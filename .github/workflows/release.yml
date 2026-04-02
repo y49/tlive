@@ -1,7 +1,7 @@
 name: Release
 on:
-  push:
-    tags: ['v*']
+  release:
+    types: [published]
 
 jobs:
   build-go:
@@ -52,7 +52,7 @@ jobs:
           npm test
           npm run build
 
-  release:
+  upload-assets:
     needs: [build-go, test-bridge]
     runs-on: ubuntu-latest
     permissions:
@@ -63,11 +63,11 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.release.tag_name }}
           files: tlive-*
-          generate_release_notes: true
 
   publish-npm:
-    needs: release
+    needs: [build-go, test-bridge]
     runs-on: ubuntu-latest
     permissions:
       contents: read
