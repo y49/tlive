@@ -1,6 +1,7 @@
 import { Bot, InputFile, type Api, type RawApi } from 'grammy';
 import { run, type RunnerHandle } from '@grammyjs/runner';
 import { apiThrottler } from '@grammyjs/transformer-throttler';
+import { SocksProxyAgent } from 'socks-proxy-agent';
 import { createServer, type Server } from 'node:http';
 import { BaseChannelAdapter, registerAdapterFactory } from './base.js';
 import type { InboundMessage, OutboundMessage, SendResult, FileAttachment } from './types.js';
@@ -52,7 +53,14 @@ export class TelegramAdapter extends BaseChannelAdapter {
   }
 
   async start(): Promise<void> {
-    this.bot = new Bot(this.config.botToken);
+    this.bot = new Bot(this.config.botToken,  {
+      client: {
+        baseFetchConfig: {
+          agent: new SocksProxyAgent(this.config.proxy),
+          compress: true,
+        },
+      },
+    });
 
     // Install API throttler (rate-limit protection)
     this.bot.api.config.use(apiThrottler());
