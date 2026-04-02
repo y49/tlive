@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.2](https://github.com/y49/tlive/compare/v0.6.1...v0.6.2) (2026-04-02)
+
+
+### Bug Fixes
+
+* **bridge:** auto-allow tool after AskUserQuestion approval ([#15](https://github.com/y49/tlive/issues/15)) ([98e9c6e](https://github.com/y49/tlive/commit/98e9c6e6690b4b921d2fab6495ac890c8c31f045))
+
 ## [0.6.1](https://github.com/y49/tlive/compare/v0.6.0...v0.6.1) (2026-04-02)
 
 
