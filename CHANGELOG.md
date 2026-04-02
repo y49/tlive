@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.2](https://github.com/y49/tlive/compare/v0.5.1...v0.5.2) (2026-04-02)
+
+
+### Bug Fixes
+
+* **bridge:** bundle proxy agent packages instead of externalizing ([#10](https://github.com/y49/tlive/issues/10)) ([d4201aa](https://github.com/y49/tlive/commit/d4201aabaebf1bdf70899339f59e5049d7ba2cfb))
+
 ## [0.4.0] - 2026-03-30
 
 ### Added
