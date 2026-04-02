@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.1](https://github.com/y49/tlive/compare/v0.6.0...v0.6.1) (2026-04-02)
+
+
+### Bug Fixes
+
+* **bridge:** keep proxy agents as externals, add to root dependencies ([4463168](https://github.com/y49/tlive/commit/4463168095579abeabf681142b5847e30a98a791))
+
 ## [0.6.0](https://github.com/y49/tlive/compare/v0.5.2...v0.6.0) (2026-04-02)
 
 
