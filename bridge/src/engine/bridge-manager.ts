@@ -753,6 +753,10 @@ export class BridgeManager {
 
     let completedStats: import('./cost-tracker.js').UsageStats | undefined;
 
+    // When an AskUserQuestion is approved, auto-allow the next permission request
+    // to avoid redundant confirmation (e.g. "delete this?" → yes → Bash permission)
+    let askQuestionApproved = false;
+
     // Build SDK-level permission handler based on /perm mode
     const permMode = this.state.getPermMode(msg.channelType, msg.chatId);
     const sdkPermissionHandler = permMode === 'on'
@@ -760,6 +764,13 @@ export class BridgeManager {
           // Check dynamic whitelist — auto-allow if previously approved
           if (this.permissions.isToolAllowed(toolName, toolInput)) {
             console.log(`[bridge] Auto-allowed ${toolName} via session whitelist`);
+            return 'allow' as const;
+          }
+
+          // Auto-allow if user just approved an AskUserQuestion
+          if (askQuestionApproved) {
+            askQuestionApproved = false;
+            console.log(`[bridge] Auto-allowed ${toolName} after AskUserQuestion approval`);
             return 'allow' as const;
           }
 
@@ -887,6 +898,9 @@ export class BridgeManager {
         }).catch(() => {});
         return { [q.question]: '' };
       }
+
+      // User answered — auto-allow the next tool permission in this query
+      askQuestionApproved = true;
 
       // Check for free text answer first, then option index
       const textAnswer = this.sdkQuestionTextAnswers.get(permId);
