@@ -613,12 +613,22 @@ switch (command) {
         }
 
         // Add hooks with current paths
+        if (!settings.hooks.PostToolUse) settings.hooks.PostToolUse = [];
+        settings.hooks.PostToolUse.push({
+          matcher: 'AskUserQuestion',
+          hooks: [{
+            type: 'command',
+            command: hookHandlerCmd,
+            timeout: 10,
+          }],
+        });
+
         if (!settings.hooks.PermissionRequest) settings.hooks.PermissionRequest = [];
         settings.hooks.PermissionRequest.push({
           hooks: [{
             type: 'command',
             command: hookHandlerCmd,
-            timeout: 300000,
+            timeout: 300,
           }],
         });
 
@@ -627,7 +637,7 @@ switch (command) {
           hooks: [{
             type: 'command',
             command: notifyHandlerCmd,
-            timeout: 5000,
+            timeout: 10,
           }],
         });
 

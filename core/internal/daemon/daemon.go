@@ -396,6 +396,7 @@ func (d *Daemon) handleHookPermission(w http.ResponseWriter, r *http.Request) {
 	// Long-poll: block until resolved or timeout
 	resolution := d.hooks.WaitForResolution(req)
 
+	log.Printf("[hooks-longpoll] resolved: decision=%s updatedInput_len=%d", resolution.Decision, len(resolution.UpdatedInput))
 	w.Header().Set("Content-Type", "application/json")
 	resp := map[string]interface{}{"decision": resolution.Decision}
 	if len(resolution.UpdatedInput) > 0 {
@@ -432,6 +433,7 @@ func (d *Daemon) handleHookPermissionResolve(w http.ResponseWriter, r *http.Requ
 		body.Decision = "deny"
 	}
 
+	log.Printf("[hooks-resolve] id=%s decision=%s updatedInput_len=%d body_raw=%s", id, body.Decision, len(body.UpdatedInput), string(body.UpdatedInput)[:min(len(body.UpdatedInput), 200)])
 	ok := d.hooks.Resolve(id, body.Decision, body.UpdatedInput)
 	if !ok {
 		http.Error(w, "permission not found or already resolved", http.StatusNotFound)

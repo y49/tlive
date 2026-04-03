@@ -456,6 +456,56 @@ export class BridgeManager {
 
     // Reply routing: quote-reply to a hook message → send to PTY stdin
     if ((msg.text || msg.attachments?.length) && msg.replyToMessageId && this.permissions.isHookMessage(msg.replyToMessageId)) {
+      // Before forwarding to PTY, check Core for a pending AskUserQuestion that
+      // the bridge hasn't polled yet (race condition: hook creates perm, bridge
+      // polls every 2s, user replies before the next poll cycle).
+      if (msg.text && this.coreAvailable) {
+        try {
+          const pendingResp = await fetch(`${this.coreUrl}/api/hooks/pending`, {
+            headers: { Authorization: `Bearer ${this.token}` },
+            signal: AbortSignal.timeout(2000),
+          });
+          if (pendingResp.ok) {
+            const pending = await pendingResp.json() as Array<{ id: string; tool_name: string; input: unknown; session_id?: string }>;
+            const askq = pending.find((p: { tool_name: string }) => p.tool_name === 'AskUserQuestion');
+            if (askq) {
+              // There's a pending AskUserQuestion — handle text as question answer
+              const inputData = (typeof askq.input === 'string'
+                ? (() => { try { return JSON.parse(askq.input as string); } catch { return {}; } })()
+                : askq.input) as Record<string, unknown>;
+              const questions = (inputData?.questions ?? []) as Array<{
+                question: string; header: string;
+                options: Array<{ label: string; description?: string }>; multiSelect: boolean;
+              }>;
+              if (questions.length > 0) {
+                const q = questions[0];
+                const trimmed = msg.text.trim();
+                // Store question data if not already stored
+                if (!this.permissions.getQuestionData(askq.id)) {
+                  this.permissions.storeQuestionData(askq.id, questions);
+                  this.permissions.trackPermissionMessage(msg.replyToMessageId, askq.id, askq.session_id || '', adapter.channelType);
+                }
+                // Numeric → option selection; else → free text
+                const numMatch = trimmed.match(/^(\d+)$/);
+                const idx = numMatch ? parseInt(numMatch[1], 10) - 1 : -1;
+                if (idx >= 0 && idx < q.options.length) {
+                  await this.permissions.resolveAskQuestion(
+                    askq.id, idx, askq.session_id || '',
+                    msg.replyToMessageId, adapter, msg.chatId, this.coreAvailable,
+                  );
+                } else {
+                  await this.permissions.resolveAskQuestionWithText(
+                    askq.id, trimmed, askq.session_id || '',
+                    msg.replyToMessageId, adapter, msg.chatId, this.coreAvailable,
+                  );
+                }
+                return true;
+              }
+            }
+          }
+        } catch { /* non-fatal: fall through to normal PTY routing */ }
+      }
+
       const entry = this.permissions.getHookMessage(msg.replyToMessageId)!;
       if (entry.sessionId && this.coreAvailable) {
         try {

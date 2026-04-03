@@ -226,6 +226,102 @@ export class PermissionCoordinator {
     }
   }
 
+  // --- PTY input injection for AskUserQuestion in interactive mode ---
+
+  /**
+   * In interactive (non-headless) mode, Claude Code ignores PermissionRequest
+   * updatedInput for AskUserQuestion — it renders the interactive picker in the
+   * terminal after the hook allows the permission. Inject keystrokes into the
+   * PTY to select the option in the picker.
+   *
+   * Single-select: ↓ × optionIndex + Enter
+   * Multi-select:  ↓ × optionIndex + Space (toggle) + Enter (confirm)
+   * Free text:     type text + Enter
+   */
+  /**
+   * Send a single keystroke to PTY and wait for it to be processed.
+   */
+  private async sendKey(sessionId: string, key: string): Promise<boolean> {
+    try {
+      const resp = await fetch(`${this.coreUrl}/api/sessions/${sessionId}/input`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: key }),
+        signal: AbortSignal.timeout(3000),
+      });
+      return resp.ok;
+    } catch { return false; }
+  }
+
+  injectPtyAnswer(sessionId: string, optionIndex: number, multiSelect?: boolean, freeText?: string, totalOptions?: number): void {
+    if (!sessionId) {
+      console.log('[PTY-inject] Skipped: no sessionId');
+      return;
+    }
+    console.log(`[PTY-inject] Scheduled: session=${sessionId} idx=${optionIndex} multi=${!!multiSelect} total=${totalOptions ?? '?'} freeText=${freeText ?? 'null'}`);
+    // Wait for Claude Code to render the picker after hook returns
+    setTimeout(async () => {
+      const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+      try {
+        if (freeText != null) {
+          console.log(`[PTY-inject] Sending free text: "${freeText}"`);
+          await this.sendKey(sessionId, freeText + '\r');
+        } else if (multiSelect && totalOptions != null) {
+          // Multi-select has a two-step confirmation:
+          // 1. Navigate to option → Space (toggle) → navigate to Submit → Enter
+          // 2. Review screen → Enter (confirm "Submit answers")
+          //
+          // Picker items: [option0..optionN-1, "Type something", Submit]
+          // Submit is at position: totalOptions + 1
+
+          // Step 1: navigate to target option
+          for (let i = 0; i < optionIndex; i++) {
+            await this.sendKey(sessionId, '\x1b[B');
+            await delay(80);
+          }
+          console.log(`[PTY-inject] Navigated to option ${optionIndex}`);
+
+          // Step 2: toggle checkbox
+          await delay(80);
+          await this.sendKey(sessionId, ' ');
+          console.log('[PTY-inject] Toggled with Space');
+
+          // Step 3: navigate from current option to Submit
+          // From optionIndex, Submit is (totalOptions + 1 - optionIndex) downs away
+          const downsToSubmit = totalOptions + 1 - optionIndex;
+          for (let i = 0; i < downsToSubmit; i++) {
+            await delay(80);
+            await this.sendKey(sessionId, '\x1b[B');
+          }
+          console.log(`[PTY-inject] Navigated to Submit (${downsToSubmit} downs)`);
+
+          // Step 4: Enter to go to review screen
+          await delay(80);
+          await this.sendKey(sessionId, '\r');
+          console.log('[PTY-inject] Pressed Enter (review screen)');
+
+          // Step 5: Wait for review screen to render, then Enter to confirm
+          await delay(500);
+          await this.sendKey(sessionId, '\r');
+          console.log('[PTY-inject] Pressed Enter (confirm submit)');
+        } else {
+          // Single-select: navigate → Enter
+          for (let i = 0; i < optionIndex; i++) {
+            await this.sendKey(sessionId, '\x1b[B');
+            await delay(80);
+          }
+          console.log(`[PTY-inject] Navigated to option ${optionIndex}`);
+          await delay(80);
+          await this.sendKey(sessionId, '\r');
+          console.log('[PTY-inject] Pressed Enter (select)');
+        }
+        console.log('[PTY-inject] Done');
+      } catch (err) {
+        console.log(`[PTY-inject] Error: ${err}`);
+      }
+    }, 2000);
+  }
+
   // --- Hook callback resolution (button-based) ---
 
   /** Handle hook button callback. Returns result for adapter to edit the card. */
@@ -333,16 +429,20 @@ export class PermissionCoordinator {
     const answers: Record<string, string> = { [q.question]: selected.label };
     const updatedInput = { questions: questionData.questions, answers };
 
+    const resolveBody = JSON.stringify({ decision: 'allow', updated_input: updatedInput });
+    console.log(`[AskQ-resolve] Sending to Core: ${resolveBody.slice(0, 300)}`);
+
     try {
-      await fetch(`${this.coreUrl}/api/hooks/permission/${hookId}/resolve`, {
+      const resolveResp = await fetch(`${this.coreUrl}/api/hooks/permission/${hookId}/resolve`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${this.token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ decision: 'allow', updated_input: updatedInput }),
+        body: resolveBody,
         signal: AbortSignal.timeout(5000),
       });
+      console.log(`[AskQ-resolve] Core response: ${resolveResp.status} ${await resolveResp.text()}`);
       const ctx = questionData.contextSuffix || '';
       this.hookQuestionData.delete(hookId);
       await adapter.editMessage(chatId, messageId, {
@@ -357,6 +457,9 @@ export class PermissionCoordinator {
       if (sessionId) {
         this.trackHookMessage(messageId, sessionId);
       }
+      // Inject PTY input for interactive mode (updatedInput only works in headless)
+      console.log(`[AskQ-resolve] Button click: hookId=${hookId} option=${optionIndex} label="${selected.label}" multi=${q.multiSelect} totalOpts=${q.options.length} session=${sessionId}`);
+      this.injectPtyAnswer(sessionId, optionIndex, q.multiSelect, undefined, q.options.length);
     } catch (err) {
       await adapter.send({ chatId, text: `❌ Failed to resolve: ${err}` });
     }
@@ -465,6 +568,13 @@ export class PermissionCoordinator {
       });
       if (sessionId) {
         this.trackHookMessage(messageId, sessionId);
+      }
+      // Inject PTY input for interactive mode
+      const optIdx = q.options?.findIndex((o: { label: string }) => o.label === text) ?? -1;
+      if (optIdx >= 0) {
+        this.injectPtyAnswer(sessionId, optIdx, q.multiSelect, undefined, q.options.length);
+      } else {
+        this.injectPtyAnswer(sessionId, 0, false, text);
       }
     } catch (err) {
       await adapter.send({ chatId, text: `❌ Failed to resolve: ${err}` });

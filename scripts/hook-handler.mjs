@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -46,6 +46,41 @@ const headers = {
   'Content-Type': 'application/json',
 };
 
+const eventName = hookJson.hook_event_name || '';
+const toolName = hookJson.tool_name || '';
+const TLIVE_DIR = join(homedir(), '.tlive');
+
+// ---------------------------------------------------------------------------
+// PostToolUse + AskUserQuestion: read saved IM answer, inject as additionalContext
+// This is the reliable path — interactive PTY mode ignores updatedInput for
+// AskUserQuestion, so we tell Claude the answer AFTER the tool completes.
+// ---------------------------------------------------------------------------
+if (eventName === 'PostToolUse' && toolName === 'AskUserQuestion') {
+  const answerFile = join(TLIVE_DIR, `askq-answer-${sessionId}.json`);
+  if (existsSync(answerFile)) {
+    try {
+      const saved = JSON.parse(readFileSync(answerFile, 'utf-8'));
+      unlinkSync(answerFile);
+      // Build human-readable answer summary
+      const lines = Object.entries(saved).map(([q, a]) => `${a}`);
+      const summary = lines.join(', ');
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PostToolUse',
+          additionalContext: `[TermLive] User answered via IM: ${summary}`,
+        },
+      }));
+    } catch {
+      // File read/parse failed — nothing to inject
+    }
+  }
+  process.exit(0);
+}
+
+// ---------------------------------------------------------------------------
+// PermissionRequest / other hooks: forward to Core for IM-based resolution
+// ---------------------------------------------------------------------------
+
 // Check if core is running
 try {
   const status = await fetch(`${baseUrl}/api/status`, {
@@ -82,6 +117,29 @@ try {
 const decision = body.decision || 'allow';
 const updatedInput = body.updated_input;
 
+// For AskUserQuestion: save the IM answer so PostToolUse can inject it as context.
+// updatedInput.answers contains { "question text": "selected label" }.
+if (toolName === 'AskUserQuestion' && updatedInput?.answers) {
+  try {
+    mkdirSync(TLIVE_DIR, { recursive: true });
+    writeFileSync(
+      join(TLIVE_DIR, `askq-answer-${sessionId}.json`),
+      JSON.stringify(updatedInput.answers),
+    );
+  } catch {}
+}
+
+// Debug: dump Core response to file for inspection
+import { appendFileSync } from 'node:fs';
+try {
+  appendFileSync(join(homedir(), '.tlive', 'hook-debug.log'),
+    `[${new Date().toISOString()}] event=${eventName} tool=${toolName} decision=${decision} hasUpdatedInput=${!!updatedInput}\n` +
+    `  Core response body: ${JSON.stringify(body)}\n` +
+    `  updatedInput type: ${typeof updatedInput}, value: ${JSON.stringify(updatedInput)?.slice(0, 200)}\n`
+  );
+} catch {}
+
+// PermissionRequest: handles all tool permissions including AskUserQuestion
 switch (decision) {
   case 'allow': {
     const output = {
