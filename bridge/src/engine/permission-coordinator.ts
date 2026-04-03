@@ -155,6 +155,42 @@ export class PermissionCoordinator {
     return this.hookQuestionData.get(hookId);
   }
 
+  /** Build multi-select toggle card content for AskUserQuestion.
+   *  Used both for initial render and toggle re-renders. */
+  buildMultiSelectCard(
+    hookId: string,
+    sessionId: string,
+    selected: Set<number>,
+    channelType: string,
+  ): { text: string; html?: string; buttons: Array<{ label: string; callbackData: string; style: 'primary' | 'danger'; row?: number }>; hint: string } | null {
+    const qData = this.hookQuestionData.get(hookId);
+    if (!qData) return null;
+    const q = qData.questions[0];
+    const header = q.header ? `📋 **${q.header}**\n\n` : '';
+    const optionsList = q.options
+      .map((opt, i) => `${selected.has(i) ? '☑' : '☐'} ${i + 1}. **${opt.label}**${opt.description ? ` — ${opt.description}` : ''}`)
+      .join('\n');
+    const text = `${header}${q.question}\n\n${optionsList}`;
+    const isSdkMode = sessionId === 'sdk';
+    const buttons: Array<{ label: string; callbackData: string; style: 'primary' | 'danger'; row?: number }> = q.options.map((opt, idx) => ({
+      label: `${selected.has(idx) ? '☑' : '☐'} ${opt.label}`,
+      callbackData: `askq_toggle:${hookId}:${idx}:${sessionId}`,
+      style: 'primary' as const,
+      row: idx,
+    }));
+    buttons.push(
+      { label: '✅ Submit', callbackData: isSdkMode ? `askq_submit_sdk:${hookId}` : `askq_submit:${hookId}:${sessionId}`, style: 'primary', row: q.options.length },
+      { label: '❌ Skip', callbackData: isSdkMode ? `perm:allow:${hookId}:askq_skip` : `askq_skip:${hookId}:${sessionId}`, style: 'danger', row: q.options.length },
+    );
+    const hint = channelType === 'feishu'
+      ? '\n\n💬 点击选项切换，然后按 Submit 确认'
+      : '\n\n💬 Tap options to toggle, then Submit';
+    const html = channelType === 'telegram'
+      ? text.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>') + hint
+      : undefined;
+    return { text: text + hint, html, buttons, hint };
+  }
+
   /** Store original permission card text for later card update */
   storeHookPermissionText(hookId: string, text: string): void {
     this.hookPermissionTexts.set(hookId, { text, ts: Date.now() });
@@ -259,73 +295,74 @@ export class PermissionCoordinator {
     } catch { return false; }
   }
 
+  private static readonly PTY_INITIAL_DELAY = 1500;
+  private static readonly PTY_KEY_INTERVAL = 100;
+
   injectPtyAnswer(sessionId: string, optionIndex: number, multiSelect?: boolean, freeText?: string, totalOptions?: number): void {
-    if (!sessionId) {
-      console.log('[PTY-inject] Skipped: no sessionId');
-      return;
-    }
-    console.log(`[PTY-inject] Scheduled: session=${sessionId} idx=${optionIndex} multi=${!!multiSelect} total=${totalOptions ?? '?'} freeText=${freeText ?? 'null'}`);
-    // Wait for Claude Code to render the picker after hook returns
+    if (!sessionId) return;
+    // Wait for Claude Code to render the picker after hook returns.
+    // No screen-read API exists, so we use a best-effort initial delay
+    // then retry the first keystroke up to 3 times with back-off.
     setTimeout(async () => {
       const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+      const keyInterval = PermissionCoordinator.PTY_KEY_INTERVAL;
+
+      /** Send key with retry — first keystroke may fail if picker isn't ready */
+      const sendKeyRetry = async (key: string, retries = 3): Promise<boolean> => {
+        for (let attempt = 0; attempt < retries; attempt++) {
+          if (await this.sendKey(sessionId, key)) return true;
+          await delay(500 * (attempt + 1));
+        }
+        return false;
+      };
+
       try {
         if (freeText != null) {
-          console.log(`[PTY-inject] Sending free text: "${freeText}"`);
-          await this.sendKey(sessionId, freeText + '\r');
+          await sendKeyRetry(freeText + '\r');
         } else if (multiSelect && totalOptions != null) {
-          // Multi-select has a two-step confirmation:
-          // 1. Navigate to option → Space (toggle) → navigate to Submit → Enter
-          // 2. Review screen → Enter (confirm "Submit answers")
-          //
+          // Multi-select: navigate → Space (toggle) → navigate to Submit → Enter → confirm
           // Picker items: [option0..optionN-1, "Type something", Submit]
-          // Submit is at position: totalOptions + 1
-
-          // Step 1: navigate to target option
           for (let i = 0; i < optionIndex; i++) {
-            await this.sendKey(sessionId, '\x1b[B');
-            await delay(80);
+            const ok = i === 0 ? await sendKeyRetry('\x1b[B') : await this.sendKey(sessionId, '\x1b[B');
+            if (!ok && i === 0) return;
+            await delay(keyInterval);
           }
-          console.log(`[PTY-inject] Navigated to option ${optionIndex}`);
+          await delay(keyInterval);
+          if (optionIndex === 0) {
+            if (!await sendKeyRetry(' ')) return;
+          } else {
+            await this.sendKey(sessionId, ' ');
+          }
 
-          // Step 2: toggle checkbox
-          await delay(80);
-          await this.sendKey(sessionId, ' ');
-          console.log('[PTY-inject] Toggled with Space');
-
-          // Step 3: navigate from current option to Submit
-          // From optionIndex, Submit is (totalOptions + 1 - optionIndex) downs away
+          // Navigate from current option to Submit (totalOptions + 1 - optionIndex downs)
           const downsToSubmit = totalOptions + 1 - optionIndex;
           for (let i = 0; i < downsToSubmit; i++) {
-            await delay(80);
+            await delay(keyInterval);
             await this.sendKey(sessionId, '\x1b[B');
           }
-          console.log(`[PTY-inject] Navigated to Submit (${downsToSubmit} downs)`);
 
-          // Step 4: Enter to go to review screen
-          await delay(80);
-          await this.sendKey(sessionId, '\r');
-          console.log('[PTY-inject] Pressed Enter (review screen)');
-
-          // Step 5: Wait for review screen to render, then Enter to confirm
+          await delay(keyInterval);
+          await this.sendKey(sessionId, '\r'); // review screen
           await delay(500);
-          await this.sendKey(sessionId, '\r');
-          console.log('[PTY-inject] Pressed Enter (confirm submit)');
+          await this.sendKey(sessionId, '\r'); // confirm submit
         } else {
           // Single-select: navigate → Enter
           for (let i = 0; i < optionIndex; i++) {
-            await this.sendKey(sessionId, '\x1b[B');
-            await delay(80);
+            const ok = i === 0 ? await sendKeyRetry('\x1b[B') : await this.sendKey(sessionId, '\x1b[B');
+            if (!ok && i === 0) return;
+            await delay(keyInterval);
           }
-          console.log(`[PTY-inject] Navigated to option ${optionIndex}`);
-          await delay(80);
-          await this.sendKey(sessionId, '\r');
-          console.log('[PTY-inject] Pressed Enter (select)');
+          await delay(keyInterval);
+          if (optionIndex === 0) {
+            await sendKeyRetry('\r');
+          } else {
+            await this.sendKey(sessionId, '\r');
+          }
         }
-        console.log('[PTY-inject] Done');
-      } catch (err) {
-        console.log(`[PTY-inject] Error: ${err}`);
+      } catch {
+        // PTY injection is best-effort
       }
-    }, 2000);
+    }, PermissionCoordinator.PTY_INITIAL_DELAY);
   }
 
   // --- Hook callback resolution (button-based) ---
@@ -412,6 +449,8 @@ export class PermissionCoordinator {
     coreAvailable: boolean,
   ): Promise<boolean> {
     if (this.resolvedHookIds.has(hookId)) return true;
+    // Mark resolved immediately to prevent double-click races (async yields below)
+    this.resolvedHookIds.set(hookId, Date.now());
 
     if (!coreAvailable) {
       await adapter.send({ chatId, text: '❌ Go Core not available' });
@@ -429,26 +468,19 @@ export class PermissionCoordinator {
       await adapter.send({ chatId, text: `❌ Invalid option (1-${q.options.length})` });
       return true;
     }
-
-    // Mark resolved only after validation passes
-    this.resolvedHookIds.set(hookId, Date.now());
     const answers: Record<string, string> = { [q.question]: selected.label };
     const updatedInput = { questions: questionData.questions, answers };
 
-    const resolveBody = JSON.stringify({ decision: 'allow', updated_input: updatedInput });
-    console.log(`[AskQ-resolve] Sending to Core: ${resolveBody.slice(0, 300)}`);
-
     try {
-      const resolveResp = await fetch(`${this.coreUrl}/api/hooks/permission/${hookId}/resolve`, {
+      await fetch(`${this.coreUrl}/api/hooks/permission/${hookId}/resolve`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${this.token}`,
           'Content-Type': 'application/json',
         },
-        body: resolveBody,
+        body: JSON.stringify({ decision: 'allow', updated_input: updatedInput }),
         signal: AbortSignal.timeout(5000),
       });
-      console.log(`[AskQ-resolve] Core response: ${resolveResp.status} ${await resolveResp.text()}`);
       const ctx = questionData.contextSuffix || '';
       this.hookQuestionData.delete(hookId);
       await adapter.editMessage(chatId, messageId, {
@@ -464,7 +496,6 @@ export class PermissionCoordinator {
         this.trackHookMessage(messageId, sessionId);
       }
       // Inject PTY input for interactive mode (updatedInput only works in headless)
-      console.log(`[AskQ-resolve] Button click: hookId=${hookId} option=${optionIndex} label="${selected.label}" multi=${q.multiSelect} totalOpts=${q.options.length} session=${sessionId}`);
       this.injectPtyAnswer(sessionId, optionIndex, q.multiSelect, undefined, q.options.length);
     } catch (err) {
       await adapter.send({ chatId, text: `❌ Failed to resolve: ${err}` });
@@ -492,6 +523,12 @@ export class PermissionCoordinator {
   /** Get current toggled selections for a hookId */
   getToggledSelections(hookId: string): Set<number> {
     return this.toggledSelections.get(hookId) ?? new Set();
+  }
+
+  /** Clean up toggle state and question data for a hookId */
+  cleanupQuestion(hookId: string): void {
+    this.hookQuestionData.delete(hookId);
+    this.toggledSelections.delete(hookId);
   }
 
   /** Submit multi-select: resolve hook with all toggled options */
@@ -527,9 +564,6 @@ export class PermissionCoordinator {
     const answers: Record<string, string> = { [q.question]: answersValue };
     const updatedInput = { questions: questionData.questions, answers };
 
-    const resolveBody = JSON.stringify({ decision: 'allow', updated_input: updatedInput });
-    console.log(`[AskQ-multisubmit] hookId=${hookId} selected=[${[...selected]}] labels="${answersValue}" session=${sessionId}`);
-
     try {
       await fetch(`${this.coreUrl}/api/hooks/permission/${hookId}/resolve`, {
         method: 'POST',
@@ -537,7 +571,7 @@ export class PermissionCoordinator {
           Authorization: `Bearer ${this.token}`,
           'Content-Type': 'application/json',
         },
-        body: resolveBody,
+        body: JSON.stringify({ decision: 'allow', updated_input: updatedInput }),
         signal: AbortSignal.timeout(5000),
       });
       const ctx = questionData.contextSuffix || '';
@@ -551,6 +585,10 @@ export class PermissionCoordinator {
       });
       if (sessionId) {
         this.trackHookMessage(messageId, sessionId);
+      }
+      // Inject PTY input for interactive mode — toggle each selected option then submit
+      for (const idx of [...selected].sort((a, b) => a - b)) {
+        this.injectPtyAnswer(sessionId, idx, true, undefined, q.options.length);
       }
     } catch (err) {
       await adapter.send({ chatId, text: `❌ Failed to resolve: ${err}` });

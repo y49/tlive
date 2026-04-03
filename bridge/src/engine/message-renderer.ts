@@ -292,21 +292,20 @@ export class MessageRenderer {
     try {
       const isEdit = !!this._messageId;
       const flushButtons = this.permissionQueue[0]?.buttons;
-      let result: string | void;
+      let result: string | void = undefined;
       try {
         result = await this.flushCallback(content, isEdit, flushButtons);
       } catch (err: any) {
-        // Retry once for transient network errors (TLS disconnect, timeout)
-        if (err?.retryable) {
-          console.warn(`[renderer] Flush failed (retrying): ${err?.message ?? err}`);
+        // Retry once for transient network errors
+        const code = err?.code ?? '';
+        const retryable = err?.retryable || ['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'UND_ERR_SOCKET'].includes(code);
+        if (retryable) {
           await new Promise(r => setTimeout(r, 1000));
           try {
             result = await this.flushCallback(content, isEdit, flushButtons);
-          } catch (retryErr: any) {
-            console.warn(`[renderer] Flush retry failed: ${retryErr?.message ?? retryErr}`);
+          } catch {
+            // give up after one retry
           }
-        } else {
-          console.warn(`[renderer] Flush failed: ${err?.message ?? err}`);
         }
       }
       if (!isEdit && typeof result === 'string') {

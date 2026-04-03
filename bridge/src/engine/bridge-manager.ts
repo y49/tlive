@@ -547,8 +547,6 @@ export class BridgeManager {
 
     // Callback data
     if (msg.callbackData) {
-      console.log(`[callback] Received: "${msg.callbackData.slice(0, 80)}"`);
-
       // Prompt suggestion callback — re-inject as a normal user message
       if (msg.callbackData.startsWith('suggest:')) {
         const suggestion = msg.callbackData.slice('suggest:'.length);
@@ -582,36 +580,14 @@ export class BridgeManager {
         if (selected === null) return true;
 
         // Re-render the card with updated checkboxes
-        const qData = this.permissions.getQuestionData(hookId);
-        if (qData) {
-          const q = qData.questions[0];
-          const header = q.header ? `📋 **${q.header}**\n\n` : '';
-          const optionsList = q.options
-            .map((opt, i) => `${selected.has(i) ? '☑' : '☐'} ${i + 1}. **${opt.label}**${opt.description ? ` — ${opt.description}` : ''}`)
-            .join('\n');
-          const questionText = `${header}${q.question}\n\n${optionsList}`;
-          const isSdkMode = sessionId === 'sdk';
-          const buttons: Array<{ label: string; callbackData: string; style: 'primary' | 'danger'; row?: number }> = q.options.map((opt, idx) => ({
-            label: `${selected.has(idx) ? '☑' : '☐'} ${opt.label}`,
-            callbackData: `askq_toggle:${hookId}:${idx}:${sessionId}`,
-            style: 'primary' as const,
-            row: idx,
-          }));
-          buttons.push(
-            { label: '✅ Submit', callbackData: isSdkMode ? `askq_submit_sdk:${hookId}` : `askq_submit:${hookId}:${sessionId}`, style: 'primary', row: q.options.length },
-            { label: '❌ Skip', callbackData: isSdkMode ? `perm:allow:${hookId}:askq_skip` : `askq_skip:${hookId}:${sessionId}`, style: 'danger', row: q.options.length },
-          );
-          const hint = adapter.channelType === 'feishu'
-            ? '\n\n💬 点击选项切换，然后按 Submit 确认'
-            : '\n\n💬 Tap options to toggle, then Submit';
+        const card = this.permissions.buildMultiSelectCard(hookId, sessionId, selected, adapter.channelType);
+        if (card) {
           await adapter.editMessage(msg.chatId, msg.messageId, {
             chatId: msg.chatId,
-            text: questionText + hint,
-            html: adapter.channelType === 'telegram'
-              ? questionText.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>') + hint
-              : undefined,
-            buttons,
-            feishuHeader: adapter.channelType === 'feishu' ? { template: 'blue', title: `❓ Terminal` } : undefined,
+            text: card.text,
+            html: card.html,
+            buttons: card.buttons,
+            feishuHeader: adapter.channelType === 'feishu' ? { template: 'blue', title: '❓ Terminal' } : undefined,
           });
         }
         return true;
@@ -663,6 +639,7 @@ export class BridgeManager {
             feishuHeader: msg.channelType === 'feishu' ? { template: 'green', title: '✅ Answered' } : undefined,
           }).catch(() => {});
         }
+        this.permissions.cleanupQuestion(permId);
         this.permissions.getGateway().resolve(permId, 'allow');
         return true;
       }

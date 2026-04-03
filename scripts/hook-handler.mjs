@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, existsSync, unlinkSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -128,16 +128,6 @@ if (toolName === 'AskUserQuestion' && updatedInput?.answers) {
     );
   } catch {}
 }
-
-// Debug: dump Core response to file for inspection
-import { appendFileSync } from 'node:fs';
-try {
-  appendFileSync(join(homedir(), '.tlive', 'hook-debug.log'),
-    `[${new Date().toISOString()}] event=${eventName} tool=${toolName} decision=${decision} hasUpdatedInput=${!!updatedInput}\n` +
-    `  Core response body: ${JSON.stringify(body)}\n` +
-    `  updatedInput type: ${typeof updatedInput}, value: ${JSON.stringify(updatedInput)?.slice(0, 200)}\n`
-  );
-} catch {}
 
 // PermissionRequest: handles all tool permissions including AskUserQuestion
 switch (decision) {

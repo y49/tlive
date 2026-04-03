@@ -281,7 +281,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       if (hasRows) {
         const rowMap = new Map<number, typeof buttons>();
         for (const b of buttons) {
-          const r = b.row ?? 99;
+          const r = b.row ?? Number.MAX_SAFE_INTEGER;
           if (!rowMap.has(r)) rowMap.set(r, []);
           rowMap.get(r)!.push(b);
         }
