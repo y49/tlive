@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.3](https://github.com/y49/tlive/compare/v0.6.2...v0.6.3) (2026-04-03)
+
+
+### Bug Fixes
+
+* **bridge:** fix AskUserQuestion handling and add context labels ([725fc4f](https://github.com/y49/tlive/commit/725fc4f4fdbedb9c0a7f7bc704c2695eafc65b86))
+
 ## [0.6.2](https://github.com/y49/tlive/compare/v0.6.1...v0.6.2) (2026-04-02)
 
 
