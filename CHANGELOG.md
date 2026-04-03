@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0](https://github.com/y49/tlive/compare/v0.6.3...v0.7.0) (2026-04-03)
+
+
+### Features
+
+* **bridge:** AskUserQuestion multi-select, PTY injection & stability fixes ([#19](https://github.com/y49/tlive/issues/19)) ([4f00813](https://github.com/y49/tlive/commit/4f008137c816d565b6763aa07b0d3715bb5eda31))
+
 ## [0.6.3](https://github.com/y49/tlive/compare/v0.6.2...v0.6.3) (2026-04-03)
 
 
