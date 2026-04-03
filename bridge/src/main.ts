@@ -297,17 +297,26 @@ async function main() {
               .join('\n');
             const questionText = `${header}${q.question}\n\n${optionsList}`;
 
-            // Build option buttons
-            const buttons: Array<{ label: string; callbackData: string; style: 'primary' | 'danger' }> = q.options.map((opt, idx) => ({
-              label: `${idx + 1}. ${opt.label}`,
-              callbackData: `askq:${perm.id}:${idx}:${sid}`,
-              style: 'primary' as const,
-            }));
-            buttons.push({
-              label: '❌ Skip',
-              callbackData: `askq_skip:${perm.id}:${sid}`,
-              style: 'danger' as const,
-            });
+            // Build buttons: multiSelect uses toggle+submit, singleSelect uses direct select
+            const isMulti = q.multiSelect;
+            const buttons: Array<{ label: string; callbackData: string; style: 'primary' | 'danger' }> = isMulti
+              ? [
+                  ...q.options.map((opt, idx) => ({
+                    label: `☐ ${idx + 1}. ${opt.label}`,
+                    callbackData: `askq_toggle:${perm.id}:${idx}:${sid}`,
+                    style: 'primary' as const,
+                  })),
+                  { label: '✅ Submit', callbackData: `askq_submit:${perm.id}:${sid}`, style: 'primary' as const },
+                  { label: '❌ Skip', callbackData: `askq_skip:${perm.id}:${sid}`, style: 'danger' as const },
+                ]
+              : [
+                  ...q.options.map((opt, idx) => ({
+                    label: `${idx + 1}. ${opt.label}`,
+                    callbackData: `askq:${perm.id}:${idx}:${sid}`,
+                    style: 'primary' as const,
+                  })),
+                  { label: '❌ Skip', callbackData: `askq_skip:${perm.id}:${sid}`, style: 'danger' as const },
+                ];
 
             // Store question data for answer resolution
             manager.storeQuestionData(perm.id, questions, contextSuffix);
@@ -318,11 +327,17 @@ async function main() {
               if (!target.chatId) continue;
 
               try {
-                const hints: Record<string, string> = {
-                  feishu: '\n\n💬 回复数字选择，或直接输入内容',
-                  telegram: '\n\n💬 Reply with number to select, or type your answer',
-                  discord: '\n\n💬 Reply with number to select, or type your answer',
-                };
+                const hints: Record<string, string> = isMulti
+                  ? {
+                      feishu: '\n\n💬 点击选项切换选中，然后按 Submit 确认',
+                      telegram: '\n\n💬 Tap options to toggle, then Submit',
+                      discord: '\n\n💬 Tap options to toggle, then Submit',
+                    }
+                  : {
+                      feishu: '\n\n💬 回复数字选择，或直接输入内容',
+                      telegram: '\n\n💬 Reply with number to select, or type your answer',
+                      discord: '\n\n💬 Reply with number to select, or type your answer',
+                    };
                 const hint = hints[adapter.channelType] || '';
                 const contextHeader = contextSuffix ? `❓ Terminal${contextSuffix}\n\n` : '';
                 const outMsg: import('./channels/types.js').OutboundMessage = {

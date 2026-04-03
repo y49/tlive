@@ -30,6 +30,9 @@ export class PermissionCoordinator {
   /** Store AskUserQuestion data for answer resolution */
   private hookQuestionData = new Map<string, { questions: Array<{ question: string; header: string; options: Array<{ label: string; description?: string }>; multiSelect: boolean }>; ts: number; contextSuffix?: string }>();
 
+  /** Track multi-select toggled options per hookId (key: hookId, value: Set of selected indices) */
+  private toggledSelections = new Map<string, Set<number>>();
+
   private pruneTimer: ReturnType<typeof setInterval> | null = null;
 
   /** Dynamic session whitelist — tools approved via "Allow {tool}" button */
@@ -182,7 +185,10 @@ export class PermissionCoordinator {
       if (entry.ts < cutoff) this.hookPermissionTexts.delete(id);
     }
     for (const [id, entry] of this.hookQuestionData) {
-      if (entry.ts < cutoff) this.hookQuestionData.delete(id);
+      if (entry.ts < cutoff) {
+        this.hookQuestionData.delete(id);
+        this.toggledSelections.delete(id);
+      }
     }
   }
 
@@ -460,6 +466,92 @@ export class PermissionCoordinator {
       // Inject PTY input for interactive mode (updatedInput only works in headless)
       console.log(`[AskQ-resolve] Button click: hookId=${hookId} option=${optionIndex} label="${selected.label}" multi=${q.multiSelect} totalOpts=${q.options.length} session=${sessionId}`);
       this.injectPtyAnswer(sessionId, optionIndex, q.multiSelect, undefined, q.options.length);
+    } catch (err) {
+      await adapter.send({ chatId, text: `❌ Failed to resolve: ${err}` });
+    }
+    return true;
+  }
+
+  /** Toggle a multi-select option. Returns the current selection set for re-rendering. */
+  toggleMultiSelectOption(hookId: string, optionIndex: number): Set<number> | null {
+    const questionData = this.hookQuestionData.get(hookId);
+    if (!questionData) return null;
+    const q = questionData.questions[0];
+    if (!q || optionIndex < 0 || optionIndex >= q.options.length) return null;
+
+    let selected = this.toggledSelections.get(hookId);
+    if (!selected) {
+      selected = new Set();
+      this.toggledSelections.set(hookId, selected);
+    }
+    if (selected.has(optionIndex)) selected.delete(optionIndex);
+    else selected.add(optionIndex);
+    return selected;
+  }
+
+  /** Get current toggled selections for a hookId */
+  getToggledSelections(hookId: string): Set<number> {
+    return this.toggledSelections.get(hookId) ?? new Set();
+  }
+
+  /** Submit multi-select: resolve hook with all toggled options */
+  async resolveMultiSelect(
+    hookId: string,
+    sessionId: string,
+    messageId: string,
+    adapter: { editMessage: (chatId: string, messageId: string, msg: any) => Promise<any>; send: (msg: any) => Promise<any> },
+    chatId: string,
+    coreAvailable: boolean,
+  ): Promise<boolean> {
+    if (this.resolvedHookIds.has(hookId)) return true;
+    if (!coreAvailable) {
+      await adapter.send({ chatId, text: '❌ Go Core not available' });
+      return true;
+    }
+    const questionData = this.hookQuestionData.get(hookId);
+    if (!questionData) {
+      await adapter.send({ chatId, text: '❌ Question data not found' });
+      return true;
+    }
+    const selected = this.toggledSelections.get(hookId) ?? new Set<number>();
+    if (selected.size === 0) {
+      await adapter.send({ chatId, text: '⚠️ No options selected' });
+      return true;
+    }
+
+    this.resolvedHookIds.set(hookId, Date.now());
+    const q = questionData.questions[0];
+    // Join selected labels with comma (per Claude Code docs)
+    const selectedLabels = [...selected].sort((a, b) => a - b).map(i => q.options[i]?.label).filter(Boolean);
+    const answersValue = selectedLabels.join(',');
+    const answers: Record<string, string> = { [q.question]: answersValue };
+    const updatedInput = { questions: questionData.questions, answers };
+
+    const resolveBody = JSON.stringify({ decision: 'allow', updated_input: updatedInput });
+    console.log(`[AskQ-multisubmit] hookId=${hookId} selected=[${[...selected]}] labels="${answersValue}" session=${sessionId}`);
+
+    try {
+      await fetch(`${this.coreUrl}/api/hooks/permission/${hookId}/resolve`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: resolveBody,
+        signal: AbortSignal.timeout(5000),
+      });
+      const ctx = questionData.contextSuffix || '';
+      this.hookQuestionData.delete(hookId);
+      this.toggledSelections.delete(hookId);
+      await adapter.editMessage(chatId, messageId, {
+        chatId,
+        text: `✅ Selected: ${selectedLabels.join(', ')}`,
+        buttons: [],
+        feishuHeader: { template: 'green', title: `✅ Terminal${ctx}` },
+      });
+      if (sessionId) {
+        this.trackHookMessage(messageId, sessionId);
+      }
     } catch (err) {
       await adapter.send({ chatId, text: `❌ Failed to resolve: ${err}` });
     }

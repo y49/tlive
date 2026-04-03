@@ -569,6 +569,61 @@ export class BridgeManager {
         return true;
       }
 
+      // AskUserQuestion multi-select toggle (askq_toggle:{hookId}:{idx}:{sessionId})
+      if (msg.callbackData.startsWith('askq_toggle:')) {
+        const parts = msg.callbackData.split(':');
+        const hookId = parts[1];
+        const optionIndex = parseInt(parts[2], 10);
+        const sessionId = parts[3] || '';
+        const selected = this.permissions.toggleMultiSelectOption(hookId, optionIndex);
+        if (selected === null) return true;
+
+        // Re-render the card with updated checkboxes
+        const qData = this.permissions.getQuestionData(hookId);
+        if (qData) {
+          const q = qData.questions[0];
+          const header = q.header ? `📋 **${q.header}**\n\n` : '';
+          const optionsList = q.options
+            .map((opt, i) => `${selected.has(i) ? '☑' : '☐'} ${i + 1}. **${opt.label}**${opt.description ? ` — ${opt.description}` : ''}`)
+            .join('\n');
+          const questionText = `${header}${q.question}\n\n${optionsList}`;
+          const buttons: Array<{ label: string; callbackData: string; style: 'primary' | 'danger' }> = q.options.map((opt, idx) => ({
+            label: `${selected.has(idx) ? '☑' : '☐'} ${idx + 1}. ${opt.label}`,
+            callbackData: `askq_toggle:${hookId}:${idx}:${sessionId}`,
+            style: 'primary' as const,
+          }));
+          buttons.push(
+            { label: '✅ Submit', callbackData: `askq_submit:${hookId}:${sessionId}`, style: 'primary' },
+            { label: '❌ Skip', callbackData: `askq_skip:${hookId}:${sessionId}`, style: 'danger' },
+          );
+          const hint = adapter.channelType === 'feishu'
+            ? '\n\n💬 点击选项切换，然后按 Submit 确认'
+            : '\n\n💬 Tap options to toggle, then Submit';
+          await adapter.editMessage(msg.chatId, msg.messageId, {
+            chatId: msg.chatId,
+            text: questionText + hint,
+            html: adapter.channelType === 'telegram'
+              ? questionText.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>') + hint
+              : undefined,
+            buttons,
+            feishuHeader: adapter.channelType === 'feishu' ? { template: 'blue', title: `❓ Terminal` } : undefined,
+          });
+        }
+        return true;
+      }
+
+      // AskUserQuestion multi-select submit (askq_submit:{hookId}:{sessionId})
+      if (msg.callbackData.startsWith('askq_submit:')) {
+        const parts = msg.callbackData.split(':');
+        const hookId = parts[1];
+        const sessionId = parts[2] || '';
+        await this.permissions.resolveMultiSelect(
+          hookId, sessionId,
+          msg.messageId, adapter, msg.chatId, this.coreAvailable,
+        );
+        return true;
+      }
+
       // AskUserQuestion skip callback — resolve with allow + empty answers (askq_skip:{hookId}:{sessionId})
       if (msg.callbackData.startsWith('askq_skip:')) {
         const parts = msg.callbackData.split(':');
