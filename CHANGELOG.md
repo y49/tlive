@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.1](https://github.com/y49/tlive/compare/v0.7.0...v0.7.1) (2026-04-03)
+
+
+### Bug Fixes
+
+* sync Go core binary version with npm package version ([3878538](https://github.com/y49/tlive/commit/38785381d106fe9ae5b45699bbc5f2392744f3a0))
+
 ## [0.7.0](https://github.com/y49/tlive/compare/v0.6.3...v0.7.0) (2026-04-03)
 
 
