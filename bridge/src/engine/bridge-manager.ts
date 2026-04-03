@@ -636,6 +636,32 @@ export class BridgeManager {
         return true;
       }
 
+      // SDK AskUserQuestion multi-select submit (askq_submit_sdk:{permId})
+      if (msg.callbackData.startsWith('askq_submit_sdk:')) {
+        const permId = msg.callbackData.split(':')[1];
+        const selected = this.permissions.getToggledSelections(permId);
+        if (selected.size === 0) {
+          await adapter.send({ chatId: msg.chatId, text: '⚠️ No options selected' });
+          return true;
+        }
+        const qData = this.sdkQuestionData.get(permId);
+        if (qData) {
+          const q = qData.questions[0];
+          const selectedLabels = [...selected].sort((a, b) => a - b).map(i => q.options[i]?.label).filter(Boolean);
+          const answerText = selectedLabels.join(',');
+          this.sdkQuestionTextAnswers.set(permId, answerText);
+          // Edit card to show selection
+          adapter.editMessage(msg.chatId, msg.messageId, {
+            chatId: msg.chatId,
+            text: `✅ Selected: ${selectedLabels.join(', ')}`,
+            buttons: [],
+            feishuHeader: msg.channelType === 'feishu' ? { template: 'green', title: '✅ Answered' } : undefined,
+          }).catch(() => {});
+        }
+        this.permissions.getGateway().resolve(permId, 'allow');
+        return true;
+      }
+
       // Hook permission callbacks (hook:allow:ID:sessionId, hook:allow_always:ID:sessionId, hook:deny:ID:sessionId)
       if (msg.callbackData.startsWith('hook:')) {
         const parts = msg.callbackData.split(':');
@@ -959,20 +985,33 @@ export class BridgeManager {
         .join('\n');
       const questionText = `${header}${q.question}\n\n${optionsList}`;
 
-      // Build option buttons
-      const buttons: Array<{ label: string; callbackData: string; style: 'primary' | 'danger' }> = q.options.map((opt, idx) => ({
-        label: `${idx + 1}. ${opt.label}`,
-        callbackData: `perm:allow:${permId}:askq:${idx}`,
-        style: 'primary' as const,
-      }));
-      buttons.push({
-        label: '❌ Skip',
-        callbackData: `perm:allow:${permId}:askq_skip`,
-        style: 'danger' as const,
-      });
+      // Build option buttons: multiSelect uses toggle+submit, singleSelect uses direct select
+      const isMulti = q.multiSelect;
+      const buttons: Array<{ label: string; callbackData: string; style: 'primary' | 'danger' }> = isMulti
+        ? [
+            ...q.options.map((opt, idx) => ({
+              label: `☐ ${idx + 1}. ${opt.label}`,
+              callbackData: `askq_toggle:${permId}:${idx}:sdk`,
+              style: 'primary' as const,
+            })),
+            { label: '✅ Submit', callbackData: `askq_submit_sdk:${permId}`, style: 'primary' as const },
+            { label: '❌ Skip', callbackData: `perm:allow:${permId}:askq_skip`, style: 'danger' as const },
+          ]
+        : [
+            ...q.options.map((opt, idx) => ({
+              label: `${idx + 1}. ${opt.label}`,
+              callbackData: `perm:allow:${permId}:askq:${idx}`,
+              style: 'primary' as const,
+            })),
+            { label: '❌ Skip', callbackData: `perm:allow:${permId}:askq_skip`, style: 'danger' as const },
+          ];
 
-      // Store question data for answer resolution
+      // Store question data for answer resolution (also needed for toggle state)
       this.sdkQuestionData.set(permId, { questions, chatId: msg.chatId });
+      // Store in permission coordinator for toggle tracking (reuse hookQuestionData)
+      if (isMulti) {
+        this.permissions.storeQuestionData(permId, questions);
+      }
 
       // Create gateway entry BEFORE sending — prevents race condition where user
       // replies before waitFor is called, causing isPending() to return false
@@ -988,9 +1027,9 @@ export class BridgeManager {
       });
 
       // Send question card AFTER gateway entry exists — user replies are now safe
-      const hint = msg.channelType === 'feishu'
-        ? '\n\n💬 回复数字选择，或直接输入内容'
-        : '\n\n💬 Reply with number to select, or type your answer';
+      const hint = isMulti
+        ? (msg.channelType === 'feishu' ? '\n\n💬 点击选项切换选中，然后按 Submit 确认' : '\n\n💬 Tap options to toggle, then Submit')
+        : (msg.channelType === 'feishu' ? '\n\n💬 回复数字选择，或直接输入内容' : '\n\n💬 Reply with number to select, or type your answer');
 
       const outMsg: import('../channels/types.js').OutboundMessage = {
         chatId: msg.chatId,
