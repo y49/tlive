@@ -265,8 +265,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
     ];
 
     if (buttons?.length) {
-      // Schema 2.0: buttons as direct elements in a column_set (horizontal layout)
-      const buttonColumns = buttons.map(btn => ({
+      // Group buttons by row; each group becomes a column_set
+      const hasRows = buttons.some(b => b.row !== undefined);
+      const makeBtn = (btn: NonNullable<OutboundMessage['buttons']>[0]) => ({
         tag: 'column' as const,
         width: 'auto' as const,
         vertical_align: 'top' as const,
@@ -276,12 +277,26 @@ export class FeishuAdapter extends BaseChannelAdapter {
           type: btn.style === 'danger' ? 'danger' as const : btn.style === 'primary' ? 'primary_filled' as const : 'default' as const,
           behaviors: [{ type: 'callback' as const, value: { action: btn.callbackData } }],
         }],
-      }));
-      elements.push({
-        tag: 'column_set',
-        flex_mode: 'flow',
-        columns: buttonColumns,
-      } as any);
+      });
+      if (hasRows) {
+        const rowMap = new Map<number, typeof buttons>();
+        for (const b of buttons) {
+          const r = b.row ?? 99;
+          if (!rowMap.has(r)) rowMap.set(r, []);
+          rowMap.get(r)!.push(b);
+        }
+        for (const [, rowBtns] of [...rowMap.entries()].sort(([a], [b]) => a - b)) {
+          elements.push({
+            tag: 'column_set', flex_mode: 'flow',
+            columns: rowBtns.map(makeBtn),
+          } as any);
+        }
+      } else {
+        elements.push({
+          tag: 'column_set', flex_mode: 'flow',
+          columns: buttons.map(makeBtn),
+        } as any);
+      }
     }
 
     return buildFeishuCard({
@@ -433,8 +448,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
           content: this.buildCard(text, message.buttons, message.feishuHeader),
         },
       });
-    } catch {
-      // Non-fatal: stale message edits (e.g. after restart) should not crash the process
+    } catch (err: any) {
+      console.warn(`[feishu] editMessage failed: ${err?.message ?? err}`);
     }
   }
 

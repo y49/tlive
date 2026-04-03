@@ -547,6 +547,8 @@ export class BridgeManager {
 
     // Callback data
     if (msg.callbackData) {
+      console.log(`[callback] Received: "${msg.callbackData.slice(0, 80)}"`);
+
       // Prompt suggestion callback — re-inject as a normal user message
       if (msg.callbackData.startsWith('suggest:')) {
         const suggestion = msg.callbackData.slice('suggest:'.length);
@@ -557,7 +559,8 @@ export class BridgeManager {
       }
 
       // AskUserQuestion answer callbacks (askq:{hookId}:{optionIndex}:{sessionId})
-      if (msg.callbackData.startsWith('askq:')) {
+      // NOTE: check toggle/submit/skip BEFORE this — they also start with "askq"
+      if (msg.callbackData.startsWith('askq:') && !msg.callbackData.startsWith('askq_')) {
         const parts = msg.callbackData.split(':');
         const hookId = parts[1];
         const optionIndex = parseInt(parts[2], 10);
@@ -587,14 +590,16 @@ export class BridgeManager {
             .map((opt, i) => `${selected.has(i) ? '☑' : '☐'} ${i + 1}. **${opt.label}**${opt.description ? ` — ${opt.description}` : ''}`)
             .join('\n');
           const questionText = `${header}${q.question}\n\n${optionsList}`;
-          const buttons: Array<{ label: string; callbackData: string; style: 'primary' | 'danger' }> = q.options.map((opt, idx) => ({
-            label: `${selected.has(idx) ? '☑' : '☐'} ${idx + 1}. ${opt.label}`,
+          const isSdkMode = sessionId === 'sdk';
+          const buttons: Array<{ label: string; callbackData: string; style: 'primary' | 'danger'; row?: number }> = q.options.map((opt, idx) => ({
+            label: `${selected.has(idx) ? '☑' : '☐'} ${opt.label}`,
             callbackData: `askq_toggle:${hookId}:${idx}:${sessionId}`,
             style: 'primary' as const,
+            row: idx,
           }));
           buttons.push(
-            { label: '✅ Submit', callbackData: `askq_submit:${hookId}:${sessionId}`, style: 'primary' },
-            { label: '❌ Skip', callbackData: `askq_skip:${hookId}:${sessionId}`, style: 'danger' },
+            { label: '✅ Submit', callbackData: isSdkMode ? `askq_submit_sdk:${hookId}` : `askq_submit:${hookId}:${sessionId}`, style: 'primary', row: q.options.length },
+            { label: '❌ Skip', callbackData: isSdkMode ? `perm:allow:${hookId}:askq_skip` : `askq_skip:${hookId}:${sessionId}`, style: 'danger', row: q.options.length },
           );
           const hint = adapter.channelType === 'feishu'
             ? '\n\n💬 点击选项切换，然后按 Submit 确认'
@@ -987,15 +992,16 @@ export class BridgeManager {
 
       // Build option buttons: multiSelect uses toggle+submit, singleSelect uses direct select
       const isMulti = q.multiSelect;
-      const buttons: Array<{ label: string; callbackData: string; style: 'primary' | 'danger' }> = isMulti
+      const buttons: Array<{ label: string; callbackData: string; style: 'primary' | 'danger'; row?: number }> = isMulti
         ? [
             ...q.options.map((opt, idx) => ({
-              label: `☐ ${idx + 1}. ${opt.label}`,
+              label: `☐ ${opt.label}`,
               callbackData: `askq_toggle:${permId}:${idx}:sdk`,
               style: 'primary' as const,
+              row: idx,
             })),
-            { label: '✅ Submit', callbackData: `askq_submit_sdk:${permId}`, style: 'primary' as const },
-            { label: '❌ Skip', callbackData: `perm:allow:${permId}:askq_skip`, style: 'danger' as const },
+            { label: '✅ Submit', callbackData: `askq_submit_sdk:${permId}`, style: 'primary' as const, row: q.options.length },
+            { label: '❌ Skip', callbackData: `perm:allow:${permId}:askq_skip`, style: 'danger' as const, row: q.options.length },
           ]
         : [
             ...q.options.map((opt, idx) => ({

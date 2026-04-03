@@ -299,15 +299,16 @@ async function main() {
 
             // Build buttons: multiSelect uses toggle+submit, singleSelect uses direct select
             const isMulti = q.multiSelect;
-            const buttons: Array<{ label: string; callbackData: string; style: 'primary' | 'danger' }> = isMulti
+            const buttons: Array<{ label: string; callbackData: string; style: 'primary' | 'danger'; row?: number }> = isMulti
               ? [
                   ...q.options.map((opt, idx) => ({
-                    label: `☐ ${idx + 1}. ${opt.label}`,
+                    label: `☐ ${opt.label}`,
                     callbackData: `askq_toggle:${perm.id}:${idx}:${sid}`,
                     style: 'primary' as const,
+                    row: idx,
                   })),
-                  { label: '✅ Submit', callbackData: `askq_submit:${perm.id}:${sid}`, style: 'primary' as const },
-                  { label: '❌ Skip', callbackData: `askq_skip:${perm.id}:${sid}`, style: 'danger' as const },
+                  { label: '✅ Submit', callbackData: `askq_submit:${perm.id}:${sid}`, style: 'primary' as const, row: q.options.length },
+                  { label: '❌ Skip', callbackData: `askq_skip:${perm.id}:${sid}`, style: 'danger' as const, row: q.options.length },
                 ]
               : [
                   ...q.options.map((opt, idx) => ({

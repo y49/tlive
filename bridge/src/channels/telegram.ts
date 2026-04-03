@@ -373,11 +373,25 @@ export class TelegramAdapter extends BaseChannelAdapter {
       parse_mode: message.html ? 'HTML' : undefined,
     };
     if (message.buttons?.length) {
+      // Group buttons by row field; buttons without row go in one default row
+      const hasRows = message.buttons.some(b => b.row !== undefined);
+      let rows: Array<typeof message.buttons>;
+      if (hasRows) {
+        const rowMap = new Map<number, typeof message.buttons>();
+        for (const b of message.buttons) {
+          const r = b.row ?? 99;
+          if (!rowMap.has(r)) rowMap.set(r, []);
+          rowMap.get(r)!.push(b);
+        }
+        rows = [...rowMap.entries()].sort(([a], [b]) => a - b).map(([, btns]) => btns);
+      } else {
+        rows = [message.buttons];
+      }
       opts.reply_markup = {
-        inline_keyboard: [message.buttons.map(b => {
+        inline_keyboard: rows.map(row => row.map(b => {
           if (b.url) return { text: b.label, url: b.url };
           return { text: b.label, callback_data: b.callbackData };
-        })],
+        })),
       };
     } else if (message.buttons) {
       // Empty array = clear existing buttons
