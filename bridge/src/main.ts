@@ -324,15 +324,16 @@ async function main() {
                   discord: '\n\n💬 Reply with number to select, or type your answer',
                 };
                 const hint = hints[adapter.channelType] || '';
+                const contextHeader = contextSuffix ? `❓ Terminal${contextSuffix}\n\n` : '';
                 const outMsg: import('./channels/types.js').OutboundMessage = {
                   chatId: target.chatId,
                   receiveIdType: target.receiveIdType,
-                  text: questionText + (adapter.channelType !== 'telegram' ? hint : ''),
+                  text: adapter.channelType === 'feishu' ? questionText + hint : contextHeader + questionText + hint,
                   buttons,
                   feishuHeader: adapter.channelType === 'feishu' ? { template: 'blue', title: `❓ Terminal${contextSuffix}` } : undefined,
                 };
                 if (adapter.channelType === 'telegram') {
-                  outMsg.html = questionText.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>') + (hints.telegram || '');
+                  outMsg.html = `<b>❓ Terminal${contextSuffix}</b>\n\n` + questionText.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>') + (hints.telegram || '');
                   outMsg.text = undefined;
                 }
                 const sendResult = await adapter.send(outMsg);
@@ -374,17 +375,18 @@ async function main() {
               discord: '\n\n💬 Or reply `allow` / `deny`',
             };
             const hint = hints[adapter.channelType] || '';
+            const permContextHeader = contextSuffix ? `🔐 Terminal${contextSuffix}\n\n` : '';
             const outMsg: import('./channels/types.js').OutboundMessage = {
               chatId: target.chatId,
               receiveIdType: target.receiveIdType,
-              text: text + (adapter.channelType !== 'telegram' ? hint : ''),
+              text: adapter.channelType === 'feishu' ? text + hint : permContextHeader + text + hint,
               html: adapter.channelType === 'telegram' ? undefined : undefined,
               buttons,
               feishuHeader: adapter.channelType === 'feishu' ? { template: 'orange', title: `🔐 Terminal${contextSuffix}` } : undefined,
             };
             // Telegram: use HTML with the hint
             if (adapter.channelType === 'telegram') {
-              outMsg.html = text + hint;
+              outMsg.html = `<b>🔐 Terminal${contextSuffix}</b>\n\n` + text + hint;
               outMsg.text = undefined;
             }
             const sendResult = await adapter.send(outMsg);
