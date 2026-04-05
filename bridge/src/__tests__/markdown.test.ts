@@ -21,6 +21,24 @@ describe('Telegram rendering', () => {
     // Telegram doesn't support <h1>, should be plain text or bold
     expect(result).not.toContain('<h1>');
   });
+
+  it('converts <br> from markdown hard break to newline', () => {
+    // CommonMark hard break: two trailing spaces before newline -> <br>
+    // Telegram HTML parse mode does NOT support <br> and rejects it with
+    // 400 Bad Request: can't parse entities: Unsupported start tag "br".
+    const result = markdownToTelegram('line one  \nline two');
+    expect(result).not.toContain('<br');
+    expect(result).toContain('line one');
+    expect(result).toContain('line two');
+  });
+
+  it('converts backslash hard break to newline', () => {
+    // CommonMark hard break: trailing backslash -> <br>
+    const result = markdownToTelegram('line one\\\nline two');
+    expect(result).not.toContain('<br');
+    expect(result).toContain('line one');
+    expect(result).toContain('line two');
+  });
 });
 
 describe('Discord chunking', () => {

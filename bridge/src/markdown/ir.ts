@@ -156,8 +156,12 @@ export function markdownToHtml(text: string): string {
   // Strip <hr> tags
   html = html.replace(/<hr\s*\/?>/g, '---\n');
 
-  // Strip any remaining unsupported HTML tags (keep: b, i, s, u, code, pre, a, br)
-  html = html.replace(/<\/?(?!b>|\/b>|i>|\/i>|s>|\/s>|u>|\/u>|code>|\/code>|pre>|\/pre>|a[\s>]|\/a>|br\s*\/?>)[a-z][a-z0-9]*[^>]*>/gi, '');
+  // <br> is NOT supported by Telegram HTML parse mode — convert to newline
+  // (Telegram API rejects <br> with 400: Unsupported start tag "br")
+  html = html.replace(/<br\s*\/?>/gi, '\n');
+
+  // Strip any remaining unsupported HTML tags (keep: b, i, s, u, code, pre, a)
+  html = html.replace(/<\/?(?!b>|\/b>|i>|\/i>|s>|\/s>|u>|\/u>|code>|\/code>|pre>|\/pre>|a[\s>]|\/a>)[a-z][a-z0-9]*[^>]*>/gi, '');
 
   return html.trim();
 }
