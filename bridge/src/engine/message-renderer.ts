@@ -37,6 +37,7 @@ export class MessageRenderer {
   private costLine?: string;
   private errorMessage?: string;
   private permissionQueue: PermissionState[] = [];
+  private todoItems: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed' }> = [];
 
   private _messageId?: string;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -125,6 +126,11 @@ export class MessageRenderer {
     }
   }
 
+  onTodoUpdate(todos: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed' }>): void {
+    this.todoItems = todos;
+    this.scheduleFlush();
+  }
+
   onTextDelta(text: string): void {
     this.responseText += text;
     this.scheduleFlush();
@@ -191,6 +197,11 @@ export class MessageRenderer {
       lines.push('');
     }
 
+    if (this.todoItems.length > 0) {
+      lines.push(this.renderTodoProgress());
+      lines.push('');
+    }
+
     if (this.totalTools > 0) {
       const parts: string[] = [];
       for (const [name, count] of this.toolCounts) {
@@ -202,6 +213,16 @@ export class MessageRenderer {
     }
 
     return this.applyPlatformLimit(redactSensitiveContent(lines.join('\n')));
+  }
+
+  private renderTodoProgress(): string {
+    const done = this.todoItems.filter(t => t.status === 'completed').length;
+    const header = `📋 Progress (${done}/${this.todoItems.length})`;
+    const lines = this.todoItems.map(t => {
+      const icon = t.status === 'completed' ? '✅' : t.status === 'in_progress' ? '🔧' : '⬜';
+      return `${icon} ${t.content}`;
+    });
+    return `${header}\n${lines.join('\n')}`;
   }
 
   private renderToolSummary(): string {

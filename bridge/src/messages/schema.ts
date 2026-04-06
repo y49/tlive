@@ -91,6 +91,16 @@ const promptSuggestionSchema = z.object({
   suggestion: z.string(),
 }).passthrough();
 
+const todoItemSchema = z.object({
+  content: z.string(),
+  status: z.enum(['pending', 'in_progress', 'completed']),
+}).passthrough();
+
+const todoUpdateSchema = z.object({
+  kind: z.literal('todo_update'),
+  todos: z.array(todoItemSchema),
+}).merge(baseSchema).passthrough();
+
 const rateLimitSchema = z.object({
   kind: z.literal('rate_limit'),
   status: z.string(),
@@ -107,6 +117,7 @@ export const canonicalEventSchema = z.discriminatedUnion('kind', [
   agentStartSchema,
   agentProgressSchema,
   agentCompleteSchema,
+  todoUpdateSchema,
   queryResultSchema,
   errorSchema,
   statusSchema,

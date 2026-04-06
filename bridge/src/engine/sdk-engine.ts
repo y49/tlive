@@ -453,6 +453,9 @@ export class SDKEngine {
         onToolProgress: (_data) => {
           // No-op — flat display
         },
+        onTodoUpdate: caps.todoTracking ? (todos) => {
+          renderer.onTodoUpdate(todos);
+        } : undefined,
         onRateLimit: (data) => {
           if (data.status === 'rejected') {
             renderer.onTextDelta('\n⚠️ Rate limited. Retrying...\n');

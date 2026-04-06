@@ -161,6 +161,24 @@ export class ClaudeAdapter {
 
         if (HIDDEN_TOOLS.has(name)) {
           this.hiddenToolUseIds.add(id);
+
+          // Extract TodoWrite data as todo_update event
+          if (name === 'TodoWrite') {
+            const input = b.input as Record<string, unknown> | undefined;
+            const todos = input?.todos as Array<{ content: string; status: string }> | undefined;
+            if (todos?.length) {
+              const ev: CanonicalEvent = {
+                kind: 'todo_update',
+                todos: todos.map(t => ({
+                  content: t.content,
+                  status: t.status as 'pending' | 'in_progress' | 'completed',
+                })),
+                ...(parentToolUseId ? { parentToolUseId } : {}),
+              };
+              events.push(ev);
+            }
+          }
+
           continue;
         }
 

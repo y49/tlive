@@ -42,6 +42,7 @@ interface ProcessMessageParams {
   onAgentComplete?: (data: { summary: string; status: string }) => void;
   onPromptSuggestion?: (suggestion: string) => void;
   onToolProgress?: (data: { toolName: string; elapsed: number }) => void;
+  onTodoUpdate?: (todos: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed' }>) => void;
   onRateLimit?: (data: { status: string; utilization?: number; resetsAt?: number }) => void;
   /** Receives query controls (interrupt, stopTask) when available */
   onControls?: (controls: QueryControls) => void;
@@ -158,6 +159,9 @@ export class ConversationEngine {
             break;
           case 'tool_progress':
             params.onToolProgress?.(value);
+            break;
+          case 'todo_update':
+            params.onTodoUpdate?.(value.todos);
             break;
           case 'rate_limit':
             params.onRateLimit?.(value);
