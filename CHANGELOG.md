@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.2](https://github.com/y49/tlive/compare/v0.7.1...v0.7.2) (2026-04-06)
+
+
+### Bug Fixes
+
+* **bridge:** convert &lt;br&gt; to newline for Telegram HTML mode ([#23](https://github.com/y49/tlive/issues/23)) ([d75fcc7](https://github.com/y49/tlive/commit/d75fcc772bccf1d0dca1b5cd365c6f83a016ce05))
+
 ## [0.7.1](https://github.com/y49/tlive/compare/v0.7.0...v0.7.1) (2026-04-03)
 
 
