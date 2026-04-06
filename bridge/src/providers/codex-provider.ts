@@ -79,7 +79,7 @@ export class CodexProvider implements LLMProvider {
     return {
       slashCommands: false,
       askUserQuestion: false,
-      streamingInput: false,
+      liveSession: false,
       todoTracking: false,
       costInUsd: false,
       skills: false,

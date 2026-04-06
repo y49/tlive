@@ -11,7 +11,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import { ClaudeAdapter } from '../messages/claude-adapter.js';
 import type { CanonicalEvent } from '../messages/schema.js';
-import type { LLMProvider, StreamChatParams, StreamChatResult, QueryControls, ProviderCapabilities } from './base.js';
+import type { LLMProvider, StreamChatParams, StreamChatResult, QueryControls, ProviderCapabilities, LiveSession } from './base.js';
 import type { PendingPermissions } from '../permissions/gateway.js';
 import type { ClaudeSettingSource } from '../config.js';
 
@@ -139,7 +139,7 @@ export class ClaudeSDKProvider implements LLMProvider {
     return {
       slashCommands: true,
       askUserQuestion: true,
-      streamingInput: true,
+      liveSession: true,
       todoTracking: true,
       costInUsd: true,
       skills: true,

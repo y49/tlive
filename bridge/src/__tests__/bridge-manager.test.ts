@@ -47,7 +47,7 @@ describe('BridgeManager', () => {
           }),
           controls: undefined,
         }),
-        capabilities: () => ({ slashCommands: true, askUserQuestion: true, streamingInput: true, todoTracking: true, costInUsd: true, skills: true, sessionResume: true }),
+        capabilities: () => ({ slashCommands: true, askUserQuestion: true, liveSession: true, todoTracking: true, costInUsd: true, skills: true, sessionResume: true }),
       } as any,
       permissions: { resolvePendingPermission: vi.fn() } as any,
       core: { isHealthy: () => true } as any,
