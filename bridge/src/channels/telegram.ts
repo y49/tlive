@@ -75,10 +75,10 @@ export class TelegramAdapter extends BaseChannelAdapter {
       }
       // Register native commands to BotFather menu
       await this.bot.api.setMyCommands([
+        { command: 'menu', description: '⚙️ Control Panel' },
         { command: 'new', description: 'New conversation' },
         { command: 'sessions', description: 'List recent sessions' },
         { command: 'session', description: 'Switch to session #n' },
-        { command: 'verbose', description: 'Set detail level (0/1)' },
         { command: 'model', description: 'Switch model' },
         { command: 'runtime', description: 'Switch provider (claude/codex)' },
         { command: 'settings', description: 'Settings scope (user/full/isolated)' },

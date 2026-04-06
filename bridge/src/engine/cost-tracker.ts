@@ -66,6 +66,7 @@ export class CostTracker {
   }
 
   get queryCount(): number { return this._queryCount; }
+  get sessionTotalUsd(): number { return this.sessionTotal; }
 
   static format(stats: UsageStats): string {
     const duration = formatDuration(stats.durationMs);

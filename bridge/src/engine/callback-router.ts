@@ -1,6 +1,7 @@
 import type { BaseChannelAdapter } from '../channels/base.js';
 import type { InboundMessage } from '../channels/types.js';
 import type { PermissionCoordinator } from './permission-coordinator.js';
+import type { ControlPanel } from './control-panel.js';
 
 /** Shared SDK question state — owned by SDKEngine, read/written by CallbackRouter */
 export interface SdkQuestionState {
@@ -13,9 +14,12 @@ export interface SdkQuestionState {
  * Routes all button callback interactions from IM platforms.
  *
  * Handles: prompt suggestions, AskUserQuestion buttons (single/multi-select),
- * hook permission callbacks, SDK permission callbacks, and broker callbacks.
+ * hook permission callbacks, SDK permission callbacks, broker callbacks,
+ * and control panel interactions.
  */
 export class CallbackRouter {
+  private controlPanel?: ControlPanel;
+
   constructor(
     private permissions: PermissionCoordinator,
     private sdkState: SdkQuestionState,
@@ -23,8 +27,20 @@ export class CallbackRouter {
     private handleInboundMessage: (adapter: BaseChannelAdapter, msg: InboundMessage) => Promise<boolean>,
   ) {}
 
+  /** Inject ControlPanel after construction (avoids circular deps) */
+  setControlPanel(panel: ControlPanel): void {
+    this.controlPanel = panel;
+  }
+
   async handle(adapter: BaseChannelAdapter, msg: InboundMessage): Promise<boolean> {
     if (!msg.callbackData) return false;
+
+    // Control panel callbacks (panel:{action}:{chatKey})
+    if (msg.callbackData.startsWith('panel:') && this.controlPanel) {
+      const action = msg.callbackData.slice('panel:'.length);
+      await this.controlPanel.handleCallback(adapter, msg.chatId, msg.messageId, action);
+      return true;
+    }
 
     // Prompt suggestion callback — re-inject as a normal user message
     if (msg.callbackData.startsWith('suggest:')) {

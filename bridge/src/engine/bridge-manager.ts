@@ -14,11 +14,12 @@ import { CallbackRouter } from './callback-router.js';
 import { SDKEngine } from './sdk-engine.js';
 import { HookEngine } from './hook-engine.js';
 import { MessageRouter } from './message-router.js';
+import { ControlPanel } from './control-panel.js';
 export type { HookNotificationData } from './hook-engine.js';
 import { networkInterfaces } from 'node:os';
 
 /** Bridge commands handled synchronously (don't block adapter loop) */
-const QUICK_COMMANDS = new Set(['/new', '/status', '/verbose', '/hooks', '/sessions', '/session', '/help', '/perm', '/effort', '/stop', '/approve', '/pairings', '/runtime', '/settings', '/model']);
+const QUICK_COMMANDS = new Set(['/menu', '/new', '/status', '/verbose', '/hooks', '/sessions', '/session', '/help', '/perm', '/effort', '/stop', '/approve', '/pairings', '/runtime', '/settings', '/model']);
 
 function isPrivateIPv4(ip: string): boolean {
   const parts = ip.split('.').map(Number);
@@ -92,6 +93,17 @@ export class BridgeManager {
       () => this.coreAvailable,
       (adapter, msg) => this.handleInboundMessage(adapter, msg),
     );
+
+    // Wire control panel into command & callback routers
+    const controlPanel = new ControlPanel(
+      this.state,
+      this.sdkEngine,
+      this.sdkEngine.getActiveControls(),
+      this.router,
+      (channelType, chatId) => this.sdkEngine.closeSession(channelType, chatId),
+    );
+    this.commands.setControlPanel(controlPanel);
+    this.callbackRouter.setControlPanel(controlPanel);
   }
 
   /** Expose coreAvailable flag for main.ts polling loop */

@@ -4,6 +4,7 @@ import type { SessionStateManager } from './session-state.js';
 import type { ChannelRouter } from './router.js';
 import type { QueryControls } from '../providers/base.js';
 import type { VerboseLevel } from './session-state.js';
+import type { ControlPanel } from './control-panel.js';
 import { getBridgeContext } from '../context.js';
 import { ClaudeSDKProvider } from '../providers/claude-sdk.js';
 import { checkCodexAvailable } from '../providers/index.js';
@@ -13,6 +14,8 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 
 export class CommandRouter {
+  private controlPanel?: ControlPanel;
+
   constructor(
     private state: SessionStateManager,
     private getAdapters: () => Map<string, BaseChannelAdapter>,
@@ -23,11 +26,26 @@ export class CommandRouter {
     private onNewSession?: (channelType: string, chatId: string) => void,
   ) {}
 
+  private static MENU_HINT = '\n\n💡 Tip: Use /menu for the new control panel';
+
+  /** Inject ControlPanel after construction (avoids circular deps) */
+  setControlPanel(panel: ControlPanel): void {
+    this.controlPanel = panel;
+  }
+
   async handle(adapter: BaseChannelAdapter, msg: InboundMessage): Promise<boolean> {
     const parts = msg.text.split(' ');
     const cmd = parts[0].toLowerCase();
 
     switch (cmd) {
+      case '/menu': {
+        if (this.controlPanel) {
+          await this.controlPanel.show(adapter, msg.chatId);
+        } else {
+          await adapter.send({ chatId: msg.chatId, text: '⚠️ Control panel not available' });
+        }
+        return true;
+      }
       case '/status': {
         const ctx = getBridgeContext();
         const healthy = (ctx.core as { isHealthy?: () => boolean }).isHealthy?.() ?? false;
@@ -95,7 +113,7 @@ export class CommandRouter {
         if ([0, 1].includes(level)) {
           this.state.setVerboseLevel(msg.channelType, msg.chatId, level);
           const labels = ['🤫 quiet', '📝 terminal card'];
-          const text = `Verbose: ${labels[level]}`;
+          const text = `Verbose: ${labels[level]}${CommandRouter.MENU_HINT}`;
           if (adapter.channelType === 'discord') {
             await adapter.send({ chatId: msg.chatId, embed: { description: text, color: 0x3399FF } });
           } else {
@@ -115,9 +133,9 @@ export class CommandRouter {
         const sub = parts[1]?.toLowerCase();
         if (sub === 'on' || sub === 'off') {
           this.state.setPermMode(msg.channelType, msg.chatId, sub);
-          const text = sub === 'on'
+          const text = (sub === 'on'
             ? '🔐 Permission prompts: ON — dangerous tools will ask for confirmation'
-            : '⚡ Permission prompts: OFF — all tools auto-allowed';
+            : '⚡ Permission prompts: OFF — all tools auto-allowed') + CommandRouter.MENU_HINT;
           if (adapter.channelType === 'discord') {
             await adapter.send({ chatId: msg.chatId, embed: { description: text, color: sub === 'on' ? 0xFFA500 : 0x00CC00 } });
           } else {
@@ -140,7 +158,7 @@ export class CommandRouter {
         if (ctrl) {
           this.activeControls.delete(chatKey);
           await ctrl.interrupt();
-          await adapter.send({ chatId: msg.chatId, text: '⏹ Interrupted current execution' });
+          await adapter.send({ chatId: msg.chatId, text: '⏹ Interrupted current execution' + CommandRouter.MENU_HINT });
         } else {
           await adapter.send({ chatId: msg.chatId, text: '⚠️ No active execution to stop' });
         }
@@ -152,7 +170,7 @@ export class CommandRouter {
         if (level && LEVELS.includes(level as typeof LEVELS[number])) {
           this.state.setEffort(msg.channelType, msg.chatId, level as typeof LEVELS[number]);
           const icons: Record<string, string> = { low: '⚡', medium: '🧠', high: '💪', max: '🔥' };
-          const text = `${icons[level] || '🧠'} Effort: **${level}**`;
+          const text = `${icons[level] || '🧠'} Effort: **${level}**${CommandRouter.MENU_HINT}`;
           await adapter.send({ chatId: msg.chatId, text });
         } else {
           const current = this.state.getEffort(msg.channelType, msg.chatId) || 'default';
@@ -298,10 +316,10 @@ export class CommandRouter {
         if (model) {
           if (model === 'reset' || model === 'default') {
             this.state.setModel(msg.channelType, msg.chatId, undefined);
-            await adapter.send({ chatId: msg.chatId, text: '🤖 Model: reset to default' });
+            await adapter.send({ chatId: msg.chatId, text: '🤖 Model: reset to default' + CommandRouter.MENU_HINT });
           } else {
             this.state.setModel(msg.channelType, msg.chatId, model);
-            await adapter.send({ chatId: msg.chatId, text: `🤖 Model: **${model}**` });
+            await adapter.send({ chatId: msg.chatId, text: `🤖 Model: **${model}**${CommandRouter.MENU_HINT}` });
           }
         } else {
           const current = this.state.getModel(msg.channelType, msg.chatId) || 'default';
@@ -367,21 +385,18 @@ export class CommandRouter {
           const html = [
             '<b>❓ TLive Commands</b>',
             '',
+            '<code>/menu</code> — ⚙️ <b>Control Panel</b> ✨',
             '<code>/new</code> — New conversation',
-            '<code>/sessions</code> — List recent sessions',
-            '<code>/session &lt;n&gt;</code> — Switch to session #n',
-            '<code>/verbose 0|1</code> — Detail level',
-            '  0 = quiet · 1 = terminal card',
-            '<code>/perm on|off</code> — Tool permission prompts',
-            '<code>/effort low|high|max</code> — Thinking depth',
-            '<code>/model &lt;name&gt;</code> — Switch model',
+            '',
+            '<i>Legacy (use /menu instead):</i>',
+            '<code>/sessions</code> · <code>/perm</code> · <code>/effort</code>',
+            '<code>/model</code> · <code>/stop</code> · <code>/verbose</code>',
+            '',
             '<code>/runtime claude|codex</code> — Switch AI provider',
             '<code>/settings user|full|isolated</code> — Claude settings scope',
-            '<code>/stop</code> — Interrupt current execution',
             '<code>/hooks pause|resume</code> — Toggle IM approval',
             '<code>/status</code> — Bridge status',
             '<code>/approve &lt;code&gt;</code> — Approve pairing request',
-            '<code>/pairings</code> — List pending pairings',
             '<code>/help</code> — This message',
             '',
             '<i>💬 Reply <b>allow</b>/<b>deny</b> to approve permissions</i>',
@@ -394,19 +409,17 @@ export class CommandRouter {
               title: '❓ TLive Commands',
               color: 0x5865F2,
               description: [
+                '`/menu` — **⚙️ Control Panel** ✨',
                 '`/new` — New conversation',
-                '`/sessions` — List recent sessions',
-                '`/session <n>` — Switch to session #n',
-                '`/verbose 0|1` — Detail level',
-                '> 0 = quiet · 1 = terminal card',
-                '`/perm on|off` — Tool permission prompts',
-                '`/model <name>` — Switch model',
+                '',
+                '*Legacy (use /menu instead):*',
+                '`/sessions` · `/perm` · `/effort` · `/model` · `/stop` · `/verbose`',
+                '',
                 '`/runtime claude|codex` — Switch AI provider',
                 '`/settings user|full|isolated` — Claude settings scope',
                 '`/hooks pause|resume` — Toggle IM approval',
                 '`/status` — Bridge status',
                 '`/approve <code>` — Approve pairing request',
-                '`/pairings` — List pending pairings',
                 '`/help` — This message',
                 '',
                 '*💬 Reply `allow`/`deny` to approve permissions*',
@@ -415,21 +428,17 @@ export class CommandRouter {
           });
         } else {
           const feishuLines = [
+            '/menu — ⚙️ **Control Panel** ✨',
             '/new — New conversation',
-            '/sessions — List recent sessions',
-            '/session <n> — Switch to session #n',
-            '/verbose 0|1 — Detail level',
-            '  0 = quiet · 1 = terminal card',
-            '/perm on|off — Tool permission prompts',
-            '/effort low|high|max — Thinking depth',
-            '/model <name> — Switch model',
+            '',
+            '*Legacy (use /menu instead):*',
+            '/sessions · /perm · /effort · /model · /stop · /verbose',
+            '',
             '/runtime claude|codex — Switch AI provider',
             '/settings user|full|isolated — Claude settings scope',
-            '/stop — Interrupt current execution',
             '/hooks pause|resume — Toggle IM approval',
             '/status — Bridge status',
             '/approve <code> — Approve pairing request',
-            '/pairings — List pending pairings',
             '/help — This message',
             '',
             '💬 回复 **allow** / **deny** 审批权限',

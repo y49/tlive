@@ -204,6 +204,18 @@ export class SDKEngine {
     return this.activeControls;
   }
 
+  /** Expose cost tracker for a given chat (used by ControlPanel stats) */
+  getCostTracker(channelType: string, chatId: string): CostTracker | null {
+    const stateKey = `${channelType}:${chatId}`;
+    // Find first registry entry matching this chat
+    for (const [key, managed] of this.registry) {
+      if (key.startsWith(stateKey + ':') || key === stateKey) {
+        return managed.costTracker;
+      }
+    }
+    return null;
+  }
+
   /** Find pending SDK question for text reply routing */
   findPendingQuestion(_channelType: string, chatId: string): { permId: string } | null {
     for (const [permId, data] of this.sdkQuestionData) {
