@@ -269,39 +269,45 @@ export class DiscordAdapter extends BaseChannelAdapter {
   async editMessage(chatId: string, messageId: string, message: OutboundMessage): Promise<void> {
     if (!this.client) return;
 
-    // Use threadId if available, otherwise chatId
-    const targetId = message.threadId ?? chatId;
-    const channel = await this.client.channels.fetch(targetId) as TextChannel;
-    if (!channel || !channel.messages) return;
+    try {
+      // Use threadId if available, otherwise chatId
+      const targetId = message.threadId ?? chatId;
+      const channel = await this.client.channels.fetch(targetId) as TextChannel;
+      if (!channel || !channel.messages) return;
 
-    const existing = await channel.messages.fetch(messageId);
-    if (!existing) return;
+      const existing = await channel.messages.fetch(messageId);
+      if (!existing) return;
 
-    if (message.embed) {
-      const embed = new EmbedBuilder();
-      if (message.embed.title) embed.setTitle(message.embed.title);
-      if (message.embed.description) embed.setDescription(message.embed.description);
-      if (message.embed.color !== undefined) embed.setColor(message.embed.color);
-      if (message.embed.fields) {
-        for (const f of message.embed.fields) embed.addFields(f);
+      if (message.embed) {
+        const embed = new EmbedBuilder();
+        if (message.embed.title) embed.setTitle(message.embed.title);
+        if (message.embed.description) embed.setDescription(message.embed.description);
+        if (message.embed.color !== undefined) embed.setColor(message.embed.color);
+        if (message.embed.fields) {
+          for (const f of message.embed.fields) embed.addFields(f);
+        }
+        if (message.embed.footer) embed.setFooter({ text: message.embed.footer });
+        await existing.edit({ embeds: [embed] });
+        return;
       }
-      if (message.embed.footer) embed.setFooter({ text: message.embed.footer });
-      await existing.edit({ embeds: [embed] });
-      return;
+
+      const content = message.text ?? message.html ?? '';
+      const truncated = content.length > 2000 ? content.slice(0, 2000) : content;
+
+      const payload: Parameters<Message['edit']>[0] = { content: truncated };
+
+      if (message.buttons?.length) {
+        payload.components = DiscordAdapter.buildButtonRows(message.buttons);
+      } else if (message.buttons) {
+        payload.components = []; // clear existing buttons
+      }
+
+      await existing.edit(payload);
+    } catch (err: unknown) {
+      // Streaming edits are non-fatal: log and swallow so the bridge stays alive
+      const classified = classifyError('discord', err);
+      console.warn(`[discord] editMessage failed (${classified.constructor.name}): ${classified.message}`);
     }
-
-    const content = message.text ?? message.html ?? '';
-    const truncated = content.length > 2000 ? content.slice(0, 2000) : content;
-
-    const payload: Parameters<Message['edit']>[0] = { content: truncated };
-
-    if (message.buttons?.length) {
-      payload.components = DiscordAdapter.buildButtonRows(message.buttons);
-    } else if (message.buttons) {
-      payload.components = []; // clear existing buttons
-    }
-
-    await existing.edit(payload);
   }
 
   async sendTyping(chatId: string): Promise<void> {

@@ -400,7 +400,35 @@ export class TelegramAdapter extends BaseChannelAdapter {
     try {
       await this.api.editMessageText(chatId, parseInt(messageId, 10), text, opts);
     } catch (err: unknown) {
-      if (!(err instanceof Error && err.message?.includes('message is not modified'))) throw err;
+      if (err instanceof Error && err.message?.includes('message is not modified')) return;
+
+      const classified = classifyError('telegram', err);
+
+      // 429 Rate limit: wait retry_after and retry once
+      if (classified.retryable && 'retryAfterMs' in classified) {
+        const delay = Math.min((classified as any).retryAfterMs || 1000, 30_000);
+        await new Promise(r => setTimeout(r, delay));
+        try {
+          await this.api.editMessageText(chatId, parseInt(messageId, 10), text, opts);
+          return;
+        } catch {
+          // give up — next flush will catch up
+        }
+      }
+
+      // 400 Format error: retry without HTML (same pattern as sendMessage)
+      if (!classified.retryable && opts.parse_mode) {
+        try {
+          delete opts.parse_mode;
+          await this.api.editMessageText(chatId, parseInt(messageId, 10), text, opts);
+          return;
+        } catch {
+          // give up
+        }
+      }
+
+      // Streaming edits are non-fatal: log and swallow so the bridge stays alive
+      console.warn(`[telegram] editMessage failed (${classified.constructor.name}): ${classified.message}`);
     }
   }
 

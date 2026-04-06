@@ -296,7 +296,7 @@ export class MessageRenderer {
       try {
         result = await this.flushCallback(content, isEdit, flushButtons);
       } catch (err: any) {
-        // Retry once for transient network errors
+        // Retry once for transient / retryable errors
         const code = err?.code ?? '';
         const retryable = err?.retryable || ['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'UND_ERR_SOCKET'].includes(code);
         if (retryable) {
@@ -307,6 +307,8 @@ export class MessageRenderer {
             // give up after one retry
           }
         }
+        // Defense-in-depth: never let a flush error become an unhandled rejection.
+        // The next scheduled flush will catch up with the latest content.
       }
       if (!isEdit && typeof result === 'string') {
         this._messageId = result;
@@ -315,8 +317,13 @@ export class MessageRenderer {
       this.flushing = false;
       if (this.pendingFlush) {
         this.pendingFlush = false;
-        const retryContent = this.render();
-        if (retryContent) await this.doFlush(retryContent);
+        try {
+          const retryContent = this.render();
+          if (retryContent) await this.doFlush(retryContent);
+        } catch {
+          // Never let recursive flush errors propagate — the next scheduled
+          // flush will pick up the latest content.
+        }
       }
     }
   }
