@@ -32,6 +32,8 @@ export interface ClaudeLiveSessionOptions {
   settingSources: ClaudeSettingSource[];
   pendingPerms: PendingPermissions;
   onPermissionTimeout?: PermissionTimeoutCallback;
+  effort?: 'low' | 'medium' | 'high' | 'max';
+  model?: string;
 }
 
 export class ClaudeLiveSession implements LiveSession {
@@ -71,7 +73,9 @@ export class ClaudeLiveSession implements LiveSession {
 
     const queryOptions: Record<string, unknown> = {
       cwd: workingDirectory,
+      model: this.options.model || undefined,
       resume: sessionId || undefined,
+      effort: this.options.effort || undefined,
       agentProgressSummaries: true,
       promptSuggestions: true,
       toolConfig: { askUserQuestion: { previewFormat: 'markdown' } },
@@ -170,6 +174,7 @@ export class ClaudeLiveSession implements LiveSession {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[tlive:session] query ended with error: ${message}`);
+      this.adapter.reset();
       // Emit error to active turn if any
       if (this.currentTurnController) {
         try {
@@ -197,6 +202,11 @@ export class ClaudeLiveSession implements LiveSession {
     // Set per-turn handlers (read by canUseTool callback)
     this.turnPermissionHandler = params?.onPermissionRequest;
     this.turnAskQuestionHandler = params?.onAskUserQuestion;
+
+    // Apply per-turn model/effort changes via SDK Query methods
+    if (params?.model && this._query) {
+      (this._query as any).setModel?.(params.model).catch(() => {});
+    }
 
     // Prepare prompt with images if needed
     const finalPrompt = preparePromptWithImages(prompt, params?.attachments);

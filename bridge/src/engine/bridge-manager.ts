@@ -174,10 +174,30 @@ export class BridgeManager {
     return this.hookEngine.sendNotification(adapter, chatId, hook, receiveIdType);
   }
 
+  /** Process queued messages iteratively after current turn completes */
+  private async drainQueue(adapter: BaseChannelAdapter, channelType: string, chatId: string): Promise<void> {
+    let next: InboundMessage | undefined;
+    while ((next = this.sdkEngine.dequeueMessage(channelType, chatId))) {
+      console.log(`[${adapter.channelType}] Processing queued message`);
+      try {
+        await this.handleInboundMessage(adapter, next);
+      } catch (err) {
+        console.error(`[${adapter.channelType}] Error processing queued message:`, err);
+        break;
+      }
+    }
+  }
+
   /** Wait briefly for follow-up messages from the same user, merge text if they arrive quickly.
    *  Handles Telegram splitting long messages at 4096 chars. */
+  /** Telegram message length limit — only coalesce if text is near this boundary */
+  private static TG_MSG_LIMIT = 4096;
+
   private async coalesceMessages(adapter: BaseChannelAdapter, first: InboundMessage): Promise<InboundMessage> {
     if (!first.text || first.callbackData) return first;
+
+    // Only wait for follow-up parts if message is near Telegram's 4096 char limit
+    if (first.text.length < BridgeManager.TG_MSG_LIMIT - 200) return first;
 
     // Wait up to 500ms for follow-up parts
     const parts: string[] = [first.text];
@@ -254,6 +274,7 @@ export class BridgeManager {
         }
         this.state.setProcessing(chatKey, true);
         this.handleInboundMessage(adapter, coalesced)
+          .then(() => this.drainQueue(adapter, coalesced.channelType, coalesced.chatId))
           .catch(err => console.error(`[${adapter.channelType}] Error handling message:`, err))
           .finally(() => this.state.setProcessing(chatKey, false));
       }

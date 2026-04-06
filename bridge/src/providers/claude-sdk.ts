@@ -123,7 +123,7 @@ export class ClaudeSDKProvider implements LLMProvider {
     };
   }
 
-  createSession(params: { workingDirectory: string; sessionId?: string }): LiveSession {
+  createSession(params: { workingDirectory: string; sessionId?: string; effort?: 'low' | 'medium' | 'high' | 'max'; model?: string }): LiveSession {
     return new ClaudeLiveSession({
       workingDirectory: params.workingDirectory,
       sessionId: params.sessionId,
@@ -131,6 +131,8 @@ export class ClaudeSDKProvider implements LLMProvider {
       settingSources: this.settingSources,
       pendingPerms: this.pendingPerms,
       onPermissionTimeout: this.onPermissionTimeout,
+      effort: params.effort,
+      model: params.model,
     });
   }
 

@@ -93,6 +93,7 @@ export class SDKEngine {
   private getOrCreateSession(
     channelType: string, chatId: string, workdir: string,
     sdkSessionId: string | undefined, provider: LLMProvider,
+    opts?: { effort?: 'low' | 'medium' | 'high' | 'max'; model?: string },
   ): ManagedSession | null {
     const key = this.sessionKey(channelType, chatId, workdir);
     const existing = this.registry.get(key);
@@ -104,11 +105,16 @@ export class SDKEngine {
     // Only create if provider supports live sessions
     if (!provider.capabilities().liveSession || !provider.createSession) return null;
 
-    const session = provider.createSession({ workingDirectory: workdir, sessionId: sdkSessionId });
-    const managed: ManagedSession = { session, workdir, costTracker: new CostTracker(), lastActiveAt: Date.now() };
-    this.registry.set(key, managed);
-    console.log(`[tlive:engine] Created LiveSession for ${key}`);
-    return managed;
+    try {
+      const session = provider.createSession({ workingDirectory: workdir, sessionId: sdkSessionId, effort: opts?.effort, model: opts?.model });
+      const managed: ManagedSession = { session, workdir, costTracker: new CostTracker(), lastActiveAt: Date.now() };
+      this.registry.set(key, managed);
+      console.log(`[tlive:engine] Created LiveSession for ${key}`);
+      return managed;
+    } catch (err) {
+      console.error(`[tlive:engine] Failed to create LiveSession for ${key}:`, err);
+      return null; // Fall back to per-message streamChat
+    }
   }
 
   /** Close a session (on /new, session expiry, workdir change) */
@@ -173,7 +179,7 @@ export class SDKEngine {
   }
 
   /** Dequeue the next message for a chat */
-  private dequeueMessage(channelType: string, chatId: string): InboundMessage | undefined {
+  dequeueMessage(channelType: string, chatId: string): InboundMessage | undefined {
     const chatKey = this.state.stateKey(channelType, chatId);
     const queue = this.messageQueue.get(chatKey);
     if (!queue?.length) return undefined;
@@ -516,6 +522,7 @@ export class SDKEngine {
     const managed = this.getOrCreateSession(
       msg.channelType, msg.chatId, workdir,
       session?.sdkSessionId, provider,
+      { effort: this.state.getEffort(msg.channelType, msg.chatId), model: this.state.getModel(msg.channelType, msg.chatId) },
     );
 
     let streamResult;
@@ -604,13 +611,6 @@ export class SDKEngine {
       renderer.dispose();
       this.activeControls.delete(chatKey);
       this.activeMessageIds.delete(chatKey);
-    }
-
-    // Process queued messages (next turn)
-    const nextMsg = this.dequeueMessage(msg.channelType, msg.chatId);
-    if (nextMsg) {
-      console.log(`[tlive:engine] Processing queued message for ${msg.channelType}:${msg.chatId}`);
-      await this.handleMessage(adapter, nextMsg, provider);
     }
 
     return true;

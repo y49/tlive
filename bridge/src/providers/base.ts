@@ -105,5 +105,5 @@ export interface LLMProvider {
   streamChat(params: StreamChatParams): StreamChatResult;
   capabilities(): ProviderCapabilities;
   /** Create a long-lived session. Returns undefined if not supported. */
-  createSession?(params: { workingDirectory: string; sessionId?: string }): LiveSession;
+  createSession?(params: { workingDirectory: string; sessionId?: string; effort?: 'low' | 'medium' | 'high' | 'max'; model?: string }): LiveSession;
 }
