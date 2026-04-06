@@ -89,16 +89,16 @@ export class ClaudeSDKProvider implements LLMProvider {
     if (this.cliPath) {
       const check = checkCliVersion(this.cliPath);
       if (!check.ok) {
-        console.warn(`[claude-sdk] CLI preflight warning: ${check.error}`);
+        console.warn(`[tlive:sdk] CLI preflight warning: ${check.error}`);
       } else {
-        console.log(`[claude-sdk] Using Claude CLI ${check.version} at ${this.cliPath}`);
+        console.log(`[tlive:sdk] Using Claude CLI ${check.version} at ${this.cliPath}`);
       }
     } else {
-      console.warn('[claude-sdk] Claude CLI not found — SDK will use default resolution');
+      console.warn('[tlive:sdk] Claude CLI not found — SDK will use default resolution');
     }
 
     const srcLabel = this.settingSources.length > 0 ? this.settingSources.join(', ') : 'none (isolation mode)';
-    console.log(`[claude-sdk] Settings sources: ${srcLabel}`);
+    console.log(`[tlive:sdk] Settings sources: ${srcLabel}`);
   }
 
   getSettingSources(): ClaudeSettingSource[] {
@@ -108,7 +108,7 @@ export class ClaudeSDKProvider implements LLMProvider {
   setSettingSources(sources: ClaudeSettingSource[]): void {
     this.settingSources = [...sources];
     const label = sources.length > 0 ? sources.join(', ') : 'none (isolation mode)';
-    console.log(`[claude-sdk] Settings sources changed: ${label}`);
+    console.log(`[tlive:sdk] Settings sources changed: ${label}`);
   }
 
   capabilities(): ProviderCapabilities {
@@ -229,7 +229,7 @@ export class ClaudeSDKProvider implements LLMProvider {
                 const reason = options.blockedPath
                   ? `${options.decisionReason || toolName} (${options.blockedPath})`
                   : (options.decisionReason || options.title || toolName);
-                console.log(`[claude-sdk] canUseTool: ${toolName} → asking user (${reason})`);
+                console.log(`[tlive:sdk] canUseTool: ${toolName} → asking user (${reason})`);
                 // Do not pass abort signal — IM permissions wait indefinitely for user response
                 const decision = await params.onPermissionRequest(toolName, input, reason);
                 if (decision === 'allow') {
@@ -269,7 +269,7 @@ export class ClaudeSDKProvider implements LLMProvider {
             for await (const msg of q) {
               const sub = 'subtype' in msg ? `.${msg.subtype}` : '';
               const turns = 'num_turns' in msg ? ` turns=${msg.num_turns}` : '';
-              console.log(`[claude-sdk] msg: ${msg.type}${sub}${turns}`);
+              console.log(`[tlive:sdk] msg: ${msg.type}${sub}${turns}`);
 
               const events = adapter.mapMessage(msg as any);
               for (const event of events) {
@@ -284,7 +284,7 @@ export class ClaudeSDKProvider implements LLMProvider {
               }
             }
 
-            console.log(`[claude-sdk] query ended. streamed=${state.hasStreamedText} text_len=${state.lastAssistantText.length}`);
+            console.log(`[tlive:sdk] query ended. streamed=${state.hasStreamedText} text_len=${state.lastAssistantText.length}`);
             controller.close();
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
@@ -292,13 +292,13 @@ export class ClaudeSDKProvider implements LLMProvider {
             // Check for auth errors first
             const authType = classifyAuthError(message) || (stderrBuf ? classifyAuthError(stderrBuf) : false);
             if (authType === 'cli') {
-              console.error('[claude-sdk] Auth error: not logged in. Run `claude /login` to authenticate.');
+              console.error('[tlive:sdk] Auth error: not logged in. Run `claude /login` to authenticate.');
               controller.enqueue({ kind: 'error', message: 'Not logged in. Run `claude /login` to authenticate.' } as CanonicalEvent);
               controller.close();
               return;
             }
             if (authType === 'api') {
-              console.error('[claude-sdk] Auth error: invalid API key or unauthorized.');
+              console.error('[tlive:sdk] Auth error: invalid API key or unauthorized.');
               controller.enqueue({ kind: 'error', message: 'Invalid API key or unauthorized. Check your credentials.' } as CanonicalEvent);
               controller.close();
               return;
@@ -311,7 +311,7 @@ export class ClaudeSDKProvider implements LLMProvider {
             }
 
             const diagInfo = stderrBuf ? ` [stderr: ${stderrBuf.slice(-200)}]` : '';
-            console.error(`[claude-sdk] query error: ${message}${diagInfo}`);
+            console.error(`[tlive:sdk] query error: ${message}${diagInfo}`);
 
             controller.enqueue({ kind: 'error', message } as CanonicalEvent);
             controller.close();

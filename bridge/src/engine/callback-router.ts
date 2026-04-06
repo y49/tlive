@@ -143,7 +143,7 @@ export class CallbackRouter {
       const toolName = parts.slice(3).join(':');
       this.permissions.getGateway().resolve(permId, 'allow');
       this.permissions.addAllowedTool(toolName);
-      console.log(`[bridge] Added ${toolName} to session whitelist`);
+      console.log(`[tlive:engine] Added ${toolName} to session whitelist`);
       return true;
     }
 
@@ -153,7 +153,7 @@ export class CallbackRouter {
       const prefix = parts.slice(3).join(':');
       this.permissions.getGateway().resolve(permId, 'allow');
       this.permissions.addAllowedBashPrefix(prefix);
-      console.log(`[bridge] Added Bash(${prefix} *) to session whitelist`);
+      console.log(`[tlive:engine] Added Bash(${prefix} *) to session whitelist`);
       return true;
     }
 
@@ -197,7 +197,7 @@ export class CallbackRouter {
     }
 
     // Regular permission broker callbacks (perm:allow:ID, perm:deny:ID)
-    console.log(`[bridge] Perm callback: ${msg.callbackData}, gateway pending: ${this.permissions.getGateway().pendingCount()}`);
+    console.log(`[tlive:engine] Perm callback: ${msg.callbackData}, gateway pending: ${this.permissions.getGateway().pendingCount()}`);
     this.permissions.handleBrokerCallback(msg.callbackData);
     return true;
   }

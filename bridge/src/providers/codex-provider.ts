@@ -57,11 +57,11 @@ export class CodexProvider implements LLMProvider {
         this.CodexCtor = mod.Codex || (mod as any).default?.Codex;
         this._available = !!this.CodexCtor;
         if (this._available) {
-          console.log('[codex] Codex SDK available');
+          console.log('[tlive:codex] Codex SDK available');
         }
       })
       .catch(() => {
-        console.warn('[codex] @openai/codex-sdk not installed — Codex provider unavailable');
+        console.warn('[tlive:codex] @openai/codex-sdk not installed — Codex provider unavailable');
       });
   }
 
@@ -155,7 +155,7 @@ export class CodexProvider implements LLMProvider {
             } catch (resumeErr) {
               // If resume failed (thread expired/not found), retry with new thread
               if (resumed) {
-                console.warn(`[codex] Resume failed (${resumeErr instanceof Error ? resumeErr.message : resumeErr}), starting new thread`);
+                console.warn(`[tlive:codex] Resume failed (${resumeErr instanceof Error ? resumeErr.message : resumeErr}), starting new thread`);
                 thread = codex.startThread(threadOptions);
                 streamResult = await thread.runStreamed(params.prompt, {
                   signal: abortController.signal,
@@ -168,7 +168,7 @@ export class CodexProvider implements LLMProvider {
 
             for await (const event of events) {
               const itemType = 'item' in event ? `.${(event as any).item?.type}` : '';
-              console.log(`[codex] event: ${event.type}${itemType}`);
+              console.log(`[tlive:codex] event: ${event.type}${itemType}`);
               const canonicalEvents = adapter.adapt(event);
               for (const ce of canonicalEvents) {
                 controller.enqueue(ce);
@@ -181,7 +181,7 @@ export class CodexProvider implements LLMProvider {
 
             // Auth error detection
             if (isAuthError(message)) {
-              console.error('[codex] Auth error: invalid API key or unauthorized.');
+              console.error('[tlive:codex] Auth error: invalid API key or unauthorized.');
               controller.enqueue({
                 kind: 'error',
                 message: 'Invalid OpenAI API key. Check OPENAI_API_KEY in ~/.tlive/config.env or environment.',
@@ -190,7 +190,7 @@ export class CodexProvider implements LLMProvider {
               return;
             }
 
-            console.error(`[codex] Error: ${message}`);
+            console.error(`[tlive:codex] Error: ${message}`);
             controller.enqueue({ kind: 'error', message } as CanonicalEvent);
             controller.close();
           }

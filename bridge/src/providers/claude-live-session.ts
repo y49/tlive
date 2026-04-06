@@ -81,7 +81,7 @@ export class ClaudeLiveSession implements LiveSession {
       stderr: (data: string) => {
         // Log stderr for debugging (limited buffer)
         const trimmed = data.length > 200 ? data.slice(-200) : data;
-        console.log(`[claude-live] stderr: ${trimmed}`);
+        console.log(`[tlive:session] stderr: ${trimmed}`);
       },
       canUseTool: async (
         toolName: string,
@@ -111,7 +111,7 @@ export class ClaudeLiveSession implements LiveSession {
         const reason = cbOptions.blockedPath
           ? `${cbOptions.decisionReason || toolName} (${cbOptions.blockedPath})`
           : (cbOptions.decisionReason || cbOptions.title || toolName);
-        console.log(`[claude-live] canUseTool: ${toolName} → asking user (${reason})`);
+        console.log(`[tlive:session] canUseTool: ${toolName} → asking user (${reason})`);
         const decision = await self.turnPermissionHandler(toolName, input, reason);
         if (decision === 'allow') {
           return { behavior: 'allow' as const, updatedInput: input, toolUseID: cbOptions.toolUseID };
@@ -151,7 +151,7 @@ export class ClaudeLiveSession implements LiveSession {
     try {
       for await (const msg of this._query) {
         const sub = 'subtype' in msg ? `.${(msg as any).subtype}` : '';
-        console.log(`[claude-live] msg: ${msg.type}${sub}`);
+        console.log(`[tlive:session] msg: ${msg.type}${sub}`);
 
         const events = this.adapter.mapMessage(msg as any);
         for (const event of events) {
@@ -169,7 +169,7 @@ export class ClaudeLiveSession implements LiveSession {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(`[claude-live] query ended with error: ${message}`);
+      console.error(`[tlive:session] query ended with error: ${message}`);
       // Emit error to active turn if any
       if (this.currentTurnController) {
         try {

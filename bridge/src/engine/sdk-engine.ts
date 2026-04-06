@@ -75,7 +75,7 @@ export class SDKEngine {
         continue;
       }
       if (!managed.session.isTurnActive && (now - managed.lastActiveAt) > SDKEngine.SESSION_IDLE_MS) {
-        console.log(`[bridge] Pruning idle LiveSession: ${key} (idle ${Math.round((now - managed.lastActiveAt) / 60000)}m)`);
+        console.log(`[tlive:engine] Pruning idle LiveSession: ${key} (idle ${Math.round((now - managed.lastActiveAt) / 60000)}m)`);
         managed.session.close();
         this.registry.delete(key);
       }
@@ -107,7 +107,7 @@ export class SDKEngine {
     const session = provider.createSession({ workingDirectory: workdir, sessionId: sdkSessionId });
     const managed: ManagedSession = { session, workdir, costTracker: new CostTracker(), lastActiveAt: Date.now() };
     this.registry.set(key, managed);
-    console.log(`[bridge] Created LiveSession for ${key}`);
+    console.log(`[tlive:engine] Created LiveSession for ${key}`);
     return managed;
   }
 
@@ -119,7 +119,7 @@ export class SDKEngine {
       if (managed) {
         managed.session.close();
         this.registry.delete(key);
-        console.log(`[bridge] Closed LiveSession for ${key}`);
+        console.log(`[tlive:engine] Closed LiveSession for ${key}`);
       }
     } else {
       // Close ALL sessions for this chat (e.g. on /new)
@@ -128,7 +128,7 @@ export class SDKEngine {
         if (key.startsWith(prefix)) {
           managed.session.close();
           this.registry.delete(key);
-          console.log(`[bridge] Closed LiveSession for ${key}`);
+          console.log(`[tlive:engine] Closed LiveSession for ${key}`);
         }
       }
     }
@@ -465,17 +465,17 @@ export class SDKEngine {
     const sdkPermissionHandler = permMode === 'on'
       ? async (toolName: string, toolInput: Record<string, unknown>, promptSentence: string, _signal?: AbortSignal) => {
           if (this.permissions.isToolAllowed(toolName, toolInput)) {
-            console.log(`[bridge] Auto-allowed ${toolName} via session whitelist`);
+            console.log(`[tlive:engine] Auto-allowed ${toolName} via session whitelist`);
             return 'allow' as const;
           }
           if (askQuestionApproved) {
             askQuestionApproved = false;
-            console.log(`[bridge] Auto-allowed ${toolName} after AskUserQuestion approval`);
+            console.log(`[tlive:engine] Auto-allowed ${toolName} after AskUserQuestion approval`);
             return 'allow' as const;
           }
           const permId = `sdk-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           this.permissions.setPendingSdkPerm(chatKey, permId);
-          console.log(`[bridge] Permission request: ${toolName} (${permId}) for ${chatKey}`);
+          console.log(`[tlive:engine] Permission request: ${toolName} (${permId}) for ${chatKey}`);
           const inputStr = getToolCommand(toolName, toolInput) || JSON.stringify(toolInput, null, 2);
           const buttons: Array<{ label: string; callbackData: string; style: string }> = [
             { label: '✅ Allow', callbackData: `perm:allow:${permId}`, style: 'primary' },
@@ -492,7 +492,7 @@ export class SDKEngine {
             permissionReminderMsgId = undefined;
           }
           this.permissions.clearPendingSdkPerm(chatKey);
-          console.log(`[bridge] Permission resolved: ${toolName} (${permId}) → ${result.behavior}`);
+          console.log(`[tlive:engine] Permission resolved: ${toolName} (${permId}) → ${result.behavior}`);
           return result.behavior as 'allow' | 'allow_always' | 'deny';
         }
       : undefined;
@@ -575,7 +575,7 @@ export class SDKEngine {
         },
         onQueryResult: (event) => {
           if (event.permissionDenials?.length) {
-            console.warn(`[bridge] Permission denials: ${event.permissionDenials.map(d => d.toolName).join(', ')}`);
+            console.warn(`[tlive:engine] Permission denials: ${event.permissionDenials.map(d => d.toolName).join(', ')}`);
           }
           const tracker = managed?.costTracker ?? new CostTracker();
           if (!managed) tracker.start();
@@ -609,7 +609,7 @@ export class SDKEngine {
     // Process queued messages (next turn)
     const nextMsg = this.dequeueMessage(msg.channelType, msg.chatId);
     if (nextMsg) {
-      console.log(`[bridge] Processing queued message for ${msg.channelType}:${msg.chatId}`);
+      console.log(`[tlive:engine] Processing queued message for ${msg.channelType}:${msg.chatId}`);
       await this.handleMessage(adapter, nextMsg, provider);
     }
 

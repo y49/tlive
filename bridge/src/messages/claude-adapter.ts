@@ -332,7 +332,7 @@ export class ClaudeAdapter {
       case 'init': {
         const apiKeySource = msg.apiKeySource as string | undefined;
         if (apiKeySource) {
-          console.log(`[claude-sdk] Active auth source: ${apiKeySource}`);
+          console.log(`[tlive:sdk] Active auth source: ${apiKeySource}`);
         }
         const ev: CanonicalEvent = {
           kind: 'status',
