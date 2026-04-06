@@ -232,6 +232,9 @@ export class ClaudeSDKProvider implements LLMProvider {
                 options: { decisionReason?: string; title?: string; suggestions?: unknown[]; signal?: AbortSignal } = {},
               ): Promise<PermissionResult> => {
                 // AskUserQuestion — route to dedicated handler
+                // NOTE: We intentionally do NOT pass the abort signal to the IM handler.
+                // IM users may respond hours later; the SDK's abort signal should not
+                // cancel a question the user hasn't even seen yet.
                 if (toolName === 'AskUserQuestion' && params.onAskUserQuestion) {
                   const questions = (input as Record<string, unknown>).questions as Array<{
                     question: string;
@@ -241,7 +244,7 @@ export class ClaudeSDKProvider implements LLMProvider {
                   }> ?? [];
                   if (questions.length > 0) {
                     try {
-                      const answers = await params.onAskUserQuestion(questions, options.signal);
+                      const answers = await params.onAskUserQuestion(questions);
                       return {
                         behavior: 'allow' as const,
                         updatedInput: { questions: (input as Record<string, unknown>).questions, answers },
@@ -255,14 +258,13 @@ export class ClaudeSDKProvider implements LLMProvider {
                 if (!params.onPermissionRequest) {
                   return { behavior: 'allow' as const, updatedInput: input };
                 }
-                // Already aborted by SDK (subagent stopped) → don't bother asking
-                if (options.signal?.aborted) {
-                  return { behavior: 'deny' as const, message: 'Cancelled by SDK' };
-                }
+                // NOTE: We intentionally ignore options.signal?.aborted here.
+                // In IM context, the user may not be at the keyboard — the abort signal
+                // should not auto-deny a permission the user hasn't seen yet.
                 const reason = options.decisionReason || options.title || toolName;
                 console.log(`[claude-sdk] canUseTool: ${toolName} → asking user (${reason})`);
-                // Pass abort signal so handler can clean up gateway entry on cancel
-                const decision = await params.onPermissionRequest(toolName, input, reason, options.signal);
+                // Do not pass abort signal — IM permissions wait indefinitely for user response
+                const decision = await params.onPermissionRequest(toolName, input, reason);
                 if (decision === 'allow') {
                   return { behavior: 'allow' as const, updatedInput: input };
                 }

@@ -885,7 +885,7 @@ export class BridgeManager {
     // Build SDK-level permission handler based on /perm mode
     const permMode = this.state.getPermMode(msg.channelType, msg.chatId);
     const sdkPermissionHandler = permMode === 'on'
-      ? async (toolName: string, toolInput: Record<string, unknown>, promptSentence: string, signal?: AbortSignal) => {
+      ? async (toolName: string, toolInput: Record<string, unknown>, promptSentence: string, _signal?: AbortSignal) => {
           // Check dynamic whitelist — auto-allow if previously approved
           if (this.permissions.isToolAllowed(toolName, toolInput)) {
             console.log(`[bridge] Auto-allowed ${toolName} via session whitelist`);
@@ -904,15 +904,9 @@ export class BridgeManager {
           this.permissions.setPendingSdkPerm(chatKey, permId);
           console.log(`[bridge] Permission request: ${toolName} (${permId}) for ${chatKey}`);
 
-          // If SDK aborts (subagent stopped), clean up gateway entry and remove from queue
-          const abortCleanup = () => {
-            console.log(`[bridge] Permission cancelled by SDK: ${toolName} (${permId})`);
-            this.permissions.getGateway().resolve(permId, 'deny', 'Cancelled by SDK');
-            this.permissions.clearPendingSdkPerm(chatKey);
-            renderer.onPermissionResolved(permId);
-          };
-          if (signal?.aborted) { abortCleanup(); return 'deny' as const; }
-          signal?.addEventListener('abort', abortCleanup, { once: true });
+          // NOTE: We intentionally ignore the SDK abort signal for IM permissions.
+          // IM users may respond hours later — the abort signal should not auto-deny
+          // a permission the user hasn't seen yet. No timeout either.
 
           // Render permission inline in the terminal card
           const inputStr = getToolCommand(toolName, toolInput)
@@ -923,15 +917,8 @@ export class BridgeManager {
           ];
           renderer.onPermissionNeeded(toolName, inputStr, permId, buttons);
 
-          // Wait for user response (5 min timeout)
-          const result = await this.permissions.getGateway().waitFor(permId, {
-            timeoutMs: 5 * 60 * 1000,
-            onTimeout: () => {
-              this.permissions.clearPendingSdkPerm(chatKey);
-              console.warn(`[bridge] Permission timeout: ${toolName} (${permId})`);
-            },
-          });
-          signal?.removeEventListener('abort', abortCleanup);
+          // Wait for user response — no timeout, IM users may respond much later
+          const result = await this.permissions.getGateway().waitFor(permId);
           renderer.onPermissionResolved(permId);
 
           // Update timeout reminder message if it was sent
@@ -954,7 +941,7 @@ export class BridgeManager {
     // Build SDK-level AskUserQuestion handler
     const sdkAskQuestionHandler = async (
       questions: Array<{ question: string; header: string; options: Array<{ label: string; description?: string }>; multiSelect: boolean }>,
-      signal?: AbortSignal,
+      _signal?: AbortSignal,
     ): Promise<Record<string, string>> => {
       if (!questions.length) return {};
       const q = questions[0];
@@ -998,16 +985,9 @@ export class BridgeManager {
 
       // Create gateway entry BEFORE sending — prevents race condition where user
       // replies before waitFor is called, causing isPending() to return false
-      const abortCleanup = () => {
-        this.permissions.getGateway().resolve(permId, 'deny', 'Cancelled');
-        this.sdkQuestionData.delete(permId);
-      };
-      if (signal?.aborted) { abortCleanup(); throw new Error('Cancelled'); }
-      signal?.addEventListener('abort', abortCleanup, { once: true });
-      const waitPromise = this.permissions.getGateway().waitFor(permId, {
-        timeoutMs: 5 * 60 * 1000,
-        onTimeout: () => { this.sdkQuestionData.delete(permId); },
-      });
+      // NOTE: We intentionally ignore the abort signal for AskUserQuestion.
+      // IM users may respond hours later — questions must wait for user response.
+      const waitPromise = this.permissions.getGateway().waitFor(permId);
 
       // Send question card AFTER gateway entry exists — user replies are now safe
       const hint = isMulti
@@ -1024,9 +1004,8 @@ export class BridgeManager {
       const sendResult = await adapter.send(outMsg);
       this.permissions.trackPermissionMessage(sendResult.messageId, permId, binding.sessionId, msg.channelType);
 
-      // Await user answer
+      // Await user answer — waits indefinitely until user responds via IM
       const result = await waitPromise;
-      signal?.removeEventListener('abort', abortCleanup);
 
       if (result.behavior === 'deny') {
         this.sdkQuestionData.delete(permId);
