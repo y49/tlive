@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.3](https://github.com/y49/tlive/compare/v0.7.2...v0.7.3) (2026-04-06)
+
+
+### Bug Fixes
+
+* **bridge:** harden editMessage against Telegram/Discord API errors ([#24](https://github.com/y49/tlive/issues/24)) ([#26](https://github.com/y49/tlive/issues/26)) ([556efce](https://github.com/y49/tlive/commit/556efce1dededdc7b21dd2d8a151b80d5dfea0e4))
+
 ## [0.7.2](https://github.com/y49/tlive/compare/v0.7.1...v0.7.2) (2026-04-06)
 
 
