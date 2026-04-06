@@ -12,8 +12,10 @@ import { PermissionCoordinator } from './permission-coordinator.js';
 import { CommandRouter } from './command-router.js';
 import { CallbackRouter } from './callback-router.js';
 import { SDKEngine } from './sdk-engine.js';
+import { HookEngine } from './hook-engine.js';
+export type { HookNotificationData } from './hook-engine.js';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join, basename } from 'node:path';
+import { join } from 'node:path';
 import { homedir, networkInterfaces } from 'node:os';
 
 /** Bridge commands handled synchronously (don't block adapter loop) */
@@ -43,18 +45,6 @@ function getLocalIP(): string {
   return 'localhost';
 }
 
-/** Data shape for hook notifications (stop, idle_prompt, etc.) from Go Core */
-export interface HookNotificationData {
-  tlive_hook_type?: string;
-  tlive_session_id?: string;
-  tlive_cwd?: string;
-  notification_type?: string;
-  message?: string;
-  last_assistant_message?: string;
-  last_output?: string;
-  [key: string]: unknown;
-}
-
 export class BridgeManager {
   private adapters = new Map<string, BaseChannelAdapter>();
   private running = false;
@@ -71,6 +61,7 @@ export class BridgeManager {
   private commands: CommandRouter;
   private callbackRouter: CallbackRouter;
   private sdkEngine: SDKEngine;
+  private hookEngine: HookEngine;
   private chatIdFile: string;
   /** Cached LLM providers keyed by runtime name */
   private providerCache = new Map<string, LLMProvider>();
@@ -92,6 +83,7 @@ export class BridgeManager {
       }
     } catch { /* no saved chat IDs yet */ }
     this.sdkEngine = new SDKEngine(this.state, this.router, this.permissions);
+    this.hookEngine = new HookEngine(this.permissions, () => this.coreAvailable, this.token, getLocalIP);
     this.commands = new CommandRouter(
       this.state,
       () => this.adapters,
@@ -186,61 +178,9 @@ export class BridgeManager {
     }
   }
 
-  /** Send a hook notification to IM with [Local] prefix and track for reply routing */
-  async sendHookNotification(adapter: BaseChannelAdapter, chatId: string, hook: HookNotificationData, receiveIdType?: string): Promise<void> {
-    const { formatNotification } = await import('../formatting/index.js');
-    const hookType = hook.tlive_hook_type || '';
-
-    let title: string;
-    let type: 'stop' | 'idle_prompt' | 'generic';
-    let summary: string | undefined;
-
-    // Build context suffix: project name + short session ID
-    const contextParts: string[] = [];
-    if (hook.tlive_cwd) {
-      const projectName = basename(hook.tlive_cwd || '') || '';
-      if (projectName) contextParts.push(projectName);
-    }
-    if (hook.tlive_session_id) {
-      const shortId = hook.tlive_session_id.slice(-6);
-      contextParts.push(`#${shortId}`);
-    }
-    const contextSuffix = contextParts.length > 0 ? ' · ' + contextParts.join(' · ') : '';
-
-    if (hookType === 'stop') {
-      type = 'stop';
-      const raw = (hook.last_assistant_message || hook.last_output || '').trim();
-      summary = raw ? (raw.length > 3000 ? raw.slice(0, 2997) + '...' : raw) : undefined;
-      title = `Terminal${contextSuffix}`;
-    } else if (hook.notification_type === 'idle_prompt') {
-      title = `Terminal${contextSuffix} · ` + (hook.message || 'Waiting for input...');
-      type = 'idle_prompt';
-    } else {
-      title = hook.message || 'Notification';
-      type = 'generic';
-    }
-
-    let terminalUrl: string | undefined;
-    if (this.coreAvailable && hook.tlive_session_id) {
-      const config = loadConfig();
-      const baseUrl = config.publicUrl || `http://${getLocalIP()}:${config.port || 4590}`;
-      terminalUrl = `${baseUrl}/terminal.html?id=${hook.tlive_session_id}&token=${this.token}`;
-    }
-
-    const formatted = formatNotification({ type, title, summary, terminalUrl }, adapter.channelType as any);
-
-    const outMsg: import('../channels/types.js').OutboundMessage = {
-      chatId,
-      text: formatted.text,
-      html: formatted.html,
-      embed: formatted.embed,
-      buttons: (formatted as any).buttons,
-      feishuHeader: formatted.feishuHeader,
-      feishuElements: (formatted as any).feishuElements,
-      receiveIdType,
-    };
-    const result = await adapter.send(outMsg);
-    this.permissions.trackHookMessage(result.messageId, hook.tlive_session_id || '');
+  /** Send a hook notification to IM — delegates to HookEngine */
+  async sendHookNotification(adapter: BaseChannelAdapter, chatId: string, hook: import('./hook-engine.js').HookNotificationData, receiveIdType?: string): Promise<void> {
+    return this.hookEngine.sendNotification(adapter, chatId, hook, receiveIdType);
   }
 
   private async runAdapterLoop(adapter: BaseChannelAdapter): Promise<void> {
