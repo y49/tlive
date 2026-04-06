@@ -230,7 +230,7 @@ describe('CallbackRouter', () => {
       const result = await router.handle(adapter, msg);
 
       expect(result).toBe(true);
-      expect(sdkState.sdkQuestionTextAnswers.get('p1')).toBe('Alpha,Gamma');
+      expect(sdkState.sdkQuestionTextAnswers.get('p1')).toBe('Alpha, Gamma');
       expect(permissions.cleanupQuestion).toHaveBeenCalledWith('p1');
       expect(gateway.resolve).toHaveBeenCalledWith('p1', 'allow');
       expect(adapter.editMessage).toHaveBeenCalledWith('c1', 'm1', expect.objectContaining({

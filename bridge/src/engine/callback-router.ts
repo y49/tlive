@@ -4,7 +4,7 @@ import type { PermissionCoordinator } from './permission-coordinator.js';
 
 /** Shared SDK question state — owned by SDKEngine, read/written by CallbackRouter */
 export interface SdkQuestionState {
-  sdkQuestionData: Map<string, { questions: Array<{ question: string; header: string; options: Array<{ label: string; description?: string }>; multiSelect: boolean }>; chatId: string }>;
+  sdkQuestionData: Map<string, { questions: Array<{ question: string; header: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect: boolean }>; chatId: string }>;
   sdkQuestionAnswers: Map<string, number>;
   sdkQuestionTextAnswers: Map<string, string>;
 }
@@ -106,7 +106,7 @@ export class CallbackRouter {
       if (qData) {
         const q = qData.questions[0];
         const selectedLabels = [...selected].sort((a, b) => a - b).map(i => q.options[i]?.label).filter(Boolean);
-        const answerText = selectedLabels.join(',');
+        const answerText = selectedLabels.join(', ');
         this.sdkState.sdkQuestionTextAnswers.set(permId, answerText);
         adapter.editMessage(msg.chatId, msg.messageId, {
           chatId: msg.chatId,

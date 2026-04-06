@@ -21,7 +21,7 @@ export type AskUserQuestionHandler = (
   questions: Array<{
     question: string;
     header: string;
-    options: Array<{ label: string; description?: string }>;
+    options: Array<{ label: string; description?: string; preview?: string }>;
     multiSelect: boolean;
   }>,
   signal?: AbortSignal,

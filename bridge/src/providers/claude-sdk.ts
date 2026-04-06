@@ -198,6 +198,10 @@ export class ClaudeSDKProvider implements LLMProvider {
               agentProgressSummaries: true,
               // Enable prompt suggestions (predicted next user prompt after each turn)
               promptSuggestions: true,
+              // Enable markdown previews in AskUserQuestion options
+              toolConfig: {
+                askUserQuestion: { previewFormat: 'markdown' },
+              },
               // Controls which Claude Code settings files to load.
               // Default ['user'] loads ~/.claude/settings.json (auth, model).
               // Add 'project' for CLAUDE.md, MCP, skills; 'local' for dev overrides.
@@ -251,7 +255,7 @@ export class ClaudeSDKProvider implements LLMProvider {
                   const questions = (input as Record<string, unknown>).questions as Array<{
                     question: string;
                     header: string;
-                    options: Array<{ label: string; description?: string }>;
+                    options: Array<{ label: string; description?: string; preview?: string }>;
                     multiSelect: boolean;
                   }> ?? [];
                   if (questions.length > 0) {

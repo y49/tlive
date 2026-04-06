@@ -30,7 +30,7 @@ export class SDKEngine {
   private sessionCostTrackers = new Map<string, CostTracker>();
 
   // SDK AskUserQuestion state — shared with CallbackRouter via SdkQuestionState interface
-  private sdkQuestionData = new Map<string, { questions: Array<{ question: string; header: string; options: Array<{ label: string; description?: string }>; multiSelect: boolean }>; chatId: string }>();
+  private sdkQuestionData = new Map<string, { questions: Array<{ question: string; header: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect: boolean }>; chatId: string }>();
   private sdkQuestionAnswers = new Map<string, number>();
   private sdkQuestionTextAnswers = new Map<string, string>();
 
@@ -81,16 +81,23 @@ export class SDKEngine {
     adapter: BaseChannelAdapter,
     msg: InboundMessage,
     sessionId: string,
-    q: { question: string; header: string; options: Array<{ label: string; description?: string }>; multiSelect: boolean },
+    q: { question: string; header: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect: boolean },
   ): Promise<string> {
     const permId = `askq-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    // Build question text
+    // Build question text with optional previews
     const header = q.header ? `📋 **${q.header}**\n\n` : '';
-    const optionsList = q.options
-      .map((opt, i) => `${i + 1}. **${opt.label}**${opt.description ? ` — ${opt.description}` : ''}`)
-      .join('\n');
-    const questionText = `${header}${q.question}\n\n${optionsList}`;
+    const optionLines: string[] = [];
+    for (let i = 0; i < q.options.length; i++) {
+      const opt = q.options[i];
+      let line = `${i + 1}. **${opt.label}**${opt.description ? ` — ${opt.description}` : ''}`;
+      if (opt.preview) {
+        // Render preview as indented code block
+        line += '\n' + opt.preview.split('\n').map(l => `   ${l}`).join('\n');
+      }
+      optionLines.push(line);
+    }
+    const questionText = `${header}${q.question}\n\n${optionLines.join('\n')}`;
 
     // Build option buttons: multiSelect uses toggle+submit, singleSelect uses direct select
     const isMulti = q.multiSelect;
@@ -404,7 +411,7 @@ export class SDKEngine {
     // Build SDK-level AskUserQuestion handler
     // Processes ALL questions sequentially — SDK supports 1-4 questions per call
     const sdkAskQuestionHandler = async (
-      questions: Array<{ question: string; header: string; options: Array<{ label: string; description?: string }>; multiSelect: boolean }>,
+      questions: Array<{ question: string; header: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect: boolean }>,
       _signal?: AbortSignal,
     ): Promise<Record<string, string>> => {
       if (!questions.length) return {};
