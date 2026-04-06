@@ -297,8 +297,24 @@ export class ClaudeSDKProvider implements LLMProvider {
               queryOptions.pathToClaudeCodeExecutable = cliPath;
             }
 
+            // When messageInjector is provided, use AsyncGenerator for streaming input
+            // so users can send messages while the query is running
+            let queryPrompt: Parameters<typeof query>[0]['prompt'] = prompt;
+            if (params.messageInjector) {
+              const injector = params.messageInjector;
+              async function* streamingPrompt() {
+                yield { type: 'user' as const, message: { role: 'user' as const, content: prompt } };
+                while (true) {
+                  const text = await injector.next();
+                  if (text === null) break;
+                  yield { type: 'user' as const, message: { role: 'user' as const, content: text } };
+                }
+              }
+              queryPrompt = streamingPrompt() as any;
+            }
+
             const q = query({
-              prompt: prompt as Parameters<typeof query>[0]['prompt'],
+              prompt: queryPrompt as Parameters<typeof query>[0]['prompt'],
               options: queryOptions as Parameters<typeof query>[0]['options'],
             });
 

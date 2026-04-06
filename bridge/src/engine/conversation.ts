@@ -1,6 +1,6 @@
 import { getBridgeContext } from '../context.js';
 import type { CanonicalEvent } from '../messages/schema.js';
-import type { LLMProvider, FileAttachment, PermissionRequestHandler, QueryControls } from '../providers/base.js';
+import type { LLMProvider, FileAttachment, PermissionRequestHandler, QueryControls, MessageInjector } from '../providers/base.js';
 import type { AskUserQuestionHandler } from '../messages/types.js';
 
 const TEXT_MIME_PREFIXES = ['text/', 'application/json', 'application/xml', 'application/javascript', 'application/typescript', 'application/x-yaml', 'application/toml'];
@@ -54,6 +54,8 @@ interface ProcessMessageParams {
   model?: string;
   /** Override LLM provider (for per-chat runtime selection) */
   llm?: LLMProvider;
+  /** When provided, enables streaming input for mid-query message injection */
+  messageInjector?: MessageInjector;
 }
 
 interface ProcessMessageResult {
@@ -100,6 +102,7 @@ export class ConversationEngine {
         onPermissionRequest: params.sdkPermissionHandler,
         onAskUserQuestion: params.sdkAskQuestionHandler,
         effort: params.effort,
+        messageInjector: params.messageInjector,
       });
 
       // Expose query controls (interrupt, stopTask) to caller

@@ -8,6 +8,42 @@ export type PermissionRequestHandler = (
   signal?: AbortSignal,
 ) => Promise<'allow' | 'allow_always' | 'deny'>;
 
+/** Queue for injecting user messages into an active streaming query. */
+export class MessageInjector {
+  private queue: string[] = [];
+  private waiter: ((msg: string | null) => void) | null = null;
+  private closed = false;
+
+  /** Inject a message into the active query. */
+  push(text: string): void {
+    if (this.closed) return;
+    if (this.waiter) {
+      const resolve = this.waiter;
+      this.waiter = null;
+      resolve(text);
+    } else {
+      this.queue.push(text);
+    }
+  }
+
+  /** Wait for the next injected message. Returns null when closed. */
+  next(): Promise<string | null> {
+    if (this.queue.length > 0) return Promise.resolve(this.queue.shift()!);
+    if (this.closed) return Promise.resolve(null);
+    return new Promise(resolve => { this.waiter = resolve; });
+  }
+
+  /** Close the injector — signals the generator to stop. */
+  close(): void {
+    this.closed = true;
+    if (this.waiter) {
+      const resolve = this.waiter;
+      this.waiter = null;
+      resolve(null);
+    }
+  }
+}
+
 export interface StreamChatParams {
   prompt: string;
   workingDirectory: string;
@@ -30,6 +66,8 @@ export interface StreamChatParams {
   ) => Promise<Record<string, string>>;
   /** Controls Claude's thinking depth: low/medium/high/max */
   effort?: 'low' | 'medium' | 'high' | 'max';
+  /** When provided, enables streaming input — messages can be injected mid-query */
+  messageInjector?: MessageInjector;
 }
 
 export interface FileAttachment {

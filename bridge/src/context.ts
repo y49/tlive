@@ -1,5 +1,6 @@
 export type { BridgeStore } from './store/interface.js';
 export type { LLMProvider, ProviderCapabilities } from './providers/base.js';
+export { MessageInjector } from './providers/base.js';
 
 export interface PermissionGateway {}
 export interface CoreClient {}

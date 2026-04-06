@@ -1,6 +1,7 @@
 import type { BaseChannelAdapter } from '../channels/base.js';
 import type { InboundMessage, OutboundMessage } from '../channels/types.js';
 import type { LLMProvider, QueryControls } from '../providers/base.js';
+import { MessageInjector } from '../providers/base.js';
 import type { PermissionCoordinator } from './permission-coordinator.js';
 import type { SessionStateManager } from './session-state.js';
 import type { ChannelRouter } from './router.js';
@@ -24,6 +25,7 @@ import type { FeishuStreamingSession } from '../channels/feishu-streaming.js';
 export class SDKEngine {
   private engine = new ConversationEngine();
   private activeControls = new Map<string, QueryControls>();
+  private activeInjectors = new Map<string, MessageInjector>();
 
   // SDK AskUserQuestion state — shared with CallbackRouter via SdkQuestionState interface
   private sdkQuestionData = new Map<string, { questions: Array<{ question: string; header: string; options: Array<{ label: string; description?: string }>; multiSelect: boolean }>; chatId: string }>();
@@ -35,6 +37,18 @@ export class SDKEngine {
     private router: ChannelRouter,
     private permissions: PermissionCoordinator,
   ) {}
+
+  /** Check if this chat has an active query that can accept injected messages */
+  canInjectMessage(channelType: string, chatId: string): boolean {
+    const chatKey = this.state.stateKey(channelType, chatId);
+    return this.activeInjectors.has(chatKey);
+  }
+
+  /** Inject a message into a running query's streaming input */
+  injectMessage(channelType: string, chatId: string, text: string): void {
+    const chatKey = this.state.stateKey(channelType, chatId);
+    this.activeInjectors.get(chatKey)?.push(text);
+  }
 
   /** Expose question state for CallbackRouter */
   getQuestionState(): SdkQuestionState {
@@ -397,6 +411,15 @@ export class SDKEngine {
       return allAnswers;
     };
 
+    // Create message injector for streaming input if provider supports it
+    const caps = provider.capabilities();
+    const chatKey = this.state.stateKey(msg.channelType, msg.chatId);
+    let injector: MessageInjector | undefined;
+    if (caps.streamingInput) {
+      injector = new MessageInjector();
+      this.activeInjectors.set(chatKey, injector);
+    }
+
     try {
       const result = await this.engine.processMessage({
         sessionId: binding.sessionId,
@@ -407,8 +430,8 @@ export class SDKEngine {
         sdkAskQuestionHandler,
         effort: this.state.getEffort(msg.channelType, msg.chatId),
         model: this.state.getModel(msg.channelType, msg.chatId),
+        messageInjector: injector,
         onControls: (ctrl) => {
-          const chatKey = this.state.stateKey(msg.channelType, msg.chatId);
           this.activeControls.set(chatKey, ctrl);
         },
         onTextDelta: (delta) => renderer.onTextDelta(delta),
@@ -467,7 +490,9 @@ export class SDKEngine {
     } finally {
       clearInterval(typingInterval);
       renderer.dispose();
-      this.activeControls.delete(this.state.stateKey(msg.channelType, msg.chatId));
+      injector?.close();
+      this.activeInjectors.delete(chatKey);
+      this.activeControls.delete(chatKey);
     }
 
     return true;

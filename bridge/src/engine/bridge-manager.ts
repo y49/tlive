@@ -192,10 +192,15 @@ export class BridgeManager {
           console.error(`[${adapter.channelType}] Error handling message:`, err);
         }
       } else {
-        // Guard: if this chat is already processing a message, tell the user
+        // Guard: if this chat is already processing a message, try streaming input injection
         const chatKey = this.state.stateKey(msg.channelType, msg.chatId);
         if (this.state.isProcessing(chatKey)) {
-          await adapter.send({ chatId: msg.chatId, text: '⏳ Previous message still processing, please wait...' }).catch(() => {});
+          if (msg.text && this.sdkEngine.canInjectMessage(msg.channelType, msg.chatId)) {
+            this.sdkEngine.injectMessage(msg.channelType, msg.chatId, msg.text);
+            await adapter.send({ chatId: msg.chatId, text: '💬 Message sent to active session' }).catch(() => {});
+          } else {
+            await adapter.send({ chatId: msg.chatId, text: '⏳ Previous message still processing, please wait...' }).catch(() => {});
+          }
           continue;
         }
         this.state.setProcessing(chatKey, true);
