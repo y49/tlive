@@ -486,6 +486,7 @@ export class SDKEngine {
     let streamResult;
     if (managed) {
       // LiveSession mode — start a new turn
+      managed.costTracker.start();
       streamResult = managed.session.startTurn(msg.text, {
         onPermissionRequest: sdkPermissionHandler,
         onAskUserQuestion: sdkAskQuestionHandler,

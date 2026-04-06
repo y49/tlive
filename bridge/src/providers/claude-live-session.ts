@@ -23,58 +23,7 @@ import type {
 import type { PendingPermissions } from '../permissions/gateway.js';
 import type { ClaudeSettingSource } from '../config.js';
 import type { PermissionTimeoutCallback } from './claude-sdk.js';
-import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-
-// ── Environment isolation (shared with claude-sdk.ts) ──
-
-const ENV_ALWAYS_STRIP = ['CLAUDECODE'];
-
-function buildSubprocessEnv(): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (v === undefined) continue;
-    if (ENV_ALWAYS_STRIP.some(prefix => k.startsWith(prefix))) continue;
-    out[k] = v;
-  }
-  return out;
-}
-
-/** Save image attachments to temp files, return modified prompt */
-function preparePromptWithImages(prompt: string, attachments?: Array<{ type: string; mimeType: string; base64Data: string }>): string {
-  const images = attachments?.filter(a => a.type === 'image');
-  if (!images?.length) return prompt;
-
-  const imgDir = join(tmpdir(), 'tlive-images');
-  mkdirSync(imgDir, { recursive: true });
-  const paths: string[] = [];
-  for (const att of images) {
-    const ext = att.mimeType === 'image/png' ? '.png' : att.mimeType === 'image/gif' ? '.gif' : '.jpg';
-    const filePath = join(imgDir, `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}${ext}`);
-    writeFileSync(filePath, Buffer.from(att.base64Data, 'base64'));
-    paths.push(filePath);
-  }
-  return `[User sent ${paths.length} image(s) — read them to see the content]\n${paths.join('\n')}\n\n${prompt}`;
-}
-
-// ── Pre-approved permissions (shared with claude-sdk.ts) ──
-
-const SAFE_PERMISSIONS = [
-  'Read(*)', 'Glob(*)', 'Grep(*)', 'WebSearch(*)', 'WebFetch(*)',
-  'Agent(*)', 'Task(*)', 'TodoRead(*)', 'ToolSearch(*)',
-  'Bash(cat *)', 'Bash(head *)', 'Bash(tail *)', 'Bash(less *)',
-  'Bash(wc *)', 'Bash(ls *)', 'Bash(tree *)', 'Bash(find *)',
-  'Bash(grep *)', 'Bash(rg *)', 'Bash(ag *)',
-  'Bash(file *)', 'Bash(stat *)', 'Bash(du *)', 'Bash(df *)',
-  'Bash(which *)', 'Bash(type *)', 'Bash(whereis *)',
-  'Bash(echo *)', 'Bash(printf *)', 'Bash(date *)',
-  'Bash(pwd)', 'Bash(whoami)', 'Bash(uname *)', 'Bash(env)',
-  'Bash(git log *)', 'Bash(git status *)', 'Bash(git diff *)',
-  'Bash(git show *)', 'Bash(git blame *)', 'Bash(git branch *)',
-  'Bash(node -v *)', 'Bash(npm list *)', 'Bash(npx tsc *)',
-  'Bash(go version *)', 'Bash(go list *)',
-];
+import { buildSubprocessEnv, preparePromptWithImages, SAFE_PERMISSIONS } from './claude-shared.js';
 
 export interface ClaudeLiveSessionOptions {
   workingDirectory: string;
@@ -91,7 +40,6 @@ export class ClaudeLiveSession implements LiveSession {
   private _isAlive = true;
   private _isTurnActive = false;
   private currentTurnController: ReadableStreamDefaultController<CanonicalEvent> | null = null;
-  private turnCompleteResolve: (() => void) | null = null;
 
   // Message generator coordination
   private messageWaiter: ((msg: string | null) => void) | null = null;
@@ -214,8 +162,6 @@ export class ClaudeLiveSession implements LiveSession {
             this._isTurnActive = false;
             this.currentTurnController?.close();
             this.currentTurnController = null;
-            this.turnCompleteResolve?.();
-            this.turnCompleteResolve = null;
           }
         }
       }
@@ -233,13 +179,18 @@ export class ClaudeLiveSession implements LiveSession {
       this._isAlive = false;
       this._isTurnActive = false;
       this.currentTurnController = null;
-      this.turnCompleteResolve?.();
-      this.turnCompleteResolve = null;
     }
   }
 
   startTurn(prompt: string, params?: TurnParams): StreamChatResult {
     if (!this._isAlive) throw new Error('Session is closed');
+
+    // Guard: close previous turn if still active (shouldn't happen with proper locking)
+    if (this._isTurnActive && this.currentTurnController) {
+      try { this.currentTurnController.close(); } catch { /* already closed */ }
+      this._isTurnActive = false;
+      this.currentTurnController = null;
+    }
 
     // Set per-turn handlers (read by canUseTool callback)
     this.turnPermissionHandler = params?.onPermissionRequest;

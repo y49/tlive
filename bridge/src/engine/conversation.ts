@@ -35,7 +35,7 @@ interface ProcessMessageParams {
   onTextDelta?: (delta: string) => void;
   onToolStart?: (event: { id: string; name: string; input: Record<string, unknown> }) => void;
   onToolResult?: (event: { toolUseId: string; content: string; isError: boolean }) => void;
-  onQueryResult?: (event: { sessionId: string; isError: boolean; usage: { inputTokens: number; outputTokens: number; costUsd?: number }; permissionDenials?: Array<{ toolName: string; toolUseId: string }> }) => void;
+  onQueryResult?: (event: { sessionId: string; isError: boolean; usage: { inputTokens: number; outputTokens: number; costUsd?: number; modelUsage?: Record<string, { inputTokens: number; outputTokens: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number; costUSD?: number }> }; permissionDenials?: Array<{ toolName: string; toolUseId: string }> }) => void;
   onError?: (error: string) => void;
   onAgentStart?: (data: { description: string; taskId?: string }) => void;
   onAgentProgress?: (data: { description: string; lastTool?: string; usage?: { toolUses: number; durationMs: number } }) => void;

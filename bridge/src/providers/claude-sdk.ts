@@ -4,9 +4,8 @@
  */
 
 import { execSync } from 'node:child_process';
-import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { tmpdir } from 'node:os';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import { ClaudeAdapter } from '../messages/claude-adapter.js';
@@ -15,31 +14,7 @@ import type { LLMProvider, StreamChatParams, StreamChatResult, QueryControls, Pr
 import { ClaudeLiveSession } from './claude-live-session.js';
 import type { PendingPermissions } from '../permissions/gateway.js';
 import type { ClaudeSettingSource } from '../config.js';
-
-// ── Auth error classification ──
-
-const CLI_AUTH_PATTERNS = [/not logged in/i, /please run \/login/i];
-const API_AUTH_PATTERNS = [/unauthorized/i, /invalid.*api.?key/i, /401\b/];
-
-function classifyAuthError(text: string): 'cli' | 'api' | false {
-  if (CLI_AUTH_PATTERNS.some(re => re.test(text))) return 'cli';
-  if (API_AUTH_PATTERNS.some(re => re.test(text))) return 'api';
-  return false;
-}
-
-// ── Environment isolation ──
-
-const ENV_ALWAYS_STRIP = ['CLAUDECODE'];
-
-function buildSubprocessEnv(): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (v === undefined) continue;
-    if (ENV_ALWAYS_STRIP.some(prefix => k.startsWith(prefix))) continue;
-    out[k] = v;
-  }
-  return out;
-}
+import { buildSubprocessEnv, preparePromptWithImages, SAFE_PERMISSIONS, classifyAuthError } from './claude-shared.js';
 
 // ── CLI discovery and version check ──
 
@@ -180,25 +155,7 @@ export class ClaudeSDKProvider implements LLMProvider {
           let stderrBuf = '';
 
           try {
-            // Save image attachments to temp files so Claude Code can read them
-            let prompt = params.prompt;
-            if (params.attachments?.length) {
-              const imgDir = join(tmpdir(), 'tlive-images');
-              mkdirSync(imgDir, { recursive: true });
-              const imagePaths: string[] = [];
-              for (const att of params.attachments) {
-                if (att.type === 'image') {
-                  const ext = att.mimeType === 'image/png' ? '.png' : att.mimeType === 'image/gif' ? '.gif' : '.jpg';
-                  const filePath = join(imgDir, `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}${ext}`);
-                  writeFileSync(filePath, Buffer.from(att.base64Data, 'base64'));
-                  imagePaths.push(filePath);
-                }
-              }
-              if (imagePaths.length > 0) {
-                const imageRefs = imagePaths.map(p => p).join('\n');
-                prompt = `[User sent ${imagePaths.length} image(s) — read them to see the content]\n${imageRefs}\n\n${prompt}`;
-              }
-            }
+            const prompt = preparePromptWithImages(params.prompt, params.attachments);
 
             const queryOptions: Record<string, unknown> = {
               cwd: params.workingDirectory,
@@ -225,27 +182,7 @@ export class ClaudeSDKProvider implements LLMProvider {
               // Dangerous operations (write, delete, network) still trigger canUseTool.
               // These are passed as flag settings (highest priority), so they override
               // any permission rules from user's settings.json.
-              settings: {
-                permissions: {
-                  allow: [
-                    // Read-only tools — always safe
-                    'Read(*)', 'Glob(*)', 'Grep(*)', 'WebSearch(*)', 'WebFetch(*)',
-                    'Agent(*)', 'Task(*)', 'TodoRead(*)', 'ToolSearch(*)',
-                    // Safe Bash commands — read-only, no side effects
-                    'Bash(cat *)', 'Bash(head *)', 'Bash(tail *)', 'Bash(less *)',
-                    'Bash(wc *)', 'Bash(ls *)', 'Bash(tree *)', 'Bash(find *)',
-                    'Bash(grep *)', 'Bash(rg *)', 'Bash(ag *)',
-                    'Bash(file *)', 'Bash(stat *)', 'Bash(du *)', 'Bash(df *)',
-                    'Bash(which *)', 'Bash(type *)', 'Bash(whereis *)',
-                    'Bash(echo *)', 'Bash(printf *)', 'Bash(date *)',
-                    'Bash(pwd)', 'Bash(whoami)', 'Bash(uname *)', 'Bash(env)',
-                    'Bash(git log *)', 'Bash(git status *)', 'Bash(git diff *)',
-                    'Bash(git show *)', 'Bash(git blame *)', 'Bash(git branch *)',
-                    'Bash(node -v *)', 'Bash(npm list *)', 'Bash(npx tsc *)',
-                    'Bash(go version *)', 'Bash(go list *)',
-                  ],
-                },
-              },
+              settings: { permissions: { allow: SAFE_PERMISSIONS } },
               env: buildSubprocessEnv(),
               stderr: (data: string) => {
                 stderrBuf += data;
