@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0](https://github.com/y49/tlive/compare/v0.7.4...v0.8.0) (2026-04-06)
+
+
+### Features
+
+* **bridge:** add /menu control panel with button-based UI ([#34](https://github.com/y49/tlive/issues/34)) ([#35](https://github.com/y49/tlive/issues/35)) ([4344db9](https://github.com/y49/tlive/commit/4344db9465d8f631f1a3b1338e4e9b42ffc53c4f))
+* **bridge:** SDK capabilities — LiveSession, TodoWrite, cost tracking, AskUserQuestion ([#33](https://github.com/y49/tlive/issues/33)) ([21b5af7](https://github.com/y49/tlive/commit/21b5af7245f279527a1e7555a752faf54545f227))
+
 ## [0.7.4](https://github.com/y49/tlive/compare/v0.7.3...v0.7.4) (2026-04-06)
 
 
