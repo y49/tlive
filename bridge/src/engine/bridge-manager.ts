@@ -195,9 +195,9 @@ export class BridgeManager {
         // Guard: if this chat is already processing a message
         const chatKey = this.state.stateKey(msg.channelType, msg.chatId);
         if (this.state.isProcessing(chatKey)) {
-          if (msg.text && this.sdkEngine.canInjectMessage(msg.channelType, msg.chatId, msg.replyToMessageId)) {
-            // Reply to the working card → inject into active turn (streaming input)
-            this.sdkEngine.injectMessage(msg.channelType, msg.chatId, msg.text);
+          if (msg.text && this.sdkEngine.canSteer(msg.channelType, msg.chatId, msg.replyToMessageId)) {
+            // Reply to the working card → steer active turn (streaming input)
+            this.sdkEngine.steer(msg.channelType, msg.chatId, msg.text);
             await adapter.send({ chatId: msg.chatId, text: '💬 Message sent to active session' }).catch(() => {});
           } else if (msg.text) {
             // Direct send or reply to other message → queue for next turn

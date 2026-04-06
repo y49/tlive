@@ -1,7 +1,6 @@
 import type { BaseChannelAdapter } from '../channels/base.js';
 import type { InboundMessage, OutboundMessage } from '../channels/types.js';
-import type { LLMProvider, QueryControls } from '../providers/base.js';
-import { MessageInjector } from '../providers/base.js';
+import type { LLMProvider, QueryControls, LiveSession } from '../providers/base.js';
 import type { PermissionCoordinator } from './permission-coordinator.js';
 import type { SessionStateManager } from './session-state.js';
 import type { ChannelRouter } from './router.js';
@@ -15,20 +14,28 @@ import { markdownToTelegram } from '../markdown/index.js';
 import { downgradeHeadings } from '../markdown/feishu.js';
 import { chunkByParagraph } from '../delivery/delivery.js';
 import type { FeishuStreamingSession } from '../channels/feishu-streaming.js';
+import { getBridgeContext } from '../context.js';
+
+/** Managed session — wraps a LiveSession with per-chat metadata */
+interface ManagedSession {
+  session: LiveSession;
+  workdir: string;
+  costTracker: CostTracker;
+}
 
 /**
  * Handles the full SDK conversation flow: session management, renderer setup,
- * permission handler construction, AskUserQuestion handling, and processMessage call.
+ * permission handler construction, AskUserQuestion handling, and turn processing.
  *
- * Provider-agnostic — works with both Claude SDK and Codex via the LLMProvider interface.
+ * Provider-agnostic — works with both Claude SDK (LiveSession) and Codex (streamChat fallback).
  */
 export class SDKEngine {
   private engine = new ConversationEngine();
   private activeControls = new Map<string, QueryControls>();
-  private activeInjectors = new Map<string, MessageInjector>();
-  /** Per-session cost trackers for cumulative stats across queries */
-  private sessionCostTrackers = new Map<string, CostTracker>();
-  /** Current working card messageId per chat — for reply-to matching */
+
+  /** Session registry: sessionKey → ManagedSession */
+  private registry = new Map<string, ManagedSession>();
+  /** Current working card messageId per chat — for steer matching */
   private activeMessageIds = new Map<string, string>();
   /** Queued messages per chat — processed after current turn completes */
   private messageQueue = new Map<string, Array<InboundMessage>>();
@@ -44,19 +51,82 @@ export class SDKEngine {
     private permissions: PermissionCoordinator,
   ) {}
 
-  /** Check if reply-to matches the current working card (for streaming input injection) */
-  canInjectMessage(channelType: string, chatId: string, replyToMessageId?: string): boolean {
-    const chatKey = this.state.stateKey(channelType, chatId);
-    if (!this.activeInjectors.has(chatKey)) return false;
-    // Only inject if replying to the current working card
-    const activeId = this.activeMessageIds.get(chatKey);
-    return !!replyToMessageId && !!activeId && replyToMessageId === activeId;
+  // ── Session Registry ──
+
+  /** Build session key: channelType:chatId:workdir */
+  private sessionKey(channelType: string, chatId: string, workdir: string): string {
+    return `${channelType}:${chatId}:${workdir}`;
   }
 
-  /** Inject a message into a running query's streaming input */
-  injectMessage(channelType: string, chatId: string, text: string): void {
+  /** Get or create a LiveSession for this chat+workdir */
+  private getOrCreateSession(
+    channelType: string, chatId: string, workdir: string,
+    sdkSessionId: string | undefined, provider: LLMProvider,
+  ): ManagedSession | null {
+    const key = this.sessionKey(channelType, chatId, workdir);
+    const existing = this.registry.get(key);
+    if (existing?.session.isAlive) return existing;
+
+    // Clean up dead session
+    if (existing) this.registry.delete(key);
+
+    // Only create if provider supports live sessions
+    if (!provider.capabilities().liveSession || !provider.createSession) return null;
+
+    const session = provider.createSession({ workingDirectory: workdir, sessionId: sdkSessionId });
+    const managed: ManagedSession = { session, workdir, costTracker: new CostTracker() };
+    this.registry.set(key, managed);
+    console.log(`[bridge] Created LiveSession for ${key}`);
+    return managed;
+  }
+
+  /** Close a session (on /new, session expiry, workdir change) */
+  closeSession(channelType: string, chatId: string, workdir?: string): void {
+    if (workdir) {
+      const key = this.sessionKey(channelType, chatId, workdir);
+      const managed = this.registry.get(key);
+      if (managed) {
+        managed.session.close();
+        this.registry.delete(key);
+        console.log(`[bridge] Closed LiveSession for ${key}`);
+      }
+    } else {
+      // Close ALL sessions for this chat (e.g. on /new)
+      const prefix = `${channelType}:${chatId}:`;
+      for (const [key, managed] of this.registry) {
+        if (key.startsWith(prefix)) {
+          managed.session.close();
+          this.registry.delete(key);
+          console.log(`[bridge] Closed LiveSession for ${key}`);
+        }
+      }
+    }
+  }
+
+  // ── Steer / Queue ──
+
+  /** Check if reply-to matches the current working card (for steer) */
+  canSteer(channelType: string, chatId: string, replyToMessageId?: string): boolean {
     const chatKey = this.state.stateKey(channelType, chatId);
-    this.activeInjectors.get(chatKey)?.push(text);
+    const activeId = this.activeMessageIds.get(chatKey);
+    if (!replyToMessageId || !activeId || replyToMessageId !== activeId) return false;
+    // Find the active session for this chat and check if turn is active
+    for (const [key, managed] of this.registry) {
+      if (key.startsWith(`${channelType}:${chatId}:`) && managed.session.isTurnActive) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Steer the active turn (inject text into running turn) */
+  steer(channelType: string, chatId: string, text: string): void {
+    for (const [key, managed] of this.registry) {
+      if (key.startsWith(`${channelType}:${chatId}:`) && managed.session.isTurnActive) {
+        managed.session.steerTurn(text);
+        return;
+      }
+    }
   }
 
   /** Queue a message for processing after the current turn completes */
@@ -67,7 +137,7 @@ export class SDKEngine {
     this.messageQueue.set(chatKey, queue);
   }
 
-  /** Dequeue the next message for a chat, if any */
+  /** Dequeue the next message for a chat */
   private dequeueMessage(channelType: string, chatId: string): InboundMessage | undefined {
     const chatKey = this.state.stateKey(channelType, chatId);
     const queue = this.messageQueue.get(chatKey);
@@ -76,6 +146,8 @@ export class SDKEngine {
     if (queue.length === 0) this.messageQueue.delete(chatKey);
     return msg;
   }
+
+  // ── Shared State (CallbackRouter, /stop) ──
 
   /** Expose question state for CallbackRouter */
   getQuestionState(): SdkQuestionState {
@@ -101,6 +173,8 @@ export class SDKEngine {
     return null;
   }
 
+  // ── AskUserQuestion ──
+
   /** Ask a single question from an AskUserQuestion call. Returns the answer string. */
   private async askSingleQuestion(
     adapter: BaseChannelAdapter,
@@ -110,21 +184,18 @@ export class SDKEngine {
   ): Promise<string> {
     const permId = `askq-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    // Build question text with optional previews
     const header = q.header ? `📋 **${q.header}**\n\n` : '';
     const optionLines: string[] = [];
     for (let i = 0; i < q.options.length; i++) {
       const opt = q.options[i];
       let line = `${i + 1}. **${opt.label}**${opt.description ? ` — ${opt.description}` : ''}`;
       if (opt.preview) {
-        // Render preview as indented code block
         line += '\n' + opt.preview.split('\n').map(l => `   ${l}`).join('\n');
       }
       optionLines.push(line);
     }
     const questionText = `${header}${q.question}\n\n${optionLines.join('\n')}`;
 
-    // Build option buttons: multiSelect uses toggle+submit, singleSelect uses direct select
     const isMulti = q.multiSelect;
     const buttons: Array<{ label: string; callbackData: string; style: 'primary' | 'danger'; row?: number }> = isMulti
       ? [
@@ -146,18 +217,13 @@ export class SDKEngine {
           { label: '❌ Skip', callbackData: `perm:allow:${permId}:askq_skip`, style: 'danger' as const },
         ];
 
-    // Store question data for answer resolution (also needed for toggle state)
     this.sdkQuestionData.set(permId, { questions: [q], chatId: msg.chatId });
-    // Store in permission coordinator for toggle tracking (reuse hookQuestionData)
     if (isMulti) {
       this.permissions.storeQuestionData(permId, [q]);
     }
 
-    // Create gateway entry BEFORE sending — prevents race condition where user
-    // replies before waitFor is called, causing isPending() to return false
     const waitPromise = this.permissions.getGateway().waitFor(permId);
 
-    // Send question card AFTER gateway entry exists — user replies are now safe
     const hint = isMulti
       ? (msg.channelType === 'feishu' ? '\n\n💬 点击选项切换选中，然后按 Submit 确认' : '\n\n💬 Tap options to toggle, then Submit')
       : (msg.channelType === 'feishu' ? '\n\n💬 回复数字选择，或直接输入内容' : '\n\n💬 Reply with number to select, or type your answer');
@@ -172,21 +238,17 @@ export class SDKEngine {
     const sendResult = await adapter.send(outMsg);
     this.permissions.trackPermissionMessage(sendResult.messageId, permId, sessionId, msg.channelType);
 
-    // Await user answer — waits indefinitely until user responds via IM
     const result = await waitPromise;
 
     if (result.behavior === 'deny') {
       this.sdkQuestionData.delete(permId);
       adapter.editMessage(msg.chatId, sendResult.messageId, {
-        chatId: msg.chatId,
-        text: '⏭ Skipped',
-        buttons: [],
+        chatId: msg.chatId, text: '⏭ Skipped', buttons: [],
         feishuHeader: msg.channelType === 'feishu' ? { template: 'grey', title: '⏭ Skipped' } : undefined,
       }).catch(() => {});
       throw new Error('User skipped question');
     }
 
-    // Check for free text answer first, then option index
     const textAnswer = this.sdkQuestionTextAnswers.get(permId);
     this.sdkQuestionTextAnswers.delete(permId);
     this.sdkQuestionData.delete(permId);
@@ -201,7 +263,6 @@ export class SDKEngine {
       return textAnswer;
     }
 
-    // Option index reply (button callback already edited the message — skip redundant edit)
     const optionIndex = this.sdkQuestionAnswers.get(permId);
     this.sdkQuestionAnswers.delete(permId);
     const selected = optionIndex !== undefined ? q.options[optionIndex] : undefined;
@@ -209,15 +270,15 @@ export class SDKEngine {
 
     if (!selected) {
       adapter.editMessage(msg.chatId, sendResult.messageId, {
-        chatId: msg.chatId,
-        text: '✅ Answered',
-        buttons: [],
+        chatId: msg.chatId, text: '✅ Answered', buttons: [],
         feishuHeader: msg.channelType === 'feishu' ? { template: 'green', title: '✅ Answered' } : undefined,
       }).catch(() => {});
     }
 
     return answerLabel;
   }
+
+  // ── Main Turn Handler ──
 
   /** Run a full SDK conversation turn */
   async handleMessage(
@@ -228,9 +289,7 @@ export class SDKEngine {
     // Check for session expiry (>30 min inactivity) and auto-create new session
     const expired = this.state.checkAndUpdateLastActive(msg.channelType, msg.chatId);
     if (expired) {
-      // Clean up old session's cost tracker before rebinding
-      const oldBinding = await this.router.resolve(msg.channelType, msg.chatId).catch(() => null);
-      if (oldBinding) this.sessionCostTrackers.delete(oldBinding.sessionId);
+      this.closeSession(msg.channelType, msg.chatId);
 
       const newSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       await this.router.rebind(msg.channelType, msg.chatId, newSessionId);
@@ -239,35 +298,32 @@ export class SDKEngine {
     }
 
     const binding = await this.router.resolve(msg.channelType, msg.chatId);
+    const chatKey = this.state.stateKey(msg.channelType, msg.chatId);
 
-    // Resolve threadId: use existing thread if message came from one, or reuse session thread
+    // Resolve working directory
+    const { store, defaultWorkdir } = getBridgeContext();
+    const session = await store.getSession(binding.sessionId);
+    const workdir = session?.workingDirectory ?? defaultWorkdir;
+
+    // Resolve threadId
     let threadId = msg.threadId;
     if (!threadId && adapter.channelType === 'discord') {
       threadId = this.state.getThread(msg.channelType, msg.chatId);
     }
-    // For Telegram topics, always pass threadId through
     if (!threadId && msg.threadId) {
       threadId = msg.threadId;
     }
 
-    // Reaction target: for Discord threads, reaction goes on the original channel message
     const reactionChatId = msg.chatId;
 
-    // Start typing heartbeat (in thread if available)
+    // Start typing heartbeat
     const typingTarget = threadId && adapter.channelType === 'discord' ? threadId : msg.chatId;
     const typingInterval = setInterval(() => {
       adapter.sendTyping(typingTarget).catch(() => {});
     }, 4000);
     adapter.sendTyping(typingTarget).catch(() => {});
 
-    // Use per-session cost tracker for cumulative stats
-    if (!this.sessionCostTrackers.has(binding.sessionId)) {
-      this.sessionCostTrackers.set(binding.sessionId, new CostTracker());
-    }
-    const costTracker = this.sessionCostTrackers.get(binding.sessionId)!;
-    costTracker.start();
-
-    // Add processing reaction
+    // Reactions
     const reactionEmojis: Record<string, { processing: string; done: string; error: string }> = {
       telegram: { processing: '\u{1F914}', done: '\u{1F44D}', error: '\u{1F631}' },
       feishu: { processing: 'Typing', done: 'OK', error: 'FACEPALM' },
@@ -276,11 +332,8 @@ export class SDKEngine {
     const reactions = reactionEmojis[adapter.channelType] || reactionEmojis.telegram;
     adapter.addReaction(reactionChatId, msg.messageId, reactions.processing).catch(() => {});
 
-    // Feishu streaming disabled — new renderer uses short status lines
-    // that don't benefit from streaming, and streaming cards can't be
-    // edited with im.message.patch (needed for permission buttons)
+    // Renderer
     let feishuSession: FeishuStreamingSession | null = null;
-
     const platformLimits: Record<string, number> = { telegram: 4096, discord: 2000, feishu: 30000 };
     let permissionReminderMsgId: string | undefined;
     let permissionReminderTool: string | undefined;
@@ -304,7 +357,6 @@ export class SDKEngine {
         } catch { /* non-fatal */ }
       },
       flushCallback: async (content, isEdit, buttons) => {
-        // Feishu streaming path — skip when buttons needed (streaming doesn't support buttons)
         if (feishuSession && !buttons?.length) {
           if (!isEdit) {
             try {
@@ -319,7 +371,6 @@ export class SDKEngine {
             return;
           }
         }
-        // Non-streaming path
         let outMsg: OutboundMessage;
         if (adapter.channelType === 'telegram') {
           outMsg = { chatId: msg.chatId, html: markdownToTelegram(content), threadId };
@@ -349,7 +400,6 @@ export class SDKEngine {
         } else {
           const limit = platformLimits[adapter.channelType] ?? 4096;
           if (content.length > limit) {
-            // Overflow: edit first chunk into existing message, send rest as new messages
             const chunks = chunkByParagraph(content, limit);
             const firstOutMsg: OutboundMessage = adapter.channelType === 'telegram'
               ? { chatId: msg.chatId, html: markdownToTelegram(chunks[0]), threadId }
@@ -372,95 +422,79 @@ export class SDKEngine {
     });
 
     let completedStats: UsageStats | undefined;
-
-    // When an AskUserQuestion is approved, auto-allow the next permission request
-    // to avoid redundant confirmation (e.g. "delete this?" → yes → Bash permission)
     let askQuestionApproved = false;
+    const caps = provider.capabilities();
 
-    // Build SDK-level permission handler based on /perm mode
+    // Build SDK-level permission handler
     const permMode = this.state.getPermMode(msg.channelType, msg.chatId);
     const sdkPermissionHandler = permMode === 'on'
       ? async (toolName: string, toolInput: Record<string, unknown>, promptSentence: string, _signal?: AbortSignal) => {
-          // Check dynamic whitelist — auto-allow if previously approved
           if (this.permissions.isToolAllowed(toolName, toolInput)) {
             console.log(`[bridge] Auto-allowed ${toolName} via session whitelist`);
             return 'allow' as const;
           }
-
-          // Auto-allow if user just approved an AskUserQuestion
           if (askQuestionApproved) {
             askQuestionApproved = false;
             console.log(`[bridge] Auto-allowed ${toolName} after AskUserQuestion approval`);
             return 'allow' as const;
           }
-
           const permId = `sdk-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-          const chatKey = this.state.stateKey(msg.channelType, msg.chatId);
           this.permissions.setPendingSdkPerm(chatKey, permId);
           console.log(`[bridge] Permission request: ${toolName} (${permId}) for ${chatKey}`);
-
-          // NOTE: We intentionally ignore the SDK abort signal for IM permissions.
-          // IM users may respond hours later — the abort signal should not auto-deny
-          // a permission the user hasn't seen yet. No timeout either.
-
-          // Render permission inline in the terminal card
-          const inputStr = getToolCommand(toolName, toolInput)
-            || JSON.stringify(toolInput, null, 2);
+          const inputStr = getToolCommand(toolName, toolInput) || JSON.stringify(toolInput, null, 2);
           const buttons: Array<{ label: string; callbackData: string; style: string }> = [
             { label: '✅ Allow', callbackData: `perm:allow:${permId}`, style: 'primary' },
             { label: '❌ Deny', callbackData: `perm:deny:${permId}`, style: 'danger' },
           ];
           renderer.onPermissionNeeded(toolName, inputStr, permId, buttons);
-
-          // Wait for user response — no timeout, IM users may respond much later
           const result = await this.permissions.getGateway().waitFor(permId);
           renderer.onPermissionResolved(permId);
-
-          // Update timeout reminder message if it was sent
           if (permissionReminderMsgId) {
             const icon = result.behavior === 'deny' ? '❌' : '✅';
-            const label = `${permissionReminderTool}: ${permissionReminderInput} ${icon}`;
             adapter.editMessage(msg.chatId, permissionReminderMsgId, {
-              chatId: msg.chatId,
-              text: label,
+              chatId: msg.chatId, text: `${permissionReminderTool}: ${permissionReminderInput} ${icon}`,
             }).catch(() => {});
             permissionReminderMsgId = undefined;
           }
-
           this.permissions.clearPendingSdkPerm(chatKey);
           console.log(`[bridge] Permission resolved: ${toolName} (${permId}) → ${result.behavior}`);
           return result.behavior as 'allow' | 'allow_always' | 'deny';
         }
       : undefined;
 
-    // Build SDK-level AskUserQuestion handler
-    // Processes ALL questions sequentially — SDK supports 1-4 questions per call
+    // Build AskUserQuestion handler
     const sdkAskQuestionHandler = async (
       questions: Array<{ question: string; header: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect: boolean }>,
       _signal?: AbortSignal,
     ): Promise<Record<string, string>> => {
       if (!questions.length) return {};
-
       const allAnswers: Record<string, string> = {};
-
       for (const q of questions) {
         const answer = await this.askSingleQuestion(adapter, msg, binding.sessionId, q);
         allAnswers[q.question] = answer;
       }
-
-      // All questions answered — auto-allow the next tool permission in this query
       askQuestionApproved = true;
       return allAnswers;
     };
 
-    // Create message injector for streaming input if provider supports it
-    const caps = provider.capabilities();
-    const chatKey = this.state.stateKey(msg.channelType, msg.chatId);
-    let injector: MessageInjector | undefined;
-    if (caps.streamingInput) {
-      injector = new MessageInjector();
-      this.activeInjectors.set(chatKey, injector);
+    // ── Get or create LiveSession; build per-turn stream ──
+    const managed = this.getOrCreateSession(
+      msg.channelType, msg.chatId, workdir,
+      session?.sdkSessionId, provider,
+    );
+
+    let streamResult;
+    if (managed) {
+      // LiveSession mode — start a new turn
+      streamResult = managed.session.startTurn(msg.text, {
+        onPermissionRequest: sdkPermissionHandler,
+        onAskUserQuestion: sdkAskQuestionHandler,
+        effort: this.state.getEffort(msg.channelType, msg.chatId),
+        model: this.state.getModel(msg.channelType, msg.chatId),
+        attachments: msg.attachments,
+      });
     }
+    // else: streamResult is undefined → ConversationEngine falls back to streamChat()
 
     try {
       const result = await this.engine.processMessage({
@@ -468,17 +502,16 @@ export class SDKEngine {
         text: msg.text,
         attachments: msg.attachments,
         llm: provider,
-        sdkPermissionHandler,
-        sdkAskQuestionHandler,
+        sdkPermissionHandler: managed ? undefined : sdkPermissionHandler,
+        sdkAskQuestionHandler: managed ? undefined : sdkAskQuestionHandler,
         effort: this.state.getEffort(msg.channelType, msg.chatId),
         model: this.state.getModel(msg.channelType, msg.chatId),
-        messageInjector: injector,
+        streamResult,
         onControls: (ctrl) => {
           this.activeControls.set(chatKey, ctrl);
         },
         onTextDelta: (delta) => {
           renderer.onTextDelta(delta);
-          // Track working card messageId once available (for reply-to matching)
           if (renderer.messageId && !this.activeMessageIds.has(chatKey)) {
             this.activeMessageIds.set(chatKey, renderer.messageId);
           }
@@ -486,21 +519,13 @@ export class SDKEngine {
         onToolStart: (event) => {
           renderer.onToolStart(event.name);
         },
-        onToolResult: (_event) => {
-          // No-op — MessageRenderer counts on start, not complete
-        },
+        onToolResult: (_event) => {},
         onAgentStart: (_data) => {
           renderer.onToolStart('Agent');
         },
-        onAgentProgress: (_data) => {
-          // No-op — flat display
-        },
-        onAgentComplete: (_data) => {
-          // No-op — flat display
-        },
-        onToolProgress: (_data) => {
-          // No-op — flat display
-        },
+        onAgentProgress: (_data) => {},
+        onAgentComplete: (_data) => {},
+        onToolProgress: (_data) => {},
         onTodoUpdate: caps.todoTracking ? (todos) => {
           renderer.onTodoUpdate(todos);
         } : undefined,
@@ -515,12 +540,13 @@ export class SDKEngine {
           if (event.permissionDenials?.length) {
             console.warn(`[bridge] Permission denials: ${event.permissionDenials.map(d => d.toolName).join(', ')}`);
           }
+          const tracker = managed?.costTracker ?? new CostTracker();
+          if (!managed) tracker.start();
           const usage = { input_tokens: event.usage.inputTokens, output_tokens: event.usage.outputTokens, cost_usd: event.usage.costUsd, model_usage: event.usage.modelUsage };
-          completedStats = costTracker.finish(usage);
+          completedStats = tracker.finish(usage);
           renderer.onComplete(completedStats);
         },
         onPromptSuggestion: (suggestion) => {
-          // Send as a quick-reply button after the response completes
           const chatId = threadId && adapter.channelType === 'discord' ? threadId : msg.chatId;
           const truncated = suggestion.length > 60 ? suggestion.slice(0, 57) + '...' : suggestion;
           adapter.send({
@@ -532,17 +558,13 @@ export class SDKEngine {
         onError: (err) => renderer.onError(err),
       });
 
-      // Success: change to done reaction
       adapter.addReaction(reactionChatId, msg.messageId, reactions.done).catch(() => {});
     } catch (err) {
-      // Error: change to error reaction
       adapter.addReaction(reactionChatId, msg.messageId, reactions.error).catch(() => {});
       throw err;
     } finally {
       clearInterval(typingInterval);
       renderer.dispose();
-      injector?.close();
-      this.activeInjectors.delete(chatKey);
       this.activeControls.delete(chatKey);
       this.activeMessageIds.delete(chatKey);
     }
@@ -551,7 +573,6 @@ export class SDKEngine {
     const nextMsg = this.dequeueMessage(msg.channelType, msg.chatId);
     if (nextMsg) {
       console.log(`[bridge] Processing queued message for ${msg.channelType}:${msg.chatId}`);
-      // Recursively handle — creates new renderer, new card
       await this.handleMessage(adapter, nextMsg, provider);
     }
 

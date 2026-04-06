@@ -1,6 +1,6 @@
 import { getBridgeContext } from '../context.js';
 import type { CanonicalEvent } from '../messages/schema.js';
-import type { LLMProvider, FileAttachment, PermissionRequestHandler, QueryControls, MessageInjector } from '../providers/base.js';
+import type { LLMProvider, FileAttachment, PermissionRequestHandler, QueryControls, StreamChatResult } from '../providers/base.js';
 import type { AskUserQuestionHandler } from '../messages/types.js';
 
 const TEXT_MIME_PREFIXES = ['text/', 'application/json', 'application/xml', 'application/javascript', 'application/typescript', 'application/x-yaml', 'application/toml'];
@@ -55,8 +55,8 @@ interface ProcessMessageParams {
   model?: string;
   /** Override LLM provider (for per-chat runtime selection) */
   llm?: LLMProvider;
-  /** When provided, enables streaming input for mid-query message injection */
-  messageInjector?: MessageInjector;
+  /** Pre-built stream from LiveSession.startTurn() — skips llm.streamChat() */
+  streamResult?: StreamChatResult;
 }
 
 interface ProcessMessageResult {
@@ -93,8 +93,8 @@ export class ConversationEngine {
       const session = await store.getSession(params.sessionId);
       const workDir = session?.workingDirectory ?? defaultWorkdir;
 
-      // 5. Stream LLM response (pass images as attachments for vision)
-      const result = llm.streamChat({
+      // 5. Stream LLM response — use pre-built stream from LiveSession or call streamChat
+      const result = params.streamResult ?? llm.streamChat({
         prompt,
         workingDirectory: workDir,
         model: params.model,
@@ -103,7 +103,6 @@ export class ConversationEngine {
         onPermissionRequest: params.sdkPermissionHandler,
         onAskUserQuestion: params.sdkAskQuestionHandler,
         effort: params.effort,
-        messageInjector: params.messageInjector,
       });
 
       // Expose query controls (interrupt, stopTask) to caller
