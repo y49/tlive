@@ -20,6 +20,7 @@ export class CommandRouter {
     private coreAvailable: () => boolean,
     private activeControls: Map<string, QueryControls>,
     private permissions: { clearSessionWhitelist(): void },
+    private onNewSession?: (channelType: string, chatId: string) => void,
   ) {}
 
   async handle(adapter: BaseChannelAdapter, msg: InboundMessage): Promise<boolean> {
@@ -65,6 +66,8 @@ export class CommandRouter {
         return true;
       }
       case '/new': {
+        // Close any active LiveSession(s) for this chat before creating new session
+        this.onNewSession?.(msg.channelType, msg.chatId);
         const newSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         await this.router.rebind(msg.channelType, msg.chatId, newSessionId);
         this.state.clearLastActive(msg.channelType, msg.chatId);
