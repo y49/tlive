@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.4](https://github.com/y49/tlive/compare/v0.7.3...v0.7.4) (2026-04-06)
+
+
+### Bug Fixes
+
+* **bridge:** mock config.env in config tests to avoid local env leaks ([#28](https://github.com/y49/tlive/issues/28)) ([42dff8f](https://github.com/y49/tlive/commit/42dff8f41e834e4b84d7a2ce697d7e3fb2a8048e))
+* **bridge:** remove abort signal and timeout for SDK permissions and AskUserQuestion ([#31](https://github.com/y49/tlive/issues/31)) ([ed92347](https://github.com/y49/tlive/commit/ed92347ada756d8fa40310a09ab0761c715d0c8d))
+* change default port from 8080 to 4590 to avoid conflicts ([#30](https://github.com/y49/tlive/issues/30)) ([d79e9e8](https://github.com/y49/tlive/commit/d79e9e888e7547a8ca23a0aaaa6f7b13ac4ea5de))
+
 ## [0.7.3](https://github.com/y49/tlive/compare/v0.7.2...v0.7.3) (2026-04-06)
 
 
