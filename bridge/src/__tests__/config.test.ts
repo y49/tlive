@@ -1,5 +1,19 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { loadConfig } from '../config.js';
+
+// Prevent loadConfig from reading ~/.tlive/config.env so tests use pure defaults
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    readFileSync: vi.fn((path: string, ...args: any[]) => {
+      if (typeof path === 'string' && path.includes('config.env')) {
+        throw new Error('ENOENT');
+      }
+      return actual.readFileSync(path, ...args);
+    }),
+  };
+});
 
 describe('loadConfig', () => {
   const savedEnv = { ...process.env };
