@@ -10,7 +10,7 @@ func TestLockFile_WriteAndRead(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "daemon.json")
 
-	info := LockInfo{Port: 8080, Token: "abc123", Pid: 12345}
+	info := LockInfo{Port: 4590, Token: "abc123", Pid: 12345}
 	if err := WriteLockFile(path, info); err != nil {
 		t.Fatalf("WriteLockFile: %v", err)
 	}
@@ -19,7 +19,7 @@ func TestLockFile_WriteAndRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadLockFile: %v", err)
 	}
-	if got.Port != 8080 || got.Token != "abc123" || got.Pid != 12345 {
+	if got.Port != 4590 || got.Token != "abc123" || got.Pid != 12345 {
 		t.Errorf("unexpected lock info: %+v", got)
 	}
 }
@@ -35,7 +35,7 @@ func TestLockFile_Remove(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "daemon.json")
 
-	info := LockInfo{Port: 8080, Token: "t", Pid: 1}
+	info := LockInfo{Port: 4590, Token: "t", Pid: 1}
 	WriteLockFile(path, info)
 	RemoveLockFile(path)
 

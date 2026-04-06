@@ -21,7 +21,7 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.PersistentFlags().IntVarP(&port, "port", "p", 8080, "Web server port")
+	rootCmd.PersistentFlags().IntVarP(&port, "port", "p", 4590, "Web server port")
 	rootCmd.PersistentFlags().StringVar(&token, "token", "", "Auth token")
 	rootCmd.Flags().StringVar(&publicIP, "ip", "", "Override auto-detected LAN IP address")
 	// Stop parsing flags after the first positional arg (the wrapped command).

@@ -76,7 +76,7 @@ TL_TG_BOT_TOKEN=7823456789:AAF-xxxxx
 TL_TG_CHAT_ID=123456789
 
 # Web terminal port and access token
-TL_PORT=8080
+TL_PORT=4590
 TL_TOKEN=your-secret-token
 ```
 

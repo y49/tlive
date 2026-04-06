@@ -53,8 +53,8 @@ tlive npm run build           # 包装构建
 $ tlive claude --model opus
 
   TLive Web UI:
-    Local:   http://localhost:8080?token=abc123
-    Network: http://192.168.1.100:8080?token=abc123
+    Local:   http://localhost:4590?token=abc123
+    Network: http://192.168.1.100:4590?token=abc123
   Session: claude (ID: a1b2c3)
 ```
 
@@ -185,7 +185,7 @@ tlive hooks resume         # 恢复 Hook（IM 审批）
 统一配置文件 `~/.tlive/config.env`（由 `tlive setup` 创建）：
 
 ```env
-TL_PORT=8080
+TL_PORT=4590
 TL_TOKEN=自动生成
 TL_HOST=0.0.0.0
 TL_PUBLIC_URL=https://example.com
@@ -207,7 +207,7 @@ TL_FS_APP_SECRET=...
 
 通过 frpc、Cloudflare Tunnel、ngrok 等从外网访问 web terminal：
 
-1. 将本地 `8080` 端口（或你的 `TL_PORT`）通过隧道转发
+1. 将本地 `4590` 端口（或你的 `TL_PORT`）通过隧道转发
 2. 设置 `TL_PUBLIC_URL` 为隧道域名：
    ```env
    TL_PUBLIC_URL=https://your-domain.com

@@ -71,7 +71,7 @@ export async function runSetupWizard(): Promise<void> {
   if (isUpdate) {
     console.log(`Existing config: ${CONFIG_PATH}`);
     console.log(`  Channels: ${existing.TL_ENABLED_CHANNELS || '(none)'}`);
-    console.log(`  Port: ${existing.TL_PORT || '8080'}`);
+    console.log(`  Port: ${existing.TL_PORT || '4590'}`);
     console.log('');
 
     const mode = await ask('What do you want to do?\n  1. Update existing config\n  2. Start fresh\n  3. Cancel\nChoice', '1');
@@ -86,7 +86,7 @@ export async function runSetupWizard(): Promise<void> {
 
   // Token + port
   if (!config.TL_TOKEN) config.TL_TOKEN = randomBytes(16).toString('hex');
-  config.TL_PORT = await ask('Web server port', config.TL_PORT || '8080');
+  config.TL_PORT = await ask('Web server port', config.TL_PORT || '4590');
 
   // Choose platforms
   const currentChannels = (config.TL_ENABLED_CHANNELS || '').split(',').filter(Boolean);

@@ -36,7 +36,7 @@
 **Steps**:
 1. Verify hooks are configured in `~/.claude/settings.json`
 2. Check hook scripts exist: `ls -la ~/.tlive/bin/hook-handler.sh`
-3. Check Go Core is running: `curl -sf http://localhost:8080/api/status`
+3. Check Go Core is running: `curl -sf http://localhost:4590/api/status`
 4. Check hooks aren't paused: `tlive hooks`
 5. Test hook script manually: `echo '{}' | ~/.tlive/bin/hook-handler.sh`
 

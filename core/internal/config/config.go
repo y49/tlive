@@ -24,7 +24,7 @@ type DaemonConfig struct {
 func Default() *Config {
 	return &Config{
 		Daemon: DaemonConfig{
-			Port: 8080,
+			Port: 4590,
 			Host: "0.0.0.0",
 		},
 	}

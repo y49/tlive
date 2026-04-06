@@ -14,7 +14,7 @@ let sessionJson = '';
 for await (const chunk of process.stdin) sessionJson += chunk;
 
 // Load config
-let port = '8080';
+let port = '4590';
 let token = '';
 const configPath = join(home, '.tlive', 'config.env');
 if (existsSync(configPath)) {

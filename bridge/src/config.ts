@@ -106,7 +106,7 @@ export function loadConfig(): Config {
   const get = (key: string, defaultValue = ''): string =>
     process.env[key] ?? envFile[key] ?? defaultValue;
 
-  const port = parseInt(get('TL_PORT', '8080'), 10);
+  const port = parseInt(get('TL_PORT', '4590'), 10);
   const globalProxy = get('TL_PROXY');
 
   const config: Config = {

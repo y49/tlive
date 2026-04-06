@@ -8,8 +8,8 @@ import (
 
 func TestDefault(t *testing.T) {
 	cfg := Default()
-	if cfg.Daemon.Port != 8080 {
-		t.Errorf("expected default port 8080, got %d", cfg.Daemon.Port)
+	if cfg.Daemon.Port != 4590 {
+		t.Errorf("expected default port 4590, got %d", cfg.Daemon.Port)
 	}
 	if cfg.Daemon.Host != "0.0.0.0" {
 		t.Errorf("expected default host 0.0.0.0, got %s", cfg.Daemon.Host)
@@ -26,8 +26,8 @@ func TestLoadFromEnv_Missing(t *testing.T) {
 	if err != nil {
 		t.Fatal("missing config.env should return defaults, not error:", err)
 	}
-	if cfg.Daemon.Port != 8080 {
-		t.Errorf("expected default port 8080, got %d", cfg.Daemon.Port)
+	if cfg.Daemon.Port != 4590 {
+		t.Errorf("expected default port 4590, got %d", cfg.Daemon.Port)
 	}
 }
 

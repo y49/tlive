@@ -89,7 +89,7 @@ export class BridgeManager {
 
   constructor() {
     const config = loadConfig();
-    const effectivePublicUrl = config.publicUrl || `http://${getLocalIP()}:${config.port || 8080}`;
+    const effectivePublicUrl = config.publicUrl || `http://${getLocalIP()}:${config.port || 4590}`;
     const gateway = new PendingPermissions();
     const broker = new PermissionBroker(gateway, effectivePublicUrl);
     this.coreUrl = config.coreUrl;
@@ -234,7 +234,7 @@ export class BridgeManager {
     let terminalUrl: string | undefined;
     if (this.coreAvailable && hook.tlive_session_id) {
       const config = loadConfig();
-      const baseUrl = config.publicUrl || `http://${getLocalIP()}:${config.port || 8080}`;
+      const baseUrl = config.publicUrl || `http://${getLocalIP()}:${config.port || 4590}`;
       terminalUrl = `${baseUrl}/terminal.html?id=${hook.tlive_session_id}&token=${this.token}`;
     }
 

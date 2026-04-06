@@ -53,8 +53,8 @@ tlive npm run build           # Wrap a build
 $ tlive claude --model opus
 
   TLive Web UI:
-    Local:   http://localhost:8080?token=abc123
-    Network: http://192.168.1.100:8080?token=abc123
+    Local:   http://localhost:4590?token=abc123
+    Network: http://192.168.1.100:4590?token=abc123
   Session: claude (ID: a1b2c3)
 ```
 
@@ -196,7 +196,7 @@ tlive hooks resume         # Resume hooks (IM approval)
 Single config file `~/.tlive/config.env` (created by `tlive setup`):
 
 ```env
-TL_PORT=8080
+TL_PORT=4590
 TL_TOKEN=auto-generated
 TL_HOST=0.0.0.0
 TL_PUBLIC_URL=https://example.com
@@ -232,7 +232,7 @@ See [config.env.example](config.env.example) for all options.
 
 To access the web terminal from outside your LAN (e.g. via frpc, Cloudflare Tunnel, ngrok):
 
-1. Forward local port `8080` (or your `TL_PORT`) through the tunnel
+1. Forward local port `4590` (or your `TL_PORT`) through the tunnel
 2. Set `TL_PUBLIC_URL` to your tunnel domain:
    ```env
    TL_PUBLIC_URL=https://your-domain.com

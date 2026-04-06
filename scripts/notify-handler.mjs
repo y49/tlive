@@ -28,7 +28,7 @@ hookJson.tlive_hook_type = 'notification';
 hookJson.tlive_cwd = process.cwd();
 
 // Load config
-let port = '8080';
+let port = '4590';
 let token = '';
 const configPath = join(homedir(), '.tlive', 'config.env');
 if (existsSync(configPath)) {

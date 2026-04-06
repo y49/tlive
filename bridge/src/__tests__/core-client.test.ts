@@ -18,7 +18,7 @@ beforeAll(async () => {
 
     if (req.method === 'GET' && url.pathname === '/api/status') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'running', uptime: 10, port: 8080, sessions: 1, version: '0.1.0' }));
+      res.end(JSON.stringify({ status: 'running', uptime: 10, port: 4590, sessions: 1, version: '0.1.0' }));
     } else if (req.method === 'GET' && url.pathname === '/api/sessions') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify([{ id: 'sess1', command: 'bash', status: 'running' }]));

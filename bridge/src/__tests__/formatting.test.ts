@@ -74,11 +74,11 @@ describe('formatNotification', () => {
 
   it('stop: telegram with localhost uses inline text link', () => {
     const msg = formatNotification(
-      { type: 'stop', title: 'Done', summary: 'ok', terminalUrl: 'http://localhost:8080/t' },
+      { type: 'stop', title: 'Done', summary: 'ok', terminalUrl: 'http://localhost:4590/t' },
       'telegram'
     );
     expect(msg.html).toContain('Open Terminal');
-    expect(msg.html).toContain('localhost:8080');
+    expect(msg.html).toContain('localhost:4590');
     expect((msg as any).buttons).toBeUndefined();
   });
 

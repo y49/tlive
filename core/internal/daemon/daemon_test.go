@@ -9,7 +9,7 @@ import (
 )
 
 func TestDaemon_StatusEndpoint(t *testing.T) {
-	d := NewDaemon(DaemonConfig{Port: 8080, Token: "t"})
+	d := NewDaemon(DaemonConfig{Port: 4590, Token: "t"})
 	handler := d.Handler()
 
 	req := httptest.NewRequest("GET", "/api/status", nil)

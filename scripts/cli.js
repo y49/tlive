@@ -153,7 +153,7 @@ async function daemonStatus() {
   }
 
   // Check Go Core web terminal
-  const port = process.env.TL_PORT || config.TL_PORT || '8080';
+  const port = process.env.TL_PORT || config.TL_PORT || '4590';
   const token = process.env.TL_TOKEN || config.TL_TOKEN || '';
   try {
     const resp = await fetch(`http://localhost:${port}/api/status`, {
@@ -307,7 +307,7 @@ async function runDoctor() {
 
   // API check
   const config = existsSync(CONFIG_FILE) ? loadConfigEnv() : {};
-  const port = process.env.TL_PORT || config.TL_PORT || '8080';
+  const port = process.env.TL_PORT || config.TL_PORT || '4590';
   const token = process.env.TL_TOKEN || config.TL_TOKEN || '';
   try {
     const resp = await fetch(`http://localhost:${port}/api/status`, {
