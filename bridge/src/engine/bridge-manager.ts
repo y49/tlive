@@ -195,13 +195,14 @@ export class BridgeManager {
         // Guard: if this chat is already processing a message
         const chatKey = this.state.stateKey(msg.channelType, msg.chatId);
         if (this.state.isProcessing(chatKey)) {
-          // Reply-to-message = inject into active turn (streaming input)
-          // Direct send = queue for next turn (wait for current to finish)
-          if (msg.text && msg.replyToMessageId && this.sdkEngine.canInjectMessage(msg.channelType, msg.chatId)) {
+          if (msg.text && this.sdkEngine.canInjectMessage(msg.channelType, msg.chatId, msg.replyToMessageId)) {
+            // Reply to the working card → inject into active turn (streaming input)
             this.sdkEngine.injectMessage(msg.channelType, msg.chatId, msg.text);
             await adapter.send({ chatId: msg.chatId, text: '💬 Message sent to active session' }).catch(() => {});
-          } else {
-            await adapter.send({ chatId: msg.chatId, text: '⏳ Previous message still processing, please wait...' }).catch(() => {});
+          } else if (msg.text) {
+            // Direct send or reply to other message → queue for next turn
+            this.sdkEngine.queueMessage(msg.channelType, msg.chatId, msg);
+            await adapter.send({ chatId: msg.chatId, text: '📥 Queued — will process after current task' }).catch(() => {});
           }
           continue;
         }

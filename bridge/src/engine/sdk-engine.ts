@@ -28,6 +28,10 @@ export class SDKEngine {
   private activeInjectors = new Map<string, MessageInjector>();
   /** Per-session cost trackers for cumulative stats across queries */
   private sessionCostTrackers = new Map<string, CostTracker>();
+  /** Current working card messageId per chat — for reply-to matching */
+  private activeMessageIds = new Map<string, string>();
+  /** Queued messages per chat — processed after current turn completes */
+  private messageQueue = new Map<string, Array<InboundMessage>>();
 
   // SDK AskUserQuestion state — shared with CallbackRouter via SdkQuestionState interface
   private sdkQuestionData = new Map<string, { questions: Array<{ question: string; header: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect: boolean }>; chatId: string }>();
@@ -40,16 +44,37 @@ export class SDKEngine {
     private permissions: PermissionCoordinator,
   ) {}
 
-  /** Check if this chat has an active query that can accept injected messages */
-  canInjectMessage(channelType: string, chatId: string): boolean {
+  /** Check if reply-to matches the current working card (for streaming input injection) */
+  canInjectMessage(channelType: string, chatId: string, replyToMessageId?: string): boolean {
     const chatKey = this.state.stateKey(channelType, chatId);
-    return this.activeInjectors.has(chatKey);
+    if (!this.activeInjectors.has(chatKey)) return false;
+    // Only inject if replying to the current working card
+    const activeId = this.activeMessageIds.get(chatKey);
+    return !!replyToMessageId && !!activeId && replyToMessageId === activeId;
   }
 
   /** Inject a message into a running query's streaming input */
   injectMessage(channelType: string, chatId: string, text: string): void {
     const chatKey = this.state.stateKey(channelType, chatId);
     this.activeInjectors.get(chatKey)?.push(text);
+  }
+
+  /** Queue a message for processing after the current turn completes */
+  queueMessage(channelType: string, chatId: string, msg: InboundMessage): void {
+    const chatKey = this.state.stateKey(channelType, chatId);
+    const queue = this.messageQueue.get(chatKey) ?? [];
+    queue.push(msg);
+    this.messageQueue.set(chatKey, queue);
+  }
+
+  /** Dequeue the next message for a chat, if any */
+  private dequeueMessage(channelType: string, chatId: string): InboundMessage | undefined {
+    const chatKey = this.state.stateKey(channelType, chatId);
+    const queue = this.messageQueue.get(chatKey);
+    if (!queue?.length) return undefined;
+    const msg = queue.shift()!;
+    if (queue.length === 0) this.messageQueue.delete(chatKey);
+    return msg;
   }
 
   /** Expose question state for CallbackRouter */
@@ -451,7 +476,13 @@ export class SDKEngine {
         onControls: (ctrl) => {
           this.activeControls.set(chatKey, ctrl);
         },
-        onTextDelta: (delta) => renderer.onTextDelta(delta),
+        onTextDelta: (delta) => {
+          renderer.onTextDelta(delta);
+          // Track working card messageId once available (for reply-to matching)
+          if (renderer.messageId && !this.activeMessageIds.has(chatKey)) {
+            this.activeMessageIds.set(chatKey, renderer.messageId);
+          }
+        },
         onToolStart: (event) => {
           renderer.onToolStart(event.name);
         },
@@ -513,6 +544,15 @@ export class SDKEngine {
       injector?.close();
       this.activeInjectors.delete(chatKey);
       this.activeControls.delete(chatKey);
+      this.activeMessageIds.delete(chatKey);
+    }
+
+    // Process queued messages (next turn)
+    const nextMsg = this.dequeueMessage(msg.channelType, msg.chatId);
+    if (nextMsg) {
+      console.log(`[bridge] Processing queued message for ${msg.channelType}:${msg.chatId}`);
+      // Recursively handle — creates new renderer, new card
+      await this.handleMessage(adapter, nextMsg, provider);
     }
 
     return true;
