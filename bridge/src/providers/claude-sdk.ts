@@ -245,7 +245,7 @@ export class ClaudeSDKProvider implements LLMProvider {
               canUseTool: async (
                 toolName: string,
                 input: Record<string, unknown>,
-                options: { decisionReason?: string; title?: string; suggestions?: unknown[]; signal?: AbortSignal } = {},
+                options: { decisionReason?: string; title?: string; suggestions?: unknown[]; signal?: AbortSignal; blockedPath?: string; toolUseID?: string; agentID?: string } = {},
               ): Promise<PermissionResult> => {
                 // AskUserQuestion — route to dedicated handler
                 // NOTE: We intentionally do NOT pass the abort signal to the IM handler.
@@ -277,12 +277,14 @@ export class ClaudeSDKProvider implements LLMProvider {
                 // NOTE: We intentionally ignore options.signal?.aborted here.
                 // In IM context, the user may not be at the keyboard — the abort signal
                 // should not auto-deny a permission the user hasn't seen yet.
-                const reason = options.decisionReason || options.title || toolName;
+                const reason = options.blockedPath
+                  ? `${options.decisionReason || toolName} (${options.blockedPath})`
+                  : (options.decisionReason || options.title || toolName);
                 console.log(`[claude-sdk] canUseTool: ${toolName} → asking user (${reason})`);
                 // Do not pass abort signal — IM permissions wait indefinitely for user response
                 const decision = await params.onPermissionRequest(toolName, input, reason);
                 if (decision === 'allow') {
-                  return { behavior: 'allow' as const, updatedInput: input };
+                  return { behavior: 'allow' as const, updatedInput: input, toolUseID: options.toolUseID };
                 }
                 if (decision === 'allow_always') {
                   // SDK API uses behavior:'allow' + updatedPermissions to persist the rule.
@@ -290,10 +292,11 @@ export class ClaudeSDKProvider implements LLMProvider {
                   return {
                     behavior: 'allow' as const,
                     updatedInput: input,
+                    toolUseID: options.toolUseID,
                     ...(options.suggestions ? { updatedPermissions: options.suggestions } : {}),
                   } as PermissionResult;
                 }
-                return { behavior: 'deny' as const, message: 'Denied by user via IM' };
+                return { behavior: 'deny' as const, message: 'Denied by user via IM', toolUseID: options.toolUseID };
               },
             };
 

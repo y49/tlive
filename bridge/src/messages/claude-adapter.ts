@@ -257,6 +257,24 @@ export class ClaudeAdapter {
       }))
       : undefined;
 
+    // Extract per-model usage breakdown if available
+    const rawModelUsage = msg.modelUsage as Record<string, {
+      inputTokens?: number; outputTokens?: number;
+      cacheReadInputTokens?: number; cacheCreationInputTokens?: number;
+      costUSD?: number;
+    }> | undefined;
+    const modelUsage = rawModelUsage && Object.keys(rawModelUsage).length > 0
+      ? Object.fromEntries(
+          Object.entries(rawModelUsage).map(([model, u]) => [model, {
+            inputTokens: u.inputTokens ?? 0,
+            outputTokens: u.outputTokens ?? 0,
+            ...(u.cacheReadInputTokens != null ? { cacheReadInputTokens: u.cacheReadInputTokens } : {}),
+            ...(u.cacheCreationInputTokens != null ? { cacheCreationInputTokens: u.cacheCreationInputTokens } : {}),
+            ...(u.costUSD != null ? { costUSD: u.costUSD } : {}),
+          }]),
+        )
+      : undefined;
+
     if (msg.subtype === 'success') {
       const ev: CanonicalEvent = {
         kind: 'query_result',
@@ -266,6 +284,7 @@ export class ClaudeAdapter {
           inputTokens: usage?.input_tokens ?? 0,
           outputTokens: usage?.output_tokens ?? 0,
           ...(msg.total_cost_usd != null ? { costUsd: msg.total_cost_usd as number } : {}),
+          ...(modelUsage ? { modelUsage } : {}),
         },
         ...(denials && denials.length > 0 ? { permissionDenials: denials } : {}),
       };
@@ -285,6 +304,7 @@ export class ClaudeAdapter {
             inputTokens: usage.input_tokens ?? 0,
             outputTokens: usage.output_tokens ?? 0,
             ...(msg.total_cost_usd != null ? { costUsd: msg.total_cost_usd as number } : {}),
+            ...(modelUsage ? { modelUsage } : {}),
           },
           ...(denials && denials.length > 0 ? { permissionDenials: denials } : {}),
         };

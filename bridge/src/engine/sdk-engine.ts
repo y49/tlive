@@ -484,7 +484,7 @@ export class SDKEngine {
           if (event.permissionDenials?.length) {
             console.warn(`[bridge] Permission denials: ${event.permissionDenials.map(d => d.toolName).join(', ')}`);
           }
-          const usage = { input_tokens: event.usage.inputTokens, output_tokens: event.usage.outputTokens, cost_usd: event.usage.costUsd };
+          const usage = { input_tokens: event.usage.inputTokens, output_tokens: event.usage.outputTokens, cost_usd: event.usage.costUsd, model_usage: event.usage.modelUsage };
           completedStats = costTracker.finish(usage);
           renderer.onComplete(completedStats);
         },

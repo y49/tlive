@@ -56,10 +56,19 @@ const agentCompleteSchema = z.object({
   status: z.enum(['completed', 'failed', 'stopped']),
 }).merge(baseSchema).passthrough();
 
+const modelUsageSchema = z.object({
+  inputTokens: z.number(),
+  outputTokens: z.number(),
+  cacheReadInputTokens: z.number().optional(),
+  cacheCreationInputTokens: z.number().optional(),
+  costUSD: z.number().optional(),
+}).passthrough();
+
 const usageSchema = z.object({
   inputTokens: z.number(),
   outputTokens: z.number(),
   costUsd: z.number().optional(),
+  modelUsage: z.record(z.string(), modelUsageSchema).optional(),
 }).passthrough();
 
 const permissionDenialSchema = z.object({
