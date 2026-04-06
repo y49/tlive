@@ -192,10 +192,12 @@ export class BridgeManager {
           console.error(`[${adapter.channelType}] Error handling message:`, err);
         }
       } else {
-        // Guard: if this chat is already processing a message, try streaming input injection
+        // Guard: if this chat is already processing a message
         const chatKey = this.state.stateKey(msg.channelType, msg.chatId);
         if (this.state.isProcessing(chatKey)) {
-          if (msg.text && this.sdkEngine.canInjectMessage(msg.channelType, msg.chatId)) {
+          // Reply-to-message = inject into active turn (streaming input)
+          // Direct send = queue for next turn (wait for current to finish)
+          if (msg.text && msg.replyToMessageId && this.sdkEngine.canInjectMessage(msg.channelType, msg.chatId)) {
             this.sdkEngine.injectMessage(msg.channelType, msg.chatId, msg.text);
             await adapter.send({ chatId: msg.chatId, text: '💬 Message sent to active session' }).catch(() => {});
           } else {
