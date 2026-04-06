@@ -221,6 +221,13 @@ export class BridgeManager {
     if (msg.text?.startsWith('/')) {
       const handled = await this.commands.handle(adapter, msg);
       if (handled) return true;
+
+      // Unrecognized slash command — check if provider supports passthrough
+      const provider = this.getProvider(msg.channelType, msg.chatId);
+      if (!provider.capabilities().slashCommands) {
+        await adapter.send({ chatId: msg.chatId, text: '⚠️ Slash commands not supported by current runtime' });
+        return true;
+      }
     }
 
     // SDK conversation — delegate to SDKEngine
