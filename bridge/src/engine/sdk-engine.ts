@@ -21,6 +21,7 @@ interface ManagedSession {
   session: LiveSession;
   workdir: string;
   costTracker: CostTracker;
+  lastActiveAt: number;
 }
 
 /**
@@ -45,11 +46,41 @@ export class SDKEngine {
   private sdkQuestionAnswers = new Map<string, number>();
   private sdkQuestionTextAnswers = new Map<string, string>();
 
+  /** Idle timeout for LiveSessions (30 minutes) */
+  private static SESSION_IDLE_MS = 30 * 60 * 1000;
+  private pruneTimer: ReturnType<typeof setInterval> | null = null;
+
   constructor(
     private state: SessionStateManager,
     private router: ChannelRouter,
     private permissions: PermissionCoordinator,
   ) {}
+
+  /** Start periodic cleanup of idle LiveSessions */
+  startSessionPruning(): void {
+    this.pruneTimer = setInterval(() => this.pruneIdleSessions(), 60_000);
+  }
+
+  /** Stop periodic cleanup */
+  stopSessionPruning(): void {
+    if (this.pruneTimer) { clearInterval(this.pruneTimer); this.pruneTimer = null; }
+  }
+
+  /** Close sessions idle longer than SESSION_IDLE_MS */
+  private pruneIdleSessions(): void {
+    const now = Date.now();
+    for (const [key, managed] of this.registry) {
+      if (!managed.session.isAlive) {
+        this.registry.delete(key);
+        continue;
+      }
+      if (!managed.session.isTurnActive && (now - managed.lastActiveAt) > SDKEngine.SESSION_IDLE_MS) {
+        console.log(`[bridge] Pruning idle LiveSession: ${key} (idle ${Math.round((now - managed.lastActiveAt) / 60000)}m)`);
+        managed.session.close();
+        this.registry.delete(key);
+      }
+    }
+  }
 
   // ── Session Registry ──
 
@@ -74,7 +105,7 @@ export class SDKEngine {
     if (!provider.capabilities().liveSession || !provider.createSession) return null;
 
     const session = provider.createSession({ workingDirectory: workdir, sessionId: sdkSessionId });
-    const managed: ManagedSession = { session, workdir, costTracker: new CostTracker() };
+    const managed: ManagedSession = { session, workdir, costTracker: new CostTracker(), lastActiveAt: Date.now() };
     this.registry.set(key, managed);
     console.log(`[bridge] Created LiveSession for ${key}`);
     return managed;
@@ -129,12 +160,16 @@ export class SDKEngine {
     }
   }
 
-  /** Queue a message for processing after the current turn completes */
-  queueMessage(channelType: string, chatId: string, msg: InboundMessage): void {
+  private static MAX_QUEUE_SIZE = 10;
+
+  /** Queue a message for processing after the current turn completes. Returns false if queue is full. */
+  queueMessage(channelType: string, chatId: string, msg: InboundMessage): boolean {
     const chatKey = this.state.stateKey(channelType, chatId);
     const queue = this.messageQueue.get(chatKey) ?? [];
+    if (queue.length >= SDKEngine.MAX_QUEUE_SIZE) return false;
     queue.push(msg);
     this.messageQueue.set(chatKey, queue);
+    return true;
   }
 
   /** Dequeue the next message for a chat */
@@ -486,6 +521,7 @@ export class SDKEngine {
     let streamResult;
     if (managed) {
       // LiveSession mode — start a new turn
+      managed.lastActiveAt = Date.now();
       managed.costTracker.start();
       streamResult = managed.session.startTurn(msg.text, {
         onPermissionRequest: sdkPermissionHandler,

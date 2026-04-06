@@ -156,11 +156,13 @@ export class BridgeManager {
       this.runAdapterLoop(adapter);
     }
     this.permissions.startPruning();
+    this.sdkEngine.startSessionPruning();
   }
 
   async stop(): Promise<void> {
     this.running = false;
     this.permissions.stopPruning();
+    this.sdkEngine.stopSessionPruning();
     this.permissions.getGateway().denyAll();
     for (const adapter of this.adapters.values()) {
       await adapter.stop();
@@ -202,8 +204,12 @@ export class BridgeManager {
             await adapter.send({ chatId: msg.chatId, text: '💬 Message sent to active session' }).catch(() => {});
           } else if (msg.text) {
             // Direct send or reply to other message → queue for next turn
-            this.sdkEngine.queueMessage(msg.channelType, msg.chatId, msg);
-            await adapter.send({ chatId: msg.chatId, text: '📥 Queued — will process after current task' }).catch(() => {});
+            const queued = this.sdkEngine.queueMessage(msg.channelType, msg.chatId, msg);
+            if (queued) {
+              await adapter.send({ chatId: msg.chatId, text: '📥 Queued — will process after current task' }).catch(() => {});
+            } else {
+              await adapter.send({ chatId: msg.chatId, text: '⚠️ Queue full — please wait for current tasks to finish' }).catch(() => {});
+            }
           }
           continue;
         }

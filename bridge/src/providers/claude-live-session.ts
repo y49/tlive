@@ -162,6 +162,8 @@ export class ClaudeLiveSession implements LiveSession {
             this._isTurnActive = false;
             this.currentTurnController?.close();
             this.currentTurnController = null;
+            // Reset adapter state between turns to prevent hiddenToolUseIds leak
+            this.adapter.reset();
           }
         }
       }
