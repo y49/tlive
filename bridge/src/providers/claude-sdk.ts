@@ -12,6 +12,7 @@ import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import { ClaudeAdapter } from '../messages/claude-adapter.js';
 import type { CanonicalEvent } from '../messages/schema.js';
 import type { LLMProvider, StreamChatParams, StreamChatResult, QueryControls, ProviderCapabilities, LiveSession } from './base.js';
+import { ClaudeLiveSession } from './claude-live-session.js';
 import type { PendingPermissions } from '../permissions/gateway.js';
 import type { ClaudeSettingSource } from '../config.js';
 
@@ -145,6 +146,17 @@ export class ClaudeSDKProvider implements LLMProvider {
       skills: true,
       sessionResume: true,
     };
+  }
+
+  createSession(params: { workingDirectory: string; sessionId?: string }): LiveSession {
+    return new ClaudeLiveSession({
+      workingDirectory: params.workingDirectory,
+      sessionId: params.sessionId,
+      cliPath: this.cliPath,
+      settingSources: this.settingSources,
+      pendingPerms: this.pendingPerms,
+      onPermissionTimeout: this.onPermissionTimeout,
+    });
   }
 
   streamChat(params: StreamChatParams): StreamChatResult {
