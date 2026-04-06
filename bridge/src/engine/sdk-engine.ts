@@ -26,6 +26,8 @@ export class SDKEngine {
   private engine = new ConversationEngine();
   private activeControls = new Map<string, QueryControls>();
   private activeInjectors = new Map<string, MessageInjector>();
+  /** Per-session cost trackers for cumulative stats across queries */
+  private sessionCostTrackers = new Map<string, CostTracker>();
 
   // SDK AskUserQuestion state — shared with CallbackRouter via SdkQuestionState interface
   private sdkQuestionData = new Map<string, { questions: Array<{ question: string; header: string; options: Array<{ label: string; description?: string }>; multiSelect: boolean }>; chatId: string }>();
@@ -194,6 +196,10 @@ export class SDKEngine {
     // Check for session expiry (>30 min inactivity) and auto-create new session
     const expired = this.state.checkAndUpdateLastActive(msg.channelType, msg.chatId);
     if (expired) {
+      // Clean up old session's cost tracker before rebinding
+      const oldBinding = await this.router.resolve(msg.channelType, msg.chatId).catch(() => null);
+      if (oldBinding) this.sessionCostTrackers.delete(oldBinding.sessionId);
+
       const newSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       await this.router.rebind(msg.channelType, msg.chatId, newSessionId);
       this.state.clearThread(msg.channelType, msg.chatId);
@@ -222,7 +228,11 @@ export class SDKEngine {
     }, 4000);
     adapter.sendTyping(typingTarget).catch(() => {});
 
-    const costTracker = new CostTracker();
+    // Use per-session cost tracker for cumulative stats
+    if (!this.sessionCostTrackers.has(binding.sessionId)) {
+      this.sessionCostTrackers.set(binding.sessionId, new CostTracker());
+    }
+    const costTracker = this.sessionCostTrackers.get(binding.sessionId)!;
     costTracker.start();
 
     // Add processing reaction

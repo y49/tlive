@@ -3,6 +3,8 @@ export interface UsageStats {
   outputTokens: number;
   costUsd: number;
   durationMs: number;
+  sessionTotalUsd?: number;
+  queryCount?: number;
 }
 
 function formatTokens(n: number): string {
@@ -19,6 +21,8 @@ function formatDuration(ms: number): string {
 
 export class CostTracker {
   private startTime = 0;
+  private sessionTotal = 0;
+  private _queryCount = 0;
 
   start(): void {
     this.startTime = Date.now();
@@ -27,13 +31,19 @@ export class CostTracker {
   finish(usage: { input_tokens: number; output_tokens: number; cost_usd?: number }): UsageStats {
     const durationMs = Date.now() - this.startTime;
     const costUsd = usage.cost_usd ?? this.estimateCost(usage.input_tokens, usage.output_tokens);
+    this._queryCount++;
+    this.sessionTotal += costUsd;
     return {
       inputTokens: usage.input_tokens,
       outputTokens: usage.output_tokens,
       costUsd,
       durationMs,
+      sessionTotalUsd: this.sessionTotal,
+      queryCount: this._queryCount,
     };
   }
+
+  get queryCount(): number { return this._queryCount; }
 
   static format(stats: UsageStats): string {
     const duration = formatDuration(stats.durationMs);
@@ -42,8 +52,15 @@ export class CostTracker {
       return `📊 ${duration}`;
     }
     const tokens = `${formatTokens(stats.inputTokens)}/${formatTokens(stats.outputTokens)} tok`;
-    const cost = `$${stats.costUsd.toFixed(2)}`;
-    return `📊 ${tokens} | ${cost} | ${duration}`;
+    // Only show cost when non-zero (providers without cost_usd report 0)
+    if (stats.costUsd > 0) {
+      const cost = `$${stats.costUsd.toFixed(2)}`;
+      if (stats.queryCount && stats.queryCount > 1 && stats.sessionTotalUsd != null) {
+        return `📊 ${tokens} | ${cost} (Σ $${stats.sessionTotalUsd.toFixed(2)}) | ${duration}`;
+      }
+      return `📊 ${tokens} | ${cost} | ${duration}`;
+    }
+    return `📊 ${tokens} | ${duration}`;
   }
 
   private estimateCost(inputTokens: number, outputTokens: number): number {
