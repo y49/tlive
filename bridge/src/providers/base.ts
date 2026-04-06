@@ -50,6 +50,25 @@ export interface StreamChatResult {
   controls?: QueryControls;
 }
 
+/** Declares which SDK features a provider supports. */
+export interface ProviderCapabilities {
+  /** Can handle /compact, /clear etc. as prompt */
+  slashCommands: boolean;
+  /** Supports AskUserQuestion tool via canUseTool */
+  askUserQuestion: boolean;
+  /** Supports AsyncGenerator prompt for mid-query message injection */
+  streamingInput: boolean;
+  /** Emits TodoWrite tool_use events */
+  todoTracking: boolean;
+  /** Reports cost_usd in query results */
+  costInUsd: boolean;
+  /** Supports settingSources, skills, MCP servers */
+  skills: boolean;
+  /** Supports session resume via session ID */
+  sessionResume: boolean;
+}
+
 export interface LLMProvider {
   streamChat(params: StreamChatParams): StreamChatResult;
+  capabilities(): ProviderCapabilities;
 }

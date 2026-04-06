@@ -11,7 +11,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import { ClaudeAdapter } from '../messages/claude-adapter.js';
 import type { CanonicalEvent } from '../messages/schema.js';
-import type { LLMProvider, StreamChatParams, StreamChatResult, QueryControls } from './base.js';
+import type { LLMProvider, StreamChatParams, StreamChatResult, QueryControls, ProviderCapabilities } from './base.js';
 import type { PendingPermissions } from '../permissions/gateway.js';
 import type { ClaudeSettingSource } from '../config.js';
 
@@ -133,6 +133,18 @@ export class ClaudeSDKProvider implements LLMProvider {
     this.settingSources = [...sources];
     const label = sources.length > 0 ? sources.join(', ') : 'none (isolation mode)';
     console.log(`[claude-sdk] Settings sources changed: ${label}`);
+  }
+
+  capabilities(): ProviderCapabilities {
+    return {
+      slashCommands: true,
+      askUserQuestion: true,
+      streamingInput: true,
+      todoTracking: true,
+      costInUsd: true,
+      skills: true,
+      sessionResume: true,
+    };
   }
 
   streamChat(params: StreamChatParams): StreamChatResult {

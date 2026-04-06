@@ -3,7 +3,7 @@
  * Gracefully degrades if the SDK is not installed (platform-specific binaries).
  */
 
-import type { LLMProvider, StreamChatParams, StreamChatResult, QueryControls } from './base.js';
+import type { LLMProvider, StreamChatParams, StreamChatResult, QueryControls, ProviderCapabilities } from './base.js';
 import type { CanonicalEvent } from '../messages/schema.js';
 import { CodexAdapter } from '../messages/codex-adapter.js';
 
@@ -73,6 +73,18 @@ export class CodexProvider implements LLMProvider {
   async ensureInit(): Promise<boolean> {
     await this._initPromise;
     return this._available;
+  }
+
+  capabilities(): ProviderCapabilities {
+    return {
+      slashCommands: false,
+      askUserQuestion: false,
+      streamingInput: false,
+      todoTracking: false,
+      costInUsd: false,
+      skills: false,
+      sessionResume: true,
+    };
   }
 
   streamChat(params: StreamChatParams): StreamChatResult {
