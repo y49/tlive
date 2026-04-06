@@ -60,6 +60,117 @@ export class SDKEngine {
     return null;
   }
 
+  /** Ask a single question from an AskUserQuestion call. Returns the answer string. */
+  private async askSingleQuestion(
+    adapter: BaseChannelAdapter,
+    msg: InboundMessage,
+    sessionId: string,
+    q: { question: string; header: string; options: Array<{ label: string; description?: string }>; multiSelect: boolean },
+  ): Promise<string> {
+    const permId = `askq-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    // Build question text
+    const header = q.header ? `📋 **${q.header}**\n\n` : '';
+    const optionsList = q.options
+      .map((opt, i) => `${i + 1}. **${opt.label}**${opt.description ? ` — ${opt.description}` : ''}`)
+      .join('\n');
+    const questionText = `${header}${q.question}\n\n${optionsList}`;
+
+    // Build option buttons: multiSelect uses toggle+submit, singleSelect uses direct select
+    const isMulti = q.multiSelect;
+    const buttons: Array<{ label: string; callbackData: string; style: 'primary' | 'danger'; row?: number }> = isMulti
+      ? [
+          ...q.options.map((opt, idx) => ({
+            label: `☐ ${opt.label}`,
+            callbackData: `askq_toggle:${permId}:${idx}:sdk`,
+            style: 'primary' as const,
+            row: idx,
+          })),
+          { label: '✅ Submit', callbackData: `askq_submit_sdk:${permId}`, style: 'primary' as const, row: q.options.length },
+          { label: '❌ Skip', callbackData: `perm:allow:${permId}:askq_skip`, style: 'danger' as const, row: q.options.length },
+        ]
+      : [
+          ...q.options.map((opt, idx) => ({
+            label: `${idx + 1}. ${opt.label}`,
+            callbackData: `perm:allow:${permId}:askq:${idx}`,
+            style: 'primary' as const,
+          })),
+          { label: '❌ Skip', callbackData: `perm:allow:${permId}:askq_skip`, style: 'danger' as const },
+        ];
+
+    // Store question data for answer resolution (also needed for toggle state)
+    this.sdkQuestionData.set(permId, { questions: [q], chatId: msg.chatId });
+    // Store in permission coordinator for toggle tracking (reuse hookQuestionData)
+    if (isMulti) {
+      this.permissions.storeQuestionData(permId, [q]);
+    }
+
+    // Create gateway entry BEFORE sending — prevents race condition where user
+    // replies before waitFor is called, causing isPending() to return false
+    const waitPromise = this.permissions.getGateway().waitFor(permId);
+
+    // Send question card AFTER gateway entry exists — user replies are now safe
+    const hint = isMulti
+      ? (msg.channelType === 'feishu' ? '\n\n💬 点击选项切换选中，然后按 Submit 确认' : '\n\n💬 Tap options to toggle, then Submit')
+      : (msg.channelType === 'feishu' ? '\n\n💬 回复数字选择，或直接输入内容' : '\n\n💬 Reply with number to select, or type your answer');
+
+    const outMsg: OutboundMessage = {
+      chatId: msg.chatId,
+      text: msg.channelType !== 'telegram' ? questionText + hint : undefined,
+      html: msg.channelType === 'telegram' ? questionText.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>') + hint : undefined,
+      buttons,
+      feishuHeader: msg.channelType === 'feishu' ? { template: 'blue', title: '❓ Question' } : undefined,
+    };
+    const sendResult = await adapter.send(outMsg);
+    this.permissions.trackPermissionMessage(sendResult.messageId, permId, sessionId, msg.channelType);
+
+    // Await user answer — waits indefinitely until user responds via IM
+    const result = await waitPromise;
+
+    if (result.behavior === 'deny') {
+      this.sdkQuestionData.delete(permId);
+      adapter.editMessage(msg.chatId, sendResult.messageId, {
+        chatId: msg.chatId,
+        text: '⏭ Skipped',
+        buttons: [],
+        feishuHeader: msg.channelType === 'feishu' ? { template: 'grey', title: '⏭ Skipped' } : undefined,
+      }).catch(() => {});
+      throw new Error('User skipped question');
+    }
+
+    // Check for free text answer first, then option index
+    const textAnswer = this.sdkQuestionTextAnswers.get(permId);
+    this.sdkQuestionTextAnswers.delete(permId);
+    this.sdkQuestionData.delete(permId);
+
+    if (textAnswer !== undefined) {
+      adapter.editMessage(msg.chatId, sendResult.messageId, {
+        chatId: msg.chatId,
+        text: `✅ Answer: ${textAnswer.length > 50 ? textAnswer.slice(0, 47) + '...' : textAnswer}`,
+        buttons: [],
+        feishuHeader: msg.channelType === 'feishu' ? { template: 'green', title: '✅ Answered' } : undefined,
+      }).catch(() => {});
+      return textAnswer;
+    }
+
+    // Option index reply (button callback already edited the message — skip redundant edit)
+    const optionIndex = this.sdkQuestionAnswers.get(permId);
+    this.sdkQuestionAnswers.delete(permId);
+    const selected = optionIndex !== undefined ? q.options[optionIndex] : undefined;
+    const answerLabel = selected?.label ?? '';
+
+    if (!selected) {
+      adapter.editMessage(msg.chatId, sendResult.messageId, {
+        chatId: msg.chatId,
+        text: '✅ Answered',
+        buttons: [],
+        feishuHeader: msg.channelType === 'feishu' ? { template: 'green', title: '✅ Answered' } : undefined,
+      }).catch(() => {});
+    }
+
+    return answerLabel;
+  }
+
   /** Run a full SDK conversation turn */
   async handleMessage(
     adapter: BaseChannelAdapter,
@@ -267,122 +378,23 @@ export class SDKEngine {
       : undefined;
 
     // Build SDK-level AskUserQuestion handler
+    // Processes ALL questions sequentially — SDK supports 1-4 questions per call
     const sdkAskQuestionHandler = async (
       questions: Array<{ question: string; header: string; options: Array<{ label: string; description?: string }>; multiSelect: boolean }>,
       _signal?: AbortSignal,
     ): Promise<Record<string, string>> => {
       if (!questions.length) return {};
-      const q = questions[0];
-      const permId = `askq-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-      // Build question text
-      const header = q.header ? `📋 **${q.header}**\n\n` : '';
-      const optionsList = q.options
-        .map((opt, i) => `${i + 1}. **${opt.label}**${opt.description ? ` — ${opt.description}` : ''}`)
-        .join('\n');
-      const questionText = `${header}${q.question}\n\n${optionsList}`;
+      const allAnswers: Record<string, string> = {};
 
-      // Build option buttons: multiSelect uses toggle+submit, singleSelect uses direct select
-      const isMulti = q.multiSelect;
-      const buttons: Array<{ label: string; callbackData: string; style: 'primary' | 'danger'; row?: number }> = isMulti
-        ? [
-            ...q.options.map((opt, idx) => ({
-              label: `☐ ${opt.label}`,
-              callbackData: `askq_toggle:${permId}:${idx}:sdk`,
-              style: 'primary' as const,
-              row: idx,
-            })),
-            { label: '✅ Submit', callbackData: `askq_submit_sdk:${permId}`, style: 'primary' as const, row: q.options.length },
-            { label: '❌ Skip', callbackData: `perm:allow:${permId}:askq_skip`, style: 'danger' as const, row: q.options.length },
-          ]
-        : [
-            ...q.options.map((opt, idx) => ({
-              label: `${idx + 1}. ${opt.label}`,
-              callbackData: `perm:allow:${permId}:askq:${idx}`,
-              style: 'primary' as const,
-            })),
-            { label: '❌ Skip', callbackData: `perm:allow:${permId}:askq_skip`, style: 'danger' as const },
-          ];
-
-      // Store question data for answer resolution (also needed for toggle state)
-      this.sdkQuestionData.set(permId, { questions, chatId: msg.chatId });
-      // Store in permission coordinator for toggle tracking (reuse hookQuestionData)
-      if (isMulti) {
-        this.permissions.storeQuestionData(permId, questions);
+      for (const q of questions) {
+        const answer = await this.askSingleQuestion(adapter, msg, binding.sessionId, q);
+        allAnswers[q.question] = answer;
       }
 
-      // Create gateway entry BEFORE sending — prevents race condition where user
-      // replies before waitFor is called, causing isPending() to return false
-      // NOTE: We intentionally ignore the abort signal for AskUserQuestion.
-      // IM users may respond hours later — questions must wait for user response.
-      const waitPromise = this.permissions.getGateway().waitFor(permId);
-
-      // Send question card AFTER gateway entry exists — user replies are now safe
-      const hint = isMulti
-        ? (msg.channelType === 'feishu' ? '\n\n💬 点击选项切换选中，然后按 Submit 确认' : '\n\n💬 Tap options to toggle, then Submit')
-        : (msg.channelType === 'feishu' ? '\n\n💬 回复数字选择，或直接输入内容' : '\n\n💬 Reply with number to select, or type your answer');
-
-      const outMsg: OutboundMessage = {
-        chatId: msg.chatId,
-        text: msg.channelType !== 'telegram' ? questionText + hint : undefined,
-        html: msg.channelType === 'telegram' ? questionText.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>') + hint : undefined,
-        buttons,
-        feishuHeader: msg.channelType === 'feishu' ? { template: 'blue', title: '❓ Question' } : undefined,
-      };
-      const sendResult = await adapter.send(outMsg);
-      this.permissions.trackPermissionMessage(sendResult.messageId, permId, binding.sessionId, msg.channelType);
-
-      // Await user answer — waits indefinitely until user responds via IM
-      const result = await waitPromise;
-
-      if (result.behavior === 'deny') {
-        this.sdkQuestionData.delete(permId);
-        // Throw so provider returns { behavior: 'deny' } — Claude stops asking
-        adapter.editMessage(msg.chatId, sendResult.messageId, {
-          chatId: msg.chatId,
-          text: '⏭ Skipped',
-          buttons: [],
-          feishuHeader: msg.channelType === 'feishu' ? { template: 'grey', title: '⏭ Skipped' } : undefined,
-        }).catch(() => {});
-        throw new Error('User skipped question');
-      }
-
-      // User answered — auto-allow the next tool permission in this query
+      // All questions answered — auto-allow the next tool permission in this query
       askQuestionApproved = true;
-
-      // Check for free text answer first, then option index
-      const textAnswer = this.sdkQuestionTextAnswers.get(permId);
-      this.sdkQuestionTextAnswers.delete(permId);
-      this.sdkQuestionData.delete(permId);
-
-      if (textAnswer !== undefined) {
-        // Free text reply
-        adapter.editMessage(msg.chatId, sendResult.messageId, {
-          chatId: msg.chatId,
-          text: `✅ Answer: ${textAnswer.length > 50 ? textAnswer.slice(0, 47) + '...' : textAnswer}`,
-          buttons: [],
-          feishuHeader: msg.channelType === 'feishu' ? { template: 'green', title: '✅ Answered' } : undefined,
-        }).catch(() => {});
-        return { [q.question]: textAnswer };
-      }
-
-      // Option index reply (button callback already edited the message — skip redundant edit)
-      const optionIndex = this.sdkQuestionAnswers.get(permId);
-      this.sdkQuestionAnswers.delete(permId);
-      const selected = optionIndex !== undefined ? q.options[optionIndex] : undefined;
-      const answerLabel = selected?.label ?? '';
-
-      if (!selected) {
-        // Button callback already edited the card; only update if we somehow have no answer
-        adapter.editMessage(msg.chatId, sendResult.messageId, {
-          chatId: msg.chatId,
-          text: '✅ Answered',
-          buttons: [],
-          feishuHeader: msg.channelType === 'feishu' ? { template: 'green', title: '✅ Answered' } : undefined,
-        }).catch(() => {});
-      }
-
-      return { [q.question]: answerLabel };
+      return allAnswers;
     };
 
     try {
