@@ -86,6 +86,24 @@ Make sure to secure the config file:
 chmod 600 ~/.tlive/config.env
 ```
 
+### Claude Code Settings Sources
+
+`TL_CLAUDE_SETTINGS` controls which Claude Code settings files to load. Default: `user`.
+
+| Value | Loads | Use case |
+|-------|-------|----------|
+| `user` | `~/.claude/settings.json` | Auth, model, env (e.g. `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`) |
+| `project` | `.claude/settings.json` + `CLAUDE.md` | Project rules, MCP, skills |
+| `local` | `.claude/settings.local.json` | Developer overrides |
+
+```env
+TL_CLAUDE_SETTINGS=user            # Default — user config only
+TL_CLAUDE_SETTINGS=user,project    # User + project config
+TL_CLAUDE_SETTINGS=                # Full isolation
+```
+
+> **Tip:** If you use tools like **ccswitch** that set `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` in `~/.claude/settings.json`, the default `user` setting already covers this.
+
 ## Install Claude Code Integration
 
 ```bash

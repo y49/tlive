@@ -86,6 +86,24 @@ TL_TOKEN=your-secret-token
 chmod 600 ~/.tlive/config.env
 ```
 
+### Claude Code 配置加载
+
+`TL_CLAUDE_SETTINGS` 控制加载哪些 Claude Code 配置文件，默认值为 `user`。
+
+| 值 | 加载内容 | 用途 |
+|----|---------|------|
+| `user` | `~/.claude/settings.json` | 认证、模型、环境变量（如 `ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BASE_URL`） |
+| `project` | `.claude/settings.json` + `CLAUDE.md` | 项目规则、MCP、skills |
+| `local` | `.claude/settings.local.json` | 开发者覆盖 |
+
+```env
+TL_CLAUDE_SETTINGS=user            # 默认 — 只加载用户配置
+TL_CLAUDE_SETTINGS=user,project    # 用户 + 项目配置
+TL_CLAUDE_SETTINGS=                # 完全隔离
+```
+
+> **提示：** 如果你使用 **ccswitch** 等工具在 `~/.claude/settings.json` 中配置了 `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL`，默认的 `user` 设置已经会读取，无需额外配置。
+
 ## 安装 Claude Code 集成
 
 ```bash
