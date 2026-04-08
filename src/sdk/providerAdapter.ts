@@ -1,20 +1,7 @@
 // src/sdk/providerAdapter.ts
 
-/**
- * Minimal stub for BasePermissionHandler.
- * Will be replaced with the real import from ./permissionHandler.js in Task 6.
- */
-export interface BasePermissionHandler {
-  handleToolCall(
-    toolName: string,
-    input: unknown,
-    opts?: { signal?: AbortSignal },
-  ): Promise<{
-    behavior: 'allow' | 'deny' | 'error';
-    updatedInput?: unknown;
-    message?: string;
-  }>;
-}
+import type { BasePermissionHandler } from './permissionHandler.js';
+export type { BasePermissionHandler };
 
 export interface NormalizedMessage {
   kind:
