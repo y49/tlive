@@ -12,10 +12,8 @@ import { PermissionCoordinator } from './permission-coordinator.js';
 import { CommandRouter } from './command-router.js';
 import { CallbackRouter } from './callback-router.js';
 import { SDKEngine } from './sdk-engine.js';
-import { HookEngine } from './hook-engine.js';
 import { MessageRouter } from './message-router.js';
 import { ControlPanel } from './control-panel.js';
-export type { HookNotificationData } from './hook-engine.js';
 import { networkInterfaces } from 'node:os';
 
 /** Bridge commands handled synchronously (don't block adapter loop) */
@@ -58,7 +56,6 @@ export class BridgeManager {
   private commands: CommandRouter;
   private callbackRouter: CallbackRouter;
   private sdkEngine: SDKEngine;
-  private hookEngine: HookEngine;
   private messageRouter: MessageRouter;
   /** Cached LLM providers keyed by runtime name */
   private providerCache = new Map<string, LLMProvider>();
@@ -72,7 +69,6 @@ export class BridgeManager {
     this.token = config.token;
     this.permissions = new PermissionCoordinator(gateway, broker, this.coreUrl, this.token);
     this.sdkEngine = new SDKEngine(this.state, this.router, this.permissions);
-    this.hookEngine = new HookEngine(this.permissions, () => this.coreAvailable, this.token, getLocalIP);
     this.messageRouter = new MessageRouter(
       this.permissions, this.state, this.sdkEngine,
       () => this.coreAvailable, this.coreUrl, this.token,
@@ -104,11 +100,6 @@ export class BridgeManager {
     );
     this.commands.setControlPanel(controlPanel);
     this.callbackRouter.setControlPanel(controlPanel);
-  }
-
-  /** Expose coreAvailable flag for main.ts polling loop */
-  setCoreAvailable(available: boolean): void {
-    this.coreAvailable = available;
   }
 
   /** Returns all active adapters */
@@ -179,11 +170,6 @@ export class BridgeManager {
     for (const adapter of this.adapters.values()) {
       await adapter.stop();
     }
-  }
-
-  /** Send a hook notification to IM — delegates to HookEngine */
-  async sendHookNotification(adapter: BaseChannelAdapter, chatId: string, hook: import('./hook-engine.js').HookNotificationData, receiveIdType?: string): Promise<void> {
-    return this.hookEngine.sendNotification(adapter, chatId, hook, receiveIdType);
   }
 
   /** Process queued messages iteratively after current turn completes */

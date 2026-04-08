@@ -294,47 +294,6 @@ describe('BridgeManager', () => {
     });
   });
 
-  describe('hook notification formatting', () => {
-    it('formats stop notification with [Local] prefix', async () => {
-      const adapter = mockAdapter();
-      await (manager as any).sendHookNotification(adapter, 'c1', {
-        tlive_hook_type: 'stop',
-        tlive_session_id: 'sess-1',
-      });
-
-      const sentMsg = (adapter.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      const content = sentMsg.html ?? sentMsg.text ?? '';
-      expect(content).toContain('Terminal');
-    });
-
-    it('formats idle_prompt notification with message', async () => {
-      const adapter = mockAdapter();
-      await (manager as any).sendHookNotification(adapter, 'c1', {
-        notification_type: 'idle_prompt',
-        message: 'Claude is waiting for your input',
-        tlive_session_id: 'sess-1',
-      });
-
-      const sentMsg = (adapter.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      const content = sentMsg.html ?? sentMsg.text ?? '';
-      expect(content).toContain('Claude is waiting for your input');
-    });
-
-    it('tracks hook message for reply routing', async () => {
-      const adapter = mockAdapter();
-      await (manager as any).sendHookNotification(adapter, 'c1', {
-        tlive_hook_type: 'notification',
-        tlive_session_id: 'sess-1',
-        message: 'test',
-      });
-
-      // mockAdapter.send returns { messageId: '1' }
-      // hookMessages now live inside PermissionCoordinator
-      expect((manager as any).permissions.isHookMessage('1')).toBe(true);
-      expect((manager as any).permissions.getHookMessage('1').sessionId).toBe('sess-1');
-    });
-  });
-
   describe('/hooks command', () => {
     it('shows hook status', async () => {
       const adapter = mockAdapter();
