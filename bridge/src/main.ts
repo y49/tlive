@@ -9,7 +9,8 @@ import { createAdapter } from './channels/index.js';
 import type { ChannelType } from './channels/types.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
+import { createServer, type Socket } from 'node:net';
 
 
 function writeStatusFile(tliveHome: string, data: Record<string, unknown>): void {
@@ -74,6 +75,101 @@ async function main() {
   await manager.start();
   logger.info('Bridge started — SDK-only mode');
 
+  // -----------------------------------------------------------------------
+  // IPC Server — receives notifications from `tlive claude` terminal sessions
+  // and forwards them to IM adapters. Button callbacks are sent back via IPC.
+  // -----------------------------------------------------------------------
+  const IPC_PATH = join(tliveHome, 'ipc.sock');
+  const ipcClients = new Set<Socket>();
+
+  function startIPCServer() {
+    if (existsSync(IPC_PATH)) unlinkSync(IPC_PATH);
+
+    const ipcServer = createServer((socket) => {
+      ipcClients.add(socket);
+      logger.info(`IPC client connected (total: ${ipcClients.size})`);
+
+      let buffer = '';
+      socket.on('data', (data) => {
+        buffer += data.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const msg = JSON.parse(line);
+            handleIPCMessage(msg, socket);
+          } catch { /* skip malformed */ }
+        }
+      });
+      socket.on('close', () => {
+        ipcClients.delete(socket);
+        logger.info(`IPC client disconnected (total: ${ipcClients.size})`);
+      });
+      socket.on('error', () => ipcClients.delete(socket));
+    });
+
+    ipcServer.listen(IPC_PATH, () => {
+      logger.info(`IPC server listening at ${IPC_PATH}`);
+    });
+
+    return ipcServer;
+  }
+
+  function handleIPCMessage(msg: { type: string; payload: Record<string, unknown> }, socket: Socket) {
+    if (msg.type === 'notification') {
+      // Forward notification to all IM adapters
+      const { text, buttons, sessionId } = msg.payload as {
+        text: string;
+        buttons?: Array<{ label: string; callbackData: string; style?: string }>;
+        sessionId?: string;
+      };
+
+      for (const adapter of manager.getAdapters()) {
+        const chatId = manager.getLastChatId(adapter.channelType);
+        if (!chatId) continue;
+
+        const outButtons = buttons?.map((b) => ({
+          label: b.label,
+          callbackData: b.callbackData,
+          style: b.style as 'primary' | 'danger' | undefined,
+        }));
+
+        adapter.send({
+          chatId,
+          text,
+          buttons: outButtons,
+        }).then((sentMsgId) => {
+          // Tell the claude process the messageId so it can track terminal notifications
+          if (sentMsgId) {
+            const reply = JSON.stringify({
+              type: 'message_sent',
+              payload: { messageId: sentMsgId, sessionId, channelType: adapter.channelType },
+            }) + '\n';
+            socket.write(reply);
+          }
+        }).catch((err) => {
+          logger.warn(`IPC notification send failed: ${err}`);
+        });
+      }
+    } else if (msg.type === 'session_status') {
+      logger.info(`IPC session status: ${JSON.stringify(msg.payload)}`);
+    }
+  }
+
+  // Forward IM button callbacks for terminal permissions back via IPC
+  manager.onTerminalPermissionCallback = (action: string, toolUseId: string, sessionId: string) => {
+    const ipcMsg = JSON.stringify({
+      type: 'permission_action',
+      payload: { action, toolUseId, sessionId },
+    }) + '\n';
+    for (const client of ipcClients) {
+      client.write(ipcMsg);
+    }
+  };
+
+  const ipcServer = startIPCServer();
+
   // Wire permission timeout → IM notification
   if (llm instanceof ClaudeSDKProvider) {
     llm.onPermissionTimeout = (toolName: string, _toolUseId: string) => {
@@ -90,6 +186,10 @@ async function main() {
   const shutdown = async (reason = 'signal') => {
     logger.info('Shutting down...');
     clearInterval(keepAliveInterval);
+    // Clean up IPC
+    for (const client of ipcClients) client.destroy();
+    ipcServer.close();
+    if (existsSync(IPC_PATH)) unlinkSync(IPC_PATH);
     writeStatusFile(tliveHome, {
       pid: process.pid,
       exitedAt: new Date().toISOString(),

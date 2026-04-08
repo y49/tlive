@@ -1,6 +1,8 @@
 // src/cli/claude.ts
 import { stdin, stdout, exit } from "node:process";
-import { networkInterfaces } from "node:os";
+import { networkInterfaces, homedir as homedir5 } from "node:os";
+import { connect } from "node:net";
+import { join as join6 } from "node:path";
 
 // src/loop.ts
 import { EventEmitter as EventEmitter5 } from "node:events";
@@ -909,6 +911,13 @@ function getLocalIP() {
   }
   return "127.0.0.1";
 }
+var IPC_PATH = join6(homedir5(), ".tlive", "ipc.sock");
+function connectIPC() {
+  return new Promise((resolve) => {
+    const socket = connect(IPC_PATH, () => resolve(socket));
+    socket.on("error", () => resolve(null));
+  });
+}
 async function claudeCommand(opts = {}) {
   const config = loadConfig();
   const adapter = new ClaudeAdapter();
@@ -922,11 +931,67 @@ async function claudeCommand(opts = {}) {
     web.broadcast(data);
   });
   web.setInputHandler((data) => loop.handleTerminalInput(data));
-  web.setResizeHandler((cols, rows) => {
-  });
   await web.startOnPort(webPort);
   const localIP = getLocalIP();
   const url = `http://${localIP}:${webPort}/?token=${webToken}`;
+  const ipc = await connectIPC();
+  if (ipc) {
+    loop.setIMTarget("ipc", async (_chatId, text, buttons) => {
+      const msg = JSON.stringify({
+        type: "notification",
+        payload: {
+          text,
+          buttons,
+          sessionId: loop.sessionInfo.sessionId,
+          workdir
+        }
+      }) + "\n";
+      ipc.write(msg);
+      return new Promise((resolve) => {
+        const timeout = setTimeout(() => resolve(void 0), 3e3);
+        const onData = (raw) => {
+          const lines = raw.toString().split("\n").filter(Boolean);
+          for (const line of lines) {
+            try {
+              const resp = JSON.parse(line);
+              if (resp.type === "message_sent") {
+                clearTimeout(timeout);
+                ipc.removeListener("data", onData);
+                resolve(resp.payload.messageId);
+                return;
+              }
+              if (resp.type === "permission_action") {
+                const { action, toolUseId } = resp.payload;
+                loop.handleIMAction(action, toolUseId);
+              }
+            } catch {
+            }
+          }
+        };
+        ipc.on("data", onData);
+      });
+    });
+    let ipcBuffer = "";
+    ipc.on("data", (raw) => {
+      ipcBuffer += raw.toString();
+      const lines = ipcBuffer.split("\n");
+      ipcBuffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === "permission_action") {
+            const { action, toolUseId } = msg.payload;
+            loop.handleIMAction(action, toolUseId);
+          }
+        } catch {
+        }
+      }
+    });
+    console.error(`  IM:       \x1B[32mconnected\x1B[0m (bridge IPC)`);
+  } else {
+    console.error(`  IM:       \x1B[33mnot connected\x1B[0m (bridge not running)`);
+  }
   if (stdin.isTTY) {
     stdin.setRawMode(true);
     stdin.resume();
@@ -938,6 +1003,7 @@ async function claudeCommand(opts = {}) {
   const cleanup = async () => {
     if (cleaning) return;
     cleaning = true;
+    ipc?.destroy();
     web.stop();
     await loop.stop();
     if (stdin.isTTY) stdin.setRawMode(false);
@@ -951,7 +1017,6 @@ async function claudeCommand(opts = {}) {
   console.error(`  Session:  ${info.sessionId.slice(0, 8)}...`);
   console.error(`  Workdir:  ${workdir}`);
   console.error(`  Terminal: \x1B[4m${url}\x1B[0m`);
-  console.error("");
   try {
     await loop.start();
     await new Promise((resolve) => {

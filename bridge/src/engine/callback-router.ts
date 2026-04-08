@@ -19,6 +19,8 @@ export interface SdkQuestionState {
  */
 export class CallbackRouter {
   private controlPanel?: ControlPanel;
+  /** Callback for forwarding terminal permission actions via IPC to `tlive claude` */
+  onTerminalPermissionCallback?: (action: string, toolUseId: string, sessionId: string) => void;
 
   constructor(
     private permissions: PermissionCoordinator,
@@ -34,6 +36,27 @@ export class CallbackRouter {
 
   async handle(adapter: BaseChannelAdapter, msg: InboundMessage): Promise<boolean> {
     if (!msg.callbackData) return false;
+
+    // v1.0 terminal permission callbacks (perm:allow:<toolUseId>, perm:deny:<id>, perm:takeover:<id>)
+    if (msg.callbackData.startsWith('perm:allow:') || msg.callbackData.startsWith('perm:deny:') || msg.callbackData.startsWith('perm:takeover:')) {
+      const parts = msg.callbackData.split(':');
+      if (parts.length === 3) {
+        const [, action, toolUseId] = parts;
+        // Forward to tlive claude process via IPC
+        if (this.onTerminalPermissionCallback) {
+          this.onTerminalPermissionCallback(action, toolUseId, '');
+          // Update the message to show the action was taken
+          const label = action === 'allow' ? '✅ Allowed' : action === 'deny' ? '❌ Denied' : '🖥 Takeover';
+          await adapter.editMessage(msg.chatId, msg.messageId, {
+            chatId: msg.chatId,
+            text: label,
+            buttons: [],
+          }).catch(() => {});
+          return true;
+        }
+        // Fall through to existing perm: handling if no IPC callback
+      }
+    }
 
     // Control panel callbacks (panel:{action}:{chatKey})
     if (msg.callbackData.startsWith('panel:') && this.controlPanel) {

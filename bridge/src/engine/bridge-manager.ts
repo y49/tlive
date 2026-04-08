@@ -100,6 +100,11 @@ export class BridgeManager {
     );
     this.commands.setControlPanel(controlPanel);
     this.callbackRouter.setControlPanel(controlPanel);
+
+    // Wire terminal permission callback through to IPC
+    this.callbackRouter.onTerminalPermissionCallback = (action, toolUseId, sessionId) => {
+      this.onTerminalPermissionCallback?.(action, toolUseId, sessionId);
+    };
   }
 
   /** Returns all active adapters */
@@ -145,6 +150,9 @@ export class BridgeManager {
   storeQuestionData(hookId: string, questions: Array<{ question: string; header: string; options: Array<{ label: string; description?: string }>; multiSelect: boolean }>, contextSuffix?: string): void {
     this.permissions.storeQuestionData(hookId, questions, contextSuffix);
   }
+
+  /** Callback for forwarding terminal permission actions via IPC */
+  onTerminalPermissionCallback?: (action: string, toolUseId: string, sessionId: string) => void;
 
   registerAdapter(adapter: BaseChannelAdapter): void {
     this.adapters.set(adapter.channelType, adapter);
