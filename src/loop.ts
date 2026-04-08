@@ -5,8 +5,8 @@ import { ProjectRegistry } from './core/projectRegistry.js';
 import { NotificationHub, type NotificationEvent } from './im/notificationHub.js';
 import { SessionRouter } from './im/sessionRouter.js';
 import type { ProviderAdapter, NormalizedMessage } from './sdk/providerAdapter.js';
-import type { ToolUseEvent } from './core/sessionScanner.js';
-import { formatForIM } from './sdk/messageNormalizer.js';
+import type { ToolUseEvent, SessionEvent } from './core/sessionScanner.js';
+import { normalizeSessionLine, formatForIM } from './sdk/messageNormalizer.js';
 import type { TLiveConfig } from './config.js';
 
 export interface LoopOptions {
@@ -53,6 +53,28 @@ export class TLiveLoop extends EventEmitter {
 
   private wireEvents(): void {
     this.session.on('ptyData', (data: string) => this.emit('ptyData', data));
+
+    // Activity sync: scanner events → normalize → push to IM as info (batched)
+    this.session.on('scannerEvent', (event: SessionEvent) => {
+      const normalized = normalizeSessionLine(
+        { uuid: event.uuid, type: event.type, message: event.message },
+        'claude',
+        this.session.info.sessionId,
+      );
+      for (const msg of normalized) {
+        const text = formatForIM(msg);
+        if (!text) continue;
+        this.notifications.push({
+          kind: 'activity',
+          dedupeKey: `activity:${event.uuid}:${msg.kind}`,
+          severity: 'info',
+          requiresUserAction: false,
+          sessionId: this.session.info.sessionId,
+          title: `💬 ${this.shortWorkdir()}`,
+          body: text,
+        });
+      }
+    });
 
     this.session.on('permissionNeeded', (toolUse: ToolUseEvent) => {
       const isQuestion = toolUse.toolName === 'AskUserQuestion';

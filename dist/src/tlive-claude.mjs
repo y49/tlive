@@ -291,6 +291,7 @@ var SessionManager = class extends EventEmitter3 {
         this.emit("sessionComplete", this.info);
       }
     });
+    this.scanner.on("event", (event) => this.emit("scannerEvent", event));
     this.scanner.on("permission_needed", (toolUse) => this.emit("permissionNeeded", toolUse));
     this.scanner.on("permission_resolved", (toolUseId) => this.emit("permissionResolved", toolUseId));
   }
@@ -533,6 +534,33 @@ var SessionRouter = class {
 };
 
 // src/sdk/messageNormalizer.ts
+function normalizeSessionLine(line, provider, sessionId) {
+  const messages = [];
+  const content = line.message;
+  if (line.type === "assistant" && Array.isArray(content)) {
+    for (const block of content) {
+      if (block.type === "text" && block.text) {
+        messages.push({ kind: "text", provider, sessionId, text: block.text });
+      } else if (block.type === "tool_use") {
+        messages.push({ kind: "tool_use", provider, sessionId, toolName: block.name, toolInput: block.input });
+      }
+    }
+  }
+  if (line.type === "user" && Array.isArray(content)) {
+    for (const block of content) {
+      if (block.type === "tool_result") {
+        messages.push({
+          kind: "tool_result",
+          provider,
+          sessionId,
+          parentToolUseId: block.tool_use_id,
+          text: typeof block.content === "string" ? block.content : JSON.stringify(block.content)
+        });
+      }
+    }
+  }
+  return messages;
+}
 function formatForIM(msg) {
   switch (msg.kind) {
     case "text":
@@ -603,6 +631,26 @@ var TLiveLoop = class extends EventEmitter5 {
   }
   wireEvents() {
     this.session.on("ptyData", (data) => this.emit("ptyData", data));
+    this.session.on("scannerEvent", (event) => {
+      const normalized = normalizeSessionLine(
+        { uuid: event.uuid, type: event.type, message: event.message },
+        "claude",
+        this.session.info.sessionId
+      );
+      for (const msg of normalized) {
+        const text = formatForIM(msg);
+        if (!text) continue;
+        this.notifications.push({
+          kind: "activity",
+          dedupeKey: `activity:${event.uuid}:${msg.kind}`,
+          severity: "info",
+          requiresUserAction: false,
+          sessionId: this.session.info.sessionId,
+          title: `\u{1F4AC} ${this.shortWorkdir()}`,
+          body: text
+        });
+      }
+    });
     this.session.on("permissionNeeded", (toolUse) => {
       const isQuestion = toolUse.toolName === "AskUserQuestion";
       this.notifications.push({

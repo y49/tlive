@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { PTYManager } from './ptyManager.js';
-import { SessionScanner, type ToolUseEvent } from './sessionScanner.js';
+import { SessionScanner, type ToolUseEvent, type SessionEvent } from './sessionScanner.js';
 import type { ProviderAdapter, NormalizedMessage } from '../sdk/providerAdapter.js';
 import { ClaudePermissionHandler } from '../sdk/permissionHandler.js';
 import type { TLiveConfig } from '../config.js';
@@ -66,6 +66,7 @@ export class SessionManager extends EventEmitter {
         this.emit('sessionComplete', this.info);
       }
     });
+    this.scanner.on('event', (event: SessionEvent) => this.emit('scannerEvent', event));
     this.scanner.on('permission_needed', (toolUse: ToolUseEvent) => this.emit('permissionNeeded', toolUse));
     this.scanner.on('permission_resolved', (toolUseId: string) => this.emit('permissionResolved', toolUseId));
   }
