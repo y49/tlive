@@ -95,7 +95,7 @@ var SessionScanner = class extends EventEmitter2 {
     return this.jsonlPath;
   }
   resolveJsonlPath(workdir, sessionId) {
-    const projectDir = workdir.replace(/\//g, "-");
+    const projectDir = workdir.replace(/[^a-zA-Z0-9-]/g, "-");
     return join(homedir(), ".claude", "projects", projectDir, `${sessionId}.jsonl`);
   }
   start() {
@@ -788,7 +788,7 @@ var ClaudeAdapter = class {
     );
   }
   getSessionDir(workdir) {
-    const projectDir = workdir.replace(/\//g, "-");
+    const projectDir = workdir.replace(/[^a-zA-Z0-9-]/g, "-");
     return join3(homedir3(), ".claude", "projects", projectDir);
   }
 };

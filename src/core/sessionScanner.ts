@@ -56,8 +56,10 @@ export class SessionScanner extends EventEmitter {
   }
 
   private resolveJsonlPath(workdir: string, sessionId: string): string {
-    // Claude uses path-based directory names: /home/user/project → -home-user-project
-    const projectDir = workdir.replace(/\//g, '-');
+    // Claude encodes workdir: non-alphanumeric ASCII chars → '-'
+    // /home/user/project → -home-user-project
+    // C:\Users\bob\work  → -C--Users-bob-work
+    const projectDir = workdir.replace(/[^a-zA-Z0-9-]/g, '-');
     return join(homedir(), '.claude', 'projects', projectDir, `${sessionId}.jsonl`);
   }
 
