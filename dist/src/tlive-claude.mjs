@@ -1,5 +1,6 @@
 // src/cli/claude.ts
 import { stdin, stdout, exit } from "node:process";
+import { networkInterfaces } from "node:os";
 
 // src/loop.ts
 import { EventEmitter as EventEmitter5 } from "node:events";
@@ -744,10 +745,119 @@ var ClaudeAdapter = class {
   }
 };
 
-// src/config.ts
+// src/core/webTerminal.ts
+import { WebSocketServer } from "ws";
+import { createServer } from "node:http";
 import { readFileSync as readFileSync2, existsSync as existsSync3 } from "node:fs";
+import { join as join4, dirname, extname } from "node:path";
+import { fileURLToPath } from "node:url";
+var MIME_TYPES = {
+  ".html": "text/html",
+  ".css": "text/css",
+  ".js": "application/javascript"
+};
+var WebTerminal = class {
+  httpServer;
+  wss;
+  clients = /* @__PURE__ */ new Set();
+  token;
+  webDir;
+  onInput;
+  onResize;
+  constructor(opts) {
+    this.token = opts.token;
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    this.webDir = opts.webDir ?? join4(__dirname, "../../web");
+    this.httpServer = createServer((req, res) => {
+      const url = new URL(req.url ?? "/", `http://localhost:${opts.port}`);
+      if (this.token && url.pathname === "/") {
+        if (url.searchParams.get("token") !== this.token) {
+          res.writeHead(403);
+          res.end("Unauthorized");
+          return;
+        }
+      }
+      let filePath;
+      if (url.pathname === "/" || url.pathname === "/index.html") {
+        filePath = join4(this.webDir, "terminal.html");
+      } else {
+        const safe = url.pathname.replace(/\.\./g, "");
+        filePath = join4(this.webDir, safe);
+      }
+      if (existsSync3(filePath)) {
+        const ext = extname(filePath);
+        res.writeHead(200, { "Content-Type": MIME_TYPES[ext] ?? "application/octet-stream" });
+        res.end(readFileSync2(filePath));
+      } else {
+        res.writeHead(404);
+        res.end("Not found");
+      }
+    });
+    this.wss = new WebSocketServer({ server: this.httpServer });
+    this.wss.on("connection", (ws, req) => {
+      if (this.token) {
+        const url = new URL(req.url ?? "", `http://localhost:${opts.port}`);
+        if (url.searchParams.get("token") !== this.token) {
+          ws.close(4001, "Unauthorized");
+          return;
+        }
+      }
+      this.clients.add(ws);
+      ws.on("message", (raw) => {
+        const data = raw.toString();
+        try {
+          const msg = JSON.parse(data);
+          if (msg.type === "resize" && msg.cols && msg.rows) {
+            this.onResize?.(msg.cols, msg.rows);
+            return;
+          }
+        } catch {
+        }
+        this.onInput?.(data);
+      });
+      ws.on("close", () => this.clients.delete(ws));
+    });
+  }
+  setInputHandler(handler) {
+    this.onInput = handler;
+  }
+  setResizeHandler(handler) {
+    this.onResize = handler;
+  }
+  broadcast(data) {
+    const buf = Buffer.from(data);
+    for (const ws of this.clients) {
+      if (ws.readyState === ws.OPEN) ws.send(buf);
+    }
+  }
+  sendControl(msg) {
+    const data = JSON.stringify(msg);
+    for (const ws of this.clients) {
+      if (ws.readyState === ws.OPEN) ws.send(data);
+    }
+  }
+  startOnPort(port) {
+    return new Promise((resolve) => {
+      this.httpServer.listen(port, () => resolve());
+    });
+  }
+  get address() {
+    const addr = this.httpServer.address();
+    if (typeof addr === "object" && addr) return addr;
+    return null;
+  }
+  stop() {
+    this.sendControl({ type: "exit", code: 0 });
+    for (const ws of this.clients) ws.close();
+    this.wss.close();
+    this.httpServer.close();
+  }
+};
+
+// src/config.ts
+import { readFileSync as readFileSync3, existsSync as existsSync4 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 var DEFAULTS = {
   port: 8849,
   token: "",
@@ -759,10 +869,10 @@ var DEFAULTS = {
   proactiveQuestionDelay: 5e3
 };
 function loadConfig(envPath) {
-  const configPath = envPath ?? join4(homedir4(), ".tlive", "config.env");
+  const configPath = envPath ?? join5(homedir4(), ".tlive", "config.env");
   const env = { ...process.env };
-  if (existsSync3(configPath)) {
-    const lines = readFileSync2(configPath, "utf-8").split("\n");
+  if (existsSync4(configPath)) {
+    const lines = readFileSync3(configPath, "utf-8").split("\n");
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith("#")) continue;
@@ -790,20 +900,45 @@ function loadConfig(envPath) {
 }
 
 // src/cli/claude.ts
+function getLocalIP() {
+  const nets = networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name] ?? []) {
+      if (net.family === "IPv4" && !net.internal) return net.address;
+    }
+  }
+  return "127.0.0.1";
+}
 async function claudeCommand(opts = {}) {
   const config = loadConfig();
   const adapter = new ClaudeAdapter();
   const workdir = opts.workdir ?? process.cwd();
   const loop = new TLiveLoop({ workdir, adapter, config, sessionId: opts.sessionId });
+  const webPort = config.port;
+  const webToken = config.token || loop.sessionInfo.sessionId.slice(0, 16);
+  const web = new WebTerminal({ port: webPort, token: webToken });
+  loop.on("ptyData", (data) => {
+    stdout.write(data);
+    web.broadcast(data);
+  });
+  web.setInputHandler((data) => loop.handleTerminalInput(data));
+  web.setResizeHandler((cols, rows) => {
+  });
+  await web.startOnPort(webPort);
+  const localIP = getLocalIP();
+  const url = `http://${localIP}:${webPort}/?token=${webToken}`;
   if (stdin.isTTY) {
     stdin.setRawMode(true);
     stdin.resume();
   }
-  loop.on("ptyData", (data) => stdout.write(data));
   stdin.on("data", (data) => {
     loop.handleTerminalInput(data.toString());
   });
+  let cleaning = false;
   const cleanup = async () => {
+    if (cleaning) return;
+    cleaning = true;
+    web.stop();
     await loop.stop();
     if (stdin.isTTY) stdin.setRawMode(false);
     exit(0);
@@ -811,8 +946,12 @@ async function claudeCommand(opts = {}) {
   process.on("SIGINT", cleanup);
   process.on("SIGTERM", cleanup);
   const info = loop.sessionInfo;
-  console.error(`[tlive] Session: ${info.sessionId.slice(0, 8)}... | ${workdir}`);
-  console.error(`[tlive] IM notifications active. Press Ctrl+C to exit.`);
+  console.error("");
+  console.error(`  \x1B[36m\u26A1 TLive v1.0\x1B[0m`);
+  console.error(`  Session:  ${info.sessionId.slice(0, 8)}...`);
+  console.error(`  Workdir:  ${workdir}`);
+  console.error(`  Terminal: \x1B[4m${url}\x1B[0m`);
+  console.error("");
   try {
     await loop.start();
     await new Promise((resolve) => {
