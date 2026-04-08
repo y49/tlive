@@ -37,9 +37,9 @@ describe('ClaudeAdapter', () => {
     delete process.env.CTI_CLAUDE_CODE_EXECUTABLE;
   });
 
-  it('computes session dir from workdir hash', () => {
+  it('computes session dir from workdir path', () => {
     const adapter = new ClaudeAdapter();
     const dir = adapter.getSessionDir('/home/user/myproject');
-    expect(dir).toMatch(/\.claude\/projects\/[a-f0-9]{16}$/);
+    expect(dir).toMatch(/\.claude\/projects\/-home-user-myproject$/);
   });
 });

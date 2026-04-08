@@ -56,10 +56,8 @@ export class ClaudeAdapter implements ProviderAdapter {
   }
 
   getSessionDir(workdir: string): string {
-    const projectHash = createHash('sha256')
-      .update(workdir)
-      .digest('hex')
-      .slice(0, 16);
-    return join(homedir(), '.claude', 'projects', projectHash);
+    // Claude uses path-based directory names: /home/user/project → -home-user-project
+    const projectDir = workdir.replace(/\//g, '-');
+    return join(homedir(), '.claude', 'projects', projectDir);
   }
 }

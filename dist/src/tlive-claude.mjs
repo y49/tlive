@@ -71,7 +71,6 @@ var PTYManager = class extends EventEmitter {
 // src/core/sessionScanner.ts
 import { watch, existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { EventEmitter as EventEmitter2 } from "node:events";
-import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join, basename } from "node:path";
 var SessionScanner = class extends EventEmitter2 {
@@ -96,8 +95,8 @@ var SessionScanner = class extends EventEmitter2 {
     return this.jsonlPath;
   }
   resolveJsonlPath(workdir, sessionId) {
-    const projectHash = createHash("sha256").update(workdir).digest("hex").slice(0, 16);
-    return join(homedir(), ".claude", "projects", projectHash, `${sessionId}.jsonl`);
+    const projectDir = workdir.replace(/\//g, "-");
+    return join(homedir(), ".claude", "projects", projectDir, `${sessionId}.jsonl`);
   }
   start() {
     try {
@@ -752,7 +751,6 @@ ${event.body}` : event.title;
 
 // src/sdk/claudeAdapter.ts
 import { execSync } from "node:child_process";
-import { createHash as createHash2 } from "node:crypto";
 import { homedir as homedir3 } from "node:os";
 import { join as join3 } from "node:path";
 var ClaudeAdapter = class {
@@ -790,8 +788,8 @@ var ClaudeAdapter = class {
     );
   }
   getSessionDir(workdir) {
-    const projectHash = createHash2("sha256").update(workdir).digest("hex").slice(0, 16);
-    return join3(homedir3(), ".claude", "projects", projectHash);
+    const projectDir = workdir.replace(/\//g, "-");
+    return join3(homedir3(), ".claude", "projects", projectDir);
   }
 };
 
