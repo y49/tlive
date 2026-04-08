@@ -435,6 +435,23 @@ if (command === '--version' || command === '-v' || command === '-V') {
 }
 
 switch (command) {
+  case 'claude': {
+    // v1.0: Pure Node dual-channel mode (no Go Core)
+    const claudeEntry = join(PACKAGE_ROOT, 'dist', 'src', 'tlive-claude.mjs');
+    if (!existsSync(claudeEntry)) {
+      console.error('v1.0 build not found. Run: npm run build:src');
+      process.exit(1);
+    }
+    ensureBridgeRunning();
+    const { claudeCommand } = await import(claudeEntry);
+    await claudeCommand({
+      sessionId: args.includes('--session-id') ? args[args.indexOf('--session-id') + 1] : undefined,
+      resume: args.includes('--resume') || args.includes('--continue'),
+      workdir: process.cwd(),
+    });
+    break;
+  }
+
   case 'setup': {
     const setupEntry = join(PACKAGE_ROOT, 'bridge', 'dist', 'setup.mjs');
     if (existsSync(setupEntry)) {
@@ -675,8 +692,10 @@ switch (command) {
       console.error(`Did you mean: tlive ${similar}?`);
       process.exit(1);
     }
-    // Unknown command → wrap with Go Core web terminal
-    runCore([command, ...args]);
+    // Unknown command
+    console.error(`Unknown command: ${command}`);
+    console.error('Run: tlive --help');
+    process.exit(1);
     break;
   }
 }
