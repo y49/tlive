@@ -75,6 +75,16 @@ export class TLiveLoop extends EventEmitter {
     this.session.on('permissionNeeded', (toolUse: ToolUseEvent) => this.handlePermissionNeeded(toolUse));
     this.session.on('permissionResolved', (id: string) => this.notifications.cancel(`perm:${id}`));
     this.session.on('sdkMessage', (msg: NormalizedMessage) => this.emit('sdkMessage', msg));
+    this.session.on('thinking', (thinking: boolean) => {
+      if (thinking) {
+        this.notifications.push({
+          kind: 'thinking',
+          dedupeKey: 'thinking:on',
+          sessionId: this.session.info.sessionId,
+          title: `\u{1F914} Thinking... \u00B7 ${this.sessionTag()}`,
+        });
+      }
+    });
     this.session.on('sessionComplete', () => this.handleSessionComplete());
     this.notifications.on('notify', (events: NotificationEvent[]) => this.dispatchToIM(events));
   }

@@ -4,6 +4,7 @@ import { PTYManager } from './ptyManager.js';
 import { SessionScanner, type ToolUseEvent, type SessionEvent } from './sessionScanner.js';
 import type { ProviderAdapter, NormalizedMessage } from '../sdk/providerAdapter.js';
 import { ClaudePermissionHandler } from '../sdk/permissionHandler.js';
+import { ThinkingTracker } from './thinkingTracker.js';
 import type { TLiveConfig } from '../config.js';
 
 export type SessionState = 'idle' | 'pty_active' | 'sdk_active';
@@ -27,6 +28,7 @@ export class SessionManager extends EventEmitter {
   private config: TLiveConfig;
   private permissionHandler: ClaudePermissionHandler | null = null;
   private sdkAbortController: AbortController | null = null;
+  private thinkingTracker: ThinkingTracker;
   private _createdAt = Date.now();
   private _lastActivityAt = Date.now();
   private _messageCount = 0;
@@ -43,6 +45,8 @@ export class SessionManager extends EventEmitter {
     this.adapter = opts.adapter;
     this.config = opts.config;
     this.pty = new PTYManager();
+    this.thinkingTracker = new ThinkingTracker();
+    this.thinkingTracker.on('change', (thinking: boolean) => this.emit('thinking', thinking));
     this.scanner = new SessionScanner({
       sessionId: this.sessionId,
       workdir: this.workdir,
@@ -79,6 +83,25 @@ export class SessionManager extends EventEmitter {
       this._lastActivityAt = Date.now();
       this._messageCount++;
       this.emit('scannerEvent', event);
+
+      // Track thinking state from content blocks
+      const blocks = this.getContentBlocks(event.message);
+      if (event.type === 'assistant') {
+        for (const block of blocks) {
+          if (block.type === 'tool_use' && block.id) {
+            this.thinkingTracker.trackToolUse(block.id as string);
+          } else if (block.type === 'text') {
+            this.thinkingTracker.trackAssistantMessage();
+          }
+        }
+      }
+      if (event.type === 'user') {
+        for (const block of blocks) {
+          if (block.type === 'tool_result' && block.tool_use_id) {
+            this.thinkingTracker.trackToolResult(block.tool_use_id as string);
+          }
+        }
+      }
     });
     this.scanner.on('permission_needed', (toolUse: ToolUseEvent) => this.emit('permissionNeeded', toolUse));
     this.scanner.on('permission_resolved', (toolUseId: string) => this.emit('permissionResolved', toolUseId));
@@ -146,7 +169,21 @@ export class SessionManager extends EventEmitter {
   writeToPTY(data: string): void { this.pty.write(data); }
   resizePTY(cols: number, rows: number): void { this.pty.resize(cols, rows); }
 
+  /**
+   * Extract content blocks from a message.
+   * Claude .jsonl format: { message: { role: "assistant", content: [...] } }
+   */
+  private getContentBlocks(message: unknown): Array<Record<string, unknown>> {
+    if (Array.isArray(message)) return message;
+    if (message && typeof message === 'object') {
+      const content = (message as Record<string, unknown>).content;
+      if (Array.isArray(content)) return content;
+    }
+    return [];
+  }
+
   async stop(): Promise<void> {
+    this.thinkingTracker.reset();
     this.scanner.stop();
     this.sdkAbortController?.abort();
     this.permissionHandler?.cancelAll();
