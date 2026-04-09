@@ -40,10 +40,10 @@ describe('ClaudePermissionHandler', () => {
     const handler = new ClaudePermissionHandler({
       onPermissionRequest: (id) => requests.push(id),
     });
-    const p1 = handler.handleToolCall('Read', { path: '/a' });
+    const p1 = handler.handleToolCall('Bash', { command: 'echo a' });
     handler.resolve(requests[0], 'allow_always');
     await p1;
-    const result = await handler.handleToolCall('Read', { path: '/b' });
+    const result = await handler.handleToolCall('Bash', { command: 'echo b' });
     expect(result.behavior).toBe('allow');
     expect(requests).toHaveLength(1);
   });

@@ -1,5 +1,7 @@
 // src/sdk/permissionHandler.ts
 
+import { isAllowed as isPolicyAllowed, type PermissionMode } from './permissionPolicies.js';
+
 export interface PermissionResult {
   behavior: 'allow' | 'deny' | 'error';
   updatedInput?: unknown;
@@ -85,15 +87,23 @@ export function matchesToolPermission(toolName: string, pattern: string): boolea
 export class ClaudePermissionHandler extends BasePermissionHandler {
   private opts: PermissionHandlerOptions;
   private requestCounter = 0;
+  private mode: PermissionMode = 'default';
 
   constructor(opts: PermissionHandlerOptions = {}) {
     super();
     this.opts = opts;
   }
 
+  setMode(mode: PermissionMode): void { this.mode = mode; }
+
   async handleToolCall(
     toolName: string, input: unknown, callOpts?: { signal?: AbortSignal },
   ): Promise<PermissionResult> {
+    // Policy-based auto-allow
+    if (isPolicyAllowed(this.mode, toolName, input)) {
+      return { behavior: 'allow', updatedInput: input };
+    }
+    // Session-level always-allow (from previous allow_always decisions)
     if (this.alwaysAllow.has(toolName)) {
       return { behavior: 'allow', updatedInput: input };
     }
