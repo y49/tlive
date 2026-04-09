@@ -117,11 +117,12 @@ export async function claudeCommand(opts: ClaudeCommandOptions = {}): Promise<vo
     });
 
     ipc.on('terminal_input', (p: Record<string, unknown>) => {
-      if (p.text) loop.handleTerminalInput(p.text as string + '\n');
+      // Claude Code TUI uses \r (carriage return) for submit, not \n
+      if (p.text) loop.handleTerminalInput(p.text as string + '\r');
     });
 
     ipc.on('question_answer', (p: Record<string, unknown>) => {
-      if (p.answer !== undefined) loop.handleTerminalInput(p.answer as string + '\n');
+      if (p.answer !== undefined) loop.handleTerminalInput(p.answer as string + '\r');
     });
 
     ipc.on('config_update', (p: Record<string, unknown>) => {
