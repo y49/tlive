@@ -81,6 +81,7 @@ async function main() {
   manager.onInboundMessage = (_ch, msg) => relay.interceptReply(msg);
   manager.onTerminalPermissionCallback = (action, id, sid) => relay.forwardPermissionAction(action, id, sid);
   manager.onTerminalQuestionCallback = (data) => relay.handleAskCallback(data);
+  manager.onConfigUpdate = (update) => relay.forwardConfigUpdate(update);
 
   // Graceful shutdown
   const keepAliveInterval = setInterval(() => {}, 60_000);

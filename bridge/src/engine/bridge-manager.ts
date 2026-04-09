@@ -159,6 +159,8 @@ export class BridgeManager {
   onTerminalPermissionCallback?: (action: string, toolUseId: string, sessionId: string) => void;
   /** Callback for forwarding terminal question answers via IPC */
   onTerminalQuestionCallback?: (callbackData: string) => void;
+  /** Callback for forwarding effort/model config updates to terminal via IPC */
+  onConfigUpdate?: (update: Record<string, unknown>) => void;
 
   /** Intercept inbound messages — return true to consume (don't route to SDK) */
   onInboundMessage?: (channelType: string, msg: { text: string; replyToMessageId?: string }) => boolean;

@@ -155,6 +155,7 @@ export class TerminalRelay {
         // bridge responds with empty list — the real listing happens terminal-side.
         sendJson(s, { type: 'session_list_response', payload: { sessions: [] } });
       },
+      config_update: (p) => this.broadcastConfigUpdate(p),
     };
   }
 
@@ -252,6 +253,17 @@ export class TerminalRelay {
       payload: { toolUseId, answer, optionIndex },
     });
     return true;
+  }
+
+  /**
+   * Forward a config update (effort/model change from IM) to terminal processes.
+   */
+  forwardConfigUpdate(payload: Record<string, unknown>): void {
+    this.broadcast({ type: 'config_update', payload });
+  }
+
+  private broadcastConfigUpdate(payload: Record<string, unknown>): void {
+    this.broadcast({ type: 'config_update', payload });
   }
 
   /**

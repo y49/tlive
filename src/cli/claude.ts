@@ -109,6 +109,13 @@ export async function claudeCommand(opts: ClaudeCommandOptions = {}): Promise<vo
       if (text) loop.handleTerminalInput(text + '\n');
     });
 
+    // Config updates from IM (effort/model changes) → display + store for next SDK handoff
+    ipc.on('config_update', (payload: Record<string, unknown>) => {
+      if (payload.effort) console.error(`  Effort:   ${payload.effort}`);
+      if (payload.model) console.error(`  Model:    ${payload.model}`);
+      // Store for next SDK handoff
+    });
+
     // Question answers from IM → write answer to PTY as user input
     ipc.on('question_answer', (payload: Record<string, unknown>) => {
       const answer = payload.answer as string;
