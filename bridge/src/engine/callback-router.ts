@@ -1,7 +1,8 @@
 import type { BaseChannelAdapter } from '../channels/base.js';
-import type { InboundMessage } from '../channels/types.js';
+import type { ChannelType, InboundMessage } from '../channels/types.js';
 import type { PermissionCoordinator } from './permission-coordinator.js';
 import type { ControlPanel } from './control-panel.js';
+import type { NotificationRenderer } from '../renderers/types.js';
 
 /** Shared SDK question state — owned by SDKEngine, read/written by CallbackRouter */
 export interface SdkQuestionState {
@@ -31,6 +32,7 @@ export class CallbackRouter {
     private sdkState: SdkQuestionState,
     private coreAvailable: () => boolean,
     private handleInboundMessage: (adapter: BaseChannelAdapter, msg: InboundMessage) => Promise<boolean>,
+    private renderers: Map<ChannelType, NotificationRenderer>,
   ) {}
 
   /** Inject ControlPanel after construction (avoids circular deps) */
@@ -45,9 +47,8 @@ export class CallbackRouter {
     if (msg.callbackData.startsWith('resume:')) {
       const parts = msg.callbackData.split(':');
       if (parts[1] === 'ignore') {
-        await adapter.editMessage(msg.chatId, msg.messageId, {
-          chatId: msg.chatId, text: '🔕 Ignored', buttons: [],
-        }).catch(() => {});
+        const renderer = this.renderers.get(adapter.channelType)!;
+        await adapter.editRendered(msg.chatId, msg.messageId, renderer.renderSimpleText('🔕 Ignored')).catch(() => {});
         return true;
       }
       // Resume session: resume:<sessionId>:<workdir> (workdir may contain colons on Windows)
@@ -55,9 +56,8 @@ export class CallbackRouter {
       const workdir = parts.slice(2).join(':');
       if (this.onResumeSession) {
         this.onResumeSession(adapter, msg.chatId, sessionId, workdir);
-        await adapter.editMessage(msg.chatId, msg.messageId, {
-          chatId: msg.chatId, text: `💬 Resuming session #${sessionId.slice(0, 6)}...`, buttons: [],
-        }).catch(() => {});
+        const renderer = this.renderers.get(adapter.channelType)!;
+        await adapter.editRendered(msg.chatId, msg.messageId, renderer.renderSimpleText(`💬 Resuming session #${sessionId.slice(0, 6)}...`)).catch(() => {});
       }
       return true;
     }
@@ -70,11 +70,8 @@ export class CallbackRouter {
         this.onTerminalQuestionCallback(msg.callbackData);
         const selection = parts[2];
         const label = selection === 'skip' ? '⏭ Skipped' : `✅ Selected option ${parseInt(selection, 10) + 1}`;
-        await adapter.editMessage(msg.chatId, msg.messageId, {
-          chatId: msg.chatId,
-          text: label,
-          buttons: [],
-        }).catch(() => {});
+        const renderer = this.renderers.get(adapter.channelType)!;
+        await adapter.editRendered(msg.chatId, msg.messageId, renderer.renderSimpleText(label)).catch(() => {});
         return true;
       }
     }
@@ -89,11 +86,8 @@ export class CallbackRouter {
           this.onTerminalPermissionCallback(action, toolUseId, '');
           // Update the message to show the action was taken
           const label = action === 'allow' ? '✅ Allowed' : action === 'deny' ? '❌ Denied' : '🖥 Takeover';
-          await adapter.editMessage(msg.chatId, msg.messageId, {
-            chatId: msg.chatId,
-            text: label,
-            buttons: [],
-          }).catch(() => {});
+          const renderer = this.renderers.get(adapter.channelType)!;
+          await adapter.editRendered(msg.chatId, msg.messageId, renderer.renderSimpleText(label)).catch(() => {});
           return true;
         }
         // Fall through to existing perm: handling if no IPC callback
@@ -145,7 +139,6 @@ export class CallbackRouter {
           text: card.text,
           html: card.html,
           buttons: card.buttons,
-          feishuHeader: adapter.channelType === 'feishu' ? { template: 'blue', title: '❓ Terminal' } : undefined,
         });
       }
       return true;
@@ -180,7 +173,8 @@ export class CallbackRouter {
       const permId = msg.callbackData.split(':')[1];
       const selected = this.permissions.getToggledSelections(permId);
       if (selected.size === 0) {
-        await adapter.send({ chatId: msg.chatId, text: '⚠️ No options selected' });
+        const renderer = this.renderers.get(adapter.channelType)!;
+        await adapter.sendRendered(msg.chatId, renderer.renderSimpleText('⚠️ No options selected'));
         return true;
       }
       const qData = this.sdkState.sdkQuestionData.get(permId);
@@ -189,12 +183,8 @@ export class CallbackRouter {
         const selectedLabels = [...selected].sort((a, b) => a - b).map(i => q.options[i]?.label).filter(Boolean);
         const answerText = selectedLabels.join(', ');
         this.sdkState.sdkQuestionTextAnswers.set(permId, answerText);
-        adapter.editMessage(msg.chatId, msg.messageId, {
-          chatId: msg.chatId,
-          text: `✅ Selected: ${selectedLabels.join(', ')}`,
-          buttons: [],
-          feishuHeader: msg.channelType === 'feishu' ? { template: 'green', title: '✅ Answered' } : undefined,
-        }).catch(() => {});
+        const renderer = this.renderers.get(adapter.channelType)!;
+        adapter.editRendered(msg.chatId, msg.messageId, renderer.renderSimpleText(`✅ Selected: ${selectedLabels.join(', ')}`)).catch(() => {});
       }
       this.permissions.cleanupQuestion(permId);
       this.permissions.getGateway().resolve(permId, 'allow');
@@ -250,12 +240,8 @@ export class CallbackRouter {
         if (!selected) return true;
         this.sdkState.sdkQuestionAnswers.set(permId, optionIndex);
         this.permissions.getGateway().resolve(permId, 'allow');
-        adapter.editMessage(msg.chatId, msg.messageId, {
-          chatId: msg.chatId,
-          text: `✅ Selected: ${selected.label}`,
-          buttons: [],
-          feishuHeader: { template: 'green', title: `✅ ${selected.label}` },
-        }).catch(() => {});
+        const renderer = this.renderers.get(adapter.channelType)!;
+        adapter.editRendered(msg.chatId, msg.messageId, renderer.renderSimpleText(`✅ Selected: ${selected.label}`)).catch(() => {});
         return true;
       }
     }
@@ -267,12 +253,8 @@ export class CallbackRouter {
       if (skipIdx >= 0) {
         const permId = parts.slice(2, skipIdx).join(':');
         this.permissions.getGateway().resolve(permId, 'deny', 'Skipped');
-        adapter.editMessage(msg.chatId, msg.messageId, {
-          chatId: msg.chatId,
-          text: '⏭ Skipped',
-          buttons: [],
-          feishuHeader: { template: 'grey', title: '⏭ Skipped' },
-        }).catch(() => {});
+        const renderer = this.renderers.get(adapter.channelType)!;
+        adapter.editRendered(msg.chatId, msg.messageId, renderer.renderSimpleText('⏭ Skipped')).catch(() => {});
         return true;
       }
     }

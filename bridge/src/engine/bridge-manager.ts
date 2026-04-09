@@ -1,5 +1,5 @@
 import { BaseChannelAdapter, createAdapter } from '../channels/base.js';
-import type { InboundMessage } from '../channels/types.js';
+import type { ChannelType, InboundMessage } from '../channels/types.js';
 import { ChannelRouter } from './router.js';
 import { PermissionBroker } from '../permissions/broker.js';
 import { PendingPermissions } from '../permissions/gateway.js';
@@ -15,6 +15,10 @@ import { SDKEngine } from './sdk-engine.js';
 import { MessageRouter } from './message-router.js';
 import { ControlPanel } from './control-panel.js';
 import { networkInterfaces } from 'node:os';
+import type { NotificationRenderer } from '../renderers/types.js';
+import { TelegramRenderer } from '../renderers/telegram.js';
+import { DiscordRenderer } from '../renderers/discord.js';
+import { FeishuRenderer } from '../renderers/feishu.js';
 
 /** Bridge commands handled synchronously (don't block adapter loop) */
 const QUICK_COMMANDS = new Set(['/menu', '/new', '/status', '/verbose', '/hooks', '/sessions', '/session', '/help', '/perm', '/effort', '/stop', '/approve', '/pairings', '/runtime', '/settings', '/model']);
@@ -52,6 +56,7 @@ export class BridgeManager {
   private coreAvailable = false;
   private state = new SessionStateManager();
   private permissions: PermissionCoordinator;
+  private renderers: Map<ChannelType, NotificationRenderer>;
 
   private commands: CommandRouter;
   private callbackRouter: CallbackRouter;
@@ -64,7 +69,12 @@ export class BridgeManager {
     const config = loadConfig();
     const effectivePublicUrl = config.publicUrl || `http://${getLocalIP()}:${config.port || 4590}`;
     const gateway = new PendingPermissions();
-    const broker = new PermissionBroker(gateway, effectivePublicUrl);
+    this.renderers = new Map<ChannelType, NotificationRenderer>([
+      ['telegram', new TelegramRenderer()],
+      ['discord', new DiscordRenderer()],
+      ['feishu', new FeishuRenderer()],
+    ]);
+    const broker = new PermissionBroker(gateway, effectivePublicUrl, this.renderers);
     this.coreUrl = config.coreUrl;
     this.token = config.token;
     this.permissions = new PermissionCoordinator(gateway, broker, this.coreUrl, this.token);
@@ -88,6 +98,7 @@ export class BridgeManager {
       this.sdkEngine.getQuestionState(),
       () => this.coreAvailable,
       (adapter, msg) => this.handleInboundMessage(adapter, msg),
+      this.renderers,
     );
 
     // Wire control panel into command & callback routers
@@ -199,7 +210,8 @@ export class BridgeManager {
       }, provider);
     } catch (err) {
       console.error(`[tlive:engine] Failed to resume session ${sessionId}:`, err);
-      adapter.send({ chatId, text: `⚠️ Failed to resume session: ${err}` }).catch(() => {});
+      const renderer = this.renderers.get(adapter.channelType)!;
+      adapter.sendRendered(chatId, renderer.renderSimpleText(`⚠️ Failed to resume session: ${err}`)).catch(() => {});
     }
   }
 
@@ -314,15 +326,16 @@ export class BridgeManager {
         // Guard: if this chat is already processing a message
         const chatKey = this.state.stateKey(coalesced.channelType, coalesced.chatId);
         if (this.state.isProcessing(chatKey)) {
+          const renderer = this.renderers.get(adapter.channelType)!;
           if (coalesced.text && this.sdkEngine.canSteer(coalesced.channelType, coalesced.chatId, coalesced.replyToMessageId)) {
             this.sdkEngine.steer(coalesced.channelType, coalesced.chatId, coalesced.text);
-            await adapter.send({ chatId: coalesced.chatId, text: '💬 Message sent to active session' }).catch(() => {});
+            await adapter.sendRendered(coalesced.chatId, renderer.renderSimpleText('💬 Message sent to active session')).catch(() => {});
           } else if (coalesced.text) {
             const queued = this.sdkEngine.queueMessage(coalesced.channelType, coalesced.chatId, coalesced);
             if (queued) {
-              await adapter.send({ chatId: coalesced.chatId, text: '📥 Queued — will process after current task' }).catch(() => {});
+              await adapter.sendRendered(coalesced.chatId, renderer.renderSimpleText('📥 Queued — will process after current task')).catch(() => {});
             } else {
-              await adapter.send({ chatId: coalesced.chatId, text: '⚠️ Queue full — please wait for current tasks to finish' }).catch(() => {});
+              await adapter.sendRendered(coalesced.chatId, renderer.renderSimpleText('⚠️ Queue full — please wait for current tasks to finish')).catch(() => {});
             }
           }
           continue;
@@ -363,7 +376,8 @@ export class BridgeManager {
       // Unrecognized slash command — check if provider supports passthrough
       const provider = this.getProvider(msg.channelType, msg.chatId);
       if (!provider.capabilities().slashCommands) {
-        await adapter.send({ chatId: msg.chatId, text: '⚠️ Slash commands not supported by current runtime' });
+        const renderer = this.renderers.get(adapter.channelType)!;
+        await adapter.sendRendered(msg.chatId, renderer.renderSimpleText('⚠️ Slash commands not supported by current runtime'));
         return true;
       }
     }

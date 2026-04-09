@@ -2,15 +2,26 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PermissionBroker } from '../permissions/broker.js';
 import { PendingPermissions } from '../permissions/gateway.js';
 import type { BaseChannelAdapter } from '../channels/base.js';
+import type { ChannelType } from '../channels/types.js';
+import type { NotificationRenderer } from '../renderers/types.js';
+import { TelegramRenderer } from '../renderers/telegram.js';
 
 function createMockAdapter(): BaseChannelAdapter {
   return {
     channelType: 'telegram',
     send: vi.fn().mockResolvedValue({ messageId: '42', success: true }),
+    sendRendered: vi.fn().mockResolvedValue({ messageId: '42', success: true }),
     editMessage: vi.fn(),
+    editRendered: vi.fn(),
     start: vi.fn(), stop: vi.fn(), consumeOne: vi.fn(),
     validateConfig: vi.fn(), isAuthorized: vi.fn(),
   } as any;
+}
+
+function createRenderers(): Map<ChannelType, NotificationRenderer> {
+  return new Map<ChannelType, NotificationRenderer>([
+    ['telegram', new TelegramRenderer()],
+  ]);
 }
 
 describe('PermissionBroker', () => {
@@ -21,24 +32,24 @@ describe('PermissionBroker', () => {
   beforeEach(() => {
     gateway = new PendingPermissions();
     adapter = createMockAdapter();
-    broker = new PermissionBroker(gateway, 'https://termlive.example.com');
+    broker = new PermissionBroker(gateway, 'https://termlive.example.com', createRenderers());
   });
 
-  it('forwards permission request to adapter with buttons and web link', async () => {
+  it('forwards permission request to adapter via sendRendered with buttons', async () => {
     await broker.forwardPermissionRequest(
       { permissionRequestId: 'perm1', toolName: 'Edit', toolInput: { file: 'src/auth.ts' } },
       () => 'chat123',
       [adapter]
     );
 
-    expect(adapter.send).toHaveBeenCalledOnce();
-    const msg = (adapter.send as any).mock.calls[0][0];
-    expect(msg.chatId).toBe('chat123');
-    expect(msg.buttons).toHaveLength(2); // Yes, No
-    expect(msg.buttons[0].callbackData).toBe('perm:allow:perm1');
-    expect(msg.buttons[1].callbackData).toBe('perm:deny:perm1');
-    // Should include web link (HTML format for telegram adapter)
-    expect(msg.html).toContain('https://termlive.example.com');
+    expect(adapter.sendRendered).toHaveBeenCalledOnce();
+    const [chatId, rendered] = (adapter.sendRendered as any).mock.calls[0];
+    expect(chatId).toBe('chat123');
+    expect(rendered.buttons).toHaveLength(2); // Yes, No
+    expect(rendered.buttons[0].callbackData).toBe('perm:allow:perm1');
+    expect(rendered.buttons[1].callbackData).toBe('perm:deny:perm1');
+    // Should include HTML content (rendered by TelegramRenderer)
+    expect(rendered.html).toContain('Permission Required');
   });
 
   it('truncates long tool input to 300 chars', async () => {
@@ -49,8 +60,8 @@ describe('PermissionBroker', () => {
       [adapter]
     );
 
-    const msg = (adapter.send as any).mock.calls[0][0];
-    const text = msg.text || msg.html || '';
+    const [, rendered] = (adapter.sendRendered as any).mock.calls[0];
+    const text = rendered.html || '';
     // The full 500-char input should not appear
     expect(text.length).toBeLessThan(600);
   });

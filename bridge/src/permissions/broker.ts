@@ -1,13 +1,17 @@
 import { PendingPermissions } from './gateway.js';
 import type { BaseChannelAdapter } from '../channels/base.js';
+import type { ChannelType } from '../channels/types.js';
+import type { NotificationRenderer, NotificationEvent } from '../renderers/types.js';
 
 export class PermissionBroker {
   private gateway: PendingPermissions;
   private publicUrl: string;
+  private renderers: Map<ChannelType, NotificationRenderer>;
 
-  constructor(gateway: PendingPermissions, publicUrl: string) {
+  constructor(gateway: PendingPermissions, publicUrl: string, renderers: Map<ChannelType, NotificationRenderer>) {
     this.gateway = gateway;
     this.publicUrl = publicUrl;
+    this.renderers = renderers;
   }
 
   async forwardPermissionRequest(
@@ -20,32 +24,19 @@ export class PermissionBroker {
       ? request.toolInput
       : JSON.stringify(request.toolInput, null, 2);
 
-    const { formatPermissionCard } = await import('../formatting/index.js');
-    const showTerminal = options?.showTerminalUrl ?? true;
-
     for (const adapter of adapters) {
       const chatId = getChatId(adapter.channelType);
       if (!chatId) continue;
 
-      const formatted = formatPermissionCard(
-        {
-          toolName: request.toolName,
-          toolInput: inputStr,
-          permissionId: request.permissionRequestId,
-          expiresInMinutes: 5,
-          terminalUrl: showTerminal ? (this.publicUrl || undefined) : undefined,
-        },
-        adapter.channelType as import('../channels/types.js').ChannelType,
-      );
-
-      await adapter.send({
-        chatId,
-        text: formatted.text,
-        html: formatted.html,
-        embed: formatted.embed,
-        buttons: formatted.buttons,
-        feishuHeader: formatted.feishuHeader,
-      });
+      const renderer = this.renderers.get(adapter.channelType)!;
+      const event: NotificationEvent = {
+        kind: 'permission_request',
+        toolName: request.toolName,
+        toolInput: inputStr,
+        permissionId: request.permissionRequestId,
+        expiresInMinutes: 5,
+      };
+      await adapter.sendRendered(chatId, renderer.renderNotification(event));
     }
   }
 

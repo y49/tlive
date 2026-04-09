@@ -2,7 +2,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CallbackRouter } from '../engine/callback-router.js';
 import type { SdkQuestionState } from '../engine/callback-router.js';
 import type { BaseChannelAdapter } from '../channels/base.js';
-import type { InboundMessage } from '../channels/types.js';
+import type { ChannelType, InboundMessage } from '../channels/types.js';
+import type { NotificationRenderer } from '../renderers/types.js';
+import { TelegramRenderer } from '../renderers/telegram.js';
+import { FeishuRenderer } from '../renderers/feishu.js';
+
+function createRenderers(): Map<ChannelType, NotificationRenderer> {
+  return new Map<ChannelType, NotificationRenderer>([
+    ['telegram', new TelegramRenderer()],
+    ['feishu', new FeishuRenderer()],
+  ]);
+}
 
 function mockAdapter(channelType = 'telegram'): BaseChannelAdapter {
   const messageQueue: any[] = [];
@@ -12,7 +22,9 @@ function mockAdapter(channelType = 'telegram'): BaseChannelAdapter {
     stop: vi.fn().mockResolvedValue(undefined),
     consumeOne: vi.fn().mockImplementation(() => messageQueue.shift() ?? null),
     send: vi.fn().mockResolvedValue({ messageId: '1', success: true }),
+    sendRendered: vi.fn().mockResolvedValue({ messageId: '1', success: true }),
     editMessage: vi.fn().mockResolvedValue(undefined),
+    editRendered: vi.fn().mockResolvedValue(undefined),
     sendTyping: vi.fn().mockResolvedValue(undefined),
     addReaction: vi.fn().mockResolvedValue(undefined),
     removeReaction: vi.fn().mockResolvedValue(undefined),
@@ -84,6 +96,7 @@ describe('CallbackRouter', () => {
       sdkState,
       () => true,
       handleInboundMessage,
+      createRenderers(),
     );
   });
 
@@ -161,15 +174,18 @@ describe('CallbackRouter', () => {
       expect(adapter.editMessage).not.toHaveBeenCalled();
     });
 
-    it('passes feishuHeader when adapter is feishu', async () => {
+    it('edits message without feishuHeader when adapter is feishu', async () => {
       const feishuAdapter = mockAdapter('feishu');
       permissions.toggleMultiSelectOption.mockReturnValue(new Set([0]));
       const msg = makeMsg({ callbackData: 'askq_toggle:h1:0:sess1', channelType: 'feishu' });
       await router.handle(feishuAdapter, msg);
 
       expect(feishuAdapter.editMessage).toHaveBeenCalledWith('c1', 'm1', expect.objectContaining({
-        feishuHeader: { template: 'blue', title: '❓ Terminal' },
+        text: 'card text',
       }));
+      // feishuHeader is no longer passed — Renderer handles platform formatting
+      const callArgs = (feishuAdapter.editMessage as any).mock.calls[0][2];
+      expect(callArgs.feishuHeader).toBeUndefined();
     });
   });
 
@@ -204,9 +220,10 @@ describe('CallbackRouter', () => {
       const result = await router.handle(adapter, msg);
 
       expect(result).toBe(true);
-      expect(adapter.send).toHaveBeenCalledWith(expect.objectContaining({
-        text: '⚠️ No options selected',
-      }));
+      expect(adapter.sendRendered).toHaveBeenCalledOnce();
+      const [chatId, rendered] = (adapter.sendRendered as any).mock.calls[0];
+      expect(chatId).toBe('c1');
+      expect(rendered.html).toContain('No options selected');
       expect(gateway.resolve).not.toHaveBeenCalled();
     });
 
@@ -233,10 +250,11 @@ describe('CallbackRouter', () => {
       expect(sdkState.sdkQuestionTextAnswers.get('p1')).toBe('Alpha, Gamma');
       expect(permissions.cleanupQuestion).toHaveBeenCalledWith('p1');
       expect(gateway.resolve).toHaveBeenCalledWith('p1', 'allow');
-      expect(adapter.editMessage).toHaveBeenCalledWith('c1', 'm1', expect.objectContaining({
-        text: '✅ Selected: Alpha, Gamma',
-        buttons: [],
-      }));
+      expect(adapter.editRendered).toHaveBeenCalledOnce();
+      const [chatId, msgId, rendered] = (adapter.editRendered as any).mock.calls[0];
+      expect(chatId).toBe('c1');
+      expect(msgId).toBe('m1');
+      expect(rendered.html).toContain('Selected: Alpha, Gamma');
     });
   });
 
@@ -332,10 +350,11 @@ describe('CallbackRouter', () => {
       expect(result).toBe(true);
       expect(sdkState.sdkQuestionAnswers.get('p1')).toBe(1);
       expect(gateway.resolve).toHaveBeenCalledWith('p1', 'allow');
-      expect(adapter.editMessage).toHaveBeenCalledWith('c1', 'm1', expect.objectContaining({
-        text: '✅ Selected: Option B',
-        buttons: [],
-      }));
+      expect(adapter.editRendered).toHaveBeenCalledOnce();
+      const [chatId, msgId, rendered] = (adapter.editRendered as any).mock.calls[0];
+      expect(chatId).toBe('c1');
+      expect(msgId).toBe('m1');
+      expect(rendered.html).toContain('Selected: Option B');
     });
 
     it('returns true without resolving when option index is out of range', async () => {
@@ -364,10 +383,11 @@ describe('CallbackRouter', () => {
 
       expect(result).toBe(true);
       expect(gateway.resolve).toHaveBeenCalledWith('p1', 'deny', 'Skipped');
-      expect(adapter.editMessage).toHaveBeenCalledWith('c1', 'm1', expect.objectContaining({
-        text: '⏭ Skipped',
-        buttons: [],
-      }));
+      expect(adapter.editRendered).toHaveBeenCalledOnce();
+      const [chatId, msgId, rendered] = (adapter.editRendered as any).mock.calls[0];
+      expect(chatId).toBe('c1');
+      expect(msgId).toBe('m1');
+      expect(rendered.html).toContain('Skipped');
     });
   });
 
