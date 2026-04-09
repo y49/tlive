@@ -1,6 +1,7 @@
 import { CostTracker, type UsageStats } from './cost-tracker.js';
 import { redactSensitiveContent } from './content-filter.js';
 import { getToolIcon } from './tool-registry.js';
+import type { ProgressSnapshot } from '../renderers/types.js';
 
 export interface MessageRendererOptions {
   platformLimit: number;
@@ -149,6 +150,27 @@ export class MessageRenderer {
     this.stopTimers();
     const content = this.render();
     this.doFlush(content);
+  }
+
+  snapshot(): ProgressSnapshot {
+    let phase: ProgressSnapshot['phase'];
+    if (this.completed) phase = 'completed';
+    else if (this.errorMessage) phase = 'error';
+    else if (this.permissionQueue.length > 0) phase = 'permission';
+    else if (this.totalTools > 0 || this.responseText) phase = 'executing';
+    else phase = 'starting';
+
+    return {
+      phase,
+      toolCounts: new Map(this.toolCounts),
+      totalTools: this.totalTools,
+      elapsedSeconds: this.elapsedSeconds,
+      responseText: this.responseText,
+      permissionQueue: [...this.permissionQueue],
+      todoItems: [...this.todoItems],
+      costLine: this.costLine,
+      errorMessage: this.errorMessage,
+    };
   }
 
   getResponseText(): string {

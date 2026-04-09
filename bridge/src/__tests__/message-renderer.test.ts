@@ -557,4 +557,125 @@ describe('MessageRenderer', () => {
       r.dispose();
     });
   });
+
+  // ─── snapshot() ─────────────────────────────────
+
+  describe('snapshot()', () => {
+    it('returns starting phase when no activity', () => {
+      const r = createRenderer();
+      const snap = r.snapshot();
+      expect(snap.phase).toBe('starting');
+      expect(snap.totalTools).toBe(0);
+      expect(snap.toolCounts.size).toBe(0);
+      expect(snap.responseText).toBe('');
+      expect(snap.permissionQueue).toEqual([]);
+      expect(snap.todoItems).toEqual([]);
+      expect(snap.elapsedSeconds).toBe(0);
+      expect(snap.costLine).toBeUndefined();
+      expect(snap.errorMessage).toBeUndefined();
+      r.dispose();
+    });
+
+    it('returns executing phase with tool counts after onToolStart', async () => {
+      const r = createRenderer();
+      r.onToolStart('Bash');
+      r.onToolStart('Read');
+      r.onToolStart('Bash');
+      const snap = r.snapshot();
+      expect(snap.phase).toBe('executing');
+      expect(snap.totalTools).toBe(3);
+      expect(snap.toolCounts.get('Bash')).toBe(2);
+      expect(snap.toolCounts.get('Read')).toBe(1);
+      r.dispose();
+    });
+
+    it('returns permission phase when permission is queued', () => {
+      const r = createRenderer();
+      r.onToolStart('Bash');
+      r.onPermissionNeeded('Bash', 'rm -rf /', 'perm-1', defaultButtons);
+      const snap = r.snapshot();
+      expect(snap.phase).toBe('permission');
+      expect(snap.permissionQueue).toHaveLength(1);
+      expect(snap.permissionQueue[0].toolName).toBe('Bash');
+      expect(snap.permissionQueue[0].input).toBe('rm -rf /');
+      expect(snap.permissionQueue[0].permId).toBe('perm-1');
+      r.dispose();
+    });
+
+    it('returns completed phase after onComplete', async () => {
+      const r = createRenderer();
+      r.onToolStart('Bash');
+      r.onTextDelta('Done!');
+      r.onComplete(defaultStats);
+      await advance(0);
+      const snap = r.snapshot();
+      expect(snap.phase).toBe('completed');
+      expect(snap.responseText).toBe('Done!');
+      expect(snap.costLine).toBeDefined();
+      expect(snap.costLine).toContain('$0.05');
+      r.dispose();
+    });
+
+    it('returns error phase after onError', async () => {
+      const r = createRenderer();
+      r.onToolStart('Bash');
+      r.onError('connection lost');
+      await advance(0);
+      const snap = r.snapshot();
+      expect(snap.phase).toBe('error');
+      expect(snap.errorMessage).toBe('connection lost');
+      r.dispose();
+    });
+
+    it('includes todo items from onTodoUpdate', () => {
+      const r = createRenderer();
+      r.onToolStart('Bash');
+      const todos = [
+        { content: 'Write tests', status: 'completed' as const },
+        { content: 'Fix bug', status: 'in_progress' as const },
+        { content: 'Deploy', status: 'pending' as const },
+      ];
+      r.onTodoUpdate(todos);
+      const snap = r.snapshot();
+      expect(snap.todoItems).toHaveLength(3);
+      expect(snap.todoItems[0]).toEqual({ content: 'Write tests', status: 'completed' });
+      expect(snap.todoItems[1]).toEqual({ content: 'Fix bug', status: 'in_progress' });
+      expect(snap.todoItems[2]).toEqual({ content: 'Deploy', status: 'pending' });
+      r.dispose();
+    });
+
+    it('includes accumulated response text from onTextDelta', () => {
+      const r = createRenderer();
+      r.onTextDelta('hello ');
+      r.onTextDelta('world');
+      const snap = r.snapshot();
+      expect(snap.phase).toBe('executing');
+      expect(snap.responseText).toBe('hello world');
+      r.dispose();
+    });
+
+    it('returns defensive copies (modifying returned snapshot does not affect internal state)', () => {
+      const r = createRenderer();
+      r.onToolStart('Bash');
+      r.onToolStart('Read');
+      r.onPermissionNeeded('Bash', 'cmd', 'p1', defaultButtons);
+      r.onTodoUpdate([{ content: 'Task 1', status: 'pending' }]);
+
+      const snap1 = r.snapshot();
+
+      // Mutate returned snapshot
+      snap1.toolCounts.set('Bash', 999);
+      snap1.toolCounts.set('Fake', 1);
+      snap1.permissionQueue.push({ toolName: 'Fake', input: 'x', permId: 'x', buttons: [] });
+      snap1.todoItems.push({ content: 'Injected', status: 'completed' });
+
+      // Take a fresh snapshot — should be unaffected
+      const snap2 = r.snapshot();
+      expect(snap2.toolCounts.get('Bash')).toBe(1);
+      expect(snap2.toolCounts.has('Fake')).toBe(false);
+      expect(snap2.permissionQueue).toHaveLength(1);
+      expect(snap2.todoItems).toHaveLength(1);
+      r.dispose();
+    });
+  });
 });
