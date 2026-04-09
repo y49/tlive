@@ -21,6 +21,8 @@ export class CallbackRouter {
   private controlPanel?: ControlPanel;
   /** Callback for forwarding terminal permission actions via IPC to `tlive claude` */
   onTerminalPermissionCallback?: (action: string, toolUseId: string, sessionId: string) => void;
+  /** Callback for forwarding terminal question answers via IPC to `tlive claude` */
+  onTerminalQuestionCallback?: (callbackData: string) => void;
 
   constructor(
     private permissions: PermissionCoordinator,
@@ -36,6 +38,23 @@ export class CallbackRouter {
 
   async handle(adapter: BaseChannelAdapter, msg: InboundMessage): Promise<boolean> {
     if (!msg.callbackData) return false;
+
+    // v1.0 terminal question callbacks (askq:<toolUseId>:<option|skip>)
+    // Only match the terminal v1.0 format (3 parts) — hook-based askq has 4 parts with sessionId
+    if (msg.callbackData.startsWith('askq:') && !msg.callbackData.startsWith('askq_')) {
+      const parts = msg.callbackData.split(':');
+      if (parts.length === 3 && this.onTerminalQuestionCallback) {
+        this.onTerminalQuestionCallback(msg.callbackData);
+        const selection = parts[2];
+        const label = selection === 'skip' ? '⏭ Skipped' : `✅ Selected option ${parseInt(selection, 10) + 1}`;
+        await adapter.editMessage(msg.chatId, msg.messageId, {
+          chatId: msg.chatId,
+          text: label,
+          buttons: [],
+        }).catch(() => {});
+        return true;
+      }
+    }
 
     // v1.0 terminal permission callbacks (perm:allow:<toolUseId>, perm:deny:<id>, perm:takeover:<id>)
     if (msg.callbackData.startsWith('perm:allow:') || msg.callbackData.startsWith('perm:deny:') || msg.callbackData.startsWith('perm:takeover:')) {

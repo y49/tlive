@@ -15,6 +15,8 @@ export interface ToolUseEvent {
   toolName: string;
   input: unknown;
   timestamp: number;
+  questionText?: string;
+  questionOptions?: string[];
 }
 
 export interface PendingPermission {
@@ -165,6 +167,17 @@ export class SessionScanner extends EventEmitter {
     const isQuestion = toolName === 'AskUserQuestion';
     const delay = isQuestion ? this.opts.proactiveQuestionDelay : this.opts.proactiveNotifyDelay;
 
+    const toolUseEvent: ToolUseEvent = { toolUseId, toolName, input: block.input, timestamp: Date.now() };
+
+    if (isQuestion) {
+      const inputObj = block.input as Record<string, unknown>;
+      toolUseEvent.questionText = (inputObj?.question as string) ?? '';
+      const options = inputObj?.options;
+      if (Array.isArray(options)) {
+        toolUseEvent.questionOptions = options.map((o: any) => o.label ?? o.description ?? String(o));
+      }
+    }
+
     const timerId = setTimeout(() => {
       const pending = this.pendingToolUse.get(toolUseId);
       if (pending) {
@@ -174,7 +187,7 @@ export class SessionScanner extends EventEmitter {
     }, delay);
 
     this.pendingToolUse.set(toolUseId, {
-      toolUse: { toolUseId, toolName, input: block.input, timestamp: Date.now() },
+      toolUse: toolUseEvent,
       timerId,
     });
   }

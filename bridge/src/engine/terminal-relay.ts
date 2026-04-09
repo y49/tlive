@@ -230,6 +230,26 @@ export class TerminalRelay {
   }
 
   /**
+   * Handle a callback from IM that targets a terminal session question.
+   * Returns true if consumed.
+   */
+  handleAskCallback(callbackData: string): boolean {
+    if (!callbackData.startsWith('askq:')) return false;
+    const parts = callbackData.split(':');
+    const toolUseId = parts[1];
+    const selection = parts[2]; // index number or 'skip'
+
+    const answer = selection === 'skip' ? '' : selection;
+    const optionIndex = selection === 'skip' ? -1 : parseInt(selection, 10);
+
+    this.broadcast({
+      type: 'question_answer',
+      payload: { toolUseId, answer, optionIndex },
+    });
+    return true;
+  }
+
+  /**
    * Forward a permission action (from IM button press) to terminal processes.
    */
   forwardPermissionAction(action: string, toolUseId: string, sessionId: string): void {

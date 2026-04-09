@@ -95,6 +95,14 @@ export async function claudeCommand(opts: ClaudeCommandOptions = {}): Promise<vo
       if (text) loop.handleTerminalInput(text + '\n');
     });
 
+    // Question answers from IM → write answer to PTY as user input
+    ipc.on('question_answer', (payload: Record<string, unknown>) => {
+      const answer = payload.answer as string;
+      if (answer !== undefined) {
+        loop.handleTerminalInput(answer + '\n');
+      }
+    });
+
     console.error(`  IM:       \x1b[32mconnected\x1b[0m (bridge IPC)`);
   } else {
     console.error(`  IM:       \x1b[33mnot connected\x1b[0m (bridge not running)`);

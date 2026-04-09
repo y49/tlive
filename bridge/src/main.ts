@@ -77,9 +77,10 @@ async function main() {
 
   relay.start();
 
-  // Wire IM → terminal: reply interception + permission callbacks
+  // Wire IM → terminal: reply interception + permission/question callbacks
   manager.onInboundMessage = (_ch, msg) => relay.interceptReply(msg);
   manager.onTerminalPermissionCallback = (action, id, sid) => relay.forwardPermissionAction(action, id, sid);
+  manager.onTerminalQuestionCallback = (data) => relay.handleAskCallback(data);
 
   // Graceful shutdown
   const keepAliveInterval = setInterval(() => {}, 60_000);

@@ -105,6 +105,10 @@ export class BridgeManager {
     this.callbackRouter.onTerminalPermissionCallback = (action, toolUseId, sessionId) => {
       this.onTerminalPermissionCallback?.(action, toolUseId, sessionId);
     };
+    // Wire terminal question callback through to IPC
+    this.callbackRouter.onTerminalQuestionCallback = (data) => {
+      this.onTerminalQuestionCallback?.(data);
+    };
   }
 
   /** Returns all active adapters */
@@ -153,6 +157,8 @@ export class BridgeManager {
 
   /** Callback for forwarding terminal permission actions via IPC */
   onTerminalPermissionCallback?: (action: string, toolUseId: string, sessionId: string) => void;
+  /** Callback for forwarding terminal question answers via IPC */
+  onTerminalQuestionCallback?: (callbackData: string) => void;
 
   /** Intercept inbound messages — return true to consume (don't route to SDK) */
   onInboundMessage?: (channelType: string, msg: { text: string; replyToMessageId?: string }) => boolean;

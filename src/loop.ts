@@ -76,7 +76,10 @@ export class TLiveLoop extends EventEmitter {
     this.session.on('ptyData', (data: string) => this.emit('ptyData', data));
     this.session.on('scannerEvent', (event: SessionEvent) => this.handleScannerEvent(event));
     this.session.on('permissionNeeded', (toolUse: ToolUseEvent) => this.handlePermissionNeeded(toolUse));
-    this.session.on('permissionResolved', (id: string) => this.notifications.cancel(`perm:${id}`));
+    this.session.on('permissionResolved', (id: string) => {
+      this.notifications.cancel(`perm:${id}`);
+      this.notifications.cancel(`askq:${id}`);
+    });
     this.session.on('sdkMessage', (msg: NormalizedMessage) => this.emit('sdkMessage', msg));
     this.session.on('thinking', (thinking: boolean) => {
       if (thinking) {
@@ -131,20 +134,46 @@ export class TLiveLoop extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   private handlePermissionNeeded(toolUse: ToolUseEvent): void {
-    const isQuestion = toolUse.toolName === 'AskUserQuestion';
+    if (toolUse.toolName === 'AskUserQuestion') {
+      // Build option buttons if question has options
+      const buttons: Array<{ label: string; callbackData: string; style?: 'primary' | 'danger' }> = [];
+      if (toolUse.questionOptions) {
+        for (let i = 0; i < toolUse.questionOptions.length; i++) {
+          buttons.push({
+            label: toolUse.questionOptions[i],
+            callbackData: `askq:${toolUse.toolUseId}:${i}`,
+          });
+        }
+      }
+      buttons.push({
+        label: 'Skip',
+        callbackData: `askq:${toolUse.toolUseId}:skip`,
+        style: 'danger',
+      });
+
+      this.notifications.push({
+        kind: 'ask_user_question',
+        dedupeKey: `askq:${toolUse.toolUseId}`,
+        sessionId: this.session.info.sessionId,
+        title: `❓ Claude asks · ${this.sessionTag()}`,
+        body: toolUse.questionText ?? 'Question from Claude',
+        buttons,
+      });
+      return;
+    }
+
+    // Regular permission request
     this.notifications.push({
-      kind: isQuestion ? 'ask_user_question' : 'permission_request',
+      kind: 'permission_request',
       dedupeKey: `perm:${toolUse.toolUseId}`,
       sessionId: this.session.info.sessionId,
-      title: isQuestion
-        ? `❓ Claude asks · ${this.sessionTag()}`
-        : `⚠️ Permission · ${this.sessionTag()}`,
+      title: `⚠️ Permission · ${this.sessionTag()}`,
       body: formatForIM({
         kind: 'permission_request', provider: 'claude',
         sessionId: this.session.info.sessionId,
         toolName: toolUse.toolName, toolInput: toolUse.input,
       }),
-      buttons: isQuestion ? undefined : [
+      buttons: [
         { label: 'Allow', callbackData: `perm:allow:${toolUse.toolUseId}` },
         { label: 'Deny', callbackData: `perm:deny:${toolUse.toolUseId}`, style: 'danger' as const },
         { label: 'Takeover', callbackData: `perm:takeover:${toolUse.toolUseId}` },
@@ -171,7 +200,7 @@ export class TLiveLoop extends EventEmitter {
     for (const event of events) {
       const text = event.body ? `${event.title}\n${event.body}` : event.title;
       const messageId = await this.imSend(this.imChatId, text, event.buttons);
-      if (messageId && event.kind === 'permission_request') {
+      if (messageId && (event.kind === 'permission_request' || event.kind === 'ask_user_question')) {
         this.router.registerTerminalNotification(
           messageId, this.session.info.sessionId, this.session.info.workdir,
         );
