@@ -87,19 +87,46 @@ async function main() {
   // Priority: active session chatId → config → persisted chat-ids.json
   // ---------------------------------------------------------------------------
 
+  // ---------------------------------------------------------------------------
+  // Target resolver — determine which chat/user to send notifications to.
+  // Each platform registers a resolver returning { chatId, receiveIdType? }.
+  // ---------------------------------------------------------------------------
+
+  interface ResolvedTarget { chatId: string; receiveIdType?: string }
+
   const chatIdsFile = join(tliveHome, 'runtime', 'chat-ids.json');
   let cachedChatIds: Record<string, string> = {};
   try { cachedChatIds = JSON.parse(readFileSync(chatIdsFile, 'utf-8')); } catch { /* none yet */ }
 
-  const configChatIds: Record<string, string> = {
-    telegram: config.telegram.chatId,
+  /** Detect feishu receive_id_type from ID prefix. */
+  function feishuIdType(id: string): string {
+    if (id.startsWith('ou_')) return 'open_id';
+    if (id.startsWith('oc_')) return 'chat_id';
+    return 'user_id';
+  }
+
+  /** Per-platform config-based fallback targets. */
+  const configTargets: Record<string, () => ResolvedTarget | null> = {
+    telegram: () => config.telegram.chatId ? { chatId: config.telegram.chatId } : null,
+    feishu: () => {
+      const id = config.feishu.allowedUsers[0];
+      return id ? { chatId: id, receiveIdType: feishuIdType(id) } : null;
+    },
+    discord: () => null,
   };
 
-  function resolveChatId(channelType: string): string {
-    return manager.getLastChatId(channelType)
-      || configChatIds[channelType]
-      || cachedChatIds[channelType]
-      || '';
+  function resolveTarget(channelType: string): ResolvedTarget | null {
+    // Priority: active session → platform config → persisted cache
+    const active = manager.getLastChatId(channelType);
+    if (active) return { chatId: active, receiveIdType: channelType === 'feishu' ? feishuIdType(active) : undefined };
+
+    const fromConfig = configTargets[channelType]?.();
+    if (fromConfig) return fromConfig;
+
+    const cached = cachedChatIds[channelType];
+    if (cached) return { chatId: cached, receiveIdType: channelType === 'feishu' ? feishuIdType(cached) : undefined };
+
+    return null;
   }
 
   // ---------------------------------------------------------------------------
@@ -145,11 +172,12 @@ async function main() {
       };
 
       for (const adapter of manager.getAdapters()) {
-        const chatId = resolveChatId(adapter.channelType);
-        if (!chatId) continue;
+        const target = resolveTarget(adapter.channelType);
+        if (!target) continue;
 
         adapter.send({
-          chatId,
+          chatId: target.chatId,
+          receiveIdType: target.receiveIdType,
           text,
           buttons: buttons?.map((b) => ({
             label: b.label,

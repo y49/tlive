@@ -27265,11 +27265,27 @@ async function main() {
     cachedChatIds = JSON.parse(readFileSync3(chatIdsFile, "utf-8"));
   } catch {
   }
-  const configChatIds = {
-    telegram: config3.telegram.chatId
+  function feishuIdType(id) {
+    if (id.startsWith("ou_")) return "open_id";
+    if (id.startsWith("oc_")) return "chat_id";
+    return "user_id";
+  }
+  const configTargets = {
+    telegram: () => config3.telegram.chatId ? { chatId: config3.telegram.chatId } : null,
+    feishu: () => {
+      const id = config3.feishu.allowedUsers[0];
+      return id ? { chatId: id, receiveIdType: feishuIdType(id) } : null;
+    },
+    discord: () => null
   };
-  function resolveChatId(channelType) {
-    return manager.getLastChatId(channelType) || configChatIds[channelType] || cachedChatIds[channelType] || "";
+  function resolveTarget(channelType) {
+    const active = manager.getLastChatId(channelType);
+    if (active) return { chatId: active, receiveIdType: channelType === "feishu" ? feishuIdType(active) : void 0 };
+    const fromConfig = configTargets[channelType]?.();
+    if (fromConfig) return fromConfig;
+    const cached2 = cachedChatIds[channelType];
+    if (cached2) return { chatId: cached2, receiveIdType: channelType === "feishu" ? feishuIdType(cached2) : void 0 };
+    return null;
   }
   const ipcServer = createServer2((socket) => {
     ipcClients.add(socket);
@@ -27301,10 +27317,11 @@ async function main() {
     notification(payload, socket) {
       const { text: text2, buttons, sessionId } = payload;
       for (const adapter of manager.getAdapters()) {
-        const chatId = resolveChatId(adapter.channelType);
-        if (!chatId) continue;
+        const target = resolveTarget(adapter.channelType);
+        if (!target) continue;
         adapter.send({
-          chatId,
+          chatId: target.chatId,
+          receiveIdType: target.receiveIdType,
           text: text2,
           buttons: buttons?.map((b) => ({
             label: b.label,
