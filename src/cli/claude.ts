@@ -27,6 +27,22 @@ function getLocalIP(): string {
   return '127.0.0.1';
 }
 
+export function setupQR(port: number, token: string): void {
+  const localIP = getLocalIP();
+  const url = `http://${localIP}:${port}/?token=${token}`;
+
+  console.log('');
+  console.log('  \x1b[36m⚡ TLive Web Terminal\x1b[0m');
+  console.log('');
+  console.log(`  URL: \x1b[4m${url}\x1b[0m`);
+  console.log(`  Pair: \x1b[4mhttp://${localIP}:${port}/pair?token=${token}\x1b[0m`);
+  console.log('');
+  console.log('  Open this URL on your phone or another device.');
+  console.log('  For Telegram pairing, send this to your bot:');
+  console.log(`  /start pair_${token.slice(0, 16)}`);
+  console.log('');
+}
+
 export async function claudeCommand(opts: ClaudeCommandOptions = {}): Promise<void> {
   const config = loadConfig();
   const adapter = new ClaudeAdapter();

@@ -454,6 +454,19 @@ switch (command) {
   }
 
   case 'setup': {
+    if (args.includes('--qr')) {
+      const claudeEntry = join(PACKAGE_ROOT, 'dist', 'src', 'tlive-claude.mjs');
+      if (existsSync(claudeEntry)) {
+        const { setupQR } = await import(claudeEntry);
+        const config = loadConfigEnv();
+        const port = parseInt(config.TL_PORT || '8849', 10);
+        const token = config.TL_TOKEN || 'tlive';
+        setupQR(port, token);
+      } else {
+        console.error('Build required: npm run build:src');
+      }
+      break;
+    }
     const setupEntry = join(PACKAGE_ROOT, 'bridge', 'dist', 'setup.mjs');
     if (existsSync(setupEntry)) {
       const r = spawnSync(process.execPath, [setupEntry], { stdio: 'inherit' });

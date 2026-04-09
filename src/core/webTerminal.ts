@@ -34,6 +34,23 @@ export class WebTerminal {
     this.httpServer = createServer((req, res) => {
       const url = new URL(req.url ?? '/', `http://localhost:${opts.port}`);
 
+      // /pair endpoint — lightweight pairing confirmation page
+      if (url.pathname === '/pair') {
+        if (this.token && url.searchParams.get('token') !== this.token) {
+          res.writeHead(403);
+          res.end('Unauthorized');
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        const t = url.searchParams.get('token') ?? '';
+        res.end(`<!DOCTYPE html><html><body style="font-family:system-ui;text-align:center;padding:2em">
+          <h2>TLive Paired</h2>
+          <p>Web terminal is accessible from this device.</p>
+          <p><a href="/?token=${t}">Open Terminal</a></p>
+        </body></html>`);
+        return;
+      }
+
       // Token check for HTML pages
       if (this.token && url.pathname === '/') {
         if (url.searchParams.get('token') !== this.token) {
