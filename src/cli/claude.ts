@@ -103,6 +103,10 @@ export async function claudeCommand(opts: ClaudeCommandOptions = {}): Promise<vo
       }
     });
 
+    ipc.on('reconnected', () => {
+      console.error(`  IM:       \x1b[32mreconnected\x1b[0m`);
+    });
+
     console.error(`  IM:       \x1b[32mconnected\x1b[0m (bridge IPC)`);
   } else {
     console.error(`  IM:       \x1b[33mnot connected\x1b[0m (bridge not running)`);

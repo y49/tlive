@@ -98,6 +98,8 @@ export interface IPCClientOptions {
   retryDelay?: number;
   /** IPC socket path. Default: ~/.tlive/ipc.sock */
   path?: string;
+  /** Auto-reconnect on disconnect. Default: true */
+  autoReconnect?: boolean;
 }
 
 export class IPCClient extends EventEmitter {
@@ -111,6 +113,7 @@ export class IPCClient extends EventEmitter {
       maxRetries: opts.maxRetries ?? 10,
       retryDelay: opts.retryDelay ?? 500,
       path: opts.path ?? IPC_PATH,
+      autoReconnect: opts.autoReconnect ?? true,
     };
   }
 
@@ -125,9 +128,13 @@ export class IPCClient extends EventEmitter {
   async connect(): Promise<boolean> {
     for (let attempt = 0; attempt <= this.opts.maxRetries; attempt++) {
       const ok = await this.tryConnect();
-      if (ok) return true;
+      if (ok) {
+        if (attempt > 0) this.emit('reconnected');
+        return true;
+      }
       if (attempt < this.opts.maxRetries) {
-        await new Promise((r) => setTimeout(r, this.opts.retryDelay));
+        const delay = Math.min(this.opts.retryDelay * Math.pow(2, attempt), 30000);
+        await new Promise((r) => setTimeout(r, delay));
       }
     }
     return false;
@@ -142,6 +149,9 @@ export class IPCClient extends EventEmitter {
         socket.on('close', () => {
           this._connected = false;
           this.emit('disconnected');
+          if (this.opts.autoReconnect) {
+            setTimeout(() => this.connect(), this.opts.retryDelay);
+          }
         });
         resolve(true);
       });
