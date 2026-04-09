@@ -26177,9 +26177,9 @@ var TerminalRelay = class {
     for (const adapter of this.deps.getAdapters()) {
       const target = this.targetResolver.resolve(adapter.channelType);
       if (!target) continue;
-      const isPermission = text2.includes("\u26A0\uFE0F") || text2.includes("Permission");
-      const isQuestion = text2.includes("\u2753");
-      const isDone = text2.includes("\u2705 Done");
+      const isPermission = text2.includes("Permission");
+      const isQuestion = text2.includes("Question");
+      const isDone = text2.includes("Done");
       const feishuHeader = adapter.channelType === "feishu" ? {
         template: isPermission ? "orange" : isQuestion ? "blue" : isDone ? "green" : "turquoise",
         title: isPermission ? "\u26A0\uFE0F Permission" : isQuestion ? "\u2753 Question" : isDone ? "\u2705 Done" : "\u{1F5A5} Terminal"

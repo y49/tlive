@@ -703,6 +703,20 @@ var SessionRouter = class {
   }
 };
 
+// src/im/icons.ts
+var LABEL = {
+  permission: "\u26A0 Permission",
+  question: "\u2753 Question",
+  done: "\u2713 Done",
+  error: "\u2717 Error",
+  thinking: "... Thinking",
+  tasks: "\u2630 Tasks",
+  terminal: "Terminal",
+  tool: "\u25B8",
+  // prefix for tool call lines
+  replyHint: "\u21A9 Reply to this message to interact"
+};
+
 // src/sdk/messageNormalizer.ts
 function getContentBlocks(message) {
   if (Array.isArray(message)) return message;
@@ -741,14 +755,13 @@ function normalizeSessionLine(line, provider, sessionId) {
 }
 var imFormatters = {
   text: (msg) => msg.text ?? "",
-  tool_use: (msg) => `\u{1F527} ${msg.toolName}${formatToolArgs(msg.toolName, msg.toolInput)}`,
+  tool_use: (msg) => `${LABEL.tool} ${msg.toolName}${formatToolArgs(msg.toolName, msg.toolInput)}`,
   tool_result: () => "",
-  // suppressed — too noisy for IM sync
-  permission_request: (msg) => `\u26A0\uFE0F Permission: ${msg.toolName}
+  permission_request: (msg) => `${LABEL.permission}: ${msg.toolName}
 ${formatToolArgs(msg.toolName, msg.toolInput)}`,
-  error: (msg) => `\u274C ${msg.text}`,
-  complete: () => "\u2705 Session complete",
-  status: (msg) => `\u2139\uFE0F ${msg.text}`
+  error: (msg) => `${LABEL.error}: ${msg.text}`,
+  complete: () => `${LABEL.done}`,
+  status: (msg) => msg.text ?? ""
 };
 function formatForIM(msg) {
   const formatter = imFormatters[msg.kind];
@@ -803,12 +816,12 @@ function extractTodos(toolInput) {
   }));
 }
 function formatTodos(todos) {
-  const icons = {
-    completed: "\u2611\uFE0F",
-    in_progress: "\u{1F504}",
-    pending: "\u2B1C"
+  const marks = {
+    completed: "[x]",
+    in_progress: "[-]",
+    pending: "[ ]"
   };
-  return todos.map((t) => `${icons[t.status] ?? "\u2B1C"} ${t.content}`).join("\n");
+  return todos.map((t) => `${marks[t.status] ?? "[ ]"} ${t.content}`).join("\n");
 }
 
 // src/core/costTracker.ts
@@ -917,7 +930,7 @@ var TLiveLoop = class extends EventEmitter6 {
           kind: "thinking",
           dedupeKey: "thinking:on",
           sessionId: this.session.info.sessionId,
-          title: `\u{1F914} Thinking... \xB7 ${this.sessionTag()}`
+          title: `${LABEL.thinking} \xB7 ${this.sessionTag()}`
         });
       }
     });
@@ -945,7 +958,7 @@ var TLiveLoop = class extends EventEmitter6 {
             kind: "todo_update",
             dedupeKey: `todo:${event.uuid}`,
             sessionId: this.session.info.sessionId,
-            title: `\u{1F4CB} Tasks \xB7 ${this.sessionTag()}`,
+            title: `${LABEL.tasks} \xB7 ${this.sessionTag()}`,
             body: formatTodos(todos)
           });
           continue;
@@ -960,7 +973,9 @@ var TLiveLoop = class extends EventEmitter6 {
         dedupeKey: `activity:${event.uuid}:${msg.kind}`,
         sessionId: this.session.info.sessionId,
         title: `Terminal \xB7 ${this.sessionTag()}`,
-        body: body + "\n\n\u21A9\uFE0F \u56DE\u590D\u6B64\u6D88\u606F\u4E0E\u7EC8\u7AEF\u4EA4\u4E92"
+        body: body + `
+
+${LABEL.replyHint}`
       });
     }
   }
@@ -987,7 +1002,7 @@ var TLiveLoop = class extends EventEmitter6 {
         kind: "ask_user_question",
         dedupeKey: `askq:${toolUse.toolUseId}`,
         sessionId: this.session.info.sessionId,
-        title: `\u2753 Claude asks \xB7 ${this.sessionTag()}`,
+        title: `${LABEL.question} \xB7 ${this.sessionTag()}`,
         body: toolUse.questionText ?? "Question from Claude",
         buttons
       });
@@ -997,7 +1012,7 @@ var TLiveLoop = class extends EventEmitter6 {
       kind: "permission_request",
       dedupeKey: `perm:${toolUse.toolUseId}`,
       sessionId: this.session.info.sessionId,
-      title: `\u26A0\uFE0F Permission \xB7 ${this.sessionTag()}`,
+      title: `${LABEL.permission} \xB7 ${this.sessionTag()}`,
       body: formatForIM({
         kind: "permission_request",
         provider: "claude",
@@ -1017,7 +1032,7 @@ var TLiveLoop = class extends EventEmitter6 {
       kind: "session_complete",
       dedupeKey: `complete:${this.session.info.sessionId}`,
       sessionId: this.session.info.sessionId,
-      title: `\u2705 Done \xB7 ${this.sessionTag()}`,
+      title: `${LABEL.done} \xB7 ${this.sessionTag()}`,
       body: this.costTracker.formatSummary()
     });
   }
@@ -1058,7 +1073,7 @@ ${event.body}` : event.title;
           kind: "permission_request",
           dedupeKey: `perm:${id}`,
           sessionId: this.session.info.sessionId,
-          title: `\u26A0\uFE0F ${toolName}`,
+          title: `${LABEL.permission}: ${toolName}`,
           body: formatForIM({
             kind: "permission_request",
             provider: "claude",
@@ -1448,10 +1463,10 @@ async function claudeCommand(opts = {}) {
       loop.handleIMAction(p.action, p.toolUseId);
     });
     ipc.on("terminal_input", (p) => {
-      if (p.text) loop.handleTerminalInput(p.text + "\n");
+      if (p.text) loop.handleTerminalInput(p.text + "\r");
     });
     ipc.on("question_answer", (p) => {
-      if (p.answer !== void 0) loop.handleTerminalInput(p.answer + "\n");
+      if (p.answer !== void 0) loop.handleTerminalInput(p.answer + "\r");
     });
     ipc.on("config_update", (p) => {
       if (p.effort) console.error(`  Effort:   ${p.effort}`);

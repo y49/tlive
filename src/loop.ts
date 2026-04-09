@@ -13,6 +13,7 @@ import { normalizeSessionLine, formatForIM, extractTodos, formatTodos } from './
 import type { TLiveConfig } from './config.js';
 import type { NotificationKind } from './im/notificationRules.js';
 import { CostTracker } from './core/costTracker.js';
+import { LABEL } from './im/icons.js';
 
 const MAX_IM_TEXT_LEN = 300;
 
@@ -87,7 +88,7 @@ export class TLiveLoop extends EventEmitter {
           kind: 'thinking',
           dedupeKey: 'thinking:on',
           sessionId: this.session.info.sessionId,
-          title: `\u{1F914} Thinking... \u00B7 ${this.sessionTag()}`,
+          title: `${LABEL.thinking} · ${this.sessionTag()}`,
         });
       }
     });
@@ -119,7 +120,7 @@ export class TLiveLoop extends EventEmitter {
             kind: 'todo_update',
             dedupeKey: `todo:${event.uuid}`,
             sessionId: this.session.info.sessionId,
-            title: `📋 Tasks · ${this.sessionTag()}`,
+            title: `${LABEL.tasks} · ${this.sessionTag()}`,
             body: formatTodos(todos),
           });
           continue; // Don't also push as activity_tool
@@ -139,7 +140,7 @@ export class TLiveLoop extends EventEmitter {
         dedupeKey: `activity:${event.uuid}:${msg.kind}`,
         sessionId: this.session.info.sessionId,
         title: `Terminal · ${this.sessionTag()}`,
-        body: body + '\n\n↩️ 回复此消息与终端交互',
+        body: body + `\n\n${LABEL.replyHint}`,
       });
     }
   }
@@ -170,7 +171,7 @@ export class TLiveLoop extends EventEmitter {
         kind: 'ask_user_question',
         dedupeKey: `askq:${toolUse.toolUseId}`,
         sessionId: this.session.info.sessionId,
-        title: `❓ Claude asks · ${this.sessionTag()}`,
+        title: `${LABEL.question} · ${this.sessionTag()}`,
         body: toolUse.questionText ?? 'Question from Claude',
         buttons,
       });
@@ -182,7 +183,7 @@ export class TLiveLoop extends EventEmitter {
       kind: 'permission_request',
       dedupeKey: `perm:${toolUse.toolUseId}`,
       sessionId: this.session.info.sessionId,
-      title: `⚠️ Permission · ${this.sessionTag()}`,
+      title: `${LABEL.permission} · ${this.sessionTag()}`,
       body: formatForIM({
         kind: 'permission_request', provider: 'claude',
         sessionId: this.session.info.sessionId,
@@ -201,7 +202,7 @@ export class TLiveLoop extends EventEmitter {
       kind: 'session_complete',
       dedupeKey: `complete:${this.session.info.sessionId}`,
       sessionId: this.session.info.sessionId,
-      title: `✅ Done · ${this.sessionTag()}`,
+      title: `${LABEL.done} · ${this.sessionTag()}`,
       body: this.costTracker.formatSummary(),
     });
   }
@@ -244,7 +245,7 @@ export class TLiveLoop extends EventEmitter {
         this.notifications.push({
           kind: 'permission_request', dedupeKey: `perm:${id}`,
           sessionId: this.session.info.sessionId,
-          title: `⚠️ ${toolName}`,
+          title: `${LABEL.permission}: ${toolName}`,
           body: formatForIM({
             kind: 'permission_request', provider: 'claude',
             sessionId: this.session.info.sessionId,

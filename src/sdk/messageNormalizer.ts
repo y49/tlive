@@ -64,15 +64,17 @@ export function normalizeSessionLine(
 
 type IMFormatter = (msg: NormalizedMessage) => string;
 
+import { LABEL } from '../im/icons.js';
+
 /** Registry of formatters keyed by message kind. */
 const imFormatters: Record<string, IMFormatter> = {
   text:               (msg) => msg.text ?? '',
-  tool_use:           (msg) => `🔧 ${msg.toolName}${formatToolArgs(msg.toolName, msg.toolInput)}`,
-  tool_result:        ()    => '',  // suppressed — too noisy for IM sync
-  permission_request: (msg) => `⚠️ Permission: ${msg.toolName}\n${formatToolArgs(msg.toolName, msg.toolInput)}`,
-  error:              (msg) => `❌ ${msg.text}`,
-  complete:           ()    => '✅ Session complete',
-  status:             (msg) => `ℹ️ ${msg.text}`,
+  tool_use:           (msg) => `${LABEL.tool} ${msg.toolName}${formatToolArgs(msg.toolName, msg.toolInput)}`,
+  tool_result:        ()    => '',
+  permission_request: (msg) => `${LABEL.permission}: ${msg.toolName}\n${formatToolArgs(msg.toolName, msg.toolInput)}`,
+  error:              (msg) => `${LABEL.error}: ${msg.text}`,
+  complete:           ()    => `${LABEL.done}`,
+  status:             (msg) => msg.text ?? '',
 };
 
 /** Format a NormalizedMessage for IM display. */
@@ -147,8 +149,8 @@ export function extractTodos(toolInput: unknown): TodoItem[] | null {
 }
 
 export function formatTodos(todos: TodoItem[]): string {
-  const icons: Record<string, string> = {
-    completed: '☑️', in_progress: '🔄', pending: '⬜',
+  const marks: Record<string, string> = {
+    completed: '[x]', in_progress: '[-]', pending: '[ ]',
   };
-  return todos.map(t => `${icons[t.status] ?? '⬜'} ${t.content}`).join('\n');
+  return todos.map(t => `${marks[t.status] ?? '[ ]'} ${t.content}`).join('\n');
 }

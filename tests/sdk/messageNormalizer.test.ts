@@ -73,6 +73,6 @@ describe('formatForIM', () => {
   });
 
   it('formats complete', () => {
-    expect(formatForIM({ kind: 'complete', provider: 'claude', sessionId: 's' })).toBe('✅ Session complete');
+    expect(formatForIM({ kind: 'complete', provider: 'claude', sessionId: 's' })).toBe('✓ Done');
   });
 });

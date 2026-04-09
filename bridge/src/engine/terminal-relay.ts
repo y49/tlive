@@ -361,9 +361,9 @@ export class TerminalRelay {
       if (!target) continue;
 
       // Determine card header style based on notification content
-      const isPermission = text.includes('⚠️') || text.includes('Permission');
-      const isQuestion = text.includes('❓');
-      const isDone = text.includes('✅ Done');
+      const isPermission = text.includes('Permission');
+      const isQuestion = text.includes('Question');
+      const isDone = text.includes('Done');
       const feishuHeader = adapter.channelType === 'feishu' ? {
         template: isPermission ? 'orange' : isQuestion ? 'blue' : isDone ? 'green' : 'turquoise',
         title: isPermission ? '⚠️ Permission' : isQuestion ? '❓ Question' : isDone ? '✅ Done' : '🖥 Terminal',
