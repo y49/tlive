@@ -3,14 +3,15 @@
 // Relay between terminal `tlive claude` processes and IM adapters.
 // Manages IPC server, target resolution, notification dispatch, and reply routing.
 
-import { createServer, type Socket, type Server } from 'node:net';
-import { readFileSync, readFileSync as fsReadFileSync, existsSync, unlinkSync } from 'node:fs';
+import { type Socket } from 'node:net';
+import { readFileSync, readFileSync as fsReadFileSync, existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
-import { homedir } from 'node:os';
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { BaseChannelAdapter } from '../channels/base.js';
 import type { Config } from '../config.js';
+import { IPCServer } from './ipc-server.js';
+import { SessionRegistry } from './session-registry.js';
 
 // ---------------------------------------------------------------------------
 // IPC protocol — message types exchanged between terminal and bridge
@@ -100,27 +101,6 @@ export class TargetResolver {
 }
 
 // ---------------------------------------------------------------------------
-// Line-delimited JSON protocol over Unix socket
-// ---------------------------------------------------------------------------
-
-function attachLineParser(socket: Socket, onMessage: (msg: Record<string, unknown>) => void): void {
-  let buffer = '';
-  socket.on('data', (data) => {
-    buffer += data.toString();
-    const lines = buffer.split('\n');
-    buffer = lines.pop() ?? '';
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try { onMessage(JSON.parse(line)); } catch { /* skip */ }
-    }
-  });
-}
-
-function sendJson(socket: Socket, msg: Record<string, unknown>): void {
-  socket.write(JSON.stringify(msg) + '\n');
-}
-
-// ---------------------------------------------------------------------------
 // TerminalRelay — the main class
 // ---------------------------------------------------------------------------
 
@@ -140,20 +120,11 @@ const MIME: Record<string, string> = {
 };
 
 export class TerminalRelay {
-  private server: Server | null = null;
-  private clients = new Set<Socket>();
-  private ipcPath: string;
+  private ipcServer: IPCServer;
+  private registry = new SessionRegistry();
   private targetResolver: TargetResolver;
   private terminalMsgIds = new Set<string>();
   private deps: TerminalRelayDeps;
-
-  // Session registry — tracks active terminal sessions
-  private sessions = new Map<string, {
-    socket: Socket;
-    sessionId: string;
-    workdir: string;
-    projectName: string;
-  }>();
 
   // Web terminal — HTTP + WebSocket server
   private httpServer: HttpServer | null = null;
@@ -165,7 +136,8 @@ export class TerminalRelay {
 
   constructor(deps: TerminalRelayDeps) {
     this.deps = deps;
-    this.ipcPath = join(deps.tliveHome, 'ipc.sock');
+    const ipcPath = join(deps.tliveHome, 'ipc.sock');
+    this.ipcServer = new IPCServer(ipcPath, deps.log);
     this.targetResolver = new TargetResolver(deps.getLastChatId, deps.config, deps.tliveHome);
 
     this.handlers = {
@@ -174,17 +146,17 @@ export class TerminalRelay {
       session_list: (_p, s) => {
         // Terminal clients own file-system access via sessionDiscovery;
         // bridge responds with empty list — the real listing happens terminal-side.
-        sendJson(s, { type: 'session_list_response', payload: { sessions: [] } });
+        this.ipcServer.reply(s, { type: 'session_list_response', payload: { sessions: [] } });
       },
       config_update: (p) => this.broadcastConfigUpdate(p),
       session_register: (p, s) => {
         const { sessionId, workdir, projectName } = p as any;
-        this.sessions.set(sessionId, { socket: s, sessionId, workdir, projectName: projectName || '' });
+        this.registry.register(sessionId, s, { workdir, projectName: projectName || '' });
         this.deps.log(`Session registered: ${sessionId.slice(0, 8)} (${projectName})`);
       },
       session_unregister: (p) => {
         const { sessionId } = p as any;
-        this.sessions.delete(sessionId);
+        this.registry.unregister(sessionId);
         const clients = this.webClients.get(sessionId);
         if (clients) {
           for (const ws of clients) ws.close();
@@ -208,36 +180,24 @@ export class TerminalRelay {
   // ---- Lifecycle ----
 
   start(): void {
-    if (existsSync(this.ipcPath)) unlinkSync(this.ipcPath);
-
-    this.server = createServer((socket) => {
-      this.clients.add(socket);
-      this.deps.log(`Terminal connected (${this.clients.size} active)`);
-
-      attachLineParser(socket, (msg) => {
-        const handler = this.handlers[msg.type as string];
-        if (handler) handler(msg.payload as Record<string, unknown>, socket);
-      });
-
-      socket.on('close', () => {
-        this.clients.delete(socket);
-        // Remove sessions owned by this socket
-        for (const [sid, session] of this.sessions) {
-          if (session.socket === socket) {
-            this.sessions.delete(sid);
-            const wsClients = this.webClients.get(sid);
-            if (wsClients) {
-              for (const ws of wsClients) ws.close();
-              this.webClients.delete(sid);
-            }
-          }
-        }
-        this.deps.log(`Terminal disconnected (${this.clients.size} active)`);
-      });
-      socket.on('error', () => this.clients.delete(socket));
+    this.ipcServer.on('message', (payload: Record<string, unknown>, type: string, socket: Socket) => {
+      const handler = this.handlers[type];
+      if (handler) handler(payload, socket);
     });
 
-    this.server.listen(this.ipcPath, () => this.deps.log(`IPC listening at ${this.ipcPath}`));
+    this.ipcServer.on('disconnect', (socket: Socket) => {
+      // Remove sessions owned by this socket and close their web clients
+      const removedIds = this.registry.removeBySocket(socket);
+      for (const sid of removedIds) {
+        const wsClients = this.webClients.get(sid);
+        if (wsClients) {
+          for (const ws of wsClients) ws.close();
+          this.webClients.delete(sid);
+        }
+      }
+    });
+
+    this.ipcServer.start();
 
     // Start web terminal HTTP + WebSocket server
     this.startWebServer();
@@ -251,9 +211,7 @@ export class TerminalRelay {
     this.wsServer?.close();
     this.httpServer?.close();
     // Close IPC
-    for (const client of this.clients) client.destroy();
-    this.server?.close();
-    try { unlinkSync(this.ipcPath); } catch { /* gone */ }
+    this.ipcServer.stop();
   }
 
   // ---- Web terminal server ----
@@ -274,7 +232,7 @@ export class TerminalRelay {
 
       // Session list page
       if (url.pathname === '/' || url.pathname === '/index.html') {
-        const sessions = [...this.sessions.values()];
+        const sessions = this.registry.listSessions();
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(this.renderSessionList(sessions, token));
         return;
@@ -306,7 +264,7 @@ export class TerminalRelay {
       }
 
       const sessionId = url.searchParams.get('session');
-      if (!sessionId || !this.sessions.has(sessionId)) {
+      if (!sessionId || !this.registry.getSession(sessionId)) {
         ws.close(4002, 'Session not found'); return;
       }
 
@@ -317,9 +275,9 @@ export class TerminalRelay {
       // Web input -> IPC -> terminal process
       ws.on('message', (raw) => {
         const data = raw.toString();
-        const session = this.sessions.get(sessionId);
+        const session = this.registry.getSession(sessionId);
         if (session) {
-          sendJson(session.socket, { type: 'web_input', payload: { data } });
+          this.ipcServer.reply(session.socket, { type: 'web_input', payload: { data } });
         }
       });
 
@@ -385,7 +343,7 @@ export class TerminalRelay {
         if (msgId) {
           this.terminalMsgIds.add(msgId);
           this.deps.log(`Tracked notification: ${msgId}`);
-          sendJson(origin, {
+          this.ipcServer.reply(origin, {
             type: 'message_sent',
             payload: { messageId: msgId, sessionId, channelType: adapter.channelType },
           });
@@ -408,7 +366,7 @@ export class TerminalRelay {
       return false;
     }
     this.deps.log(`Forwarding reply to terminal: "${msg.text.slice(0, 50)}"`);
-    this.broadcast({ type: 'terminal_input', payload: { text: msg.text } });
+    this.ipcServer.broadcast({ type: 'terminal_input', payload: { text: msg.text } });
     return true;
   }
 
@@ -425,7 +383,7 @@ export class TerminalRelay {
     const answer = selection === 'skip' ? '' : selection;
     const optionIndex = selection === 'skip' ? -1 : parseInt(selection, 10);
 
-    this.broadcast({
+    this.ipcServer.broadcast({
       type: 'question_answer',
       payload: { toolUseId, answer, optionIndex },
     });
@@ -436,18 +394,18 @@ export class TerminalRelay {
    * Forward a config update (effort/model change from IM) to terminal processes.
    */
   forwardConfigUpdate(payload: Record<string, unknown>): void {
-    this.broadcast({ type: 'config_update', payload });
+    this.ipcServer.broadcast({ type: 'config_update', payload });
   }
 
   private broadcastConfigUpdate(payload: Record<string, unknown>): void {
-    this.broadcast({ type: 'config_update', payload });
+    this.ipcServer.broadcast({ type: 'config_update', payload });
   }
 
   /**
    * Forward a permission action (from IM button press) to terminal processes.
    */
   forwardPermissionAction(action: string, toolUseId: string, sessionId: string): void {
-    this.broadcast({
+    this.ipcServer.broadcast({
       type: 'permission_action',
       payload: { action, toolUseId, sessionId },
     });
@@ -457,7 +415,7 @@ export class TerminalRelay {
 
   /** Whether any terminal client (tlive claude) is connected via IPC */
   hasActiveClient(): boolean {
-    return this.clients.size > 0;
+    return this.ipcServer.clientCount > 0;
   }
 
   /** Resolve notification target for a given channel type */
@@ -465,9 +423,4 @@ export class TerminalRelay {
     return this.targetResolver.resolve(channelType);
   }
 
-  // ---- Helpers ----
-
-  private broadcast(msg: Record<string, unknown>): void {
-    for (const client of this.clients) sendJson(client, msg);
-  }
 }
