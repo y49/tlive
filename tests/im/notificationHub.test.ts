@@ -72,7 +72,7 @@ describe('NotificationHub', () => {
     expect(batches[1][0].dedupeKey).toBe('crit');
   });
 
-  it('suppresses activity events when user is active', () => {
+  it('suppresses only activity_tool when user is active (activity_text always pushes)', () => {
     const activeHub = new NotificationHub({
       batchDelay: 50,
       isUserActive: () => true,
@@ -80,8 +80,9 @@ describe('NotificationHub', () => {
     const batches: NotificationEvent[][] = [];
     activeHub.on('notify', (b: NotificationEvent[]) => batches.push(b));
     activeHub.push(makeEvent({ dedupeKey: 'act1', kind: 'activity_text' }));
+    expect(batches).toHaveLength(1); // activity_text always pushes
     activeHub.push(makeEvent({ dedupeKey: 'act2', kind: 'activity_tool' }));
-    expect(batches).toHaveLength(0);
+    expect(batches).toHaveLength(1); // activity_tool suppressed when active
   });
 
   it('still pushes alwaysPush events when user is active', () => {

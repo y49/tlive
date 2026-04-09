@@ -579,7 +579,7 @@ var RULES = {
   session_complete: { alwaysPush: true, aggregate: false, maxTextLength: 100 },
   todo_update: { alwaysPush: true, aggregate: false, maxTextLength: 500 },
   thinking: { alwaysPush: true, aggregate: false, maxTextLength: 50 },
-  activity_text: { alwaysPush: false, aggregate: false, maxTextLength: 300 },
+  activity_text: { alwaysPush: true, aggregate: false, maxTextLength: 300 },
   activity_tool: { alwaysPush: false, aggregate: true, maxTextLength: 500 }
 };
 function shouldPush(kind, isUserActive) {
@@ -1159,143 +1159,12 @@ var ClaudeAdapter = class {
   }
 };
 
-// src/core/webTerminal.ts
-import { WebSocketServer } from "ws";
-import { createServer } from "node:http";
-import { readFileSync as readFileSync2, existsSync as existsSync3 } from "node:fs";
-import { join as join4, dirname, extname } from "node:path";
-import { fileURLToPath } from "node:url";
-var MIME_TYPES = {
-  ".html": "text/html",
-  ".css": "text/css",
-  ".js": "application/javascript"
-};
-var WebTerminal = class {
-  httpServer;
-  wss;
-  clients = /* @__PURE__ */ new Set();
-  token;
-  webDir;
-  onInput;
-  onResize;
-  constructor(opts) {
-    this.token = opts.token;
-    const __dirname = dirname(fileURLToPath(import.meta.url));
-    this.webDir = opts.webDir ?? join4(__dirname, "../../web");
-    this.httpServer = createServer((req, res) => {
-      const url = new URL(req.url ?? "/", `http://localhost:${opts.port}`);
-      if (url.pathname === "/pair") {
-        if (this.token && url.searchParams.get("token") !== this.token) {
-          res.writeHead(403);
-          res.end("Unauthorized");
-          return;
-        }
-        res.writeHead(200, { "Content-Type": "text/html" });
-        const t = url.searchParams.get("token") ?? "";
-        res.end(`<!DOCTYPE html><html><body style="font-family:system-ui;text-align:center;padding:2em">
-          <h2>TLive Paired</h2>
-          <p>Web terminal is accessible from this device.</p>
-          <p><a href="/?token=${t}">Open Terminal</a></p>
-        </body></html>`);
-        return;
-      }
-      if (this.token && url.pathname === "/") {
-        if (url.searchParams.get("token") !== this.token) {
-          res.writeHead(403);
-          res.end("Unauthorized");
-          return;
-        }
-      }
-      let filePath;
-      if (url.pathname === "/" || url.pathname === "/index.html") {
-        filePath = join4(this.webDir, "terminal.html");
-      } else {
-        const safe = url.pathname.replace(/\.\./g, "");
-        filePath = join4(this.webDir, safe);
-      }
-      if (existsSync3(filePath)) {
-        const ext = extname(filePath);
-        res.writeHead(200, { "Content-Type": MIME_TYPES[ext] ?? "application/octet-stream" });
-        res.end(readFileSync2(filePath));
-      } else {
-        res.writeHead(404);
-        res.end("Not found");
-      }
-    });
-    this.wss = new WebSocketServer({ server: this.httpServer });
-    this.wss.on("connection", (ws, req) => {
-      if (this.token) {
-        const url = new URL(req.url ?? "", `http://localhost:${opts.port}`);
-        if (url.searchParams.get("token") !== this.token) {
-          ws.close(4001, "Unauthorized");
-          return;
-        }
-      }
-      this.clients.add(ws);
-      ws.on("message", (raw) => {
-        const data = raw.toString();
-        try {
-          const msg = JSON.parse(data);
-          if (msg.type === "resize" && msg.cols && msg.rows) {
-            this.onResize?.(msg.cols, msg.rows);
-            return;
-          }
-        } catch {
-        }
-        this.onInput?.(data);
-      });
-      ws.on("close", () => this.clients.delete(ws));
-    });
-  }
-  setInputHandler(handler) {
-    this.onInput = handler;
-  }
-  setResizeHandler(handler) {
-    this.onResize = handler;
-  }
-  broadcast(data) {
-    const buf = Buffer.from(data);
-    for (const ws of this.clients) {
-      if (ws.readyState === ws.OPEN) ws.send(buf);
-    }
-  }
-  sendControl(msg) {
-    const data = JSON.stringify(msg);
-    for (const ws of this.clients) {
-      if (ws.readyState === ws.OPEN) ws.send(data);
-    }
-  }
-  startOnPort(port) {
-    return new Promise((resolve4, reject) => {
-      this.httpServer.on("error", (err) => {
-        if (err.code === "EADDRINUSE") {
-          reject(new Error(`Port ${port} is already in use. Kill the old process or use a different TL_PORT.`));
-        } else {
-          reject(err);
-        }
-      });
-      this.httpServer.listen(port, () => resolve4());
-    });
-  }
-  get address() {
-    const addr = this.httpServer.address();
-    if (typeof addr === "object" && addr) return addr;
-    return null;
-  }
-  stop() {
-    this.sendControl({ type: "exit", code: 0 });
-    for (const ws of this.clients) ws.close();
-    this.wss.close();
-    this.httpServer.close();
-  }
-};
-
 // src/ipc.ts
-import { createServer as createServer2, connect } from "node:net";
+import { createServer, connect } from "node:net";
 import { homedir as homedir4 } from "node:os";
-import { join as join5 } from "node:path";
+import { join as join4 } from "node:path";
 import { EventEmitter as EventEmitter7 } from "node:events";
-var IPC_PATH = join5(homedir4(), ".tlive", "ipc.sock");
+var IPC_PATH = join4(homedir4(), ".tlive", "ipc.sock");
 function attachLineParser(socket, onMessage) {
   let buffer = "";
   socket.on("data", (data) => {
@@ -1380,9 +1249,9 @@ var IPCClient = class extends EventEmitter7 {
 };
 
 // src/config.ts
-import { readFileSync as readFileSync3, existsSync as existsSync4 } from "node:fs";
+import { readFileSync as readFileSync2, existsSync as existsSync3 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
-import { join as join6 } from "node:path";
+import { join as join5 } from "node:path";
 var DEFAULTS = {
   port: 8849,
   token: "",
@@ -1395,10 +1264,10 @@ var DEFAULTS = {
   activeThreshold: 3e4
 };
 function loadConfig(envPath) {
-  const configPath = envPath ?? join6(homedir5(), ".tlive", "config.env");
+  const configPath = envPath ?? join5(homedir5(), ".tlive", "config.env");
   const env = { ...process.env };
-  if (existsSync4(configPath)) {
-    const lines = readFileSync3(configPath, "utf-8").split("\n");
+  if (existsSync3(configPath)) {
+    const lines = readFileSync2(configPath, "utf-8").split("\n");
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith("#")) continue;
@@ -1427,19 +1296,19 @@ function loadConfig(envPath) {
 }
 
 // src/core/sessionDiscovery.ts
-import { readdirSync, statSync as statSync2, readFileSync as readFileSync4 } from "node:fs";
-import { join as join7, resolve as resolve3 } from "node:path";
+import { readdirSync, statSync as statSync2, readFileSync as readFileSync3 } from "node:fs";
+import { join as join6, resolve as resolve3 } from "node:path";
 import { homedir as homedir6 } from "node:os";
 var UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function getProjectPath(workingDirectory) {
   const projectId = resolve3(workingDirectory).replace(/[^a-zA-Z0-9-]/g, "-");
-  const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || join7(homedir6(), ".claude");
-  return join7(claudeConfigDir, "projects", projectId);
+  const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || join6(homedir6(), ".claude");
+  return join6(claudeConfigDir, "projects", projectId);
 }
 function isValidSession(projectDir, sessionId) {
   try {
-    const filePath = join7(projectDir, `${sessionId}.jsonl`);
-    const content = readFileSync4(filePath, "utf-8");
+    const filePath = join6(projectDir, `${sessionId}.jsonl`);
+    const content = readFileSync3(filePath, "utf-8");
     const lines = content.split("\n");
     for (const line of lines) {
       if (!line.trim()) continue;
@@ -1465,7 +1334,7 @@ function findLastSession(workingDirectory) {
       if (!isValidSession(projectDir, sessionId)) return null;
       return {
         sessionId,
-        mtime: statSync2(join7(projectDir, f)).mtime.getTime()
+        mtime: statSync2(join6(projectDir, f)).mtime.getTime()
       };
     }).filter((f) => f !== null).sort((a, b) => b.mtime - a.mtime);
     return files.length > 0 ? files[0].sessionId : null;
@@ -1476,14 +1345,14 @@ function findLastSession(workingDirectory) {
 
 // src/core/worktreeManager.ts
 import { execSync as execSync2 } from "node:child_process";
-import { existsSync as existsSync5 } from "node:fs";
-import { join as join8, dirname as dirname2, basename as basename2 } from "node:path";
+import { existsSync as existsSync4 } from "node:fs";
+import { join as join7, dirname, basename as basename2 } from "node:path";
 function createWorktree(repoDir, name) {
   const repoName = basename2(repoDir);
   const sessionPrefix = name ?? `tlive-${Date.now().toString(36).slice(-4)}`;
-  const worktreeDir = join8(dirname2(repoDir), `${repoName}-worktrees`, sessionPrefix);
+  const worktreeDir = join7(dirname(repoDir), `${repoName}-worktrees`, sessionPrefix);
   const branch = `tlive/${sessionPrefix}`;
-  if (existsSync5(worktreeDir)) {
+  if (existsSync4(worktreeDir)) {
     throw new Error(`Worktree already exists: ${worktreeDir}`);
   }
   execSync2(`git worktree add "${worktreeDir}" -b "${branch}"`, {
@@ -1539,24 +1408,24 @@ async function claudeCommand(opts = {}) {
     }
   }
   const loop = new TLiveLoop({ workdir, adapter, config, sessionId });
-  const webPort = config.port;
-  const webToken = config.token || loop.sessionInfo.sessionId.slice(0, 16);
-  const web = new WebTerminal({ port: webPort, token: webToken });
-  loop.on("ptyData", (data) => {
-    stdout.write(data);
-    web.broadcast(data);
-  });
-  web.setInputHandler((data) => loop.handleTerminalInput(data));
-  try {
-    await web.startOnPort(webPort);
-  } catch (err) {
-    console.error(`  \x1B[31mWeb terminal failed:\x1B[0m ${err.message}`);
-    console.error(`  Continuing without web terminal.`);
-  }
-  const localIP = getLocalIP();
-  const url = `http://${localIP}:${webPort}/?token=${webToken}`;
   const ipc = new IPCClient();
   const ipcConnected = await ipc.connect();
+  if (ipcConnected) {
+    ipc.send("session_register", {
+      sessionId: loop.sessionInfo.sessionId,
+      workdir,
+      projectName: workdir.split("/").filter(Boolean).pop() ?? "unknown"
+    });
+  }
+  loop.on("ptyData", (data) => {
+    stdout.write(data);
+    if (ipc.connected) {
+      ipc.send("pty_data", {
+        sessionId: loop.sessionInfo.sessionId,
+        data
+      });
+    }
+  });
   if (ipcConnected) {
     loop.setIMTarget("ipc", async (_chatId, text, buttons) => {
       ipc.send("notification", {
@@ -1575,29 +1444,23 @@ async function claudeCommand(opts = {}) {
         ipc.on("message_sent", handler);
       });
     });
-    ipc.on("permission_action", (payload) => {
-      loop.handleIMAction(
-        payload.action,
-        payload.toolUseId
-      );
+    ipc.on("permission_action", (p) => {
+      loop.handleIMAction(p.action, p.toolUseId);
     });
-    ipc.on("terminal_input", (payload) => {
-      const text = payload.text;
-      if (text) loop.handleTerminalInput(text + "\n");
+    ipc.on("terminal_input", (p) => {
+      if (p.text) loop.handleTerminalInput(p.text + "\n");
     });
-    ipc.on("config_update", (payload) => {
-      if (payload.effort) console.error(`  Effort:   ${payload.effort}`);
-      if (payload.model) console.error(`  Model:    ${payload.model}`);
+    ipc.on("question_answer", (p) => {
+      if (p.answer !== void 0) loop.handleTerminalInput(p.answer + "\n");
     });
-    ipc.on("question_answer", (payload) => {
-      const answer = payload.answer;
-      if (answer !== void 0) {
-        loop.handleTerminalInput(answer + "\n");
-      }
+    ipc.on("config_update", (p) => {
+      if (p.effort) console.error(`  Effort:   ${p.effort}`);
+      if (p.model) console.error(`  Model:    ${p.model}`);
     });
-    ipc.on("reconnected", () => {
-      console.error(`  IM:       \x1B[32mreconnected\x1B[0m`);
+    ipc.on("web_input", (p) => {
+      if (p.data) loop.handleTerminalInput(p.data);
     });
+    ipc.on("reconnected", () => console.error(`  IM:       \x1B[32mreconnected\x1B[0m`));
     console.error(`  IM:       \x1B[32mconnected\x1B[0m (bridge IPC)`);
   } else {
     console.error(`  IM:       \x1B[33mnot connected\x1B[0m (bridge not running)`);
@@ -1611,8 +1474,10 @@ async function claudeCommand(opts = {}) {
   const cleanup = async () => {
     if (cleaning) return;
     cleaning = true;
+    if (ipc.connected) {
+      ipc.send("session_unregister", { sessionId: loop.sessionInfo.sessionId });
+    }
     ipc.disconnect();
-    web.stop();
     await loop.stop();
     if (stdin.isTTY) stdin.setRawMode(false);
     exit(0);
@@ -1620,11 +1485,13 @@ async function claudeCommand(opts = {}) {
   process.on("SIGINT", cleanup);
   process.on("SIGTERM", cleanup);
   const info = loop.sessionInfo;
+  const localIP = getLocalIP();
+  const webUrl = `http://${localIP}:${config.port}/?token=${config.token || info.sessionId.slice(0, 16)}`;
   console.error("");
   console.error(`  \x1B[36m\u26A1 TLive v1.0\x1B[0m`);
   console.error(`  Session:  ${info.sessionId.slice(0, 8)}...`);
   console.error(`  Workdir:  ${workdir}`);
-  console.error(`  Terminal: \x1B[4m${url}\x1B[0m`);
+  console.error(`  Terminal: \x1B[4m${webUrl}\x1B[0m`);
   try {
     await loop.start();
     await new Promise((resolve4) => {

@@ -11,8 +11,8 @@ describe('notificationRules', () => {
     expect(shouldPush('ask_user_question', true)).toBe(true);
   });
 
-  it('suppresses activity_text when user is active', () => {
-    expect(shouldPush('activity_text', true)).toBe(false);
+  it('always pushes activity_text (Claude responses should always reach IM)', () => {
+    expect(shouldPush('activity_text', true)).toBe(true);
     expect(shouldPush('activity_text', false)).toBe(true);
   });
 
