@@ -154,6 +154,9 @@ export class BridgeManager {
   /** Callback for forwarding terminal permission actions via IPC */
   onTerminalPermissionCallback?: (action: string, toolUseId: string, sessionId: string) => void;
 
+  /** Intercept inbound messages — return true to consume (don't route to SDK) */
+  onInboundMessage?: (channelType: string, msg: { text: string; replyToMessageId?: string }) => boolean;
+
   registerAdapter(adapter: BaseChannelAdapter): void {
     this.adapters.set(adapter.channelType, adapter);
   }
@@ -288,6 +291,14 @@ export class BridgeManager {
   }
 
   async handleInboundMessage(adapter: BaseChannelAdapter, msg: InboundMessage): Promise<boolean> {
+    // Check if this message should be forwarded to a terminal session via IPC
+    if (msg.text && this.onInboundMessage?.(adapter.channelType, {
+      text: msg.text,
+      replyToMessageId: msg.replyToMessageId,
+    })) {
+      return true; // consumed by terminal relay
+    }
+
     // Text routing: auth, attachments, permissions, AskQuestion replies, hook replies
     const result = await this.messageRouter.route(adapter, msg);
     if (result.action === 'handled') return true;

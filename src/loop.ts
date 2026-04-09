@@ -97,7 +97,7 @@ export class TLiveLoop extends EventEmitter {
         severity: 'info',
         requiresUserAction: false,
         sessionId: this.session.info.sessionId,
-        title: `💬 ${this.shortWorkdir()}`,
+        title: `Terminal · ${this.sessionTag()}`,
         body,
       });
     }
@@ -116,8 +116,8 @@ export class TLiveLoop extends EventEmitter {
       requiresUserAction: true,
       sessionId: this.session.info.sessionId,
       title: isQuestion
-        ? `❓ Claude asks · ${this.shortWorkdir()}`
-        : `⚠️ Claude waiting · ${this.shortWorkdir()}`,
+        ? `❓ Claude asks · ${this.sessionTag()}`
+        : `⚠️ Permission · ${this.sessionTag()}`,
       body: formatForIM({
         kind: 'permission_request', provider: 'claude',
         sessionId: this.session.info.sessionId,
@@ -138,7 +138,7 @@ export class TLiveLoop extends EventEmitter {
       severity: 'info',
       requiresUserAction: false,
       sessionId: this.session.info.sessionId,
-      title: `✅ Session complete · ${this.shortWorkdir()}`,
+      title: `✅ Done · ${this.sessionTag()}`,
     });
   }
 
@@ -228,7 +228,14 @@ export class TLiveLoop extends EventEmitter {
     await this.session.stop();
   }
 
-  private shortWorkdir(): string {
-    return this.session.info.workdir.split('/').pop() ?? this.session.info.workdir;
+  /** Project name for IM display (last non-empty path segment). */
+  private projectName(): string {
+    const parts = this.session.info.workdir.split('/').filter(Boolean);
+    return parts.length > 0 ? parts[parts.length - 1] : 'unknown';
+  }
+
+  /** Short session tag: project · #session-prefix */
+  private sessionTag(): string {
+    return `${this.projectName()} · #${this.session.info.sessionId.slice(0, 6)}`;
   }
 }

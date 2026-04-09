@@ -25705,6 +25705,8 @@ var BridgeManager = class _BridgeManager {
   }
   /** Callback for forwarding terminal permission actions via IPC */
   onTerminalPermissionCallback;
+  /** Intercept inbound messages — return true to consume (don't route to SDK) */
+  onInboundMessage;
   registerAdapter(adapter) {
     this.adapters.set(adapter.channelType, adapter);
   }
@@ -25814,6 +25816,12 @@ var BridgeManager = class _BridgeManager {
     }
   }
   async handleInboundMessage(adapter, msg) {
+    if (msg.text && this.onInboundMessage?.(adapter.channelType, {
+      text: msg.text,
+      replyToMessageId: msg.replyToMessageId
+    })) {
+      return true;
+    }
     const result = await this.messageRouter.route(adapter, msg);
     if (result.action === "handled") return true;
     if (result.action === "unauthorized") return false;
@@ -27288,6 +27296,7 @@ async function main() {
     });
     socket.on("error", () => ipcClients.delete(socket));
   });
+  const terminalNotificationMsgIds = /* @__PURE__ */ new Set();
   const ipcHandlers = {
     notification(payload, socket) {
       const { text: text2, buttons, sessionId } = payload;
@@ -27304,6 +27313,7 @@ async function main() {
           }))
         }).then((sentMsgId) => {
           if (sentMsgId) {
+            terminalNotificationMsgIds.add(sentMsgId);
             socket.write(JSON.stringify({
               type: "message_sent",
               payload: { messageId: sentMsgId, sessionId, channelType: adapter.channelType }
@@ -27317,6 +27327,17 @@ async function main() {
     session_status(payload) {
       logger.info(`IPC session status: ${JSON.stringify(payload)}`);
     }
+  };
+  manager.onInboundMessage = (channelType, msg) => {
+    if (msg.replyToMessageId && terminalNotificationMsgIds.has(msg.replyToMessageId)) {
+      const ipcMsg = JSON.stringify({
+        type: "terminal_input",
+        payload: { text: msg.text }
+      }) + "\n";
+      for (const client of ipcClients) client.write(ipcMsg);
+      return true;
+    }
+    return false;
   };
   manager.onTerminalPermissionCallback = (action, toolUseId, sessionId) => {
     const msg = JSON.stringify({

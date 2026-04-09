@@ -717,7 +717,7 @@ var TLiveLoop = class extends EventEmitter5 {
         severity: "info",
         requiresUserAction: false,
         sessionId: this.session.info.sessionId,
-        title: `\u{1F4AC} ${this.shortWorkdir()}`,
+        title: `Terminal \xB7 ${this.sessionTag()}`,
         body
       });
     }
@@ -733,7 +733,7 @@ var TLiveLoop = class extends EventEmitter5 {
       severity: "warning",
       requiresUserAction: true,
       sessionId: this.session.info.sessionId,
-      title: isQuestion ? `\u2753 Claude asks \xB7 ${this.shortWorkdir()}` : `\u26A0\uFE0F Claude waiting \xB7 ${this.shortWorkdir()}`,
+      title: isQuestion ? `\u2753 Claude asks \xB7 ${this.sessionTag()}` : `\u26A0\uFE0F Permission \xB7 ${this.sessionTag()}`,
       body: formatForIM({
         kind: "permission_request",
         provider: "claude",
@@ -755,7 +755,7 @@ var TLiveLoop = class extends EventEmitter5 {
       severity: "info",
       requiresUserAction: false,
       sessionId: this.session.info.sessionId,
-      title: `\u2705 Session complete \xB7 ${this.shortWorkdir()}`
+      title: `\u2705 Done \xB7 ${this.sessionTag()}`
     });
   }
   // ---------------------------------------------------------------------------
@@ -841,8 +841,14 @@ ${event.body}` : event.title;
     this.notifications.reset();
     await this.session.stop();
   }
-  shortWorkdir() {
-    return this.session.info.workdir.split("/").pop() ?? this.session.info.workdir;
+  /** Project name for IM display (last non-empty path segment). */
+  projectName() {
+    const parts = this.session.info.workdir.split("/").filter(Boolean);
+    return parts.length > 0 ? parts[parts.length - 1] : "unknown";
+  }
+  /** Short session tag: project · #session-prefix */
+  sessionTag() {
+    return `${this.projectName()} \xB7 #${this.session.info.sessionId.slice(0, 6)}`;
   }
 };
 
@@ -1232,6 +1238,10 @@ async function claudeCommand(opts = {}) {
         payload.action,
         payload.toolUseId
       );
+    });
+    ipc.on("terminal_input", (payload) => {
+      const text = payload.text;
+      if (text) loop.handleTerminalInput(text + "\n");
     });
     console.error(`  IM:       \x1B[32mconnected\x1B[0m (bridge IPC)`);
   } else {

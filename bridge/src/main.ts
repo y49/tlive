@@ -132,6 +132,9 @@ async function main() {
     socket.on('error', () => ipcClients.delete(socket));
   });
 
+  // Track terminal notification messageIds — replies to these should be forwarded via IPC
+  const terminalNotificationMsgIds = new Set<string>();
+
   /** Typed IPC message handlers. */
   const ipcHandlers: Record<string, (payload: Record<string, unknown>, socket: Socket) => void> = {
     notification(payload, socket) {
@@ -155,6 +158,7 @@ async function main() {
           })),
         }).then((sentMsgId) => {
           if (sentMsgId) {
+            terminalNotificationMsgIds.add(sentMsgId);
             socket.write(JSON.stringify({
               type: 'message_sent',
               payload: { messageId: sentMsgId, sessionId, channelType: adapter.channelType },
@@ -169,6 +173,21 @@ async function main() {
     session_status(payload) {
       logger.info(`IPC session status: ${JSON.stringify(payload)}`);
     },
+  };
+
+  // Intercept inbound IM messages — if replying to a terminal notification,
+  // forward the text via IPC instead of routing to SDK engine.
+  manager.onInboundMessage = (channelType: string, msg: { text: string; replyToMessageId?: string }) => {
+    if (msg.replyToMessageId && terminalNotificationMsgIds.has(msg.replyToMessageId)) {
+      // Forward reply text to terminal session via IPC
+      const ipcMsg = JSON.stringify({
+        type: 'terminal_input',
+        payload: { text: msg.text },
+      }) + '\n';
+      for (const client of ipcClients) client.write(ipcMsg);
+      return true; // consumed — don't route to SDK
+    }
+    return false; // not a terminal reply — proceed normally
   };
 
   // Forward IM permission callbacks → IPC → tlive claude process
