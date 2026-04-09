@@ -24973,8 +24973,8 @@ var MessageRouter = class {
   /** Load persisted chatIds from disk (called once at startup) */
   loadChatIds() {
     try {
-      const { readFileSync: readFileSync3 } = __require("node:fs");
-      const data = JSON.parse(readFileSync3(this.chatIdFile, "utf-8"));
+      const { readFileSync: readFileSync4 } = __require("node:fs");
+      const data = JSON.parse(readFileSync4(this.chatIdFile, "utf-8"));
       for (const [k, v] of Object.entries(data)) {
         if (typeof v === "string") this.lastChatId.set(k, v);
       }
@@ -27200,7 +27200,7 @@ registerAdapterFactory("feishu", () => new FeishuAdapter(loadConfig().feishu));
 // src/main.ts
 import { join as join7 } from "node:path";
 import { homedir as homedir4 } from "node:os";
-import { mkdirSync as mkdirSync6, writeFileSync as writeFileSync5, existsSync as existsSync5, unlinkSync as unlinkSync3 } from "node:fs";
+import { mkdirSync as mkdirSync6, writeFileSync as writeFileSync5, readFileSync as readFileSync3, existsSync as existsSync5, unlinkSync as unlinkSync3 } from "node:fs";
 import { createServer as createServer2 } from "node:net";
 function writeStatusFile(tliveHome, data) {
   try {
@@ -27251,77 +27251,82 @@ async function main() {
   logger.info("Bridge started \u2014 SDK-only mode");
   const IPC_PATH = join7(tliveHome, "ipc.sock");
   const ipcClients = /* @__PURE__ */ new Set();
-  function startIPCServer() {
-    if (existsSync5(IPC_PATH)) unlinkSync3(IPC_PATH);
-    const ipcServer2 = createServer2((socket) => {
-      ipcClients.add(socket);
-      logger.info(`IPC client connected (total: ${ipcClients.size})`);
-      let buffer = "";
-      socket.on("data", (data) => {
-        buffer += data.toString();
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const msg = JSON.parse(line);
-            handleIPCMessage(msg, socket);
-          } catch {
-          }
-        }
-      });
-      socket.on("close", () => {
-        ipcClients.delete(socket);
-        logger.info(`IPC client disconnected (total: ${ipcClients.size})`);
-      });
-      socket.on("error", () => ipcClients.delete(socket));
-    });
-    ipcServer2.listen(IPC_PATH, () => {
-      logger.info(`IPC server listening at ${IPC_PATH}`);
-    });
-    return ipcServer2;
+  const chatIdsFile = join7(tliveHome, "runtime", "chat-ids.json");
+  let cachedChatIds = {};
+  try {
+    cachedChatIds = JSON.parse(readFileSync3(chatIdsFile, "utf-8"));
+  } catch {
   }
-  function handleIPCMessage(msg, socket) {
-    if (msg.type === "notification") {
-      const { text: text2, buttons, sessionId } = msg.payload;
+  const configChatIds = {
+    telegram: config3.telegram.chatId
+  };
+  function resolveChatId(channelType) {
+    return manager.getLastChatId(channelType) || configChatIds[channelType] || cachedChatIds[channelType] || "";
+  }
+  const ipcServer = createServer2((socket) => {
+    ipcClients.add(socket);
+    logger.info(`IPC client connected (total: ${ipcClients.size})`);
+    let buffer = "";
+    socket.on("data", (data) => {
+      buffer += data.toString();
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          const handler = ipcHandlers[msg.type];
+          if (handler) handler(msg.payload, socket);
+          else logger.warn(`IPC unknown message type: ${msg.type}`);
+        } catch {
+        }
+      }
+    });
+    socket.on("close", () => {
+      ipcClients.delete(socket);
+      logger.info(`IPC client disconnected (total: ${ipcClients.size})`);
+    });
+    socket.on("error", () => ipcClients.delete(socket));
+  });
+  const ipcHandlers = {
+    notification(payload, socket) {
+      const { text: text2, buttons, sessionId } = payload;
       for (const adapter of manager.getAdapters()) {
-        const chatId = manager.getLastChatId(adapter.channelType);
+        const chatId = resolveChatId(adapter.channelType);
         if (!chatId) continue;
-        const outButtons = buttons?.map((b) => ({
-          label: b.label,
-          callbackData: b.callbackData,
-          style: b.style
-        }));
         adapter.send({
           chatId,
           text: text2,
-          buttons: outButtons
+          buttons: buttons?.map((b) => ({
+            label: b.label,
+            callbackData: b.callbackData,
+            style: b.style
+          }))
         }).then((sentMsgId) => {
           if (sentMsgId) {
-            const reply = JSON.stringify({
+            socket.write(JSON.stringify({
               type: "message_sent",
               payload: { messageId: sentMsgId, sessionId, channelType: adapter.channelType }
-            }) + "\n";
-            socket.write(reply);
+            }) + "\n");
           }
         }).catch((err) => {
-          logger.warn(`IPC notification send failed: ${err}`);
+          logger.warn(`IPC \u2192 ${adapter.channelType} failed: ${err}`);
         });
       }
-    } else if (msg.type === "session_status") {
-      logger.info(`IPC session status: ${JSON.stringify(msg.payload)}`);
+    },
+    session_status(payload) {
+      logger.info(`IPC session status: ${JSON.stringify(payload)}`);
     }
-  }
+  };
   manager.onTerminalPermissionCallback = (action, toolUseId, sessionId) => {
-    const ipcMsg = JSON.stringify({
+    const msg = JSON.stringify({
       type: "permission_action",
       payload: { action, toolUseId, sessionId }
     }) + "\n";
-    for (const client of ipcClients) {
-      client.write(ipcMsg);
-    }
+    for (const client of ipcClients) client.write(msg);
   };
-  const ipcServer = startIPCServer();
+  if (existsSync5(IPC_PATH)) unlinkSync3(IPC_PATH);
+  ipcServer.listen(IPC_PATH, () => logger.info(`IPC server listening at ${IPC_PATH}`));
   if (llm instanceof ClaudeSDKProvider) {
     llm.onPermissionTimeout = (toolName, _toolUseId) => {
       const text2 = `\u23F0 Permission timed out (5m)

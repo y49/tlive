@@ -1,4 +1,4 @@
-import { watch, existsSync, statSync, openSync, readSync, closeSync, readdirSync } from 'node:fs';
+import { watch, existsSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { homedir } from 'node:os';
 import { join, basename, resolve } from 'node:path';
@@ -69,7 +69,7 @@ export class SessionScanner extends EventEmitter {
         if (filename === basename(this.jsonlPath)) this.readNewLines();
       });
     } catch {
-      // fs.watch not available
+      // fs.watch unavailable on this platform — rely on polling
     }
     this.pollTimer = setInterval(() => this.readNewLines(), this.opts.pollingInterval);
   }

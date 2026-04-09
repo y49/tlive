@@ -9,7 +9,7 @@ import { createAdapter } from './channels/index.js';
 import type { ChannelType } from './channels/types.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { mkdirSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { createServer, type Socket } from 'node:net';
 
 
@@ -82,93 +82,106 @@ async function main() {
   const IPC_PATH = join(tliveHome, 'ipc.sock');
   const ipcClients = new Set<Socket>();
 
-  function startIPCServer() {
-    if (existsSync(IPC_PATH)) unlinkSync(IPC_PATH);
+  // ---------------------------------------------------------------------------
+  // ChatId resolver — fallback chain for finding the right IM chat target.
+  // Priority: active session chatId → config → persisted chat-ids.json
+  // ---------------------------------------------------------------------------
 
-    const ipcServer = createServer((socket) => {
-      ipcClients.add(socket);
-      logger.info(`IPC client connected (total: ${ipcClients.size})`);
+  const chatIdsFile = join(tliveHome, 'runtime', 'chat-ids.json');
+  let cachedChatIds: Record<string, string> = {};
+  try { cachedChatIds = JSON.parse(readFileSync(chatIdsFile, 'utf-8')); } catch { /* none yet */ }
 
-      let buffer = '';
-      socket.on('data', (data) => {
-        buffer += data.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const msg = JSON.parse(line);
-            handleIPCMessage(msg, socket);
-          } catch { /* skip malformed */ }
-        }
-      });
-      socket.on('close', () => {
-        ipcClients.delete(socket);
-        logger.info(`IPC client disconnected (total: ${ipcClients.size})`);
-      });
-      socket.on('error', () => ipcClients.delete(socket));
-    });
+  const configChatIds: Record<string, string> = {
+    telegram: config.telegram.chatId,
+  };
 
-    ipcServer.listen(IPC_PATH, () => {
-      logger.info(`IPC server listening at ${IPC_PATH}`);
-    });
-
-    return ipcServer;
+  function resolveChatId(channelType: string): string {
+    return manager.getLastChatId(channelType)
+      || configChatIds[channelType]
+      || cachedChatIds[channelType]
+      || '';
   }
 
-  function handleIPCMessage(msg: { type: string; payload: Record<string, unknown> }, socket: Socket) {
-    if (msg.type === 'notification') {
-      // Forward notification to all IM adapters
-      const { text, buttons, sessionId } = msg.payload as {
+  // ---------------------------------------------------------------------------
+  // IPC Server — message handler registry
+  // ---------------------------------------------------------------------------
+
+  const ipcServer = createServer((socket) => {
+    ipcClients.add(socket);
+    logger.info(`IPC client connected (total: ${ipcClients.size})`);
+
+    let buffer = '';
+    socket.on('data', (data) => {
+      buffer += data.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          const handler = ipcHandlers[msg.type];
+          if (handler) handler(msg.payload, socket);
+          else logger.warn(`IPC unknown message type: ${msg.type}`);
+        } catch { /* skip malformed */ }
+      }
+    });
+    socket.on('close', () => {
+      ipcClients.delete(socket);
+      logger.info(`IPC client disconnected (total: ${ipcClients.size})`);
+    });
+    socket.on('error', () => ipcClients.delete(socket));
+  });
+
+  /** Typed IPC message handlers. */
+  const ipcHandlers: Record<string, (payload: Record<string, unknown>, socket: Socket) => void> = {
+    notification(payload, socket) {
+      const { text, buttons, sessionId } = payload as {
         text: string;
         buttons?: Array<{ label: string; callbackData: string; style?: string }>;
         sessionId?: string;
       };
 
       for (const adapter of manager.getAdapters()) {
-        const chatId = manager.getLastChatId(adapter.channelType);
+        const chatId = resolveChatId(adapter.channelType);
         if (!chatId) continue;
-
-        const outButtons = buttons?.map((b) => ({
-          label: b.label,
-          callbackData: b.callbackData,
-          style: b.style as 'primary' | 'danger' | undefined,
-        }));
 
         adapter.send({
           chatId,
           text,
-          buttons: outButtons,
+          buttons: buttons?.map((b) => ({
+            label: b.label,
+            callbackData: b.callbackData,
+            style: b.style as 'primary' | 'danger' | undefined,
+          })),
         }).then((sentMsgId) => {
-          // Tell the claude process the messageId so it can track terminal notifications
           if (sentMsgId) {
-            const reply = JSON.stringify({
+            socket.write(JSON.stringify({
               type: 'message_sent',
               payload: { messageId: sentMsgId, sessionId, channelType: adapter.channelType },
-            }) + '\n';
-            socket.write(reply);
+            }) + '\n');
           }
         }).catch((err) => {
-          logger.warn(`IPC notification send failed: ${err}`);
+          logger.warn(`IPC → ${adapter.channelType} failed: ${err}`);
         });
       }
-    } else if (msg.type === 'session_status') {
-      logger.info(`IPC session status: ${JSON.stringify(msg.payload)}`);
-    }
-  }
+    },
 
-  // Forward IM button callbacks for terminal permissions back via IPC
-  manager.onTerminalPermissionCallback = (action: string, toolUseId: string, sessionId: string) => {
-    const ipcMsg = JSON.stringify({
+    session_status(payload) {
+      logger.info(`IPC session status: ${JSON.stringify(payload)}`);
+    },
+  };
+
+  // Forward IM permission callbacks → IPC → tlive claude process
+  manager.onTerminalPermissionCallback = (action, toolUseId, sessionId) => {
+    const msg = JSON.stringify({
       type: 'permission_action',
       payload: { action, toolUseId, sessionId },
     }) + '\n';
-    for (const client of ipcClients) {
-      client.write(ipcMsg);
-    }
+    for (const client of ipcClients) client.write(msg);
   };
 
-  const ipcServer = startIPCServer();
+  if (existsSync(IPC_PATH)) unlinkSync(IPC_PATH);
+  ipcServer.listen(IPC_PATH, () => logger.info(`IPC server listening at ${IPC_PATH}`));
 
   // Wire permission timeout → IM notification
   if (llm instanceof ClaudeSDKProvider) {

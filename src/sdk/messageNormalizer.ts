@@ -8,9 +8,13 @@ export interface RawSessionLine {
   [key: string]: unknown;
 }
 
+// ---------------------------------------------------------------------------
+// .jsonl → NormalizedMessage
+// ---------------------------------------------------------------------------
+
 /**
- * Extract content blocks from a message.
- * Claude .jsonl format: { message: { role: "assistant", content: [...] } }
+ * Extract content blocks from a Claude .jsonl message.
+ * Handles both nested { role, content: [...] } and flat [...] formats.
  */
 function getContentBlocks(message: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(message)) return message;
@@ -54,60 +58,68 @@ export function normalizeSessionLine(
   return messages;
 }
 
-/** Formats a NormalizedMessage for IM display (plain text summary). */
+// ---------------------------------------------------------------------------
+// NormalizedMessage → IM display string
+// ---------------------------------------------------------------------------
+
+type IMFormatter = (msg: NormalizedMessage) => string;
+
+/** Registry of formatters keyed by message kind. */
+const imFormatters: Record<string, IMFormatter> = {
+  text:               (msg) => msg.text ?? '',
+  tool_use:           (msg) => `🔧 ${msg.toolName}${formatToolArgs(msg.toolName, msg.toolInput)}`,
+  tool_result:        ()    => '',  // suppressed — too noisy for IM sync
+  permission_request: (msg) => `⚠️ Permission: ${msg.toolName}\n${formatToolArgs(msg.toolName, msg.toolInput)}`,
+  error:              (msg) => `❌ ${msg.text}`,
+  complete:           ()    => '✅ Session complete',
+  status:             (msg) => `ℹ️ ${msg.text}`,
+};
+
+/** Format a NormalizedMessage for IM display. */
 export function formatForIM(msg: NormalizedMessage): string {
-  switch (msg.kind) {
-    case 'text': return msg.text ?? '';
-    case 'tool_use': return `🔧 ${msg.toolName}${formatToolArgs(msg.toolName, msg.toolInput)}`;
-    case 'tool_result': return ''; // Skip tool results in IM sync (too noisy)
-    case 'permission_request': return `⚠️ Permission: ${msg.toolName}\n${formatToolArgs(msg.toolName, msg.toolInput)}`;
-    case 'error': return `❌ ${msg.text}`;
-    case 'complete': return '✅ Session complete';
-    case 'status': return `ℹ️ ${msg.text}`;
-    default: return '';
-  }
+  const formatter = imFormatters[msg.kind];
+  return formatter ? formatter(msg) : '';
 }
 
-/**
- * Format tool arguments for IM display.
- * Adapted from hapi's formatToolArgumentsDetailed — show relevant args per tool type.
- */
+// ---------------------------------------------------------------------------
+// Tool argument formatting — per-tool display strategies
+// ---------------------------------------------------------------------------
+
+const MAX_ARG_LEN = 150;
+
+type ToolArgFormatter = (args: Record<string, unknown>) => string;
+
+/** Registry of tool-specific argument formatters. */
+const toolArgFormatters: Record<string, ToolArgFormatter> = {
+  Bash:            (a) => a.command ? `\n\`${truncate(String(a.command), MAX_ARG_LEN)}\`` : '',
+  Read:            (a) => a.file_path ? `\n${truncate(String(a.file_path), MAX_ARG_LEN)}` : '',
+  Edit:            (a) => formatFilePath(a),
+  Write:           (a) => formatFilePath(a),
+  Grep:            (a) => a.pattern ? ` \`${truncate(String(a.pattern), 80)}\`` : '',
+  Glob:            (a) => a.pattern ? ` \`${truncate(String(a.pattern), 80)}\`` : '',
+  WebFetch:        (a) => a.url ? `\n${truncate(String(a.url), MAX_ARG_LEN)}` : '',
+  Agent:           (a) => a.prompt ? `\n${truncate(String(a.prompt), MAX_ARG_LEN)}` : '',
+  AskUserQuestion: (a) => a.question ? `\n${truncate(String(a.question), MAX_ARG_LEN)}` : '',
+};
+
+/** Fallback: show first non-empty string value from args. */
+function defaultToolArgFormatter(args: Record<string, unknown>): string {
+  for (const v of Object.values(args)) {
+    if (typeof v === 'string' && v.length > 0) return `\n${truncate(v, MAX_ARG_LEN)}`;
+  }
+  return '';
+}
+
 function formatToolArgs(toolName: string | undefined, input: unknown): string {
   if (!input || typeof input !== 'object' || !toolName) return '';
   const args = input as Record<string, unknown>;
-  const MAX = 150;
+  const formatter = toolArgFormatters[toolName] ?? defaultToolArgFormatter;
+  return formatter(args);
+}
 
-  switch (toolName) {
-    case 'Bash':
-      return args.command ? `\n\`${truncate(String(args.command), MAX)}\`` : '';
-    case 'Read':
-      return args.file_path ? `\n${truncate(String(args.file_path), MAX)}` : '';
-    case 'Edit':
-    case 'Write': {
-      const file = args.file_path ?? args.path ?? '';
-      return file ? `\n${truncate(String(file), MAX)}` : '';
-    }
-    case 'Grep':
-    case 'Glob': {
-      const pattern = args.pattern ?? '';
-      return pattern ? ` \`${truncate(String(pattern), 80)}\`` : '';
-    }
-    case 'WebFetch':
-      return args.url ? `\n${truncate(String(args.url), MAX)}` : '';
-    case 'Agent':
-      return args.prompt ? `\n${truncate(String(args.prompt), MAX)}` : '';
-    case 'AskUserQuestion':
-      return args.question ? `\n${truncate(String(args.question), MAX)}` : '';
-    default: {
-      // Generic: show first string-valued arg
-      for (const v of Object.values(args)) {
-        if (typeof v === 'string' && v.length > 0) {
-          return `\n${truncate(v, MAX)}`;
-        }
-      }
-      return '';
-    }
-  }
+function formatFilePath(args: Record<string, unknown>): string {
+  const file = args.file_path ?? args.path ?? '';
+  return file ? `\n${truncate(String(file), MAX_ARG_LEN)}` : '';
 }
 
 function truncate(s: string, max: number): string {

@@ -1,11 +1,10 @@
 // src/cli/claude.ts
 import { stdin, stdout, exit } from 'node:process';
-import { networkInterfaces, homedir } from 'node:os';
-import { connect, type Socket } from 'node:net';
-import { join } from 'node:path';
+import { networkInterfaces } from 'node:os';
 import { TLiveLoop } from '../loop.js';
 import { ClaudeAdapter } from '../sdk/claudeAdapter.js';
 import { WebTerminal } from '../core/webTerminal.js';
+import { IPCClient } from '../ipc.js';
 import { loadConfig } from '../config.js';
 import { findLastSession } from '../core/sessionDiscovery.js';
 
@@ -24,18 +23,6 @@ function getLocalIP(): string {
     }
   }
   return '127.0.0.1';
-}
-
-const IPC_PATH = join(homedir(), '.tlive', 'ipc.sock');
-
-/**
- * Connect to bridge's IPC socket. Returns null if bridge is not running.
- */
-function connectIPC(): Promise<Socket | null> {
-  return new Promise((resolve) => {
-    const socket = connect(IPC_PATH, () => resolve(socket));
-    socket.on('error', () => resolve(null));
-  });
 }
 
 export async function claudeCommand(opts: ClaudeCommandOptions = {}): Promise<void> {
@@ -59,76 +46,47 @@ export async function claudeCommand(opts: ClaudeCommandOptions = {}): Promise<vo
   const webToken = config.token || loop.sessionInfo.sessionId.slice(0, 16);
   const web = new WebTerminal({ port: webPort, token: webToken });
 
-  // Wire WebTerminal ↔ PTY
   loop.on('ptyData', (data: string) => {
     stdout.write(data);
     web.broadcast(data);
   });
-
   web.setInputHandler((data) => loop.handleTerminalInput(data));
-
   await web.startOnPort(webPort);
 
   const localIP = getLocalIP();
   const url = `http://${localIP}:${webPort}/?token=${webToken}`;
 
-  // Connect to bridge IPC for IM notifications
-  const ipc = await connectIPC();
-  if (ipc) {
-    // Set up IPC-based IM sending
-    loop.setIMTarget('ipc', async (_chatId: string, text: string, buttons?) => {
-      const msg = JSON.stringify({
-        type: 'notification',
-        payload: {
-          text,
-          buttons,
-          sessionId: loop.sessionInfo.sessionId,
-          workdir,
-        },
-      }) + '\n';
-      ipc.write(msg);
-      // Wait for message_sent response (with messageId)
+  // Connect to bridge IPC (auto-retries while bridge starts up)
+  const ipc = new IPCClient();
+  const ipcConnected = await ipc.connect();
+
+  if (ipcConnected) {
+    // Wire IPC as the IM transport
+    loop.setIMTarget('ipc', async (_chatId, text, buttons) => {
+      ipc.send('notification', {
+        text,
+        buttons,
+        sessionId: loop.sessionInfo.sessionId,
+        workdir,
+      });
+      // Wait for bridge to confirm message was sent (with messageId)
       return new Promise<string | undefined>((resolve) => {
         const timeout = setTimeout(() => resolve(undefined), 3000);
-        const onData = (raw: Buffer) => {
-          const lines = raw.toString().split('\n').filter(Boolean);
-          for (const line of lines) {
-            try {
-              const resp = JSON.parse(line);
-              if (resp.type === 'message_sent') {
-                clearTimeout(timeout);
-                ipc.removeListener('data', onData);
-                resolve(resp.payload.messageId);
-                return;
-              }
-              if (resp.type === 'permission_action') {
-                // Handle permission action from IM user
-                const { action, toolUseId } = resp.payload;
-                loop.handleIMAction(action, toolUseId);
-              }
-            } catch { /* skip */ }
-          }
+        const handler = (payload: Record<string, unknown>) => {
+          clearTimeout(timeout);
+          ipc.removeListener('message_sent', handler);
+          resolve(payload.messageId as string | undefined);
         };
-        ipc.on('data', onData);
+        ipc.on('message_sent', handler);
       });
     });
 
-    // Also listen for incoming IPC messages (permission actions)
-    let ipcBuffer = '';
-    ipc.on('data', (raw) => {
-      ipcBuffer += raw.toString();
-      const lines = ipcBuffer.split('\n');
-      ipcBuffer = lines.pop() ?? '';
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const msg = JSON.parse(line);
-          if (msg.type === 'permission_action') {
-            const { action, toolUseId } = msg.payload;
-            loop.handleIMAction(action, toolUseId);
-          }
-        } catch { /* skip */ }
-      }
+    // Permission actions from IM → loop
+    ipc.on('permission_action', (payload: Record<string, unknown>) => {
+      loop.handleIMAction(
+        payload.action as string,
+        payload.toolUseId as string,
+      );
     });
 
     console.error(`  IM:       \x1b[32mconnected\x1b[0m (bridge IPC)`);
@@ -141,24 +99,19 @@ export async function claudeCommand(opts: ClaudeCommandOptions = {}): Promise<vo
     stdin.setRawMode(true);
     stdin.resume();
   }
-
-  // Handle terminal input
-  stdin.on('data', (data: Buffer) => {
-    loop.handleTerminalInput(data.toString());
-  });
+  stdin.on('data', (data: Buffer) => loop.handleTerminalInput(data.toString()));
 
   // Graceful shutdown
   let cleaning = false;
   const cleanup = async () => {
     if (cleaning) return;
     cleaning = true;
-    ipc?.destroy();
+    ipc.disconnect();
     web.stop();
     await loop.stop();
     if (stdin.isTTY) stdin.setRawMode(false);
     exit(0);
   };
-
   process.on('SIGINT', cleanup);
   process.on('SIGTERM', cleanup);
 

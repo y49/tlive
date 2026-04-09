@@ -1,8 +1,6 @@
 // src/cli/claude.ts
 import { stdin, stdout, exit } from "node:process";
-import { networkInterfaces, homedir as homedir6 } from "node:os";
-import { connect } from "node:net";
-import { join as join7 } from "node:path";
+import { networkInterfaces } from "node:os";
 
 // src/loop.ts
 import { EventEmitter as EventEmitter5 } from "node:events";
@@ -597,75 +595,62 @@ function normalizeSessionLine(line, provider, sessionId) {
   }
   return messages;
 }
+var imFormatters = {
+  text: (msg) => msg.text ?? "",
+  tool_use: (msg) => `\u{1F527} ${msg.toolName}${formatToolArgs(msg.toolName, msg.toolInput)}`,
+  tool_result: () => "",
+  // suppressed — too noisy for IM sync
+  permission_request: (msg) => `\u26A0\uFE0F Permission: ${msg.toolName}
+${formatToolArgs(msg.toolName, msg.toolInput)}`,
+  error: (msg) => `\u274C ${msg.text}`,
+  complete: () => "\u2705 Session complete",
+  status: (msg) => `\u2139\uFE0F ${msg.text}`
+};
 function formatForIM(msg) {
-  switch (msg.kind) {
-    case "text":
-      return msg.text ?? "";
-    case "tool_use":
-      return `\u{1F527} ${msg.toolName}${formatToolArgs(msg.toolName, msg.toolInput)}`;
-    case "tool_result":
-      return "";
-    // Skip tool results in IM sync (too noisy)
-    case "permission_request":
-      return `\u26A0\uFE0F Permission: ${msg.toolName}
-${formatToolArgs(msg.toolName, msg.toolInput)}`;
-    case "error":
-      return `\u274C ${msg.text}`;
-    case "complete":
-      return "\u2705 Session complete";
-    case "status":
-      return `\u2139\uFE0F ${msg.text}`;
-    default:
-      return "";
+  const formatter = imFormatters[msg.kind];
+  return formatter ? formatter(msg) : "";
+}
+var MAX_ARG_LEN = 150;
+var toolArgFormatters = {
+  Bash: (a) => a.command ? `
+\`${truncate(String(a.command), MAX_ARG_LEN)}\`` : "",
+  Read: (a) => a.file_path ? `
+${truncate(String(a.file_path), MAX_ARG_LEN)}` : "",
+  Edit: (a) => formatFilePath(a),
+  Write: (a) => formatFilePath(a),
+  Grep: (a) => a.pattern ? ` \`${truncate(String(a.pattern), 80)}\`` : "",
+  Glob: (a) => a.pattern ? ` \`${truncate(String(a.pattern), 80)}\`` : "",
+  WebFetch: (a) => a.url ? `
+${truncate(String(a.url), MAX_ARG_LEN)}` : "",
+  Agent: (a) => a.prompt ? `
+${truncate(String(a.prompt), MAX_ARG_LEN)}` : "",
+  AskUserQuestion: (a) => a.question ? `
+${truncate(String(a.question), MAX_ARG_LEN)}` : ""
+};
+function defaultToolArgFormatter(args) {
+  for (const v of Object.values(args)) {
+    if (typeof v === "string" && v.length > 0) return `
+${truncate(v, MAX_ARG_LEN)}`;
   }
+  return "";
 }
 function formatToolArgs(toolName, input) {
   if (!input || typeof input !== "object" || !toolName) return "";
   const args = input;
-  const MAX = 150;
-  switch (toolName) {
-    case "Bash":
-      return args.command ? `
-\`${truncate(String(args.command), MAX)}\`` : "";
-    case "Read":
-      return args.file_path ? `
-${truncate(String(args.file_path), MAX)}` : "";
-    case "Edit":
-    case "Write": {
-      const file = args.file_path ?? args.path ?? "";
-      return file ? `
-${truncate(String(file), MAX)}` : "";
-    }
-    case "Grep":
-    case "Glob": {
-      const pattern = args.pattern ?? "";
-      return pattern ? ` \`${truncate(String(pattern), 80)}\`` : "";
-    }
-    case "WebFetch":
-      return args.url ? `
-${truncate(String(args.url), MAX)}` : "";
-    case "Agent":
-      return args.prompt ? `
-${truncate(String(args.prompt), MAX)}` : "";
-    case "AskUserQuestion":
-      return args.question ? `
-${truncate(String(args.question), MAX)}` : "";
-    default: {
-      for (const v of Object.values(args)) {
-        if (typeof v === "string" && v.length > 0) {
-          return `
-${truncate(v, MAX)}`;
-        }
-      }
-      return "";
-    }
-  }
+  const formatter = toolArgFormatters[toolName] ?? defaultToolArgFormatter;
+  return formatter(args);
+}
+function formatFilePath(args) {
+  const file = args.file_path ?? args.path ?? "";
+  return file ? `
+${truncate(String(file), MAX_ARG_LEN)}` : "";
 }
 function truncate(s, max) {
   return s.length > max ? s.slice(0, max) + "..." : s;
 }
 
 // src/loop.ts
+var MAX_IM_TEXT_LEN = 300;
 var TLiveLoop = class extends EventEmitter5 {
   session;
   registry;
@@ -699,120 +684,158 @@ var TLiveLoop = class extends EventEmitter5 {
     this.imChatId = chatId;
     this.imSend = sendFn;
   }
+  // ---------------------------------------------------------------------------
+  // Event wiring
+  // ---------------------------------------------------------------------------
   wireEvents() {
     this.session.on("ptyData", (data) => this.emit("ptyData", data));
-    this.session.on("scannerEvent", (event) => {
-      const raw = event.raw;
-      if (raw.isMeta) return;
-      const normalized = normalizeSessionLine(
-        { uuid: event.uuid, type: event.type, message: event.message },
-        "claude",
-        this.session.info.sessionId
-      );
-      for (const msg of normalized) {
-        const text = formatForIM(msg);
-        if (!text) continue;
-        const body = msg.kind === "text" && text.length > 300 ? text.slice(0, 300) + "..." : text;
-        this.notifications.push({
-          kind: "activity",
-          dedupeKey: `activity:${event.uuid}:${msg.kind}`,
-          severity: "info",
-          requiresUserAction: false,
-          sessionId: this.session.info.sessionId,
-          title: `\u{1F4AC} ${this.shortWorkdir()}`,
-          body
-        });
-      }
-    });
-    this.session.on("permissionNeeded", (toolUse) => {
-      const isQuestion = toolUse.toolName === "AskUserQuestion";
-      this.notifications.push({
-        kind: isQuestion ? "question" : "permission_required",
-        dedupeKey: `perm:${toolUse.toolUseId}`,
-        severity: "warning",
-        requiresUserAction: true,
-        sessionId: this.session.info.sessionId,
-        title: isQuestion ? `\u2753 Claude asks \xB7 ${this.shortWorkdir()}` : `\u26A0\uFE0F Claude waiting \xB7 ${this.shortWorkdir()}`,
-        body: formatForIM({
-          kind: "permission_request",
-          provider: "claude",
-          sessionId: this.session.info.sessionId,
-          toolName: toolUse.toolName,
-          toolInput: toolUse.input
-        }),
-        buttons: isQuestion ? void 0 : [
-          { label: "Allow", callbackData: `perm:allow:${toolUse.toolUseId}` },
-          { label: "Deny", callbackData: `perm:deny:${toolUse.toolUseId}`, style: "danger" },
-          { label: "Takeover", callbackData: `perm:takeover:${toolUse.toolUseId}` }
-        ]
-      });
-    });
-    this.session.on("permissionResolved", (toolUseId) => {
-      this.notifications.cancel(`perm:${toolUseId}`);
-    });
+    this.session.on("scannerEvent", (event) => this.handleScannerEvent(event));
+    this.session.on("permissionNeeded", (toolUse) => this.handlePermissionNeeded(toolUse));
+    this.session.on("permissionResolved", (id) => this.notifications.cancel(`perm:${id}`));
     this.session.on("sdkMessage", (msg) => this.emit("sdkMessage", msg));
-    this.notifications.on("notify", async (events) => {
-      if (!this.imSend || !this.imChatId) return;
-      for (const event of events) {
-        const text = event.body ? `${event.title}
-${event.body}` : event.title;
-        const messageId = await this.imSend(this.imChatId, text, event.buttons);
-        if (messageId && event.kind === "permission_required") {
-          this.router.registerTerminalNotification(messageId, this.session.info.sessionId, this.session.info.workdir);
-        }
-      }
-    });
-    this.session.on("sessionComplete", () => {
+    this.session.on("sessionComplete", () => this.handleSessionComplete());
+    this.notifications.on("notify", (events) => this.dispatchToIM(events));
+  }
+  // ---------------------------------------------------------------------------
+  // Scanner activity → IM sync
+  // ---------------------------------------------------------------------------
+  handleScannerEvent(event) {
+    const raw = event.raw;
+    if (raw.isMeta) return;
+    const normalized = normalizeSessionLine(
+      { uuid: event.uuid, type: event.type, message: event.message },
+      "claude",
+      this.session.info.sessionId
+    );
+    for (const msg of normalized) {
+      const text = formatForIM(msg);
+      if (!text) continue;
+      const body = text.length > MAX_IM_TEXT_LEN ? text.slice(0, MAX_IM_TEXT_LEN) + "..." : text;
       this.notifications.push({
-        kind: "task_complete",
-        dedupeKey: `complete:${this.session.info.sessionId}`,
+        kind: "activity",
+        dedupeKey: `activity:${event.uuid}:${msg.kind}`,
         severity: "info",
         requiresUserAction: false,
         sessionId: this.session.info.sessionId,
-        title: `\u2705 Session complete \xB7 ${this.shortWorkdir()}`
+        title: `\u{1F4AC} ${this.shortWorkdir()}`,
+        body
       });
+    }
+  }
+  // ---------------------------------------------------------------------------
+  // Permission detection → IM alert
+  // ---------------------------------------------------------------------------
+  handlePermissionNeeded(toolUse) {
+    const isQuestion = toolUse.toolName === "AskUserQuestion";
+    this.notifications.push({
+      kind: isQuestion ? "question" : "permission_required",
+      dedupeKey: `perm:${toolUse.toolUseId}`,
+      severity: "warning",
+      requiresUserAction: true,
+      sessionId: this.session.info.sessionId,
+      title: isQuestion ? `\u2753 Claude asks \xB7 ${this.shortWorkdir()}` : `\u26A0\uFE0F Claude waiting \xB7 ${this.shortWorkdir()}`,
+      body: formatForIM({
+        kind: "permission_request",
+        provider: "claude",
+        sessionId: this.session.info.sessionId,
+        toolName: toolUse.toolName,
+        toolInput: toolUse.input
+      }),
+      buttons: isQuestion ? void 0 : [
+        { label: "Allow", callbackData: `perm:allow:${toolUse.toolUseId}` },
+        { label: "Deny", callbackData: `perm:deny:${toolUse.toolUseId}`, style: "danger" },
+        { label: "Takeover", callbackData: `perm:takeover:${toolUse.toolUseId}` }
+      ]
     });
   }
-  async start() {
-    await this.session.startPTY();
+  handleSessionComplete() {
+    this.notifications.push({
+      kind: "task_complete",
+      dedupeKey: `complete:${this.session.info.sessionId}`,
+      severity: "info",
+      requiresUserAction: false,
+      sessionId: this.session.info.sessionId,
+      title: `\u2705 Session complete \xB7 ${this.shortWorkdir()}`
+    });
   }
-  async handleIMAction(action, toolUseId) {
-    if (action === "takeover") {
-      await this.session.handoffToSDK({
-        onPermissionRequest: (id, toolName, input) => {
-          this.notifications.push({
-            kind: "permission_required",
-            dedupeKey: `perm:${id}`,
-            severity: "warning",
-            requiresUserAction: true,
-            sessionId: this.session.info.sessionId,
-            title: `\u26A0\uFE0F ${toolName}`,
-            body: JSON.stringify(input).slice(0, 200),
-            buttons: [
-              { label: "Allow", callbackData: `perm:allow:${id}` },
-              { label: "Deny", callbackData: `perm:deny:${id}`, style: "danger" }
-            ]
-          });
-        }
-      });
-    } else if (action === "allow" || action === "deny") {
-      if (this.session.state === "sdk_active") {
-        this.session.resolvePermission(toolUseId, action);
-      } else {
-        await this.session.handoffToSDK({
-          onPermissionRequest: (id) => {
-            setTimeout(() => this.session.resolvePermission(id, action), 100);
-          }
-        });
+  // ---------------------------------------------------------------------------
+  // Notification dispatch → IM
+  // ---------------------------------------------------------------------------
+  async dispatchToIM(events) {
+    if (!this.imSend || !this.imChatId) return;
+    for (const event of events) {
+      const text = event.body ? `${event.title}
+${event.body}` : event.title;
+      const messageId = await this.imSend(this.imChatId, text, event.buttons);
+      if (messageId && event.kind === "permission_required") {
+        this.router.registerTerminalNotification(
+          messageId,
+          this.session.info.sessionId,
+          this.session.info.workdir
+        );
       }
     }
   }
+  // ---------------------------------------------------------------------------
+  // IM action handlers — strategy map
+  // ---------------------------------------------------------------------------
+  actionHandlers = {
+    takeover: (toolUseId) => this.handleTakeover(toolUseId),
+    allow: (toolUseId) => this.handlePermissionDecision(toolUseId, "allow"),
+    deny: (toolUseId) => this.handlePermissionDecision(toolUseId, "deny")
+  };
+  async handleIMAction(action, toolUseId) {
+    const handler = this.actionHandlers[action];
+    if (handler) await handler(toolUseId);
+  }
+  async handleTakeover(_toolUseId) {
+    await this.session.handoffToSDK({
+      onPermissionRequest: (id, toolName, input) => {
+        this.notifications.push({
+          kind: "permission_required",
+          dedupeKey: `perm:${id}`,
+          severity: "warning",
+          requiresUserAction: true,
+          sessionId: this.session.info.sessionId,
+          title: `\u26A0\uFE0F ${toolName}`,
+          body: formatForIM({
+            kind: "permission_request",
+            provider: "claude",
+            sessionId: this.session.info.sessionId,
+            toolName,
+            toolInput: input
+          }),
+          buttons: [
+            { label: "Allow", callbackData: `perm:allow:${id}` },
+            { label: "Deny", callbackData: `perm:deny:${id}`, style: "danger" }
+          ]
+        });
+      }
+    });
+  }
+  async handlePermissionDecision(toolUseId, decision) {
+    if (this.session.state === "sdk_active") {
+      this.session.resolvePermission(toolUseId, decision);
+    } else {
+      await this.session.handoffToSDK({
+        onPermissionRequest: (id) => {
+          setTimeout(() => this.session.resolvePermission(id, decision), 100);
+        }
+      });
+    }
+  }
+  // ---------------------------------------------------------------------------
+  // Terminal input
+  // ---------------------------------------------------------------------------
   async handleTerminalInput(data) {
     if (this.session.state === "sdk_active") {
       await this.session.takebackToTerminal();
     } else {
       this.session.writeToPTY(data);
     }
+  }
+  async start() {
+    await this.session.startPTY();
   }
   async stop() {
     this.notifications.reset();
@@ -977,10 +1000,91 @@ var WebTerminal = class {
   }
 };
 
-// src/config.ts
-import { readFileSync as readFileSync3, existsSync as existsSync4 } from "node:fs";
+// src/ipc.ts
+import { createServer as createServer2, connect } from "node:net";
 import { homedir as homedir4 } from "node:os";
 import { join as join5 } from "node:path";
+import { EventEmitter as EventEmitter6 } from "node:events";
+var IPC_PATH = join5(homedir4(), ".tlive", "ipc.sock");
+function attachLineParser(socket, onMessage) {
+  let buffer = "";
+  socket.on("data", (data) => {
+    buffer += data.toString();
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        onMessage(JSON.parse(line));
+      } catch {
+      }
+    }
+  });
+}
+function sendMessage(socket, msg) {
+  socket.write(JSON.stringify(msg) + "\n");
+}
+var IPCClient = class extends EventEmitter6 {
+  socket = null;
+  _connected = false;
+  opts;
+  constructor(opts = {}) {
+    super();
+    this.opts = {
+      maxRetries: opts.maxRetries ?? 10,
+      retryDelay: opts.retryDelay ?? 500,
+      path: opts.path ?? IPC_PATH
+    };
+  }
+  get connected() {
+    return this._connected;
+  }
+  /**
+   * Connect to the IPC server, retrying until the bridge is ready.
+   * Resolves true if connected, false if all retries exhausted.
+   */
+  async connect() {
+    for (let attempt = 0; attempt <= this.opts.maxRetries; attempt++) {
+      const ok = await this.tryConnect();
+      if (ok) return true;
+      if (attempt < this.opts.maxRetries) {
+        await new Promise((r) => setTimeout(r, this.opts.retryDelay));
+      }
+    }
+    return false;
+  }
+  tryConnect() {
+    return new Promise((resolve4) => {
+      const socket = connect(this.opts.path, () => {
+        this.socket = socket;
+        this._connected = true;
+        attachLineParser(socket, (msg) => this.emit(msg.type, msg.payload));
+        socket.on("close", () => {
+          this._connected = false;
+          this.emit("disconnected");
+        });
+        resolve4(true);
+      });
+      socket.on("error", () => resolve4(false));
+    });
+  }
+  /** Send a typed message to the bridge. */
+  send(type, payload = {}) {
+    if (this.socket && this._connected) {
+      sendMessage(this.socket, { type, payload });
+    }
+  }
+  disconnect() {
+    this.socket?.destroy();
+    this.socket = null;
+    this._connected = false;
+  }
+};
+
+// src/config.ts
+import { readFileSync as readFileSync3, existsSync as existsSync4 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { join as join6 } from "node:path";
 var DEFAULTS = {
   port: 8849,
   token: "",
@@ -992,7 +1096,7 @@ var DEFAULTS = {
   proactiveQuestionDelay: 5e3
 };
 function loadConfig(envPath) {
-  const configPath = envPath ?? join5(homedir4(), ".tlive", "config.env");
+  const configPath = envPath ?? join6(homedir5(), ".tlive", "config.env");
   const env = { ...process.env };
   if (existsSync4(configPath)) {
     const lines = readFileSync3(configPath, "utf-8").split("\n");
@@ -1023,18 +1127,18 @@ function loadConfig(envPath) {
 }
 
 // src/core/sessionDiscovery.ts
-import { readdirSync as readdirSync2, statSync as statSync2, readFileSync as readFileSync4 } from "node:fs";
-import { join as join6, resolve as resolve3 } from "node:path";
-import { homedir as homedir5 } from "node:os";
+import { readdirSync, statSync as statSync2, readFileSync as readFileSync4 } from "node:fs";
+import { join as join7, resolve as resolve3 } from "node:path";
+import { homedir as homedir6 } from "node:os";
 var UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function getProjectPath(workingDirectory) {
   const projectId = resolve3(workingDirectory).replace(/[^a-zA-Z0-9-]/g, "-");
-  const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || join6(homedir5(), ".claude");
-  return join6(claudeConfigDir, "projects", projectId);
+  const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || join7(homedir6(), ".claude");
+  return join7(claudeConfigDir, "projects", projectId);
 }
 function isValidSession(projectDir, sessionId) {
   try {
-    const filePath = join6(projectDir, `${sessionId}.jsonl`);
+    const filePath = join7(projectDir, `${sessionId}.jsonl`);
     const content = readFileSync4(filePath, "utf-8");
     const lines = content.split("\n");
     for (const line of lines) {
@@ -1055,13 +1159,13 @@ function isValidSession(projectDir, sessionId) {
 function findLastSession(workingDirectory) {
   try {
     const projectDir = getProjectPath(workingDirectory);
-    const files = readdirSync2(projectDir).filter((f) => f.endsWith(".jsonl")).map((f) => {
+    const files = readdirSync(projectDir).filter((f) => f.endsWith(".jsonl")).map((f) => {
       const sessionId = f.replace(".jsonl", "");
       if (!UUID_PATTERN.test(sessionId)) return null;
       if (!isValidSession(projectDir, sessionId)) return null;
       return {
         sessionId,
-        mtime: statSync2(join6(projectDir, f)).mtime.getTime()
+        mtime: statSync2(join7(projectDir, f)).mtime.getTime()
       };
     }).filter((f) => f !== null).sort((a, b) => b.mtime - a.mtime);
     return files.length > 0 ? files[0].sessionId : null;
@@ -1079,13 +1183,6 @@ function getLocalIP() {
     }
   }
   return "127.0.0.1";
-}
-var IPC_PATH = join7(homedir6(), ".tlive", "ipc.sock");
-function connectIPC() {
-  return new Promise((resolve4) => {
-    const socket = connect(IPC_PATH, () => resolve4(socket));
-    socket.on("error", () => resolve4(null));
-  });
 }
 async function claudeCommand(opts = {}) {
   const config = loadConfig();
@@ -1110,59 +1207,31 @@ async function claudeCommand(opts = {}) {
   await web.startOnPort(webPort);
   const localIP = getLocalIP();
   const url = `http://${localIP}:${webPort}/?token=${webToken}`;
-  const ipc = await connectIPC();
-  if (ipc) {
+  const ipc = new IPCClient();
+  const ipcConnected = await ipc.connect();
+  if (ipcConnected) {
     loop.setIMTarget("ipc", async (_chatId, text, buttons) => {
-      const msg = JSON.stringify({
-        type: "notification",
-        payload: {
-          text,
-          buttons,
-          sessionId: loop.sessionInfo.sessionId,
-          workdir
-        }
-      }) + "\n";
-      ipc.write(msg);
+      ipc.send("notification", {
+        text,
+        buttons,
+        sessionId: loop.sessionInfo.sessionId,
+        workdir
+      });
       return new Promise((resolve4) => {
         const timeout = setTimeout(() => resolve4(void 0), 3e3);
-        const onData = (raw) => {
-          const lines = raw.toString().split("\n").filter(Boolean);
-          for (const line of lines) {
-            try {
-              const resp = JSON.parse(line);
-              if (resp.type === "message_sent") {
-                clearTimeout(timeout);
-                ipc.removeListener("data", onData);
-                resolve4(resp.payload.messageId);
-                return;
-              }
-              if (resp.type === "permission_action") {
-                const { action, toolUseId } = resp.payload;
-                loop.handleIMAction(action, toolUseId);
-              }
-            } catch {
-            }
-          }
+        const handler = (payload) => {
+          clearTimeout(timeout);
+          ipc.removeListener("message_sent", handler);
+          resolve4(payload.messageId);
         };
-        ipc.on("data", onData);
+        ipc.on("message_sent", handler);
       });
     });
-    let ipcBuffer = "";
-    ipc.on("data", (raw) => {
-      ipcBuffer += raw.toString();
-      const lines = ipcBuffer.split("\n");
-      ipcBuffer = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const msg = JSON.parse(line);
-          if (msg.type === "permission_action") {
-            const { action, toolUseId } = msg.payload;
-            loop.handleIMAction(action, toolUseId);
-          }
-        } catch {
-        }
-      }
+    ipc.on("permission_action", (payload) => {
+      loop.handleIMAction(
+        payload.action,
+        payload.toolUseId
+      );
     });
     console.error(`  IM:       \x1B[32mconnected\x1B[0m (bridge IPC)`);
   } else {
@@ -1172,14 +1241,12 @@ async function claudeCommand(opts = {}) {
     stdin.setRawMode(true);
     stdin.resume();
   }
-  stdin.on("data", (data) => {
-    loop.handleTerminalInput(data.toString());
-  });
+  stdin.on("data", (data) => loop.handleTerminalInput(data.toString()));
   let cleaning = false;
   const cleanup = async () => {
     if (cleaning) return;
     cleaning = true;
-    ipc?.destroy();
+    ipc.disconnect();
     web.stop();
     await loop.stop();
     if (stdin.isTTY) stdin.setRawMode(false);
