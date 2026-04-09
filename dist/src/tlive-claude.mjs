@@ -960,7 +960,7 @@ var TLiveLoop = class extends EventEmitter6 {
         dedupeKey: `activity:${event.uuid}:${msg.kind}`,
         sessionId: this.session.info.sessionId,
         title: `Terminal \xB7 ${this.sessionTag()}`,
-        body
+        body: body + "\n\n\u21A9\uFE0F \u56DE\u590D\u6B64\u6D88\u606F\u4E0E\u7EC8\u7AEF\u4EA4\u4E92"
       });
     }
   }

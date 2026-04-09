@@ -139,7 +139,7 @@ export class TLiveLoop extends EventEmitter {
         dedupeKey: `activity:${event.uuid}:${msg.kind}`,
         sessionId: this.session.info.sessionId,
         title: `Terminal · ${this.sessionTag()}`,
-        body,
+        body: body + '\n\n↩️ 回复此消息与终端交互',
       });
     }
   }

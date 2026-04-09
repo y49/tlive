@@ -360,6 +360,15 @@ export class TerminalRelay {
       const target = this.targetResolver.resolve(adapter.channelType);
       if (!target) continue;
 
+      // Determine card header style based on notification content
+      const isPermission = text.includes('⚠️') || text.includes('Permission');
+      const isQuestion = text.includes('❓');
+      const isDone = text.includes('✅ Done');
+      const feishuHeader = adapter.channelType === 'feishu' ? {
+        template: isPermission ? 'orange' : isQuestion ? 'blue' : isDone ? 'green' : 'turquoise',
+        title: isPermission ? '⚠️ Permission' : isQuestion ? '❓ Question' : isDone ? '✅ Done' : '🖥 Terminal',
+      } : undefined;
+
       adapter.send({
         chatId: target.chatId,
         receiveIdType: target.receiveIdType,
@@ -369,9 +378,12 @@ export class TerminalRelay {
           callbackData: b.callbackData,
           style: b.style as 'primary' | 'danger' | undefined,
         })),
-      }).then((msgId) => {
+        feishuHeader,
+      } as any).then((result: any) => {
+        const msgId = result?.messageId;
         if (msgId) {
           this.terminalMsgIds.add(msgId);
+          this.deps.log(`Tracked notification: ${msgId}`);
           sendJson(origin, {
             type: 'message_sent',
             payload: { messageId: msgId, sessionId, channelType: adapter.channelType },
@@ -390,9 +402,11 @@ export class TerminalRelay {
    * Returns true if consumed (forwarded to terminal via IPC).
    */
   interceptReply(msg: { text: string; replyToMessageId?: string }): boolean {
+    this.deps.log(`interceptReply: replyTo=${msg.replyToMessageId ?? 'NONE'}, tracked=${this.terminalMsgIds.size}, match=${msg.replyToMessageId ? this.terminalMsgIds.has(msg.replyToMessageId) : false}`);
     if (!msg.replyToMessageId || !this.terminalMsgIds.has(msg.replyToMessageId)) {
       return false;
     }
+    this.deps.log(`Forwarding reply to terminal: "${msg.text.slice(0, 50)}"`);
     this.broadcast({ type: 'terminal_input', payload: { text: msg.text } });
     return true;
   }

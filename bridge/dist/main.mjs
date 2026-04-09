@@ -26177,6 +26177,13 @@ var TerminalRelay = class {
     for (const adapter of this.deps.getAdapters()) {
       const target = this.targetResolver.resolve(adapter.channelType);
       if (!target) continue;
+      const isPermission = text2.includes("\u26A0\uFE0F") || text2.includes("Permission");
+      const isQuestion = text2.includes("\u2753");
+      const isDone = text2.includes("\u2705 Done");
+      const feishuHeader = adapter.channelType === "feishu" ? {
+        template: isPermission ? "orange" : isQuestion ? "blue" : isDone ? "green" : "turquoise",
+        title: isPermission ? "\u26A0\uFE0F Permission" : isQuestion ? "\u2753 Question" : isDone ? "\u2705 Done" : "\u{1F5A5} Terminal"
+      } : void 0;
       adapter.send({
         chatId: target.chatId,
         receiveIdType: target.receiveIdType,
@@ -26185,10 +26192,13 @@ var TerminalRelay = class {
           label: b.label,
           callbackData: b.callbackData,
           style: b.style
-        }))
-      }).then((msgId) => {
+        })),
+        feishuHeader
+      }).then((result) => {
+        const msgId = result?.messageId;
         if (msgId) {
           this.terminalMsgIds.add(msgId);
+          this.deps.log(`Tracked notification: ${msgId}`);
           sendJson(origin, {
             type: "message_sent",
             payload: { messageId: msgId, sessionId, channelType: adapter.channelType }
@@ -26205,9 +26215,11 @@ var TerminalRelay = class {
    * Returns true if consumed (forwarded to terminal via IPC).
    */
   interceptReply(msg) {
+    this.deps.log(`interceptReply: replyTo=${msg.replyToMessageId ?? "NONE"}, tracked=${this.terminalMsgIds.size}, match=${msg.replyToMessageId ? this.terminalMsgIds.has(msg.replyToMessageId) : false}`);
     if (!msg.replyToMessageId || !this.terminalMsgIds.has(msg.replyToMessageId)) {
       return false;
     }
+    this.deps.log(`Forwarding reply to terminal: "${msg.text.slice(0, 50)}"`);
     this.broadcast({ type: "terminal_input", payload: { text: msg.text } });
     return true;
   }
