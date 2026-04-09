@@ -70,6 +70,7 @@ async function main() {
   const relay = new TerminalRelay({
     config,
     tliveHome,
+    webDir: process.env.TL_WEB_DIR || '',
     getAdapters: () => manager.getAdapters(),
     getLastChatId: (ch) => manager.getLastChatId(ch),
     log: (msg) => logger.info(msg),

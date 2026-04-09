@@ -3,7 +3,6 @@ import { stdin, stdout, exit } from 'node:process';
 import { networkInterfaces } from 'node:os';
 import { TLiveLoop } from '../loop.js';
 import { ClaudeAdapter } from '../sdk/claudeAdapter.js';
-import { WebTerminal } from '../core/webTerminal.js';
 import { IPCClient } from '../ipc.js';
 import { loadConfig } from '../config.js';
 import { findLastSession } from '../core/sessionDiscovery.js';
@@ -12,7 +11,6 @@ import { createWorktree } from '../core/worktreeManager.js';
 export interface ClaudeCommandOptions {
   resume?: boolean;
   sessionId?: string;
-  web?: boolean;
   workdir?: string;
   worktree?: boolean | string;
 }
@@ -30,7 +28,6 @@ function getLocalIP(): string {
 export function setupQR(port: number, token: string): void {
   const localIP = getLocalIP();
   const url = `http://${localIP}:${port}/?token=${token}`;
-
   console.log('');
   console.log('  \x1b[36m⚡ TLive Web Terminal\x1b[0m');
   console.log('');
@@ -71,40 +68,38 @@ export async function claudeCommand(opts: ClaudeCommandOptions = {}): Promise<vo
 
   const loop = new TLiveLoop({ workdir, adapter, config, sessionId });
 
-  // Start WebTerminal
-  const webPort = config.port;
-  const webToken = config.token || loop.sessionInfo.sessionId.slice(0, 16);
-  const web = new WebTerminal({ port: webPort, token: webToken });
-
-  loop.on('ptyData', (data: string) => {
-    stdout.write(data);
-    web.broadcast(data);
-  });
-  web.setInputHandler((data) => loop.handleTerminalInput(data));
-  try {
-    await web.startOnPort(webPort);
-  } catch (err) {
-    console.error(`  \x1b[31mWeb terminal failed:\x1b[0m ${(err as Error).message}`);
-    console.error(`  Continuing without web terminal.`);
-  }
-
-  const localIP = getLocalIP();
-  const url = `http://${localIP}:${webPort}/?token=${webToken}`;
-
   // Connect to bridge IPC (auto-retries while bridge starts up)
   const ipc = new IPCClient();
   const ipcConnected = await ipc.connect();
+
+  // Register session with bridge (for web terminal + IM routing)
+  if (ipcConnected) {
+    ipc.send('session_register', {
+      sessionId: loop.sessionInfo.sessionId,
+      workdir,
+      projectName: workdir.split('/').filter(Boolean).pop() ?? 'unknown',
+    });
+  }
+
+  // PTY output → local terminal + IPC (for bridge web terminal)
+  loop.on('ptyData', (data: string) => {
+    stdout.write(data);
+    if (ipc.connected) {
+      ipc.send('pty_data', {
+        sessionId: loop.sessionInfo.sessionId,
+        data,
+      });
+    }
+  });
 
   if (ipcConnected) {
     // Wire IPC as the IM transport
     loop.setIMTarget('ipc', async (_chatId, text, buttons) => {
       ipc.send('notification', {
-        text,
-        buttons,
+        text, buttons,
         sessionId: loop.sessionInfo.sessionId,
         workdir,
       });
-      // Wait for bridge to confirm message was sent (with messageId)
       return new Promise<string | undefined>((resolve) => {
         const timeout = setTimeout(() => resolve(undefined), 3000);
         const handler = (payload: Record<string, unknown>) => {
@@ -116,45 +111,36 @@ export async function claudeCommand(opts: ClaudeCommandOptions = {}): Promise<vo
       });
     });
 
-    // Permission actions from IM → loop
-    ipc.on('permission_action', (payload: Record<string, unknown>) => {
-      loop.handleIMAction(
-        payload.action as string,
-        payload.toolUseId as string,
-      );
+    // IPC message handlers — one per message type
+    ipc.on('permission_action', (p: Record<string, unknown>) => {
+      loop.handleIMAction(p.action as string, p.toolUseId as string);
     });
 
-    // Text replies to terminal notifications → write to PTY as user input
-    ipc.on('terminal_input', (payload: Record<string, unknown>) => {
-      const text = payload.text as string;
-      if (text) loop.handleTerminalInput(text + '\n');
+    ipc.on('terminal_input', (p: Record<string, unknown>) => {
+      if (p.text) loop.handleTerminalInput(p.text as string + '\n');
     });
 
-    // Config updates from IM (effort/model changes) → display + store for next SDK handoff
-    ipc.on('config_update', (payload: Record<string, unknown>) => {
-      if (payload.effort) console.error(`  Effort:   ${payload.effort}`);
-      if (payload.model) console.error(`  Model:    ${payload.model}`);
-      // Store for next SDK handoff
+    ipc.on('question_answer', (p: Record<string, unknown>) => {
+      if (p.answer !== undefined) loop.handleTerminalInput(p.answer as string + '\n');
     });
 
-    // Question answers from IM → write answer to PTY as user input
-    ipc.on('question_answer', (payload: Record<string, unknown>) => {
-      const answer = payload.answer as string;
-      if (answer !== undefined) {
-        loop.handleTerminalInput(answer + '\n');
-      }
+    ipc.on('config_update', (p: Record<string, unknown>) => {
+      if (p.effort) console.error(`  Effort:   ${p.effort}`);
+      if (p.model) console.error(`  Model:    ${p.model}`);
     });
 
-    ipc.on('reconnected', () => {
-      console.error(`  IM:       \x1b[32mreconnected\x1b[0m`);
+    ipc.on('web_input', (p: Record<string, unknown>) => {
+      if (p.data) loop.handleTerminalInput(p.data as string);
     });
+
+    ipc.on('reconnected', () => console.error(`  IM:       \x1b[32mreconnected\x1b[0m`));
 
     console.error(`  IM:       \x1b[32mconnected\x1b[0m (bridge IPC)`);
   } else {
     console.error(`  IM:       \x1b[33mnot connected\x1b[0m (bridge not running)`);
   }
 
-  // Raw mode for terminal passthrough
+  // Terminal raw mode
   if (stdin.isTTY) {
     stdin.setRawMode(true);
     stdin.resume();
@@ -166,8 +152,10 @@ export async function claudeCommand(opts: ClaudeCommandOptions = {}): Promise<vo
   const cleanup = async () => {
     if (cleaning) return;
     cleaning = true;
+    if (ipc.connected) {
+      ipc.send('session_unregister', { sessionId: loop.sessionInfo.sessionId });
+    }
     ipc.disconnect();
-    web.stop();
     await loop.stop();
     if (stdin.isTTY) stdin.setRawMode(false);
     exit(0);
@@ -177,11 +165,13 @@ export async function claudeCommand(opts: ClaudeCommandOptions = {}): Promise<vo
 
   // Show session info
   const info = loop.sessionInfo;
+  const localIP = getLocalIP();
+  const webUrl = `http://${localIP}:${config.port}/?token=${config.token || info.sessionId.slice(0, 16)}`;
   console.error('');
   console.error(`  \x1b[36m⚡ TLive v1.0\x1b[0m`);
   console.error(`  Session:  ${info.sessionId.slice(0, 8)}...`);
   console.error(`  Workdir:  ${workdir}`);
-  console.error(`  Terminal: \x1b[4m${url}\x1b[0m`);
+  console.error(`  Terminal: \x1b[4m${webUrl}\x1b[0m`);
 
   try {
     await loop.start();

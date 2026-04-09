@@ -3,6 +3,7 @@
 
     var params = new URLSearchParams(window.location.search);
     var tokenParam = params.get('token') || '';
+    var sessionParam = params.get('session') || '';
 
     var term = new Terminal({
         cursorBlink: true,
@@ -25,14 +26,21 @@
     var statusText = document.getElementById('status-text');
     var overlay = document.getElementById('disconnect-overlay');
     var sessionName = document.getElementById('session-name');
-    if (sessionName) sessionName.textContent = 'TLive v1.0';
+    if (sessionName) sessionName.textContent = sessionParam ? 'Session #' + sessionParam.slice(0, 6) : 'TLive v1.0';
 
-    // Hide back link (single-session mode)
+    // Show back link when in multi-session mode (session param present)
     var backLink = document.getElementById('back-link');
-    if (backLink) backLink.style.display = 'none';
+    if (backLink) {
+        if (sessionParam) {
+            backLink.href = '/' + (tokenParam ? '?token=' + encodeURIComponent(tokenParam) : '');
+        } else {
+            backLink.style.display = 'none';
+        }
+    }
 
     var wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    var wsUrl = wsProtocol + '//' + location.host + '/?token=' + encodeURIComponent(tokenParam);
+    var wsUrl = wsProtocol + '//' + location.host + '/?token=' + encodeURIComponent(tokenParam) +
+        (sessionParam ? '&session=' + encodeURIComponent(sessionParam) : '');
     var ws = null;
     var reconnectTimer = null;
     var processExited = false;

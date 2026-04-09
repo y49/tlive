@@ -21,7 +21,7 @@ const RULES: Record<NotificationKind, NotificationRule> = {
   session_complete:    { alwaysPush: true,  aggregate: false, maxTextLength: 100 },
   todo_update:         { alwaysPush: true,  aggregate: false, maxTextLength: 500 },
   thinking:            { alwaysPush: true,  aggregate: false, maxTextLength: 50 },
-  activity_text:       { alwaysPush: false, aggregate: false, maxTextLength: 300 },
+  activity_text:       { alwaysPush: true,  aggregate: false, maxTextLength: 300 },
   activity_tool:       { alwaysPush: false, aggregate: true,  maxTextLength: 500 },
 };
 

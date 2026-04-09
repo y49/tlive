@@ -3,10 +3,10 @@ import { stdin, stdout, exit } from "node:process";
 import { networkInterfaces } from "node:os";
 
 // src/loop.ts
-import { EventEmitter as EventEmitter5 } from "node:events";
+import { EventEmitter as EventEmitter6 } from "node:events";
 
 // src/core/sessionManager.ts
-import { EventEmitter as EventEmitter3 } from "node:events";
+import { EventEmitter as EventEmitter4 } from "node:events";
 import { randomUUID } from "node:crypto";
 
 // src/core/ptyManager.ts
@@ -162,6 +162,13 @@ var SessionScanner = class extends EventEmitter2 {
       for (const block of blocks) {
         if (block.type === "tool_use") this.trackToolUse(block);
       }
+      const messageObj = msg.message;
+      if (messageObj && typeof messageObj === "object") {
+        const usage = messageObj.usage;
+        if (usage && typeof usage === "object") this.emit("usage", usage);
+        const model = messageObj.model;
+        if (typeof model === "string") this.emit("model", model);
+      }
     }
     if (type === "result" || type === "user") {
       for (const block of blocks) {
@@ -175,6 +182,15 @@ var SessionScanner = class extends EventEmitter2 {
     if (!toolUseId) return;
     const isQuestion = toolName === "AskUserQuestion";
     const delay = isQuestion ? this.opts.proactiveQuestionDelay : this.opts.proactiveNotifyDelay;
+    const toolUseEvent = { toolUseId, toolName, input: block.input, timestamp: Date.now() };
+    if (isQuestion) {
+      const inputObj = block.input;
+      toolUseEvent.questionText = inputObj?.question ?? "";
+      const options = inputObj?.options;
+      if (Array.isArray(options)) {
+        toolUseEvent.questionOptions = options.map((o) => o.label ?? o.description ?? String(o));
+      }
+    }
     const timerId = setTimeout(() => {
       const pending = this.pendingToolUse.get(toolUseId);
       if (pending) {
@@ -183,7 +199,7 @@ var SessionScanner = class extends EventEmitter2 {
       }
     }, delay);
     this.pendingToolUse.set(toolUseId, {
-      toolUse: { toolUseId, toolName, input: block.input, timestamp: Date.now() },
+      toolUse: toolUseEvent,
       timerId
     });
   }
@@ -196,6 +212,28 @@ var SessionScanner = class extends EventEmitter2 {
     }
   }
 };
+
+// src/sdk/permissionPolicies.ts
+var SAFE_TOOLS = /* @__PURE__ */ new Set(["Read", "Glob", "Grep", "TodoRead", "WebSearch"]);
+var EDIT_TOOLS = /* @__PURE__ */ new Set([...SAFE_TOOLS, "Edit", "Write", "NotebookEdit"]);
+var DANGEROUS_PATTERNS = [/rm\s+-rf/, /git\s+push.*--force/, /DROP\s+TABLE/i];
+function isAllowed(mode, toolName, input) {
+  switch (mode) {
+    case "yolo":
+      return true;
+    case "auto-approve": {
+      if (toolName === "Bash") {
+        const cmd = input?.command ?? "";
+        return !DANGEROUS_PATTERNS.some((p) => p.test(cmd));
+      }
+      return true;
+    }
+    case "accept-edits":
+      return EDIT_TOOLS.has(toolName);
+    case "default":
+      return SAFE_TOOLS.has(toolName);
+  }
+}
 
 // src/sdk/permissionHandler.ts
 var BasePermissionHandler = class {
@@ -243,24 +281,70 @@ var INTERACTIVE_TOOLS = /* @__PURE__ */ new Set(["AskUserQuestion"]);
 var ClaudePermissionHandler = class extends BasePermissionHandler {
   opts;
   requestCounter = 0;
+  mode = "default";
   constructor(opts = {}) {
     super();
     this.opts = opts;
   }
+  setMode(mode) {
+    this.mode = mode;
+  }
   async handleToolCall(toolName, input, callOpts) {
+    if (isAllowed(this.mode, toolName, input)) {
+      return { behavior: "allow", updatedInput: input };
+    }
     if (this.alwaysAllow.has(toolName)) {
       return { behavior: "allow", updatedInput: input };
     }
     const id = `perm-${++this.requestCounter}`;
     const isInteractive = INTERACTIVE_TOOLS.has(toolName);
-    const timeoutMs = isInteractive ? 0 : this.opts.timeout ?? 55e3;
+    const timeoutMs = isInteractive ? 0 : this.opts.timeout ?? 0;
     this.opts.onPermissionRequest?.(id, toolName, input);
     return this.waitForApproval(id, toolName, input, { signal: callOpts?.signal, timeoutMs });
   }
 };
 
+// src/core/thinkingTracker.ts
+import { EventEmitter as EventEmitter3 } from "node:events";
+var ThinkingTracker = class extends EventEmitter3 {
+  activeToolCalls = /* @__PURE__ */ new Set();
+  _isThinking = false;
+  debounceTimer = null;
+  DEBOUNCE_MS = 500;
+  get isThinking() {
+    return this._isThinking;
+  }
+  trackToolUse(toolUseId) {
+    this.activeToolCalls.add(toolUseId);
+    this.updateState(true);
+  }
+  trackToolResult(toolUseId) {
+    this.activeToolCalls.delete(toolUseId);
+    if (this.activeToolCalls.size === 0) {
+      if (this.debounceTimer) clearTimeout(this.debounceTimer);
+      this.debounceTimer = setTimeout(() => {
+        if (this.activeToolCalls.size === 0) this.updateState(false);
+      }, this.DEBOUNCE_MS);
+    }
+  }
+  trackAssistantMessage() {
+    this.activeToolCalls.clear();
+    this.updateState(false);
+  }
+  updateState(thinking) {
+    if (thinking === this._isThinking) return;
+    this._isThinking = thinking;
+    this.emit("change", thinking);
+  }
+  reset() {
+    this.activeToolCalls.clear();
+    if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    this._isThinking = false;
+  }
+};
+
 // src/core/sessionManager.ts
-var SessionManager = class extends EventEmitter3 {
+var SessionManager = class extends EventEmitter4 {
   _state = "idle";
   sessionId;
   workdir;
@@ -270,6 +354,7 @@ var SessionManager = class extends EventEmitter3 {
   config;
   permissionHandler = null;
   sdkAbortController = null;
+  thinkingTracker;
   _createdAt = Date.now();
   _lastActivityAt = Date.now();
   _messageCount = 0;
@@ -280,6 +365,8 @@ var SessionManager = class extends EventEmitter3 {
     this.adapter = opts.adapter;
     this.config = opts.config;
     this.pty = new PTYManager();
+    this.thinkingTracker = new ThinkingTracker();
+    this.thinkingTracker.on("change", (thinking) => this.emit("thinking", thinking));
     this.scanner = new SessionScanner({
       sessionId: this.sessionId,
       workdir: this.workdir,
@@ -317,9 +404,28 @@ var SessionManager = class extends EventEmitter3 {
       this._lastActivityAt = Date.now();
       this._messageCount++;
       this.emit("scannerEvent", event);
+      const blocks = this.getContentBlocks(event.message);
+      if (event.type === "assistant") {
+        for (const block of blocks) {
+          if (block.type === "tool_use" && block.id) {
+            this.thinkingTracker.trackToolUse(block.id);
+          } else if (block.type === "text") {
+            this.thinkingTracker.trackAssistantMessage();
+          }
+        }
+      }
+      if (event.type === "user") {
+        for (const block of blocks) {
+          if (block.type === "tool_result" && block.tool_use_id) {
+            this.thinkingTracker.trackToolResult(block.tool_use_id);
+          }
+        }
+      }
     });
     this.scanner.on("permission_needed", (toolUse) => this.emit("permissionNeeded", toolUse));
     this.scanner.on("permission_resolved", (toolUseId) => this.emit("permissionResolved", toolUseId));
+    this.scanner.on("usage", (usage) => this.emit("usage", usage));
+    this.scanner.on("model", (model) => this.emit("model", model));
   }
   async startPTY() {
     if (this._state !== "idle") throw new Error(`Cannot start PTY from state: ${this._state}`);
@@ -380,7 +486,20 @@ var SessionManager = class extends EventEmitter3 {
   resizePTY(cols, rows) {
     this.pty.resize(cols, rows);
   }
+  /**
+   * Extract content blocks from a message.
+   * Claude .jsonl format: { message: { role: "assistant", content: [...] } }
+   */
+  getContentBlocks(message) {
+    if (Array.isArray(message)) return message;
+    if (message && typeof message === "object") {
+      const content = message.content;
+      if (Array.isArray(content)) return content;
+    }
+    return [];
+  }
   async stop() {
+    this.thinkingTracker.reset();
     this.scanner.stop();
     this.sdkAbortController?.abort();
     this.permissionHandler?.cancelAll();
@@ -450,21 +569,46 @@ var ProjectRegistry = class {
 };
 
 // src/im/notificationHub.ts
-import { EventEmitter as EventEmitter4 } from "node:events";
-var NotificationHub = class extends EventEmitter4 {
+import { EventEmitter as EventEmitter5 } from "node:events";
+
+// src/im/notificationRules.ts
+var RULES = {
+  permission_request: { alwaysPush: true, aggregate: false, maxTextLength: 500 },
+  ask_user_question: { alwaysPush: true, aggregate: false, maxTextLength: 500 },
+  error: { alwaysPush: true, aggregate: false, maxTextLength: 300 },
+  session_complete: { alwaysPush: true, aggregate: false, maxTextLength: 100 },
+  todo_update: { alwaysPush: true, aggregate: false, maxTextLength: 500 },
+  thinking: { alwaysPush: true, aggregate: false, maxTextLength: 50 },
+  activity_text: { alwaysPush: false, aggregate: false, maxTextLength: 300 },
+  activity_tool: { alwaysPush: false, aggregate: true, maxTextLength: 500 }
+};
+function shouldPush(kind, isUserActive) {
+  const rule = RULES[kind];
+  return rule.alwaysPush || !isUserActive;
+}
+function shouldAggregate(kind) {
+  return RULES[kind].aggregate;
+}
+
+// src/im/notificationHub.ts
+var NotificationHub = class extends EventEmitter5 {
   seen = /* @__PURE__ */ new Map();
   batch = [];
   batchTimer = null;
   batchDelay;
+  isUserActive;
   TTL = 15 * 60 * 1e3;
   constructor(opts = {}) {
     super();
     this.batchDelay = opts.batchDelay ?? 250;
+    this.isUserActive = opts.isUserActive;
   }
   push(event) {
     if (this.seen.has(event.dedupeKey)) return;
     this.seen.set(event.dedupeKey, Date.now());
-    if (event.severity === "critical" || event.requiresUserAction) {
+    const active = this.isUserActive?.() ?? false;
+    if (!shouldPush(event.kind, active)) return;
+    if (!shouldAggregate(event.kind)) {
       this.flush();
       this.emit("notify", [event]);
       return;
@@ -648,22 +792,90 @@ ${truncate(String(file), MAX_ARG_LEN)}` : "";
 function truncate(s, max) {
   return s.length > max ? s.slice(0, max) + "..." : s;
 }
+function extractTodos(toolInput) {
+  if (!toolInput || typeof toolInput !== "object") return null;
+  const input = toolInput;
+  const todos = input.todos;
+  if (!Array.isArray(todos)) return null;
+  return todos.map((t) => ({
+    content: t.content ?? t.subject ?? String(t),
+    status: t.status ?? "pending"
+  }));
+}
+function formatTodos(todos) {
+  const icons = {
+    completed: "\u2611\uFE0F",
+    in_progress: "\u{1F504}",
+    pending: "\u2B1C"
+  };
+  return todos.map((t) => `${icons[t.status] ?? "\u2B1C"} ${t.content}`).join("\n");
+}
+
+// src/core/costTracker.ts
+var PRICING = {
+  "claude-sonnet-4-6": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  "claude-opus-4-6": { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+  "claude-haiku-4-5": { input: 0.8, output: 4, cacheRead: 0.08, cacheWrite: 1 },
+  default: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }
+};
+var CostTracker = class {
+  inputTokens = 0;
+  outputTokens = 0;
+  cacheReadTokens = 0;
+  cacheWriteTokens = 0;
+  model = "default";
+  setModel(model) {
+    this.model = model;
+  }
+  addUsage(usage) {
+    this.inputTokens += usage.input_tokens || 0;
+    this.outputTokens += usage.output_tokens || 0;
+    this.cacheReadTokens += usage.cache_read_input_tokens || 0;
+    this.cacheWriteTokens += usage.cache_creation_input_tokens || 0;
+  }
+  get summary() {
+    const p = PRICING[this.model] ?? PRICING.default;
+    const cost = this.inputTokens / 1e6 * p.input + this.outputTokens / 1e6 * p.output + this.cacheReadTokens / 1e6 * p.cacheRead + this.cacheWriteTokens / 1e6 * p.cacheWrite;
+    return {
+      inputTokens: this.inputTokens,
+      outputTokens: this.outputTokens,
+      cacheReadTokens: this.cacheReadTokens,
+      cacheWriteTokens: this.cacheWriteTokens,
+      estimatedCostUsd: Math.round(cost * 1e3) / 1e3
+    };
+  }
+  formatSummary() {
+    const s = this.summary;
+    const fmt = (n) => n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
+    return `Tokens: ${fmt(s.inputTokens)} in / ${fmt(s.outputTokens)} out` + (s.cacheReadTokens ? ` / ${fmt(s.cacheReadTokens)} cached` : "") + `
+Cost: ~$${s.estimatedCostUsd.toFixed(2)}`;
+  }
+  reset() {
+    this.inputTokens = this.outputTokens = this.cacheReadTokens = this.cacheWriteTokens = 0;
+  }
+};
 
 // src/loop.ts
 var MAX_IM_TEXT_LEN = 300;
-var TLiveLoop = class extends EventEmitter5 {
+var TLiveLoop = class extends EventEmitter6 {
   session;
   registry;
   notifications;
   router;
   config;
+  costTracker;
   imSend;
   imChatId;
+  lastTerminalInputAt = Date.now();
   constructor(opts) {
     super();
     this.config = opts.config;
+    this.costTracker = new CostTracker();
     this.registry = new ProjectRegistry();
-    this.notifications = new NotificationHub({ batchDelay: opts.config.messageBatchDelay });
+    this.notifications = new NotificationHub({
+      batchDelay: opts.config.messageBatchDelay,
+      isUserActive: () => this.isUserActive()
+    });
     this.router = new SessionRouter();
     this.session = new SessionManager({
       sessionId: opts.sessionId,
@@ -684,6 +896,9 @@ var TLiveLoop = class extends EventEmitter5 {
     this.imChatId = chatId;
     this.imSend = sendFn;
   }
+  isUserActive() {
+    return Date.now() - this.lastTerminalInputAt < this.config.activeThreshold;
+  }
   // ---------------------------------------------------------------------------
   // Event wiring
   // ---------------------------------------------------------------------------
@@ -691,8 +906,23 @@ var TLiveLoop = class extends EventEmitter5 {
     this.session.on("ptyData", (data) => this.emit("ptyData", data));
     this.session.on("scannerEvent", (event) => this.handleScannerEvent(event));
     this.session.on("permissionNeeded", (toolUse) => this.handlePermissionNeeded(toolUse));
-    this.session.on("permissionResolved", (id) => this.notifications.cancel(`perm:${id}`));
+    this.session.on("permissionResolved", (id) => {
+      this.notifications.cancel(`perm:${id}`);
+      this.notifications.cancel(`askq:${id}`);
+    });
     this.session.on("sdkMessage", (msg) => this.emit("sdkMessage", msg));
+    this.session.on("thinking", (thinking) => {
+      if (thinking) {
+        this.notifications.push({
+          kind: "thinking",
+          dedupeKey: "thinking:on",
+          sessionId: this.session.info.sessionId,
+          title: `\u{1F914} Thinking... \xB7 ${this.sessionTag()}`
+        });
+      }
+    });
+    this.session.on("usage", (usage) => this.costTracker.addUsage(usage));
+    this.session.on("model", (model) => this.costTracker.setModel(model));
     this.session.on("sessionComplete", () => this.handleSessionComplete());
     this.notifications.on("notify", (events) => this.dispatchToIM(events));
   }
@@ -708,14 +938,26 @@ var TLiveLoop = class extends EventEmitter5 {
       this.session.info.sessionId
     );
     for (const msg of normalized) {
+      if (msg.kind === "tool_use" && msg.toolName === "TodoWrite") {
+        const todos = extractTodos(msg.toolInput);
+        if (todos) {
+          this.notifications.push({
+            kind: "todo_update",
+            dedupeKey: `todo:${event.uuid}`,
+            sessionId: this.session.info.sessionId,
+            title: `\u{1F4CB} Tasks \xB7 ${this.sessionTag()}`,
+            body: formatTodos(todos)
+          });
+          continue;
+        }
+      }
       const text = formatForIM(msg);
       if (!text) continue;
       const body = text.length > MAX_IM_TEXT_LEN ? text.slice(0, MAX_IM_TEXT_LEN) + "..." : text;
+      const notifKind = msg.kind === "tool_use" ? "activity_tool" : "activity_text";
       this.notifications.push({
-        kind: "activity",
+        kind: notifKind,
         dedupeKey: `activity:${event.uuid}:${msg.kind}`,
-        severity: "info",
-        requiresUserAction: false,
         sessionId: this.session.info.sessionId,
         title: `Terminal \xB7 ${this.sessionTag()}`,
         body
@@ -726,14 +968,36 @@ var TLiveLoop = class extends EventEmitter5 {
   // Permission detection → IM alert
   // ---------------------------------------------------------------------------
   handlePermissionNeeded(toolUse) {
-    const isQuestion = toolUse.toolName === "AskUserQuestion";
+    if (toolUse.toolName === "AskUserQuestion") {
+      const buttons = [];
+      if (toolUse.questionOptions) {
+        for (let i = 0; i < toolUse.questionOptions.length; i++) {
+          buttons.push({
+            label: toolUse.questionOptions[i],
+            callbackData: `askq:${toolUse.toolUseId}:${i}`
+          });
+        }
+      }
+      buttons.push({
+        label: "Skip",
+        callbackData: `askq:${toolUse.toolUseId}:skip`,
+        style: "danger"
+      });
+      this.notifications.push({
+        kind: "ask_user_question",
+        dedupeKey: `askq:${toolUse.toolUseId}`,
+        sessionId: this.session.info.sessionId,
+        title: `\u2753 Claude asks \xB7 ${this.sessionTag()}`,
+        body: toolUse.questionText ?? "Question from Claude",
+        buttons
+      });
+      return;
+    }
     this.notifications.push({
-      kind: isQuestion ? "question" : "permission_required",
+      kind: "permission_request",
       dedupeKey: `perm:${toolUse.toolUseId}`,
-      severity: "warning",
-      requiresUserAction: true,
       sessionId: this.session.info.sessionId,
-      title: isQuestion ? `\u2753 Claude asks \xB7 ${this.sessionTag()}` : `\u26A0\uFE0F Permission \xB7 ${this.sessionTag()}`,
+      title: `\u26A0\uFE0F Permission \xB7 ${this.sessionTag()}`,
       body: formatForIM({
         kind: "permission_request",
         provider: "claude",
@@ -741,7 +1005,7 @@ var TLiveLoop = class extends EventEmitter5 {
         toolName: toolUse.toolName,
         toolInput: toolUse.input
       }),
-      buttons: isQuestion ? void 0 : [
+      buttons: [
         { label: "Allow", callbackData: `perm:allow:${toolUse.toolUseId}` },
         { label: "Deny", callbackData: `perm:deny:${toolUse.toolUseId}`, style: "danger" },
         { label: "Takeover", callbackData: `perm:takeover:${toolUse.toolUseId}` }
@@ -750,12 +1014,11 @@ var TLiveLoop = class extends EventEmitter5 {
   }
   handleSessionComplete() {
     this.notifications.push({
-      kind: "task_complete",
+      kind: "session_complete",
       dedupeKey: `complete:${this.session.info.sessionId}`,
-      severity: "info",
-      requiresUserAction: false,
       sessionId: this.session.info.sessionId,
-      title: `\u2705 Done \xB7 ${this.sessionTag()}`
+      title: `\u2705 Done \xB7 ${this.sessionTag()}`,
+      body: this.costTracker.formatSummary()
     });
   }
   // ---------------------------------------------------------------------------
@@ -767,7 +1030,7 @@ var TLiveLoop = class extends EventEmitter5 {
       const text = event.body ? `${event.title}
 ${event.body}` : event.title;
       const messageId = await this.imSend(this.imChatId, text, event.buttons);
-      if (messageId && event.kind === "permission_required") {
+      if (messageId && (event.kind === "permission_request" || event.kind === "ask_user_question")) {
         this.router.registerTerminalNotification(
           messageId,
           this.session.info.sessionId,
@@ -792,10 +1055,8 @@ ${event.body}` : event.title;
     await this.session.handoffToSDK({
       onPermissionRequest: (id, toolName, input) => {
         this.notifications.push({
-          kind: "permission_required",
+          kind: "permission_request",
           dedupeKey: `perm:${id}`,
-          severity: "warning",
-          requiresUserAction: true,
           sessionId: this.session.info.sessionId,
           title: `\u26A0\uFE0F ${toolName}`,
           body: formatForIM({
@@ -828,6 +1089,7 @@ ${event.body}` : event.title;
   // Terminal input
   // ---------------------------------------------------------------------------
   async handleTerminalInput(data) {
+    this.lastTerminalInputAt = Date.now();
     if (this.session.state === "sdk_active") {
       await this.session.takebackToTerminal();
     } else {
@@ -922,6 +1184,21 @@ var WebTerminal = class {
     this.webDir = opts.webDir ?? join4(__dirname, "../../web");
     this.httpServer = createServer((req, res) => {
       const url = new URL(req.url ?? "/", `http://localhost:${opts.port}`);
+      if (url.pathname === "/pair") {
+        if (this.token && url.searchParams.get("token") !== this.token) {
+          res.writeHead(403);
+          res.end("Unauthorized");
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "text/html" });
+        const t = url.searchParams.get("token") ?? "";
+        res.end(`<!DOCTYPE html><html><body style="font-family:system-ui;text-align:center;padding:2em">
+          <h2>TLive Paired</h2>
+          <p>Web terminal is accessible from this device.</p>
+          <p><a href="/?token=${t}">Open Terminal</a></p>
+        </body></html>`);
+        return;
+      }
       if (this.token && url.pathname === "/") {
         if (url.searchParams.get("token") !== this.token) {
           res.writeHead(403);
@@ -989,7 +1266,14 @@ var WebTerminal = class {
     }
   }
   startOnPort(port) {
-    return new Promise((resolve4) => {
+    return new Promise((resolve4, reject) => {
+      this.httpServer.on("error", (err) => {
+        if (err.code === "EADDRINUSE") {
+          reject(new Error(`Port ${port} is already in use. Kill the old process or use a different TL_PORT.`));
+        } else {
+          reject(err);
+        }
+      });
       this.httpServer.listen(port, () => resolve4());
     });
   }
@@ -1010,7 +1294,7 @@ var WebTerminal = class {
 import { createServer as createServer2, connect } from "node:net";
 import { homedir as homedir4 } from "node:os";
 import { join as join5 } from "node:path";
-import { EventEmitter as EventEmitter6 } from "node:events";
+import { EventEmitter as EventEmitter7 } from "node:events";
 var IPC_PATH = join5(homedir4(), ".tlive", "ipc.sock");
 function attachLineParser(socket, onMessage) {
   let buffer = "";
@@ -1030,7 +1314,7 @@ function attachLineParser(socket, onMessage) {
 function sendMessage(socket, msg) {
   socket.write(JSON.stringify(msg) + "\n");
 }
-var IPCClient = class extends EventEmitter6 {
+var IPCClient = class extends EventEmitter7 {
   socket = null;
   _connected = false;
   opts;
@@ -1039,7 +1323,8 @@ var IPCClient = class extends EventEmitter6 {
     this.opts = {
       maxRetries: opts.maxRetries ?? 10,
       retryDelay: opts.retryDelay ?? 500,
-      path: opts.path ?? IPC_PATH
+      path: opts.path ?? IPC_PATH,
+      autoReconnect: opts.autoReconnect ?? true
     };
   }
   get connected() {
@@ -1052,9 +1337,13 @@ var IPCClient = class extends EventEmitter6 {
   async connect() {
     for (let attempt = 0; attempt <= this.opts.maxRetries; attempt++) {
       const ok = await this.tryConnect();
-      if (ok) return true;
+      if (ok) {
+        if (attempt > 0) this.emit("reconnected");
+        return true;
+      }
       if (attempt < this.opts.maxRetries) {
-        await new Promise((r) => setTimeout(r, this.opts.retryDelay));
+        const delay = Math.min(this.opts.retryDelay * Math.pow(2, attempt), 3e4);
+        await new Promise((r) => setTimeout(r, delay));
       }
     }
     return false;
@@ -1068,6 +1357,9 @@ var IPCClient = class extends EventEmitter6 {
         socket.on("close", () => {
           this._connected = false;
           this.emit("disconnected");
+          if (this.opts.autoReconnect) {
+            setTimeout(() => this.connect(), this.opts.retryDelay);
+          }
         });
         resolve4(true);
       });
@@ -1099,7 +1391,8 @@ var DEFAULTS = {
   webEnabled: false,
   messageBatchDelay: 250,
   proactiveNotifyDelay: 6e4,
-  proactiveQuestionDelay: 5e3
+  proactiveQuestionDelay: 5e3,
+  activeThreshold: 3e4
 };
 function loadConfig(envPath) {
   const configPath = envPath ?? join6(homedir5(), ".tlive", "config.env");
@@ -1125,6 +1418,7 @@ function loadConfig(envPath) {
     messageBatchDelay: parseInt(env.TL_MESSAGE_BATCH_DELAY ?? "") || DEFAULTS.messageBatchDelay,
     proactiveNotifyDelay: parseInt(env.TL_PROACTIVE_NOTIFY_DELAY ?? "") || DEFAULTS.proactiveNotifyDelay,
     proactiveQuestionDelay: parseInt(env.TL_PROACTIVE_QUESTION_DELAY ?? "") || DEFAULTS.proactiveQuestionDelay,
+    activeThreshold: parseInt(env.TL_ACTIVE_THRESHOLD ?? "") || DEFAULTS.activeThreshold,
     telegram: env.TL_TELEGRAM_TOKEN ? { token: env.TL_TELEGRAM_TOKEN, chatId: env.TL_TELEGRAM_CHAT_ID ?? "" } : void 0,
     discord: env.TL_DISCORD_TOKEN ? { token: env.TL_DISCORD_TOKEN, channelId: env.TL_DISCORD_CHANNEL_ID ?? "" } : void 0,
     feishu: env.TL_FEISHU_APP_ID ? { appId: env.TL_FEISHU_APP_ID, appSecret: env.TL_FEISHU_APP_SECRET ?? "" } : void 0,
@@ -1180,6 +1474,25 @@ function findLastSession(workingDirectory) {
   }
 }
 
+// src/core/worktreeManager.ts
+import { execSync as execSync2 } from "node:child_process";
+import { existsSync as existsSync5 } from "node:fs";
+import { join as join8, dirname as dirname2, basename as basename2 } from "node:path";
+function createWorktree(repoDir, name) {
+  const repoName = basename2(repoDir);
+  const sessionPrefix = name ?? `tlive-${Date.now().toString(36).slice(-4)}`;
+  const worktreeDir = join8(dirname2(repoDir), `${repoName}-worktrees`, sessionPrefix);
+  const branch = `tlive/${sessionPrefix}`;
+  if (existsSync5(worktreeDir)) {
+    throw new Error(`Worktree already exists: ${worktreeDir}`);
+  }
+  execSync2(`git worktree add "${worktreeDir}" -b "${branch}"`, {
+    cwd: repoDir,
+    stdio: "pipe"
+  });
+  return { path: worktreeDir, branch, name: sessionPrefix };
+}
+
 // src/cli/claude.ts
 function getLocalIP() {
   const nets = networkInterfaces();
@@ -1190,10 +1503,34 @@ function getLocalIP() {
   }
   return "127.0.0.1";
 }
+function setupQR(port, token) {
+  const localIP = getLocalIP();
+  const url = `http://${localIP}:${port}/?token=${token}`;
+  console.log("");
+  console.log("  \x1B[36m\u26A1 TLive Web Terminal\x1B[0m");
+  console.log("");
+  console.log(`  URL: \x1B[4m${url}\x1B[0m`);
+  console.log(`  Pair: \x1B[4mhttp://${localIP}:${port}/pair?token=${token}\x1B[0m`);
+  console.log("");
+  console.log("  Open this URL on your phone or another device.");
+  console.log("  For Telegram pairing, send this to your bot:");
+  console.log(`  /start pair_${token.slice(0, 16)}`);
+  console.log("");
+}
 async function claudeCommand(opts = {}) {
   const config = loadConfig();
   const adapter = new ClaudeAdapter();
-  const workdir = opts.workdir ?? process.cwd();
+  let workdir = opts.workdir ?? process.cwd();
+  if (opts.worktree) {
+    try {
+      const name = typeof opts.worktree === "string" ? opts.worktree : void 0;
+      const wt = createWorktree(workdir, name);
+      console.error(`  Worktree: ${wt.path} (${wt.branch})`);
+      workdir = wt.path;
+    } catch (err) {
+      console.error(`  Worktree: \x1B[31mfailed\x1B[0m \u2014 ${err.message}`);
+    }
+  }
   let sessionId = opts.sessionId;
   if (!sessionId && opts.resume) {
     sessionId = findLastSession(workdir) ?? void 0;
@@ -1210,7 +1547,12 @@ async function claudeCommand(opts = {}) {
     web.broadcast(data);
   });
   web.setInputHandler((data) => loop.handleTerminalInput(data));
-  await web.startOnPort(webPort);
+  try {
+    await web.startOnPort(webPort);
+  } catch (err) {
+    console.error(`  \x1B[31mWeb terminal failed:\x1B[0m ${err.message}`);
+    console.error(`  Continuing without web terminal.`);
+  }
   const localIP = getLocalIP();
   const url = `http://${localIP}:${webPort}/?token=${webToken}`;
   const ipc = new IPCClient();
@@ -1242,6 +1584,19 @@ async function claudeCommand(opts = {}) {
     ipc.on("terminal_input", (payload) => {
       const text = payload.text;
       if (text) loop.handleTerminalInput(text + "\n");
+    });
+    ipc.on("config_update", (payload) => {
+      if (payload.effort) console.error(`  Effort:   ${payload.effort}`);
+      if (payload.model) console.error(`  Model:    ${payload.model}`);
+    });
+    ipc.on("question_answer", (payload) => {
+      const answer = payload.answer;
+      if (answer !== void 0) {
+        loop.handleTerminalInput(answer + "\n");
+      }
+    });
+    ipc.on("reconnected", () => {
+      console.error(`  IM:       \x1B[32mreconnected\x1B[0m`);
     });
     console.error(`  IM:       \x1B[32mconnected\x1B[0m (bridge IPC)`);
   } else {
@@ -1285,5 +1640,6 @@ async function claudeCommand(opts = {}) {
   }
 }
 export {
-  claudeCommand
+  claudeCommand,
+  setupQR
 };
