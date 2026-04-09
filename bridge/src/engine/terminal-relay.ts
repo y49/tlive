@@ -150,6 +150,11 @@ export class TerminalRelay {
     this.handlers = {
       notification: (p, s) => this.handleNotification(p as unknown as IPCNotification, s),
       session_status: (p) => deps.log(`Terminal session: ${JSON.stringify(p)}`),
+      session_list: (_p, s) => {
+        // Terminal clients own file-system access via sessionDiscovery;
+        // bridge responds with empty list — the real listing happens terminal-side.
+        sendJson(s, { type: 'session_list_response', payload: { sessions: [] } });
+      },
     };
   }
 

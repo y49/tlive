@@ -37,6 +37,53 @@ function isValidSession(projectDir: string, sessionId: string): boolean {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Session listing with metadata
+// ---------------------------------------------------------------------------
+
+export interface SessionMeta {
+  sessionId: string;
+  mtime: number;
+  size: number;
+  messageCount: number;
+  lastType: string;
+}
+
+/**
+ * List sessions for a working directory, sorted by most recent first.
+ * Returns lightweight metadata (line count, last message type) for each session.
+ */
+export function listSessions(workingDirectory: string, limit = 10): SessionMeta[] {
+  try {
+    const projectDir = getProjectPath(workingDirectory);
+    return readdirSync(projectDir)
+      .filter(f => f.endsWith('.jsonl'))
+      .map(f => {
+        const sessionId = f.replace('.jsonl', '');
+        if (!UUID_PATTERN.test(sessionId)) return null;
+        const filePath = join(projectDir, f);
+        const stat = statSync(filePath);
+        // Quick peek: count lines and get last message type
+        const content = readFileSync(filePath, 'utf-8');
+        const lines = content.trim().split('\n').filter(Boolean);
+        let lastType = '';
+        for (let i = lines.length - 1; i >= 0; i--) {
+          try {
+            const msg = JSON.parse(lines[i]);
+            if (msg.type === 'assistant' || msg.type === 'user') {
+              lastType = msg.type;
+              break;
+            }
+          } catch { continue; }
+        }
+        return { sessionId, mtime: stat.mtime.getTime(), size: stat.size, messageCount: lines.length, lastType };
+      })
+      .filter((f): f is NonNullable<typeof f> => f !== null)
+      .sort((a, b) => b.mtime - a.mtime)
+      .slice(0, limit);
+  } catch { return []; }
+}
+
 /**
  * Find the most recently modified valid session in the project directory.
  * Only accepts UUID-format session IDs (required for --resume in Claude v2.0.65+).
