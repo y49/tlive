@@ -11,6 +11,7 @@ import type { ProviderAdapter, NormalizedMessage } from './sdk/providerAdapter.j
 import type { ToolUseEvent, SessionEvent } from './core/sessionScanner.js';
 import { normalizeSessionLine, formatForIM } from './sdk/messageNormalizer.js';
 import type { TLiveConfig } from './config.js';
+import type { NotificationKind } from './im/notificationRules.js';
 
 const MAX_IM_TEXT_LEN = 300;
 
@@ -33,12 +34,16 @@ export class TLiveLoop extends EventEmitter {
   private config: TLiveConfig;
   private imSend?: IMSendFn;
   private imChatId?: string;
+  private lastTerminalInputAt = Date.now();
 
   constructor(opts: LoopOptions) {
     super();
     this.config = opts.config;
     this.registry = new ProjectRegistry();
-    this.notifications = new NotificationHub({ batchDelay: opts.config.messageBatchDelay });
+    this.notifications = new NotificationHub({
+      batchDelay: opts.config.messageBatchDelay,
+      isUserActive: () => this.isUserActive(),
+    });
     this.router = new SessionRouter();
     this.session = new SessionManager({
       sessionId: opts.sessionId, workdir: opts.workdir,
@@ -54,6 +59,10 @@ export class TLiveLoop extends EventEmitter {
   setIMTarget(chatId: string, sendFn: IMSendFn): void {
     this.imChatId = chatId;
     this.imSend = sendFn;
+  }
+
+  private isUserActive(): boolean {
+    return Date.now() - this.lastTerminalInputAt < this.config.activeThreshold;
   }
 
   // ---------------------------------------------------------------------------
@@ -91,11 +100,10 @@ export class TLiveLoop extends EventEmitter {
         ? text.slice(0, MAX_IM_TEXT_LEN) + '...'
         : text;
 
+      const notifKind: NotificationKind = msg.kind === 'tool_use' ? 'activity_tool' : 'activity_text';
       this.notifications.push({
-        kind: 'activity',
+        kind: notifKind,
         dedupeKey: `activity:${event.uuid}:${msg.kind}`,
-        severity: 'info',
-        requiresUserAction: false,
         sessionId: this.session.info.sessionId,
         title: `Terminal · ${this.sessionTag()}`,
         body,
@@ -110,10 +118,8 @@ export class TLiveLoop extends EventEmitter {
   private handlePermissionNeeded(toolUse: ToolUseEvent): void {
     const isQuestion = toolUse.toolName === 'AskUserQuestion';
     this.notifications.push({
-      kind: isQuestion ? 'question' : 'permission_required',
+      kind: isQuestion ? 'ask_user_question' : 'permission_request',
       dedupeKey: `perm:${toolUse.toolUseId}`,
-      severity: 'warning',
-      requiresUserAction: true,
       sessionId: this.session.info.sessionId,
       title: isQuestion
         ? `❓ Claude asks · ${this.sessionTag()}`
@@ -133,10 +139,8 @@ export class TLiveLoop extends EventEmitter {
 
   private handleSessionComplete(): void {
     this.notifications.push({
-      kind: 'task_complete',
+      kind: 'session_complete',
       dedupeKey: `complete:${this.session.info.sessionId}`,
-      severity: 'info',
-      requiresUserAction: false,
       sessionId: this.session.info.sessionId,
       title: `✅ Done · ${this.sessionTag()}`,
     });
@@ -151,7 +155,7 @@ export class TLiveLoop extends EventEmitter {
     for (const event of events) {
       const text = event.body ? `${event.title}\n${event.body}` : event.title;
       const messageId = await this.imSend(this.imChatId, text, event.buttons);
-      if (messageId && event.kind === 'permission_required') {
+      if (messageId && event.kind === 'permission_request') {
         this.router.registerTerminalNotification(
           messageId, this.session.info.sessionId, this.session.info.workdir,
         );
@@ -178,8 +182,7 @@ export class TLiveLoop extends EventEmitter {
     await this.session.handoffToSDK({
       onPermissionRequest: (id, toolName, input) => {
         this.notifications.push({
-          kind: 'permission_required', dedupeKey: `perm:${id}`,
-          severity: 'warning', requiresUserAction: true,
+          kind: 'permission_request', dedupeKey: `perm:${id}`,
           sessionId: this.session.info.sessionId,
           title: `⚠️ ${toolName}`,
           body: formatForIM({
@@ -214,6 +217,7 @@ export class TLiveLoop extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   async handleTerminalInput(data: string): Promise<void> {
+    this.lastTerminalInputAt = Date.now();
     if (this.session.state === 'sdk_active') {
       await this.session.takebackToTerminal();
     } else {

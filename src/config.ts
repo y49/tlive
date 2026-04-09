@@ -11,6 +11,7 @@ export interface TLiveConfig {
   messageBatchDelay: number;
   proactiveNotifyDelay: number;
   proactiveQuestionDelay: number;
+  activeThreshold: number;
   telegram?: { token: string; chatId: string };
   discord?: { token: string; channelId: string };
   feishu?: { appId: string; appSecret: string };
@@ -26,6 +27,7 @@ const DEFAULTS: TLiveConfig = {
   messageBatchDelay: 250,
   proactiveNotifyDelay: 60000,
   proactiveQuestionDelay: 5000,
+  activeThreshold: 30000,
 };
 
 export function loadConfig(envPath?: string): TLiveConfig {
@@ -54,6 +56,7 @@ export function loadConfig(envPath?: string): TLiveConfig {
     messageBatchDelay: parseInt(env.TL_MESSAGE_BATCH_DELAY ?? '') || DEFAULTS.messageBatchDelay,
     proactiveNotifyDelay: parseInt(env.TL_PROACTIVE_NOTIFY_DELAY ?? '') || DEFAULTS.proactiveNotifyDelay,
     proactiveQuestionDelay: parseInt(env.TL_PROACTIVE_QUESTION_DELAY ?? '') || DEFAULTS.proactiveQuestionDelay,
+    activeThreshold: parseInt(env.TL_ACTIVE_THRESHOLD ?? '') || DEFAULTS.activeThreshold,
     telegram: env.TL_TELEGRAM_TOKEN
       ? { token: env.TL_TELEGRAM_TOKEN, chatId: env.TL_TELEGRAM_CHAT_ID ?? '' }
       : undefined,
