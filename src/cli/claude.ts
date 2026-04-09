@@ -81,7 +81,12 @@ export async function claudeCommand(opts: ClaudeCommandOptions = {}): Promise<vo
     web.broadcast(data);
   });
   web.setInputHandler((data) => loop.handleTerminalInput(data));
-  await web.startOnPort(webPort);
+  try {
+    await web.startOnPort(webPort);
+  } catch (err) {
+    console.error(`  \x1b[31mWeb terminal failed:\x1b[0m ${(err as Error).message}`);
+    console.error(`  Continuing without web terminal.`);
+  }
 
   const localIP = getLocalIP();
   const url = `http://${localIP}:${webPort}/?token=${webToken}`;

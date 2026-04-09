@@ -122,7 +122,14 @@ export class WebTerminal {
   }
 
   startOnPort(port: number): Promise<void> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
+      this.httpServer.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'EADDRINUSE') {
+          reject(new Error(`Port ${port} is already in use. Kill the old process or use a different TL_PORT.`));
+        } else {
+          reject(err);
+        }
+      });
       this.httpServer.listen(port, () => resolve());
     });
   }
