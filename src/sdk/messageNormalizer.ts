@@ -8,25 +8,39 @@ export interface RawSessionLine {
   [key: string]: unknown;
 }
 
+/**
+ * Extract content blocks from a message.
+ * Claude .jsonl format: { message: { role: "assistant", content: [...] } }
+ */
+function getContentBlocks(message: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(message)) return message;
+  if (message && typeof message === 'object') {
+    const content = (message as Record<string, unknown>).content;
+    if (Array.isArray(content)) return content;
+  }
+  return [];
+}
+
 /** Normalizes raw .jsonl session lines into NormalizedMessage format. */
 export function normalizeSessionLine(
   line: RawSessionLine, provider: 'claude' | 'codex', sessionId: string,
 ): NormalizedMessage[] {
   const messages: NormalizedMessage[] = [];
-  const content = line.message;
+  const blocks = getContentBlocks(line.message);
 
-  if (line.type === 'assistant' && Array.isArray(content)) {
-    for (const block of content as Array<Record<string, unknown>>) {
+  if (line.type === 'assistant') {
+    for (const block of blocks) {
       if (block.type === 'text' && block.text) {
         messages.push({ kind: 'text', provider, sessionId, text: block.text as string });
       } else if (block.type === 'tool_use') {
         messages.push({ kind: 'tool_use', provider, sessionId, toolName: block.name as string, toolInput: block.input });
       }
+      // Skip 'thinking' blocks — internal
     }
   }
 
-  if (line.type === 'user' && Array.isArray(content)) {
-    for (const block of content as Array<Record<string, unknown>>) {
+  if (line.type === 'user') {
+    for (const block of blocks) {
       if (block.type === 'tool_result') {
         messages.push({
           kind: 'tool_result', provider, sessionId,

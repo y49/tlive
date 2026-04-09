@@ -136,21 +136,35 @@ var SessionScanner = class extends EventEmitter2 {
       }
     }
   }
+  /**
+   * Extract content blocks from a message.
+   * Claude .jsonl format: { message: { role: "assistant", content: [...] } }
+   * We need the content array.
+   */
+  getContentBlocks(message) {
+    if (Array.isArray(message)) return message;
+    if (message && typeof message === "object") {
+      const content = message.content;
+      if (Array.isArray(content)) return content;
+    }
+    return [];
+  }
   processMessage(msg) {
     const uuid = msg.uuid;
     if (!uuid || this.seenUUIDs.has(uuid)) return;
     this.seenUUIDs.add(uuid);
     const type = msg.type;
     if (type === "system" || type === "summary") return;
+    if (type === "permission-mode" || type === "file-history-snapshot" || type === "change" || type === "queue-operation" || type === "attachment") return;
     const event = { type, uuid, message: msg.message, raw: msg };
     this.emit("event", event);
-    if (type === "assistant" && Array.isArray(msg.message)) {
-      for (const block of msg.message) {
+    const blocks = this.getContentBlocks(msg.message);
+    if (type === "assistant") {
+      for (const block of blocks) {
         if (block.type === "tool_use") this.trackToolUse(block);
       }
     }
-    if (type === "result" || type === "user" && Array.isArray(msg.message)) {
-      const blocks = Array.isArray(msg.message) ? msg.message : [];
+    if (type === "result" || type === "user") {
       for (const block of blocks) {
         if (block.type === "tool_result") this.resolveToolUse(block.tool_use_id);
       }
@@ -533,11 +547,19 @@ var SessionRouter = class {
 };
 
 // src/sdk/messageNormalizer.ts
+function getContentBlocks(message) {
+  if (Array.isArray(message)) return message;
+  if (message && typeof message === "object") {
+    const content = message.content;
+    if (Array.isArray(content)) return content;
+  }
+  return [];
+}
 function normalizeSessionLine(line, provider, sessionId) {
   const messages = [];
-  const content = line.message;
-  if (line.type === "assistant" && Array.isArray(content)) {
-    for (const block of content) {
+  const blocks = getContentBlocks(line.message);
+  if (line.type === "assistant") {
+    for (const block of blocks) {
       if (block.type === "text" && block.text) {
         messages.push({ kind: "text", provider, sessionId, text: block.text });
       } else if (block.type === "tool_use") {
@@ -545,8 +567,8 @@ function normalizeSessionLine(line, provider, sessionId) {
       }
     }
   }
-  if (line.type === "user" && Array.isArray(content)) {
-    for (const block of content) {
+  if (line.type === "user") {
+    for (const block of blocks) {
       if (block.type === "tool_result") {
         messages.push({
           kind: "tool_result",

@@ -106,6 +106,20 @@ export class SessionScanner extends EventEmitter {
     }
   }
 
+  /**
+   * Extract content blocks from a message.
+   * Claude .jsonl format: { message: { role: "assistant", content: [...] } }
+   * We need the content array.
+   */
+  private getContentBlocks(message: unknown): Array<Record<string, unknown>> {
+    if (Array.isArray(message)) return message;
+    if (message && typeof message === 'object') {
+      const content = (message as Record<string, unknown>).content;
+      if (Array.isArray(content)) return content;
+    }
+    return [];
+  }
+
   private processMessage(msg: Record<string, unknown>): void {
     const uuid = msg.uuid as string;
     if (!uuid || this.seenUUIDs.has(uuid)) return;
@@ -113,20 +127,24 @@ export class SessionScanner extends EventEmitter {
 
     const type = msg.type as string;
     if (type === 'system' || type === 'summary') return;
+    // Skip internal Claude events
+    if (type === 'permission-mode' || type === 'file-history-snapshot' ||
+        type === 'change' || type === 'queue-operation' || type === 'attachment') return;
 
     const event: SessionEvent = { type: type as SessionEvent['type'], uuid, message: msg.message, raw: msg };
     this.emit('event', event);
 
+    const blocks = this.getContentBlocks(msg.message);
+
     // Track tool_use from assistant
-    if (type === 'assistant' && Array.isArray(msg.message)) {
-      for (const block of msg.message as Array<Record<string, unknown>>) {
+    if (type === 'assistant') {
+      for (const block of blocks) {
         if (block.type === 'tool_use') this.trackToolUse(block);
       }
     }
 
     // Track tool_result — cancel pending
-    if (type === 'result' || (type === 'user' && Array.isArray(msg.message))) {
-      const blocks = Array.isArray(msg.message) ? msg.message as Array<Record<string, unknown>> : [];
+    if (type === 'result' || type === 'user') {
       for (const block of blocks) {
         if (block.type === 'tool_result') this.resolveToolUse(block.tool_use_id as string);
       }
