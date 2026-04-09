@@ -23,6 +23,8 @@ export class CallbackRouter {
   onTerminalPermissionCallback?: (action: string, toolUseId: string, sessionId: string) => void;
   /** Callback for forwarding terminal question answers via IPC to `tlive claude` */
   onTerminalQuestionCallback?: (callbackData: string) => void;
+  /** Callback for resuming a discovered Claude session from IM */
+  onResumeSession?: (adapter: BaseChannelAdapter, chatId: string, sessionId: string, workdir: string) => void;
 
   constructor(
     private permissions: PermissionCoordinator,
@@ -38,6 +40,27 @@ export class CallbackRouter {
 
   async handle(adapter: BaseChannelAdapter, msg: InboundMessage): Promise<boolean> {
     if (!msg.callbackData) return false;
+
+    // Session resume callbacks (resume:ignore:<sessionId> or resume:<sessionId>:<workdir>)
+    if (msg.callbackData.startsWith('resume:')) {
+      const parts = msg.callbackData.split(':');
+      if (parts[1] === 'ignore') {
+        await adapter.editMessage(msg.chatId, msg.messageId, {
+          chatId: msg.chatId, text: '🔕 Ignored', buttons: [],
+        }).catch(() => {});
+        return true;
+      }
+      // Resume session: resume:<sessionId>:<workdir> (workdir may contain colons on Windows)
+      const sessionId = parts[1];
+      const workdir = parts.slice(2).join(':');
+      if (this.onResumeSession) {
+        this.onResumeSession(adapter, msg.chatId, sessionId, workdir);
+        await adapter.editMessage(msg.chatId, msg.messageId, {
+          chatId: msg.chatId, text: `💬 Resuming session #${sessionId.slice(0, 6)}...`, buttons: [],
+        }).catch(() => {});
+      }
+      return true;
+    }
 
     // v1.0 terminal question callbacks (askq:<toolUseId>:<option|skip>)
     // Only match the terminal v1.0 format (3 parts) — hook-based askq has 4 parts with sessionId

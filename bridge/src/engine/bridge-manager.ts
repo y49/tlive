@@ -109,6 +109,10 @@ export class BridgeManager {
     this.callbackRouter.onTerminalQuestionCallback = (data) => {
       this.onTerminalQuestionCallback?.(data);
     };
+    // Wire session resume callback — saves session data and starts SDK turn
+    this.callbackRouter.onResumeSession = (adapter, chatId, sessionId, workdir) => {
+      this.resumeSession(adapter, chatId, sessionId, workdir);
+    };
   }
 
   /** Returns all active adapters */
@@ -164,6 +168,40 @@ export class BridgeManager {
 
   /** Intercept inbound messages — return true to consume (don't route to SDK) */
   onInboundMessage?: (channelType: string, msg: { text: string; replyToMessageId?: string }) => boolean;
+
+  /** Resume a discovered Claude session — store session data and start an SDK turn */
+  private async resumeSession(adapter: BaseChannelAdapter, chatId: string, sessionId: string, workdir: string): Promise<void> {
+    try {
+      const { store } = getBridgeContext();
+      const channelType = adapter.channelType;
+
+      // Create a bridge session pointing to the discovered Claude session
+      const bridgeSessionId = `resume-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      await store.saveSession({
+        id: bridgeSessionId,
+        sdkSessionId: sessionId,
+        workingDirectory: workdir,
+        createdAt: new Date().toISOString(),
+      });
+
+      // Bind this chat to the new bridge session
+      await this.router.rebind(channelType, chatId, bridgeSessionId);
+      this.state.clearThread(channelType, chatId);
+
+      // Send empty turn to attach — the SDK will resume the existing conversation
+      const provider = this.getProvider(channelType, chatId);
+      await this.sdkEngine.handleMessage(adapter, {
+        channelType,
+        chatId,
+        userId: '',
+        text: '',
+        messageId: '',
+      }, provider);
+    } catch (err) {
+      console.error(`[tlive:engine] Failed to resume session ${sessionId}:`, err);
+      adapter.send({ chatId, text: `⚠️ Failed to resume session: ${err}` }).catch(() => {});
+    }
+  }
 
   registerAdapter(adapter: BaseChannelAdapter): void {
     this.adapters.set(adapter.channelType, adapter);

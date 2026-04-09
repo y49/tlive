@@ -276,6 +276,18 @@ export class TerminalRelay {
     });
   }
 
+  // ---- Public accessors for session discovery ----
+
+  /** Whether any terminal client (tlive claude) is connected via IPC */
+  hasActiveClient(): boolean {
+    return this.clients.size > 0;
+  }
+
+  /** Resolve notification target for a given channel type */
+  resolveTarget(channelType: string): ResolvedTarget | null {
+    return this.targetResolver.resolve(channelType);
+  }
+
   // ---- Helpers ----
 
   private broadcast(msg: Record<string, unknown>): void {

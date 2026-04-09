@@ -11,6 +11,7 @@ import type { ChannelType } from './channels/types.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { discoverActiveSessions } from './engine/session-discovery.js';
 
 function writeStatusFile(tliveHome: string, data: Record<string, unknown>): void {
   try {
@@ -77,6 +78,41 @@ async function main() {
 
   relay.start();
 
+  // Session discovery — detect non-tlive Claude sessions and notify IM
+  const knownSessions = new Set<string>();
+  const DISCOVERY_INTERVAL = 30_000;
+
+  const discoveryTimer = setInterval(() => {
+    const sessions = discoverActiveSessions(5 * 60 * 1000); // active in last 5 min
+
+    for (const session of sessions) {
+      if (knownSessions.has(session.sessionId)) continue;
+      knownSessions.add(session.sessionId);
+
+      // Only notify for sessions that are waiting for user input
+      if (!session.isWaiting) continue;
+
+      // Don't notify for sessions managed via IPC (tlive claude sessions)
+      if (relay.hasActiveClient()) continue;
+
+      // Notify IM
+      for (const adapter of manager.getAdapters()) {
+        const target = relay.resolveTarget(adapter.channelType);
+        if (!target) continue;
+
+        adapter.send({
+          chatId: target.chatId,
+          receiveIdType: target.receiveIdType,
+          text: `🖥 Claude session detected\n${session.projectName} · #${session.sessionId.slice(0, 6)}\n\nClaude is waiting for input`,
+          buttons: [
+            { label: '💬 Resume from IM', callbackData: `resume:${session.sessionId}:${session.workdir}` },
+            { label: '🔕 Ignore', callbackData: `resume:ignore:${session.sessionId}` },
+          ],
+        }).catch(() => {});
+      }
+    }
+  }, DISCOVERY_INTERVAL);
+
   // Wire IM → terminal: reply interception + permission/question callbacks
   manager.onInboundMessage = (_ch, msg) => relay.interceptReply(msg);
   manager.onTerminalPermissionCallback = (action, id, sid) => relay.forwardPermissionAction(action, id, sid);
@@ -88,6 +124,7 @@ async function main() {
   const shutdown = async (reason = 'signal') => {
     logger.info('Shutting down...');
     clearInterval(keepAliveInterval);
+    clearInterval(discoveryTimer);
     relay.stop();
     writeStatusFile(tliveHome, {
       pid: process.pid,
