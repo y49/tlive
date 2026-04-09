@@ -1,8 +1,7 @@
-import { watch, existsSync, statSync, openSync, readSync, closeSync } from 'node:fs';
+import { watch, existsSync, statSync, openSync, readSync, closeSync, readdirSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
-import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join, basename } from 'node:path';
+import { join, basename, resolve } from 'node:path';
 
 export interface SessionEvent {
   type: 'assistant' | 'user' | 'system' | 'result';
@@ -56,11 +55,11 @@ export class SessionScanner extends EventEmitter {
   }
 
   private resolveJsonlPath(workdir: string, sessionId: string): string {
-    // Claude encodes workdir: non-alphanumeric ASCII chars → '-'
-    // /home/user/project → -home-user-project
-    // C:\Users\bob\work  → -C--Users-bob-work
-    const projectDir = workdir.replace(/[^a-zA-Z0-9-]/g, '-');
-    return join(homedir(), '.claude', 'projects', projectDir, `${sessionId}.jsonl`);
+    // Match Claude's project path encoding (same as happy's getProjectPath):
+    // resolve() first, then replace non-alphanumeric chars with '-'
+    const projectDir = resolve(workdir).replace(/[^a-zA-Z0-9-]/g, '-');
+    const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+    return join(claudeConfigDir, 'projects', projectDir, `${sessionId}.jsonl`);
   }
 
   start(): void {

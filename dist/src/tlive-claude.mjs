@@ -1,8 +1,8 @@
 // src/cli/claude.ts
 import { stdin, stdout, exit } from "node:process";
-import { networkInterfaces, homedir as homedir5 } from "node:os";
+import { networkInterfaces, homedir as homedir6 } from "node:os";
 import { connect } from "node:net";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 
 // src/loop.ts
 import { EventEmitter as EventEmitter5 } from "node:events";
@@ -57,10 +57,10 @@ var PTYManager = class extends EventEmitter {
     if (!this.pty) return;
     this.pty.kill(signal);
     if (this.pty) {
-      await new Promise((resolve) => {
+      await new Promise((resolve4) => {
         const onExit = () => {
           this.removeListener("exit", onExit);
-          resolve();
+          resolve4();
         };
         this.on("exit", onExit);
       });
@@ -72,7 +72,7 @@ var PTYManager = class extends EventEmitter {
 import { watch, existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { EventEmitter as EventEmitter2 } from "node:events";
 import { homedir } from "node:os";
-import { join, basename } from "node:path";
+import { join, basename, resolve } from "node:path";
 var SessionScanner = class extends EventEmitter2 {
   watcher = null;
   pollTimer = null;
@@ -95,8 +95,9 @@ var SessionScanner = class extends EventEmitter2 {
     return this.jsonlPath;
   }
   resolveJsonlPath(workdir, sessionId) {
-    const projectDir = workdir.replace(/[^a-zA-Z0-9-]/g, "-");
-    return join(homedir(), ".claude", "projects", projectDir, `${sessionId}.jsonl`);
+    const projectDir = resolve(workdir).replace(/[^a-zA-Z0-9-]/g, "-");
+    const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+    return join(claudeConfigDir, "projects", projectDir, `${sessionId}.jsonl`);
   }
   start() {
     try {
@@ -203,20 +204,20 @@ var BasePermissionHandler = class {
   pending = /* @__PURE__ */ new Map();
   alwaysAllow = /* @__PURE__ */ new Set();
   waitForApproval(id, toolName, input, opts) {
-    return new Promise((resolve) => {
+    return new Promise((resolve4) => {
       let timerId;
       if (opts?.timeoutMs && opts.timeoutMs > 0) {
         timerId = setTimeout(() => {
           this.pending.delete(id);
-          resolve({ behavior: "deny", message: "Permission timeout" });
+          resolve4({ behavior: "deny", message: "Permission timeout" });
         }, opts.timeoutMs);
       }
-      const entry = { id, toolName, input, resolve, timerId };
+      const entry = { id, toolName, input, resolve: resolve4, timerId };
       this.pending.set(id, entry);
       opts?.signal?.addEventListener("abort", () => {
         this.pending.delete(id);
         if (timerId) clearTimeout(timerId);
-        resolve({ behavior: "deny", message: "Aborted" });
+        resolve4({ behavior: "deny", message: "Aborted" });
       }, { once: true });
     });
   }
@@ -271,6 +272,9 @@ var SessionManager = class extends EventEmitter3 {
   config;
   permissionHandler = null;
   sdkAbortController = null;
+  _createdAt = Date.now();
+  _lastActivityAt = Date.now();
+  _messageCount = 0;
   constructor(opts) {
     super();
     this.sessionId = opts.sessionId ?? randomUUID();
@@ -290,7 +294,14 @@ var SessionManager = class extends EventEmitter3 {
     return this._state;
   }
   get info() {
-    return { sessionId: this.sessionId, workdir: this.workdir, state: this._state, createdAt: Date.now() };
+    return {
+      sessionId: this.sessionId,
+      workdir: this.workdir,
+      state: this._state,
+      createdAt: this._createdAt,
+      lastActivityAt: this._lastActivityAt,
+      messageCount: this._messageCount
+    };
   }
   setState(state) {
     this._state = state;
@@ -304,7 +315,11 @@ var SessionManager = class extends EventEmitter3 {
         this.emit("sessionComplete", this.info);
       }
     });
-    this.scanner.on("event", (event) => this.emit("scannerEvent", event));
+    this.scanner.on("event", (event) => {
+      this._lastActivityAt = Date.now();
+      this._messageCount++;
+      this.emit("scannerEvent", event);
+    });
     this.scanner.on("permission_needed", (toolUse) => this.emit("permissionNeeded", toolUse));
     this.scanner.on("permission_resolved", (toolUseId) => this.emit("permissionResolved", toolUseId));
   }
@@ -355,7 +370,7 @@ var SessionManager = class extends EventEmitter3 {
     if (this._state !== "sdk_active") return;
     this.sdkAbortController?.abort();
     this.permissionHandler?.cancelAll();
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve4) => setTimeout(resolve4, 100));
     await this.restorePTY();
   }
   resolvePermission(id, decision) {
@@ -587,12 +602,13 @@ function formatForIM(msg) {
     case "text":
       return msg.text ?? "";
     case "tool_use":
-      return `\u{1F527} ${msg.toolName}`;
+      return `\u{1F527} ${msg.toolName}${formatToolArgs(msg.toolName, msg.toolInput)}`;
     case "tool_result":
-      return `\u2705 Result`;
+      return "";
+    // Skip tool results in IM sync (too noisy)
     case "permission_request":
       return `\u26A0\uFE0F Permission: ${msg.toolName}
-${summarizeInput(msg.toolInput)}`;
+${formatToolArgs(msg.toolName, msg.toolInput)}`;
     case "error":
       return `\u274C ${msg.text}`;
     case "complete":
@@ -603,14 +619,47 @@ ${summarizeInput(msg.toolInput)}`;
       return "";
   }
 }
-function summarizeInput(input) {
-  if (!input || typeof input !== "object") return "";
-  const obj = input;
-  if (obj.command) return `\`${truncate(String(obj.command), 200)}\``;
-  if (obj.file_path) return `\`${obj.file_path}\``;
-  if (obj.path) return `\`${obj.path}\``;
-  if (obj.pattern) return `\`${obj.pattern}\``;
-  return truncate(JSON.stringify(input), 200);
+function formatToolArgs(toolName, input) {
+  if (!input || typeof input !== "object" || !toolName) return "";
+  const args = input;
+  const MAX = 150;
+  switch (toolName) {
+    case "Bash":
+      return args.command ? `
+\`${truncate(String(args.command), MAX)}\`` : "";
+    case "Read":
+      return args.file_path ? `
+${truncate(String(args.file_path), MAX)}` : "";
+    case "Edit":
+    case "Write": {
+      const file = args.file_path ?? args.path ?? "";
+      return file ? `
+${truncate(String(file), MAX)}` : "";
+    }
+    case "Grep":
+    case "Glob": {
+      const pattern = args.pattern ?? "";
+      return pattern ? ` \`${truncate(String(pattern), 80)}\`` : "";
+    }
+    case "WebFetch":
+      return args.url ? `
+${truncate(String(args.url), MAX)}` : "";
+    case "Agent":
+      return args.prompt ? `
+${truncate(String(args.prompt), MAX)}` : "";
+    case "AskUserQuestion":
+      return args.question ? `
+${truncate(String(args.question), MAX)}` : "";
+    default: {
+      for (const v of Object.values(args)) {
+        if (typeof v === "string" && v.length > 0) {
+          return `
+${truncate(v, MAX)}`;
+        }
+      }
+      return "";
+    }
+  }
 }
 function truncate(s, max) {
   return s.length > max ? s.slice(0, max) + "..." : s;
@@ -653,6 +702,8 @@ var TLiveLoop = class extends EventEmitter5 {
   wireEvents() {
     this.session.on("ptyData", (data) => this.emit("ptyData", data));
     this.session.on("scannerEvent", (event) => {
+      const raw = event.raw;
+      if (raw.isMeta) return;
       const normalized = normalizeSessionLine(
         { uuid: event.uuid, type: event.type, message: event.message },
         "claude",
@@ -661,6 +712,7 @@ var TLiveLoop = class extends EventEmitter5 {
       for (const msg of normalized) {
         const text = formatForIM(msg);
         if (!text) continue;
+        const body = msg.kind === "text" && text.length > 300 ? text.slice(0, 300) + "..." : text;
         this.notifications.push({
           kind: "activity",
           dedupeKey: `activity:${event.uuid}:${msg.kind}`,
@@ -668,7 +720,7 @@ var TLiveLoop = class extends EventEmitter5 {
           requiresUserAction: false,
           sessionId: this.session.info.sessionId,
           title: `\u{1F4AC} ${this.shortWorkdir()}`,
-          body: text
+          body
         });
       }
     });
@@ -774,7 +826,7 @@ ${event.body}` : event.title;
 // src/sdk/claudeAdapter.ts
 import { execSync } from "node:child_process";
 import { homedir as homedir3 } from "node:os";
-import { join as join3 } from "node:path";
+import { join as join3, resolve as resolve2 } from "node:path";
 var ClaudeAdapter = class {
   name = "claude";
   executablePath = null;
@@ -810,8 +862,9 @@ var ClaudeAdapter = class {
     );
   }
   getSessionDir(workdir) {
-    const projectDir = workdir.replace(/[^a-zA-Z0-9-]/g, "-");
-    return join3(homedir3(), ".claude", "projects", projectDir);
+    const projectDir = resolve2(workdir).replace(/[^a-zA-Z0-9-]/g, "-");
+    const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || join3(homedir3(), ".claude");
+    return join3(claudeConfigDir, "projects", projectDir);
   }
 };
 
@@ -907,8 +960,8 @@ var WebTerminal = class {
     }
   }
   startOnPort(port) {
-    return new Promise((resolve) => {
-      this.httpServer.listen(port, () => resolve());
+    return new Promise((resolve4) => {
+      this.httpServer.listen(port, () => resolve4());
     });
   }
   get address() {
@@ -969,6 +1022,54 @@ function loadConfig(envPath) {
   };
 }
 
+// src/core/sessionDiscovery.ts
+import { readdirSync as readdirSync2, statSync as statSync2, readFileSync as readFileSync4 } from "node:fs";
+import { join as join6, resolve as resolve3 } from "node:path";
+import { homedir as homedir5 } from "node:os";
+var UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function getProjectPath(workingDirectory) {
+  const projectId = resolve3(workingDirectory).replace(/[^a-zA-Z0-9-]/g, "-");
+  const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || join6(homedir5(), ".claude");
+  return join6(claudeConfigDir, "projects", projectId);
+}
+function isValidSession(projectDir, sessionId) {
+  try {
+    const filePath = join6(projectDir, `${sessionId}.jsonl`);
+    const content = readFileSync4(filePath, "utf-8");
+    const lines = content.split("\n");
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const msg = JSON.parse(line);
+        if (msg.uuid && (msg.type === "user" || msg.type === "assistant")) {
+          return true;
+        }
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+  }
+  return false;
+}
+function findLastSession(workingDirectory) {
+  try {
+    const projectDir = getProjectPath(workingDirectory);
+    const files = readdirSync2(projectDir).filter((f) => f.endsWith(".jsonl")).map((f) => {
+      const sessionId = f.replace(".jsonl", "");
+      if (!UUID_PATTERN.test(sessionId)) return null;
+      if (!isValidSession(projectDir, sessionId)) return null;
+      return {
+        sessionId,
+        mtime: statSync2(join6(projectDir, f)).mtime.getTime()
+      };
+    }).filter((f) => f !== null).sort((a, b) => b.mtime - a.mtime);
+    return files.length > 0 ? files[0].sessionId : null;
+  } catch {
+    return null;
+  }
+}
+
 // src/cli/claude.ts
 function getLocalIP() {
   const nets = networkInterfaces();
@@ -979,18 +1080,25 @@ function getLocalIP() {
   }
   return "127.0.0.1";
 }
-var IPC_PATH = join6(homedir5(), ".tlive", "ipc.sock");
+var IPC_PATH = join7(homedir6(), ".tlive", "ipc.sock");
 function connectIPC() {
-  return new Promise((resolve) => {
-    const socket = connect(IPC_PATH, () => resolve(socket));
-    socket.on("error", () => resolve(null));
+  return new Promise((resolve4) => {
+    const socket = connect(IPC_PATH, () => resolve4(socket));
+    socket.on("error", () => resolve4(null));
   });
 }
 async function claudeCommand(opts = {}) {
   const config = loadConfig();
   const adapter = new ClaudeAdapter();
   const workdir = opts.workdir ?? process.cwd();
-  const loop = new TLiveLoop({ workdir, adapter, config, sessionId: opts.sessionId });
+  let sessionId = opts.sessionId;
+  if (!sessionId && opts.resume) {
+    sessionId = findLastSession(workdir) ?? void 0;
+    if (sessionId) {
+      console.error(`  Resuming session ${sessionId.slice(0, 8)}...`);
+    }
+  }
+  const loop = new TLiveLoop({ workdir, adapter, config, sessionId });
   const webPort = config.port;
   const webToken = config.token || loop.sessionInfo.sessionId.slice(0, 16);
   const web = new WebTerminal({ port: webPort, token: webToken });
@@ -1015,8 +1123,8 @@ async function claudeCommand(opts = {}) {
         }
       }) + "\n";
       ipc.write(msg);
-      return new Promise((resolve) => {
-        const timeout = setTimeout(() => resolve(void 0), 3e3);
+      return new Promise((resolve4) => {
+        const timeout = setTimeout(() => resolve4(void 0), 3e3);
         const onData = (raw) => {
           const lines = raw.toString().split("\n").filter(Boolean);
           for (const line of lines) {
@@ -1025,7 +1133,7 @@ async function claudeCommand(opts = {}) {
               if (resp.type === "message_sent") {
                 clearTimeout(timeout);
                 ipc.removeListener("data", onData);
-                resolve(resp.payload.messageId);
+                resolve4(resp.payload.messageId);
                 return;
               }
               if (resp.type === "permission_action") {
@@ -1087,11 +1195,11 @@ async function claudeCommand(opts = {}) {
   console.error(`  Terminal: \x1B[4m${url}\x1B[0m`);
   try {
     await loop.start();
-    await new Promise((resolve) => {
+    await new Promise((resolve4) => {
       const check = setInterval(() => {
         if (loop.sessionState === "idle") {
           clearInterval(check);
-          resolve();
+          resolve4();
         }
       }, 500);
     });

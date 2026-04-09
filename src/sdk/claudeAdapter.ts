@@ -1,9 +1,8 @@
 // src/sdk/claudeAdapter.ts
 
 import { execSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type {
   ProviderAdapter,
   NormalizedMessage,
@@ -56,8 +55,8 @@ export class ClaudeAdapter implements ProviderAdapter {
   }
 
   getSessionDir(workdir: string): string {
-    // Claude encodes workdir: non-alphanumeric ASCII chars → '-'
-    const projectDir = workdir.replace(/[^a-zA-Z0-9-]/g, '-');
-    return join(homedir(), '.claude', 'projects', projectDir);
+    const projectDir = resolve(workdir).replace(/[^a-zA-Z0-9-]/g, '-');
+    const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+    return join(claudeConfigDir, 'projects', projectDir);
   }
 }

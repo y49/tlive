@@ -13,6 +13,8 @@ export interface SessionInfo {
   workdir: string;
   state: SessionState;
   createdAt: number;
+  lastActivityAt: number;
+  messageCount: number;
 }
 
 export class SessionManager extends EventEmitter {
@@ -25,6 +27,9 @@ export class SessionManager extends EventEmitter {
   private config: TLiveConfig;
   private permissionHandler: ClaudePermissionHandler | null = null;
   private sdkAbortController: AbortController | null = null;
+  private _createdAt = Date.now();
+  private _lastActivityAt = Date.now();
+  private _messageCount = 0;
 
   constructor(opts: {
     sessionId?: string;
@@ -50,7 +55,11 @@ export class SessionManager extends EventEmitter {
   get state(): SessionState { return this._state; }
 
   get info(): SessionInfo {
-    return { sessionId: this.sessionId, workdir: this.workdir, state: this._state, createdAt: Date.now() };
+    return {
+      sessionId: this.sessionId, workdir: this.workdir, state: this._state,
+      createdAt: this._createdAt, lastActivityAt: this._lastActivityAt,
+      messageCount: this._messageCount,
+    };
   }
 
   private setState(state: SessionState): void {
@@ -66,7 +75,11 @@ export class SessionManager extends EventEmitter {
         this.emit('sessionComplete', this.info);
       }
     });
-    this.scanner.on('event', (event: SessionEvent) => this.emit('scannerEvent', event));
+    this.scanner.on('event', (event: SessionEvent) => {
+      this._lastActivityAt = Date.now();
+      this._messageCount++;
+      this.emit('scannerEvent', event);
+    });
     this.scanner.on('permission_needed', (toolUse: ToolUseEvent) => this.emit('permissionNeeded', toolUse));
     this.scanner.on('permission_resolved', (toolUseId: string) => this.emit('permissionResolved', toolUseId));
   }

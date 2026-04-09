@@ -58,9 +58,9 @@ export function normalizeSessionLine(
 export function formatForIM(msg: NormalizedMessage): string {
   switch (msg.kind) {
     case 'text': return msg.text ?? '';
-    case 'tool_use': return `🔧 ${msg.toolName}`;
-    case 'tool_result': return `✅ Result`;
-    case 'permission_request': return `⚠️ Permission: ${msg.toolName}\n${summarizeInput(msg.toolInput)}`;
+    case 'tool_use': return `🔧 ${msg.toolName}${formatToolArgs(msg.toolName, msg.toolInput)}`;
+    case 'tool_result': return ''; // Skip tool results in IM sync (too noisy)
+    case 'permission_request': return `⚠️ Permission: ${msg.toolName}\n${formatToolArgs(msg.toolName, msg.toolInput)}`;
     case 'error': return `❌ ${msg.text}`;
     case 'complete': return '✅ Session complete';
     case 'status': return `ℹ️ ${msg.text}`;
@@ -68,14 +68,46 @@ export function formatForIM(msg: NormalizedMessage): string {
   }
 }
 
-function summarizeInput(input: unknown): string {
-  if (!input || typeof input !== 'object') return '';
-  const obj = input as Record<string, unknown>;
-  if (obj.command) return `\`${truncate(String(obj.command), 200)}\``;
-  if (obj.file_path) return `\`${obj.file_path}\``;
-  if (obj.path) return `\`${obj.path}\``;
-  if (obj.pattern) return `\`${obj.pattern}\``;
-  return truncate(JSON.stringify(input), 200);
+/**
+ * Format tool arguments for IM display.
+ * Adapted from hapi's formatToolArgumentsDetailed — show relevant args per tool type.
+ */
+function formatToolArgs(toolName: string | undefined, input: unknown): string {
+  if (!input || typeof input !== 'object' || !toolName) return '';
+  const args = input as Record<string, unknown>;
+  const MAX = 150;
+
+  switch (toolName) {
+    case 'Bash':
+      return args.command ? `\n\`${truncate(String(args.command), MAX)}\`` : '';
+    case 'Read':
+      return args.file_path ? `\n${truncate(String(args.file_path), MAX)}` : '';
+    case 'Edit':
+    case 'Write': {
+      const file = args.file_path ?? args.path ?? '';
+      return file ? `\n${truncate(String(file), MAX)}` : '';
+    }
+    case 'Grep':
+    case 'Glob': {
+      const pattern = args.pattern ?? '';
+      return pattern ? ` \`${truncate(String(pattern), 80)}\`` : '';
+    }
+    case 'WebFetch':
+      return args.url ? `\n${truncate(String(args.url), MAX)}` : '';
+    case 'Agent':
+      return args.prompt ? `\n${truncate(String(args.prompt), MAX)}` : '';
+    case 'AskUserQuestion':
+      return args.question ? `\n${truncate(String(args.question), MAX)}` : '';
+    default: {
+      // Generic: show first string-valued arg
+      for (const v of Object.values(args)) {
+        if (typeof v === 'string' && v.length > 0) {
+          return `\n${truncate(v, MAX)}`;
+        }
+      }
+      return '';
+    }
+  }
 }
 
 function truncate(s: string, max: number): string {

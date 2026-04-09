@@ -7,6 +7,7 @@ import { TLiveLoop } from '../loop.js';
 import { ClaudeAdapter } from '../sdk/claudeAdapter.js';
 import { WebTerminal } from '../core/webTerminal.js';
 import { loadConfig } from '../config.js';
+import { findLastSession } from '../core/sessionDiscovery.js';
 
 export interface ClaudeCommandOptions {
   resume?: boolean;
@@ -42,7 +43,16 @@ export async function claudeCommand(opts: ClaudeCommandOptions = {}): Promise<vo
   const adapter = new ClaudeAdapter();
   const workdir = opts.workdir ?? process.cwd();
 
-  const loop = new TLiveLoop({ workdir, adapter, config, sessionId: opts.sessionId });
+  // Resolve session ID: explicit > resume last > new
+  let sessionId = opts.sessionId;
+  if (!sessionId && opts.resume) {
+    sessionId = findLastSession(workdir) ?? undefined;
+    if (sessionId) {
+      console.error(`  Resuming session ${sessionId.slice(0, 8)}...`);
+    }
+  }
+
+  const loop = new TLiveLoop({ workdir, adapter, config, sessionId });
 
   // Start WebTerminal
   const webPort = config.port;

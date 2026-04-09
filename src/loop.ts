@@ -56,6 +56,10 @@ export class TLiveLoop extends EventEmitter {
 
     // Activity sync: scanner events → normalize → push to IM as info (batched)
     this.session.on('scannerEvent', (event: SessionEvent) => {
+      // Skip isMeta messages (Claude internal bookkeeping)
+      const raw = event.raw as Record<string, unknown>;
+      if (raw.isMeta) return;
+
       const normalized = normalizeSessionLine(
         { uuid: event.uuid, type: event.type, message: event.message },
         'claude',
@@ -64,6 +68,12 @@ export class TLiveLoop extends EventEmitter {
       for (const msg of normalized) {
         const text = formatForIM(msg);
         if (!text) continue;
+
+        // Truncate long text for IM (assistant responses can be huge)
+        const body = msg.kind === 'text' && text.length > 300
+          ? text.slice(0, 300) + '...'
+          : text;
+
         this.notifications.push({
           kind: 'activity',
           dedupeKey: `activity:${event.uuid}:${msg.kind}`,
@@ -71,7 +81,7 @@ export class TLiveLoop extends EventEmitter {
           requiresUserAction: false,
           sessionId: this.session.info.sessionId,
           title: `💬 ${this.shortWorkdir()}`,
-          body: text,
+          body,
         });
       }
     });
