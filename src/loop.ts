@@ -112,8 +112,49 @@ export class TLiveLoop extends EventEmitter {
     );
 
     for (const msg of normalized) {
-      // Intercept TodoWrite → structured task list notification
-      if (msg.kind === 'tool_use' && msg.toolName === 'TodoWrite') {
+      if (msg.kind !== 'tool_use') {
+        // Text activity → push with reply hint
+        const text = formatForIM(msg);
+        if (!text) continue;
+        const body = text.length > MAX_IM_TEXT_LEN ? text.slice(0, MAX_IM_TEXT_LEN) + '...' : text;
+        this.notifications.push({
+          kind: 'activity_text',
+          dedupeKey: `activity:${event.uuid}:${msg.kind}`,
+          sessionId: this.session.info.sessionId,
+          title: `${LABEL.terminal} · ${this.sessionTag()}`,
+          body: body + `\n\n${LABEL.replyHint}`,
+        });
+        continue;
+      }
+
+      // --- tool_use handling: route by tool name ---
+
+      // AskUserQuestion → immediate notification with option buttons
+      if (msg.toolName === 'AskUserQuestion') {
+        const input = msg.toolInput as Record<string, unknown> | undefined;
+        const questionText = (input?.question as string) ?? 'Question from Claude';
+        const options = Array.isArray(input?.options)
+          ? (input.options as Array<{ label?: string; description?: string }>).map(o => o.label ?? o.description ?? '?')
+          : [];
+        const toolUseId = `scanq:${event.uuid}`;
+        const buttons: Array<{ label: string; callbackData: string; style?: 'primary' | 'danger' }> = [];
+        for (let i = 0; i < options.length; i++) {
+          buttons.push({ label: options[i], callbackData: `askq:${toolUseId}:${i}` });
+        }
+        buttons.push({ label: 'Skip', callbackData: `askq:${toolUseId}:skip`, style: 'danger' });
+        this.notifications.push({
+          kind: 'ask_user_question',
+          dedupeKey: `askq:${event.uuid}`,
+          sessionId: this.session.info.sessionId,
+          title: `${LABEL.question} · ${this.sessionTag()}`,
+          body: questionText,
+          buttons,
+        });
+        continue;
+      }
+
+      // TodoWrite → structured task list
+      if (msg.toolName === 'TodoWrite') {
         const todos = extractTodos(msg.toolInput);
         if (todos) {
           this.notifications.push({
@@ -123,24 +164,19 @@ export class TLiveLoop extends EventEmitter {
             title: `${LABEL.tasks} · ${this.sessionTag()}`,
             body: formatTodos(todos),
           });
-          continue; // Don't also push as activity_tool
+          continue;
         }
       }
 
+      // Other tools → activity notification
       const text = formatForIM(msg);
       if (!text) continue;
-
-      const body = text.length > MAX_IM_TEXT_LEN
-        ? text.slice(0, MAX_IM_TEXT_LEN) + '...'
-        : text;
-
-      const notifKind: NotificationKind = msg.kind === 'tool_use' ? 'activity_tool' : 'activity_text';
       this.notifications.push({
-        kind: notifKind,
-        dedupeKey: `activity:${event.uuid}:${msg.kind}`,
+        kind: 'activity_tool',
+        dedupeKey: `activity:${event.uuid}:tool`,
         sessionId: this.session.info.sessionId,
-        title: `Terminal · ${this.sessionTag()}`,
-        body: body + `\n\n${LABEL.replyHint}`,
+        title: `${LABEL.terminal} · ${this.sessionTag()}`,
+        body: text,
       });
     }
   }

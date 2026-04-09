@@ -951,7 +951,42 @@ var TLiveLoop = class extends EventEmitter6 {
       this.session.info.sessionId
     );
     for (const msg of normalized) {
-      if (msg.kind === "tool_use" && msg.toolName === "TodoWrite") {
+      if (msg.kind !== "tool_use") {
+        const text2 = formatForIM(msg);
+        if (!text2) continue;
+        const body = text2.length > MAX_IM_TEXT_LEN ? text2.slice(0, MAX_IM_TEXT_LEN) + "..." : text2;
+        this.notifications.push({
+          kind: "activity_text",
+          dedupeKey: `activity:${event.uuid}:${msg.kind}`,
+          sessionId: this.session.info.sessionId,
+          title: `${LABEL.terminal} \xB7 ${this.sessionTag()}`,
+          body: body + `
+
+${LABEL.replyHint}`
+        });
+        continue;
+      }
+      if (msg.toolName === "AskUserQuestion") {
+        const input = msg.toolInput;
+        const questionText = input?.question ?? "Question from Claude";
+        const options = Array.isArray(input?.options) ? input.options.map((o) => o.label ?? o.description ?? "?") : [];
+        const toolUseId = `scanq:${event.uuid}`;
+        const buttons = [];
+        for (let i = 0; i < options.length; i++) {
+          buttons.push({ label: options[i], callbackData: `askq:${toolUseId}:${i}` });
+        }
+        buttons.push({ label: "Skip", callbackData: `askq:${toolUseId}:skip`, style: "danger" });
+        this.notifications.push({
+          kind: "ask_user_question",
+          dedupeKey: `askq:${event.uuid}`,
+          sessionId: this.session.info.sessionId,
+          title: `${LABEL.question} \xB7 ${this.sessionTag()}`,
+          body: questionText,
+          buttons
+        });
+        continue;
+      }
+      if (msg.toolName === "TodoWrite") {
         const todos = extractTodos(msg.toolInput);
         if (todos) {
           this.notifications.push({
@@ -966,16 +1001,12 @@ var TLiveLoop = class extends EventEmitter6 {
       }
       const text = formatForIM(msg);
       if (!text) continue;
-      const body = text.length > MAX_IM_TEXT_LEN ? text.slice(0, MAX_IM_TEXT_LEN) + "..." : text;
-      const notifKind = msg.kind === "tool_use" ? "activity_tool" : "activity_text";
       this.notifications.push({
-        kind: notifKind,
-        dedupeKey: `activity:${event.uuid}:${msg.kind}`,
+        kind: "activity_tool",
+        dedupeKey: `activity:${event.uuid}:tool`,
         sessionId: this.session.info.sessionId,
-        title: `Terminal \xB7 ${this.sessionTag()}`,
-        body: body + `
-
-${LABEL.replyHint}`
+        title: `${LABEL.terminal} \xB7 ${this.sessionTag()}`,
+        body: text
       });
     }
   }

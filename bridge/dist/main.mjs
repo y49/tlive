@@ -26180,9 +26180,10 @@ var TerminalRelay = class {
       const isPermission = text2.includes("Permission");
       const isQuestion = text2.includes("Question");
       const isDone = text2.includes("Done");
+      const isThinking = text2.includes("Thinking");
       const feishuHeader = adapter.channelType === "feishu" ? {
-        template: isPermission ? "orange" : isQuestion ? "blue" : isDone ? "green" : "turquoise",
-        title: isPermission ? "\u26A0\uFE0F Permission" : isQuestion ? "\u2753 Question" : isDone ? "\u2705 Done" : "\u{1F5A5} Terminal"
+        template: isPermission ? "orange" : isQuestion ? "blue" : isDone ? "green" : isThinking ? "grey" : "turquoise",
+        title: isPermission ? "Permission Request" : isQuestion ? "Question" : isDone ? "Done" : isThinking ? "Thinking..." : "Terminal"
       } : void 0;
       adapter.send({
         chatId: target.chatId,

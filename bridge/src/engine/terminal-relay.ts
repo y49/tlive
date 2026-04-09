@@ -364,9 +364,10 @@ export class TerminalRelay {
       const isPermission = text.includes('Permission');
       const isQuestion = text.includes('Question');
       const isDone = text.includes('Done');
+      const isThinking = text.includes('Thinking');
       const feishuHeader = adapter.channelType === 'feishu' ? {
-        template: isPermission ? 'orange' : isQuestion ? 'blue' : isDone ? 'green' : 'turquoise',
-        title: isPermission ? '⚠️ Permission' : isQuestion ? '❓ Question' : isDone ? '✅ Done' : '🖥 Terminal',
+        template: isPermission ? 'orange' : isQuestion ? 'blue' : isDone ? 'green' : isThinking ? 'grey' : 'turquoise',
+        title: isPermission ? 'Permission Request' : isQuestion ? 'Question' : isDone ? 'Done' : isThinking ? 'Thinking...' : 'Terminal',
       } : undefined;
 
       adapter.send({
