@@ -4,6 +4,7 @@ import { apiThrottler } from '@grammyjs/transformer-throttler';
 import { createServer, type Server } from 'node:http';
 import { BaseChannelAdapter, registerAdapterFactory } from './base.js';
 import type { InboundMessage, OutboundMessage, SendResult, FileAttachment } from './types.js';
+import type { TelegramOutbound } from '../renderers/types.js';
 import { loadConfig } from '../config.js';
 import { createNodeAgent, maskProxyUrl } from '../proxy.js';
 import { chunkMarkdown } from '../delivery/delivery.js';
@@ -29,7 +30,7 @@ interface PairingRequest {
   expiresAt: number;
 }
 
-export class TelegramAdapter extends BaseChannelAdapter {
+export class TelegramAdapter extends BaseChannelAdapter<TelegramOutbound> {
   readonly channelType = 'telegram' as const;
   private bot: Bot | null = null;
   private config: TelegramConfig;
@@ -429,6 +430,82 @@ export class TelegramAdapter extends BaseChannelAdapter {
 
       // Streaming edits are non-fatal: log and swallow so the bridge stays alive
       console.warn(`[telegram] editMessage failed (${classified.constructor.name}): ${classified.message}`);
+    }
+  }
+
+  async sendRendered(chatId: string, message: TelegramOutbound): Promise<SendResult> {
+    const api = this.api;
+    const opts: Record<string, unknown> = { parse_mode: 'HTML' };
+
+    if (this.config.disableLinkPreview) {
+      opts.link_preview_options = { is_disabled: true };
+    }
+
+    if (message.buttons?.length) {
+      opts.reply_markup = {
+        inline_keyboard: [message.buttons.map(b => {
+          if (b.url) return { text: b.label, url: b.url };
+          return { text: b.label, callback_data: b.callbackData };
+        })],
+      };
+    }
+
+    try {
+      const result = await api.sendMessage(chatId, message.html, opts);
+      return { messageId: String(result.message_id), success: true };
+    } catch (sendErr: any) {
+      // Parse-mode fallback: retry without HTML if formatting fails
+      if (opts.parse_mode && sendErr?.error_code === 400) {
+        delete opts.parse_mode;
+        const result = await api.sendMessage(chatId, message.html, opts);
+        return { messageId: String(result.message_id), success: true };
+      }
+      throw classifyError('telegram', sendErr);
+    }
+  }
+
+  async editRendered(chatId: string, messageId: string, message: TelegramOutbound): Promise<void> {
+    if (!this.bot) return;
+    const opts: Record<string, unknown> = { parse_mode: 'HTML' };
+
+    if (message.buttons?.length) {
+      opts.reply_markup = {
+        inline_keyboard: [message.buttons.map(b => {
+          if (b.url) return { text: b.label, url: b.url };
+          return { text: b.label, callback_data: b.callbackData };
+        })],
+      };
+    } else if (message.buttons) {
+      opts.reply_markup = { inline_keyboard: [] };
+    }
+
+    try {
+      await this.api.editMessageText(chatId, parseInt(messageId, 10), message.html, opts);
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message?.includes('message is not modified')) return;
+
+      const classified = classifyError('telegram', err);
+
+      // 429 Rate limit: wait retry_after and retry once
+      if (classified.retryable && 'retryAfterMs' in classified) {
+        const delay = Math.min((classified as any).retryAfterMs || 1000, 30_000);
+        await new Promise(r => setTimeout(r, delay));
+        try {
+          await this.api.editMessageText(chatId, parseInt(messageId, 10), message.html, opts);
+          return;
+        } catch { /* give up */ }
+      }
+
+      // 400 Format error: retry without HTML
+      if (!classified.retryable && opts.parse_mode) {
+        try {
+          delete opts.parse_mode;
+          await this.api.editMessageText(chatId, parseInt(messageId, 10), message.html, opts);
+          return;
+        } catch { /* give up */ }
+      }
+
+      console.warn(`[telegram] editRendered failed (${classified.constructor.name}): ${classified.message}`);
     }
   }
 

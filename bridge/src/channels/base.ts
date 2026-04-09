@@ -1,6 +1,7 @@
 import type { ChannelType, InboundMessage, OutboundMessage, SendResult } from './types.js';
+import type { RenderedMessage } from '../renderers/types.js';
 
-export abstract class BaseChannelAdapter {
+export abstract class BaseChannelAdapter<T extends RenderedMessage = RenderedMessage> {
   abstract readonly channelType: ChannelType;
   abstract start(): Promise<void>;
   abstract stop(): Promise<void>;
@@ -10,6 +11,10 @@ export abstract class BaseChannelAdapter {
   abstract sendTyping(chatId: string): Promise<void>;
   abstract validateConfig(): string | null;
   abstract isAuthorized(userId: string, chatId: string): boolean;
+
+  // Typed methods for rendered messages (Phase C: coexist with legacy send/editMessage)
+  abstract sendRendered(chatId: string, message: T): Promise<SendResult>;
+  abstract editRendered(chatId: string, messageId: string, message: T): Promise<void>;
 
   /** Delete a message. Override in adapters that support deletion. */
   async deleteMessage(_chatId: string, _messageId: string): Promise<void> {}

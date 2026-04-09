@@ -1,6 +1,7 @@
 import { Client, WSClient, EventDispatcher } from '@larksuiteoapi/node-sdk';
 import { BaseChannelAdapter, registerAdapterFactory } from './base.js';
 import type { InboundMessage, OutboundMessage, SendResult, FileAttachment } from './types.js';
+import type { FeishuOutbound } from '../renderers/types.js';
 import { loadConfig } from '../config.js';
 import { classifyError } from './errors.js';
 import { markdownToFeishu, downgradeHeadings } from '../markdown/feishu.js';
@@ -90,7 +91,7 @@ interface FeishuConfig {
   allowedUsers: string[];
 }
 
-export class FeishuAdapter extends BaseChannelAdapter {
+export class FeishuAdapter extends BaseChannelAdapter<FeishuOutbound> {
   readonly channelType = 'feishu' as const;
   private client: Client | null = null;
   private wsClient: WSClient | null = null;
@@ -450,6 +451,47 @@ export class FeishuAdapter extends BaseChannelAdapter {
       });
     } catch (err: any) {
       console.warn(`[feishu] editMessage failed: ${err?.message ?? err}`);
+    }
+  }
+
+  /** Detect feishu receive_id_type from ID prefix convention. */
+  private detectReceiveIdType(chatId: string): string {
+    if (chatId.startsWith('ou_')) return 'open_id';
+    if (chatId.startsWith('oc_')) return 'chat_id';
+    return 'user_id';
+  }
+
+  async sendRendered(chatId: string, message: FeishuOutbound): Promise<SendResult> {
+    if (!this.client) throw new Error('Feishu client not started');
+
+    const idType = this.detectReceiveIdType(chatId);
+    try {
+      const result = await this.client.im.message.create({
+        params: { receive_id_type: idType as any },
+        data: {
+          receive_id: chatId,
+          msg_type: 'interactive',
+          content: message.card,
+        },
+      }) as FeishuCreateMessageResult;
+
+      const messageId = result?.data?.message_id ?? '';
+      return { messageId: String(messageId), success: true };
+    } catch (err) {
+      throw classifyError('feishu', err);
+    }
+  }
+
+  async editRendered(chatId: string, messageId: string, message: FeishuOutbound): Promise<void> {
+    if (!this.client) return;
+    // chatId unused for Feishu edits (message_id is globally unique), but kept for interface consistency
+    try {
+      await this.client.im.message.patch({
+        path: { message_id: messageId },
+        data: { content: message.card },
+      });
+    } catch (err: any) {
+      console.warn(`[feishu] editRendered failed: ${err?.message ?? err}`);
     }
   }
 

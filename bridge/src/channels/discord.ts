@@ -12,6 +12,7 @@ import {
 } from 'discord.js';
 import { BaseChannelAdapter, registerAdapterFactory } from './base.js';
 import type { InboundMessage, OutboundMessage, SendResult, FileAttachment } from './types.js';
+import type { DiscordOutbound } from '../renderers/types.js';
 import { loadConfig } from '../config.js';
 import { chunkMarkdown } from '../delivery/delivery.js';
 import { classifyError } from './errors.js';
@@ -24,7 +25,7 @@ interface DiscordConfig {
   proxy: string;
 }
 
-export class DiscordAdapter extends BaseChannelAdapter {
+export class DiscordAdapter extends BaseChannelAdapter<DiscordOutbound> {
   readonly channelType = 'discord' as const;
   private client: Client | null = null;
   private config: DiscordConfig;
@@ -307,6 +308,68 @@ export class DiscordAdapter extends BaseChannelAdapter {
       // Streaming edits are non-fatal: log and swallow so the bridge stays alive
       const classified = classifyError('discord', err);
       console.warn(`[discord] editMessage failed (${classified.constructor.name}): ${classified.message}`);
+    }
+  }
+
+  async sendRendered(chatId: string, message: DiscordOutbound): Promise<SendResult> {
+    if (!this.client) throw new Error('Discord client not started');
+    const channel = await this.client.channels.fetch(chatId);
+    if (!channel || !('send' in channel)) {
+      throw new Error(`Channel ${chatId} not found or not a text channel`);
+    }
+
+    const embed = new EmbedBuilder();
+    if (message.embed.title) embed.setTitle(message.embed.title);
+    if (message.embed.description) embed.setDescription(message.embed.description);
+    if (message.embed.color !== undefined) embed.setColor(message.embed.color);
+    if (message.embed.fields) {
+      for (const f of message.embed.fields) embed.addFields(f);
+    }
+    if (message.embed.footer) embed.setFooter({ text: message.embed.footer });
+
+    const payload: Record<string, unknown> = { embeds: [embed] };
+    if (message.buttons?.length) {
+      payload.components = DiscordAdapter.buildButtonRows(message.buttons);
+    }
+
+    try {
+      const sent = await (channel as TextChannel).send(payload as any) as Message;
+      return { messageId: sent.id, success: true };
+    } catch (err) {
+      throw classifyError('discord', err);
+    }
+  }
+
+  async editRendered(chatId: string, messageId: string, message: DiscordOutbound): Promise<void> {
+    if (!this.client) return;
+
+    try {
+      const channel = await this.client.channels.fetch(chatId) as TextChannel;
+      if (!channel?.messages) return;
+
+      const existing = await channel.messages.fetch(messageId);
+      if (!existing) return;
+
+      const embed = new EmbedBuilder();
+      if (message.embed.title) embed.setTitle(message.embed.title);
+      if (message.embed.description) embed.setDescription(message.embed.description);
+      if (message.embed.color !== undefined) embed.setColor(message.embed.color);
+      if (message.embed.fields) {
+        for (const f of message.embed.fields) embed.addFields(f);
+      }
+      if (message.embed.footer) embed.setFooter({ text: message.embed.footer });
+
+      const payload: Record<string, unknown> = { embeds: [embed] };
+      if (message.buttons?.length) {
+        payload.components = DiscordAdapter.buildButtonRows(message.buttons);
+      } else if (message.buttons) {
+        payload.components = [];
+      }
+
+      await existing.edit(payload as any);
+    } catch (err: unknown) {
+      const classified = classifyError('discord', err);
+      console.warn(`[discord] editRendered failed (${classified.constructor.name}): ${classified.message}`);
     }
   }
 
