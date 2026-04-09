@@ -105,6 +105,8 @@ export class SessionManager extends EventEmitter {
     });
     this.scanner.on('permission_needed', (toolUse: ToolUseEvent) => this.emit('permissionNeeded', toolUse));
     this.scanner.on('permission_resolved', (toolUseId: string) => this.emit('permissionResolved', toolUseId));
+    this.scanner.on('usage', (usage: Record<string, unknown>) => this.emit('usage', usage));
+    this.scanner.on('model', (model: string) => this.emit('model', model));
   }
 
   async startPTY(): Promise<void> {

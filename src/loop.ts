@@ -12,6 +12,7 @@ import type { ToolUseEvent, SessionEvent } from './core/sessionScanner.js';
 import { normalizeSessionLine, formatForIM } from './sdk/messageNormalizer.js';
 import type { TLiveConfig } from './config.js';
 import type { NotificationKind } from './im/notificationRules.js';
+import { CostTracker } from './core/costTracker.js';
 
 const MAX_IM_TEXT_LEN = 300;
 
@@ -32,6 +33,7 @@ export class TLiveLoop extends EventEmitter {
   private notifications: NotificationHub;
   private router: SessionRouter;
   private config: TLiveConfig;
+  private costTracker: CostTracker;
   private imSend?: IMSendFn;
   private imChatId?: string;
   private lastTerminalInputAt = Date.now();
@@ -39,6 +41,7 @@ export class TLiveLoop extends EventEmitter {
   constructor(opts: LoopOptions) {
     super();
     this.config = opts.config;
+    this.costTracker = new CostTracker();
     this.registry = new ProjectRegistry();
     this.notifications = new NotificationHub({
       batchDelay: opts.config.messageBatchDelay,
@@ -85,6 +88,8 @@ export class TLiveLoop extends EventEmitter {
         });
       }
     });
+    this.session.on('usage', (usage: Record<string, unknown>) => this.costTracker.addUsage(usage));
+    this.session.on('model', (model: string) => this.costTracker.setModel(model));
     this.session.on('sessionComplete', () => this.handleSessionComplete());
     this.notifications.on('notify', (events: NotificationEvent[]) => this.dispatchToIM(events));
   }
@@ -153,6 +158,7 @@ export class TLiveLoop extends EventEmitter {
       dedupeKey: `complete:${this.session.info.sessionId}`,
       sessionId: this.session.info.sessionId,
       title: `✅ Done · ${this.sessionTag()}`,
+      body: this.costTracker.formatSummary(),
     });
   }
 

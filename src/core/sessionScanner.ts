@@ -140,6 +140,13 @@ export class SessionScanner extends EventEmitter {
       for (const block of blocks) {
         if (block.type === 'tool_use') this.trackToolUse(block);
       }
+      const messageObj = msg.message as Record<string, unknown> | undefined;
+      if (messageObj && typeof messageObj === 'object') {
+        const usage = (messageObj as any).usage;
+        if (usage && typeof usage === 'object') this.emit('usage', usage);
+        const model = (messageObj as any).model;
+        if (typeof model === 'string') this.emit('model', model);
+      }
     }
 
     // Track tool_result — cancel pending
