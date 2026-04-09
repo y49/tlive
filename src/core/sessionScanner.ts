@@ -170,11 +170,14 @@ export class SessionScanner extends EventEmitter {
     const toolUseEvent: ToolUseEvent = { toolUseId, toolName, input: block.input, timestamp: Date.now() };
 
     if (isQuestion) {
+      // Real Claude format: { questions: [{ question, header, options: [{label}], multiSelect }] }
       const inputObj = block.input as Record<string, unknown>;
-      toolUseEvent.questionText = (inputObj?.question as string) ?? '';
-      const options = inputObj?.options;
-      if (Array.isArray(options)) {
-        toolUseEvent.questionOptions = options.map((o: any) => o.label ?? o.description ?? String(o));
+      const questions = inputObj?.questions as Array<Record<string, unknown>> | undefined;
+      const firstQ = Array.isArray(questions) ? questions[0] : inputObj;
+      toolUseEvent.questionText = (firstQ?.question as string) ?? '';
+      const rawOptions = firstQ?.options;
+      if (Array.isArray(rawOptions)) {
+        toolUseEvent.questionOptions = rawOptions.map((o: any) => o.label ?? o.description ?? String(o));
       }
     }
 

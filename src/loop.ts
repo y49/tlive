@@ -82,16 +82,8 @@ export class TLiveLoop extends EventEmitter {
       this.notifications.cancel(`askq:${id}`);
     });
     this.session.on('sdkMessage', (msg: NormalizedMessage) => this.emit('sdkMessage', msg));
-    this.session.on('thinking', (thinking: boolean) => {
-      if (thinking) {
-        this.notifications.push({
-          kind: 'thinking',
-          dedupeKey: 'thinking:on',
-          sessionId: this.session.info.sessionId,
-          title: `${LABEL.thinking} · ${this.sessionTag()}`,
-        });
-      }
-    });
+    // Thinking state tracked internally — not pushed to IM (too noisy).
+    // Users see tool_use notifications which serve the same purpose.
     this.session.on('usage', (usage: Record<string, unknown>) => this.costTracker.addUsage(usage));
     this.session.on('model', (model: string) => this.costTracker.setModel(model));
     this.session.on('sessionComplete', () => this.handleSessionComplete());
@@ -130,25 +122,30 @@ export class TLiveLoop extends EventEmitter {
       // --- tool_use handling: route by tool name ---
 
       // AskUserQuestion → immediate notification with option buttons
+      // Real Claude format: { questions: [{ question, header, options: [{label, description}], multiSelect }] }
       if (msg.toolName === 'AskUserQuestion') {
         const input = msg.toolInput as Record<string, unknown> | undefined;
-        const questionText = (input?.question as string) ?? 'Question from Claude';
-        const options = Array.isArray(input?.options)
-          ? (input.options as Array<{ label?: string; description?: string }>).map(o => o.label ?? o.description ?? '?')
-          : [];
+        const questions = input?.questions as Array<Record<string, unknown>> | undefined;
+        const firstQ = Array.isArray(questions) ? questions[0] : input;
+        const questionText = (firstQ?.question as string) ?? '';
+        const rawOptions = Array.isArray(firstQ?.options) ? firstQ.options as Array<Record<string, unknown>> : [];
+        const options = rawOptions.map(o => (o.label ?? o.description ?? '?') as string);
+
         const toolUseId = `scanq:${event.uuid}`;
         const buttons: Array<{ label: string; callbackData: string; style?: 'primary' | 'danger' }> = [];
         for (let i = 0; i < options.length; i++) {
           buttons.push({ label: options[i], callbackData: `askq:${toolUseId}:${i}` });
         }
-        buttons.push({ label: 'Skip', callbackData: `askq:${toolUseId}:skip`, style: 'danger' });
+        if (buttons.length > 0) {
+          buttons.push({ label: 'Skip', callbackData: `askq:${toolUseId}:skip`, style: 'danger' });
+        }
         this.notifications.push({
           kind: 'ask_user_question',
           dedupeKey: `askq:${event.uuid}`,
           sessionId: this.session.info.sessionId,
           title: `${LABEL.question} · ${this.sessionTag()}`,
-          body: questionText,
-          buttons,
+          body: questionText || 'Question from Claude',
+          buttons: buttons.length > 0 ? buttons : undefined,
         });
         continue;
       }

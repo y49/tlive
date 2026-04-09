@@ -185,10 +185,12 @@ var SessionScanner = class extends EventEmitter2 {
     const toolUseEvent = { toolUseId, toolName, input: block.input, timestamp: Date.now() };
     if (isQuestion) {
       const inputObj = block.input;
-      toolUseEvent.questionText = inputObj?.question ?? "";
-      const options = inputObj?.options;
-      if (Array.isArray(options)) {
-        toolUseEvent.questionOptions = options.map((o) => o.label ?? o.description ?? String(o));
+      const questions = inputObj?.questions;
+      const firstQ = Array.isArray(questions) ? questions[0] : inputObj;
+      toolUseEvent.questionText = firstQ?.question ?? "";
+      const rawOptions = firstQ?.options;
+      if (Array.isArray(rawOptions)) {
+        toolUseEvent.questionOptions = rawOptions.map((o) => o.label ?? o.description ?? String(o));
       }
     }
     const timerId = setTimeout(() => {
@@ -924,16 +926,6 @@ var TLiveLoop = class extends EventEmitter6 {
       this.notifications.cancel(`askq:${id}`);
     });
     this.session.on("sdkMessage", (msg) => this.emit("sdkMessage", msg));
-    this.session.on("thinking", (thinking) => {
-      if (thinking) {
-        this.notifications.push({
-          kind: "thinking",
-          dedupeKey: "thinking:on",
-          sessionId: this.session.info.sessionId,
-          title: `${LABEL.thinking} \xB7 ${this.sessionTag()}`
-        });
-      }
-    });
     this.session.on("usage", (usage) => this.costTracker.addUsage(usage));
     this.session.on("model", (model) => this.costTracker.setModel(model));
     this.session.on("sessionComplete", () => this.handleSessionComplete());
@@ -968,21 +960,26 @@ ${LABEL.replyHint}`
       }
       if (msg.toolName === "AskUserQuestion") {
         const input = msg.toolInput;
-        const questionText = input?.question ?? "Question from Claude";
-        const options = Array.isArray(input?.options) ? input.options.map((o) => o.label ?? o.description ?? "?") : [];
+        const questions = input?.questions;
+        const firstQ = Array.isArray(questions) ? questions[0] : input;
+        const questionText = firstQ?.question ?? "";
+        const rawOptions = Array.isArray(firstQ?.options) ? firstQ.options : [];
+        const options = rawOptions.map((o) => o.label ?? o.description ?? "?");
         const toolUseId = `scanq:${event.uuid}`;
         const buttons = [];
         for (let i = 0; i < options.length; i++) {
           buttons.push({ label: options[i], callbackData: `askq:${toolUseId}:${i}` });
         }
-        buttons.push({ label: "Skip", callbackData: `askq:${toolUseId}:skip`, style: "danger" });
+        if (buttons.length > 0) {
+          buttons.push({ label: "Skip", callbackData: `askq:${toolUseId}:skip`, style: "danger" });
+        }
         this.notifications.push({
           kind: "ask_user_question",
           dedupeKey: `askq:${event.uuid}`,
           sessionId: this.session.info.sessionId,
           title: `${LABEL.question} \xB7 ${this.sessionTag()}`,
-          body: questionText,
-          buttons
+          body: questionText || "Question from Claude",
+          buttons: buttons.length > 0 ? buttons : void 0
         });
         continue;
       }
