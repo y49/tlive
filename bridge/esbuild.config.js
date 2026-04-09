@@ -17,6 +17,7 @@ const common = {
     'socks-proxy-agent',
     'https-proxy-agent',
     'undici',
+    'ws',
   ],
   sourcemap: true,
   ...(isWatch ? { watch: true } : {}),
