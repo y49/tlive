@@ -448,6 +448,7 @@ switch (command) {
       sessionId: args.includes('--session-id') ? args[args.indexOf('--session-id') + 1] : undefined,
       resume: args.includes('--resume') || args.includes('--continue'),
       workdir: process.cwd(),
+      worktree: args.includes('--worktree') ? (args[args.indexOf('--worktree') + 1] || true) : undefined,
     });
     break;
   }

@@ -7,12 +7,14 @@ import { WebTerminal } from '../core/webTerminal.js';
 import { IPCClient } from '../ipc.js';
 import { loadConfig } from '../config.js';
 import { findLastSession } from '../core/sessionDiscovery.js';
+import { createWorktree } from '../core/worktreeManager.js';
 
 export interface ClaudeCommandOptions {
   resume?: boolean;
   sessionId?: string;
   web?: boolean;
   workdir?: string;
+  worktree?: boolean | string;
 }
 
 function getLocalIP(): string {
@@ -28,7 +30,19 @@ function getLocalIP(): string {
 export async function claudeCommand(opts: ClaudeCommandOptions = {}): Promise<void> {
   const config = loadConfig();
   const adapter = new ClaudeAdapter();
-  const workdir = opts.workdir ?? process.cwd();
+  let workdir = opts.workdir ?? process.cwd();
+
+  // Create isolated worktree if requested
+  if (opts.worktree) {
+    try {
+      const name = typeof opts.worktree === 'string' ? opts.worktree : undefined;
+      const wt = createWorktree(workdir, name);
+      console.error(`  Worktree: ${wt.path} (${wt.branch})`);
+      workdir = wt.path;
+    } catch (err) {
+      console.error(`  Worktree: \x1b[31mfailed\x1b[0m — ${(err as Error).message}`);
+    }
+  }
 
   // Resolve session ID: explicit > resume last > new
   let sessionId = opts.sessionId;
