@@ -58,7 +58,7 @@ interface DiscordOutbound {
 interface FeishuOutbound {
   card: string;        // Card 2.0 JSON
   buttons?: Button[];
-  receiveIdType?: string;
+  // receiveIdType removed — FeishuAdapter auto-detects from chatId prefix
 }
 
 type RenderedMessage = TelegramOutbound | DiscordOutbound | FeishuOutbound;
@@ -73,8 +73,12 @@ interface NotificationRenderer<T extends RenderedMessage> {
   readonly channelType: ChannelType;
   renderNotification(event: NotificationEvent): T;
   renderProgress(snapshot: ProgressSnapshot): T;
+  renderCommandResponse(data: CommandResponseData): T;
+  renderSimpleText(text: string): T;
 }
 ```
+
+`renderSimpleText` handles the ~60+ plain feedback messages scattered across permission-coordinator, callback-router, bridge-manager. `renderCommandResponse` handles structured command output (status panels, session lists, control menus).
 
 Three implementations:
 
@@ -282,9 +286,51 @@ src/
     notificationHub.ts    (generic: NotificationEvent)
 ```
 
-## 10. Migration Notes
+## 10. Renderer Coverage — All Platform-Specific Call Sites
+
+The Renderer must cover **all** places that currently do inline platform switching, not just notification/permission rendering.
+
+### command-router.ts (44+ inline platform branches)
+Currently the largest source of `channelType === 'telegram' ? html : ...` anti-patterns. Add Renderer methods for command responses:
+```ts
+interface NotificationRenderer<T> {
+  // ... existing methods ...
+  renderCommandResponse(data: CommandResponseData): T;
+  renderSimpleText(text: string): T;  // for plain feedback messages
+}
+```
+`CommandResponseData` covers: status panels, session lists, control menus, settings confirmations.
+
+### sdk-engine.ts flushCallback
+Currently constructs `OutboundMessage` with inline platform branches (html for Telegram, text for Discord/Feishu). After refactor, flushCallback calls `renderer.renderProgress(snapshot)` which returns the platform-specific type directly. No more inline switching.
+
+### permission-coordinator.ts (15+ send calls)
+Most are simple text feedback ("Permission granted", "Timeout", etc.). These use `renderer.renderSimpleText()`. Complex permission cards use `renderer.renderNotification({ kind: 'permission_request', ... })`.
+
+### broker.ts
+Currently manually spreads `formatPermissionCard()` output into `OutboundMessage`. After refactor: `renderer.renderNotification({ kind: 'permission_request', ... })` produces the complete typed message.
+
+### callback-router.ts / control-panel.ts
+Low complexity, use `renderer.renderSimpleText()` or `renderer.renderCommandResponse()`.
+
+## 11. receiveIdType — Move Detection Into FeishuAdapter
+
+Currently only `terminal-relay.ts` sets `receiveIdType` via `TargetResolver`. Other modules (permission-coordinator, command-router, etc.) send to Feishu without it, which may cause delivery failures.
+
+**Fix:** `FeishuAdapter.send()` auto-detects `receiveIdType` from `chatId` prefix internally (`ou_` → `open_id`, `oc_` → `chat_id`, default `user_id`). Callers never set it. Remove `receiveIdType` from `FeishuOutbound` — it becomes an adapter-internal concern.
+
+The `feishuReceiveIdType()` helper moves from `terminal-relay.ts` into `FeishuAdapter`.
+
+## 12. Dropped Fields
+
+- `replyToMessageId` — defined in `OutboundMessage` but never used anywhere. Dropped.
+- `media` — defined and implemented in all 3 adapters, but no message generator ever produces it. Dropped from initial types. Re-add to specific `*Outbound` types when actual media generation is implemented.
+
+## 13. Migration Notes
 
 - `OutboundMessage` type removed; all callers migrate to platform-specific types
-- `formatting/` directory deprecated; `notification.ts` and `permission.ts` logic absorbed by Renderer classes
+- `formatting/` directory deprecated; logic absorbed by Renderer classes
 - `terminal-relay.ts` shrinks from 473 lines to ~50 lines of wiring (or zero if merged into main.ts)
 - IPC protocol is internal (terminal↔bridge in same process group), no backwards compatibility needed
+- `command-router.ts` is the largest migration — 44+ call sites need Renderer methods
+- `receiveIdType` detection moves into `FeishuAdapter` — all external callers simplified
