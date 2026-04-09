@@ -5,22 +5,18 @@ import { JsonFileStore } from './store/json-file.js';
 import { resolveProvider, ClaudeSDKProvider } from './providers/index.js';
 import { PendingPermissions } from './permissions/gateway.js';
 import { BridgeManager } from './engine/bridge-manager.js';
+import { TerminalRelay } from './engine/terminal-relay.js';
 import { createAdapter } from './channels/index.js';
 import type { ChannelType } from './channels/types.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
-import { createServer, type Socket } from 'node:net';
-
+import { mkdirSync, writeFileSync } from 'node:fs';
 
 function writeStatusFile(tliveHome: string, data: Record<string, unknown>): void {
   try {
-    const runtimeDir = join(tliveHome, 'runtime');
-    mkdirSync(runtimeDir, { recursive: true });
-    writeFileSync(join(runtimeDir, 'status.json'), JSON.stringify(data, null, 2));
-  } catch {
-    // Non-fatal — don't block startup
-  }
+    mkdirSync(join(tliveHome, 'runtime'), { recursive: true });
+    writeFileSync(join(tliveHome, 'runtime', 'status.json'), JSON.stringify(data, null, 2));
+  } catch { /* non-fatal */ }
 }
 
 async function main() {
@@ -29,227 +25,78 @@ async function main() {
 
   const logger = new Logger(
     join(tliveHome, 'logs', 'bridge.log'),
-    [config.token, config.telegram.botToken, config.discord.botToken, config.feishu.appSecret].filter(Boolean)
+    [config.token, config.telegram.botToken, config.discord.botToken, config.feishu.appSecret].filter(Boolean),
   );
 
   logger.info('TLive Bridge starting...');
   logger.info(`Enabled channels: ${config.enabledChannels.join(', ') || 'none'}`);
 
-  // Write startup status
   writeStatusFile(tliveHome, {
     pid: process.pid,
     startedAt: new Date().toISOString(),
     channels: config.enabledChannels,
-    version: '0.1.0',
+    version: '1.0.0',
   });
 
-  // Initialize components
+  // Core components
   const store = new JsonFileStore(join(tliveHome, 'data'));
   const permissions = new PendingPermissions();
   const llm = resolveProvider(config.runtime, permissions, {
     claudeSettingSources: config.claudeSettingSources,
   });
 
-  // Initialize context
   initBridgeContext({
-    store,
-    llm,
+    store, llm,
     permissions: permissions as PermissionGateway,
     core: {} as CoreClient,
     defaultWorkdir: config.defaultWorkdir,
   });
 
-  // Start Bridge Manager with enabled IM adapters
+  // IM adapters
   const manager = new BridgeManager();
-
   for (const channelType of config.enabledChannels) {
     try {
-      const adapter = createAdapter(channelType as ChannelType);
-      manager.registerAdapter(adapter);
+      manager.registerAdapter(createAdapter(channelType as ChannelType));
       logger.info(`Registered ${channelType} adapter`);
     } catch (err) {
       logger.warn(`Failed to create ${channelType} adapter: ${err}`);
     }
   }
-
   await manager.start();
   logger.info('Bridge started — SDK-only mode');
 
-  // -----------------------------------------------------------------------
-  // IPC Server — receives notifications from `tlive claude` terminal sessions
-  // and forwards them to IM adapters. Button callbacks are sent back via IPC.
-  // -----------------------------------------------------------------------
-  const IPC_PATH = join(tliveHome, 'ipc.sock');
-  const ipcClients = new Set<Socket>();
-
-  // ---------------------------------------------------------------------------
-  // ChatId resolver — fallback chain for finding the right IM chat target.
-  // Priority: active session chatId → config → persisted chat-ids.json
-  // ---------------------------------------------------------------------------
-
-  // ---------------------------------------------------------------------------
-  // Target resolver — determine which chat/user to send notifications to.
-  // Each platform registers a resolver returning { chatId, receiveIdType? }.
-  // ---------------------------------------------------------------------------
-
-  interface ResolvedTarget { chatId: string; receiveIdType?: string }
-
-  const chatIdsFile = join(tliveHome, 'runtime', 'chat-ids.json');
-  let cachedChatIds: Record<string, string> = {};
-  try { cachedChatIds = JSON.parse(readFileSync(chatIdsFile, 'utf-8')); } catch { /* none yet */ }
-
-  /** Detect feishu receive_id_type from ID prefix. */
-  function feishuIdType(id: string): string {
-    if (id.startsWith('ou_')) return 'open_id';
-    if (id.startsWith('oc_')) return 'chat_id';
-    return 'user_id';
-  }
-
-  /** Per-platform config-based fallback targets. */
-  const configTargets: Record<string, () => ResolvedTarget | null> = {
-    telegram: () => config.telegram.chatId ? { chatId: config.telegram.chatId } : null,
-    feishu: () => {
-      const id = config.feishu.allowedUsers[0];
-      return id ? { chatId: id, receiveIdType: feishuIdType(id) } : null;
-    },
-    discord: () => null,
-  };
-
-  function resolveTarget(channelType: string): ResolvedTarget | null {
-    // Priority: active session → platform config → persisted cache
-    const active = manager.getLastChatId(channelType);
-    if (active) return { chatId: active, receiveIdType: channelType === 'feishu' ? feishuIdType(active) : undefined };
-
-    const fromConfig = configTargets[channelType]?.();
-    if (fromConfig) return fromConfig;
-
-    const cached = cachedChatIds[channelType];
-    if (cached) return { chatId: cached, receiveIdType: channelType === 'feishu' ? feishuIdType(cached) : undefined };
-
-    return null;
-  }
-
-  // ---------------------------------------------------------------------------
-  // IPC Server — message handler registry
-  // ---------------------------------------------------------------------------
-
-  const ipcServer = createServer((socket) => {
-    ipcClients.add(socket);
-    logger.info(`IPC client connected (total: ${ipcClients.size})`);
-
-    let buffer = '';
-    socket.on('data', (data) => {
-      buffer += data.toString();
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const msg = JSON.parse(line);
-          const handler = ipcHandlers[msg.type];
-          if (handler) handler(msg.payload, socket);
-          else logger.warn(`IPC unknown message type: ${msg.type}`);
-        } catch { /* skip malformed */ }
-      }
-    });
-    socket.on('close', () => {
-      ipcClients.delete(socket);
-      logger.info(`IPC client disconnected (total: ${ipcClients.size})`);
-    });
-    socket.on('error', () => ipcClients.delete(socket));
+  // Terminal relay — IPC bridge between `tlive claude` and IM adapters
+  const relay = new TerminalRelay({
+    config,
+    tliveHome,
+    getAdapters: () => manager.getAdapters(),
+    getLastChatId: (ch) => manager.getLastChatId(ch),
+    log: (msg) => logger.info(msg),
+    warn: (msg) => logger.warn(msg),
   });
 
-  // Track terminal notification messageIds — replies to these should be forwarded via IPC
-  const terminalNotificationMsgIds = new Set<string>();
+  relay.start();
 
-  /** Typed IPC message handlers. */
-  const ipcHandlers: Record<string, (payload: Record<string, unknown>, socket: Socket) => void> = {
-    notification(payload, socket) {
-      const { text, buttons, sessionId } = payload as {
-        text: string;
-        buttons?: Array<{ label: string; callbackData: string; style?: string }>;
-        sessionId?: string;
-      };
+  // Wire IM → terminal: reply interception + permission callbacks
+  manager.onInboundMessage = (_ch, msg) => relay.interceptReply(msg);
+  manager.onTerminalPermissionCallback = (action, id, sid) => relay.forwardPermissionAction(action, id, sid);
 
-      for (const adapter of manager.getAdapters()) {
-        const target = resolveTarget(adapter.channelType);
-        if (!target) continue;
-
-        adapter.send({
-          chatId: target.chatId,
-          receiveIdType: target.receiveIdType,
-          text,
-          buttons: buttons?.map((b) => ({
-            label: b.label,
-            callbackData: b.callbackData,
-            style: b.style as 'primary' | 'danger' | undefined,
-          })),
-        }).then((sentMsgId) => {
-          if (sentMsgId) {
-            terminalNotificationMsgIds.add(sentMsgId);
-            socket.write(JSON.stringify({
-              type: 'message_sent',
-              payload: { messageId: sentMsgId, sessionId, channelType: adapter.channelType },
-            }) + '\n');
-          }
-        }).catch((err) => {
-          logger.warn(`IPC → ${adapter.channelType} failed: ${err}`);
-        });
-      }
-    },
-
-    session_status(payload) {
-      logger.info(`IPC session status: ${JSON.stringify(payload)}`);
-    },
-  };
-
-  // Intercept inbound IM messages — if replying to a terminal notification,
-  // forward the text via IPC instead of routing to SDK engine.
-  manager.onInboundMessage = (channelType: string, msg: { text: string; replyToMessageId?: string }) => {
-    if (msg.replyToMessageId && terminalNotificationMsgIds.has(msg.replyToMessageId)) {
-      // Forward reply text to terminal session via IPC
-      const ipcMsg = JSON.stringify({
-        type: 'terminal_input',
-        payload: { text: msg.text },
-      }) + '\n';
-      for (const client of ipcClients) client.write(ipcMsg);
-      return true; // consumed — don't route to SDK
-    }
-    return false; // not a terminal reply — proceed normally
-  };
-
-  // Forward IM permission callbacks → IPC → tlive claude process
-  manager.onTerminalPermissionCallback = (action, toolUseId, sessionId) => {
-    const msg = JSON.stringify({
-      type: 'permission_action',
-      payload: { action, toolUseId, sessionId },
-    }) + '\n';
-    for (const client of ipcClients) client.write(msg);
-  };
-
-  if (existsSync(IPC_PATH)) unlinkSync(IPC_PATH);
-  ipcServer.listen(IPC_PATH, () => logger.info(`IPC server listening at ${IPC_PATH}`));
-
-  // Wire permission timeout → IM notification
+  // Permission timeout notification
   if (llm instanceof ClaudeSDKProvider) {
-    llm.onPermissionTimeout = (toolName: string, _toolUseId: string) => {
-      const text = `\u23f0 Permission timed out (5m)\nTool: ${toolName}\nAction: Denied by default`;
+    llm.onPermissionTimeout = (toolName: string) => {
+      const text = `⏰ Permission timed out (5m)\nTool: ${toolName}\nAction: Denied by default`;
       for (const adapter of manager.getAdapters()) {
-        adapter.send({ chatId: '', text }).catch((err) => {
-          logger.warn(`Failed to send timeout notification to ${adapter.channelType}: ${err}`);
-        });
+        adapter.send({ chatId: '', text }).catch(() => {});
       }
     };
   }
 
   // Graceful shutdown
+  const keepAliveInterval = setInterval(() => {}, 60_000);
   const shutdown = async (reason = 'signal') => {
     logger.info('Shutting down...');
     clearInterval(keepAliveInterval);
-    // Clean up IPC
-    for (const client of ipcClients) client.destroy();
-    ipcServer.close();
-    if (existsSync(IPC_PATH)) unlinkSync(IPC_PATH);
+    relay.stop();
     writeStatusFile(tliveHome, {
       pid: process.pid,
       exitedAt: new Date().toISOString(),
@@ -263,9 +110,6 @@ async function main() {
 
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
-
-  // Keep process alive
-  const keepAliveInterval = setInterval(() => {}, 60_000);
 }
 
 main().catch((err) => {

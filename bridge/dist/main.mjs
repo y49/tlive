@@ -25841,11 +25841,172 @@ var BridgeManager = class _BridgeManager {
   }
 };
 
+// src/engine/terminal-relay.ts
+import { createServer } from "node:net";
+import { readFileSync as readFileSync3, existsSync as existsSync5, unlinkSync as unlinkSync3 } from "node:fs";
+import { join as join7 } from "node:path";
+function feishuReceiveIdType(id) {
+  if (id.startsWith("ou_")) return "open_id";
+  if (id.startsWith("oc_")) return "chat_id";
+  return "user_id";
+}
+var TargetResolver = class {
+  constructor(getLastChatId, config3, tliveHome) {
+    this.getLastChatId = getLastChatId;
+    const chatIdsFile = join7(tliveHome, "runtime", "chat-ids.json");
+    try {
+      this.cachedChatIds = JSON.parse(readFileSync3(chatIdsFile, "utf-8"));
+    } catch {
+    }
+    this.platformResolvers = {
+      telegram: () => config3.telegram.chatId ? { chatId: config3.telegram.chatId } : null,
+      feishu: () => {
+        const id = config3.feishu.allowedUsers[0];
+        return id ? { chatId: id, receiveIdType: feishuReceiveIdType(id) } : null;
+      },
+      discord: () => null
+    };
+  }
+  cachedChatIds = {};
+  platformResolvers;
+  resolve(channelType) {
+    const active = this.getLastChatId(channelType);
+    if (active) return this.withIdType(channelType, active);
+    const fromConfig = this.platformResolvers[channelType]?.();
+    if (fromConfig) return fromConfig;
+    const cached2 = this.cachedChatIds[channelType];
+    if (cached2) return this.withIdType(channelType, cached2);
+    return null;
+  }
+  withIdType(channelType, chatId) {
+    return {
+      chatId,
+      receiveIdType: channelType === "feishu" ? feishuReceiveIdType(chatId) : void 0
+    };
+  }
+};
+function attachLineParser(socket, onMessage) {
+  let buffer = "";
+  socket.on("data", (data) => {
+    buffer += data.toString();
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        onMessage(JSON.parse(line));
+      } catch {
+      }
+    }
+  });
+}
+function sendJson(socket, msg) {
+  socket.write(JSON.stringify(msg) + "\n");
+}
+var TerminalRelay = class {
+  server = null;
+  clients = /* @__PURE__ */ new Set();
+  ipcPath;
+  targetResolver;
+  terminalMsgIds = /* @__PURE__ */ new Set();
+  deps;
+  // IPC message handler registry
+  handlers;
+  constructor(deps) {
+    this.deps = deps;
+    this.ipcPath = join7(deps.tliveHome, "ipc.sock");
+    this.targetResolver = new TargetResolver(deps.getLastChatId, deps.config, deps.tliveHome);
+    this.handlers = {
+      notification: (p, s) => this.handleNotification(p, s),
+      session_status: (p) => deps.log(`Terminal session: ${JSON.stringify(p)}`)
+    };
+  }
+  // ---- Lifecycle ----
+  start() {
+    if (existsSync5(this.ipcPath)) unlinkSync3(this.ipcPath);
+    this.server = createServer((socket) => {
+      this.clients.add(socket);
+      this.deps.log(`Terminal connected (${this.clients.size} active)`);
+      attachLineParser(socket, (msg) => {
+        const handler = this.handlers[msg.type];
+        if (handler) handler(msg.payload, socket);
+      });
+      socket.on("close", () => {
+        this.clients.delete(socket);
+        this.deps.log(`Terminal disconnected (${this.clients.size} active)`);
+      });
+      socket.on("error", () => this.clients.delete(socket));
+    });
+    this.server.listen(this.ipcPath, () => this.deps.log(`IPC listening at ${this.ipcPath}`));
+  }
+  stop() {
+    for (const client of this.clients) client.destroy();
+    this.server?.close();
+    try {
+      unlinkSync3(this.ipcPath);
+    } catch {
+    }
+  }
+  // ---- Notification dispatch ----
+  handleNotification(notification, origin) {
+    const { text: text2, buttons, sessionId } = notification;
+    for (const adapter of this.deps.getAdapters()) {
+      const target = this.targetResolver.resolve(adapter.channelType);
+      if (!target) continue;
+      adapter.send({
+        chatId: target.chatId,
+        receiveIdType: target.receiveIdType,
+        text: text2,
+        buttons: buttons?.map((b) => ({
+          label: b.label,
+          callbackData: b.callbackData,
+          style: b.style
+        }))
+      }).then((msgId) => {
+        if (msgId) {
+          this.terminalMsgIds.add(msgId);
+          sendJson(origin, {
+            type: "message_sent",
+            payload: { messageId: msgId, sessionId, channelType: adapter.channelType }
+          });
+        }
+      }).catch((err) => {
+        this.deps.warn(`\u2192 ${adapter.channelType}: ${err}`);
+      });
+    }
+  }
+  // ---- Inbound message interception ----
+  /**
+   * Check if an inbound IM message is a reply to a terminal notification.
+   * Returns true if consumed (forwarded to terminal via IPC).
+   */
+  interceptReply(msg) {
+    if (!msg.replyToMessageId || !this.terminalMsgIds.has(msg.replyToMessageId)) {
+      return false;
+    }
+    this.broadcast({ type: "terminal_input", payload: { text: msg.text } });
+    return true;
+  }
+  /**
+   * Forward a permission action (from IM button press) to terminal processes.
+   */
+  forwardPermissionAction(action, toolUseId, sessionId) {
+    this.broadcast({
+      type: "permission_action",
+      payload: { action, toolUseId, sessionId }
+    });
+  }
+  // ---- Helpers ----
+  broadcast(msg) {
+    for (const client of this.clients) sendJson(client, msg);
+  }
+};
+
 // src/channels/telegram.ts
 import { Bot, InputFile } from "grammy";
 import { run } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
-import { createServer } from "node:http";
+import { createServer as createServer2 } from "node:http";
 
 // src/channels/base.ts
 var BaseChannelAdapter = class {
@@ -26072,7 +26233,7 @@ var TelegramAdapter = class extends BaseChannelAdapter {
         allowed_updates: ["message", "callback_query", "message_reaction"]
       });
       const webhookPath = "/telegram-webhook";
-      this.webhookServer = createServer((req, res) => {
+      this.webhookServer = createServer2((req, res) => {
         if (req.method !== "POST" || req.url !== webhookPath) {
           res.writeHead(404);
           res.end();
@@ -26796,10 +26957,10 @@ async function readFeishuBuffer(resp) {
     return Buffer.concat(chunks);
   }
   if (typeof r.writeFile === "function") {
-    const { join: join8 } = await import("node:path");
+    const { join: join9 } = await import("node:path");
     const { tmpdir: tmpdir3 } = await import("node:os");
     const { readFile, unlink } = await import("node:fs/promises");
-    const tmp = join8(tmpdir3(), `tlive-feishu-${Date.now()}.tmp`);
+    const tmp = join9(tmpdir3(), `tlive-feishu-${Date.now()}.tmp`);
     try {
       await r.writeFile(tmp);
       return await readFile(tmp);
@@ -27206,23 +27367,21 @@ var FeishuAdapter = class extends BaseChannelAdapter {
 registerAdapterFactory("feishu", () => new FeishuAdapter(loadConfig().feishu));
 
 // src/main.ts
-import { join as join7 } from "node:path";
+import { join as join8 } from "node:path";
 import { homedir as homedir4 } from "node:os";
-import { mkdirSync as mkdirSync6, writeFileSync as writeFileSync5, readFileSync as readFileSync3, existsSync as existsSync5, unlinkSync as unlinkSync3 } from "node:fs";
-import { createServer as createServer2 } from "node:net";
+import { mkdirSync as mkdirSync6, writeFileSync as writeFileSync5 } from "node:fs";
 function writeStatusFile(tliveHome, data) {
   try {
-    const runtimeDir = join7(tliveHome, "runtime");
-    mkdirSync6(runtimeDir, { recursive: true });
-    writeFileSync5(join7(runtimeDir, "status.json"), JSON.stringify(data, null, 2));
+    mkdirSync6(join8(tliveHome, "runtime"), { recursive: true });
+    writeFileSync5(join8(tliveHome, "runtime", "status.json"), JSON.stringify(data, null, 2));
   } catch {
   }
 }
 async function main() {
   const config3 = loadConfig();
-  const tliveHome = join7(homedir4(), ".tlive");
+  const tliveHome = join8(homedir4(), ".tlive");
   const logger = new Logger(
-    join7(tliveHome, "logs", "bridge.log"),
+    join8(tliveHome, "logs", "bridge.log"),
     [config3.token, config3.telegram.botToken, config3.discord.botToken, config3.feishu.appSecret].filter(Boolean)
   );
   logger.info("TLive Bridge starting...");
@@ -27231,9 +27390,9 @@ async function main() {
     pid: process.pid,
     startedAt: (/* @__PURE__ */ new Date()).toISOString(),
     channels: config3.enabledChannels,
-    version: "0.1.0"
+    version: "1.0.0"
   });
-  const store = new JsonFileStore(join7(tliveHome, "data"));
+  const store = new JsonFileStore(join8(tliveHome, "data"));
   const permissions = new PendingPermissions();
   const llm = resolveProvider(config3.runtime, permissions, {
     claudeSettingSources: config3.claudeSettingSources
@@ -27248,8 +27407,7 @@ async function main() {
   const manager = new BridgeManager();
   for (const channelType of config3.enabledChannels) {
     try {
-      const adapter = createAdapter(channelType);
-      manager.registerAdapter(adapter);
+      manager.registerAdapter(createAdapter(channelType));
       logger.info(`Registered ${channelType} adapter`);
     } catch (err) {
       logger.warn(`Failed to create ${channelType} adapter: ${err}`);
@@ -27257,132 +27415,34 @@ async function main() {
   }
   await manager.start();
   logger.info("Bridge started \u2014 SDK-only mode");
-  const IPC_PATH = join7(tliveHome, "ipc.sock");
-  const ipcClients = /* @__PURE__ */ new Set();
-  const chatIdsFile = join7(tliveHome, "runtime", "chat-ids.json");
-  let cachedChatIds = {};
-  try {
-    cachedChatIds = JSON.parse(readFileSync3(chatIdsFile, "utf-8"));
-  } catch {
-  }
-  function feishuIdType(id) {
-    if (id.startsWith("ou_")) return "open_id";
-    if (id.startsWith("oc_")) return "chat_id";
-    return "user_id";
-  }
-  const configTargets = {
-    telegram: () => config3.telegram.chatId ? { chatId: config3.telegram.chatId } : null,
-    feishu: () => {
-      const id = config3.feishu.allowedUsers[0];
-      return id ? { chatId: id, receiveIdType: feishuIdType(id) } : null;
-    },
-    discord: () => null
-  };
-  function resolveTarget(channelType) {
-    const active = manager.getLastChatId(channelType);
-    if (active) return { chatId: active, receiveIdType: channelType === "feishu" ? feishuIdType(active) : void 0 };
-    const fromConfig = configTargets[channelType]?.();
-    if (fromConfig) return fromConfig;
-    const cached2 = cachedChatIds[channelType];
-    if (cached2) return { chatId: cached2, receiveIdType: channelType === "feishu" ? feishuIdType(cached2) : void 0 };
-    return null;
-  }
-  const ipcServer = createServer2((socket) => {
-    ipcClients.add(socket);
-    logger.info(`IPC client connected (total: ${ipcClients.size})`);
-    let buffer = "";
-    socket.on("data", (data) => {
-      buffer += data.toString();
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const msg = JSON.parse(line);
-          const handler = ipcHandlers[msg.type];
-          if (handler) handler(msg.payload, socket);
-          else logger.warn(`IPC unknown message type: ${msg.type}`);
-        } catch {
-        }
-      }
-    });
-    socket.on("close", () => {
-      ipcClients.delete(socket);
-      logger.info(`IPC client disconnected (total: ${ipcClients.size})`);
-    });
-    socket.on("error", () => ipcClients.delete(socket));
+  const relay = new TerminalRelay({
+    config: config3,
+    tliveHome,
+    getAdapters: () => manager.getAdapters(),
+    getLastChatId: (ch) => manager.getLastChatId(ch),
+    log: (msg) => logger.info(msg),
+    warn: (msg) => logger.warn(msg)
   });
-  const terminalNotificationMsgIds = /* @__PURE__ */ new Set();
-  const ipcHandlers = {
-    notification(payload, socket) {
-      const { text: text2, buttons, sessionId } = payload;
-      for (const adapter of manager.getAdapters()) {
-        const target = resolveTarget(adapter.channelType);
-        if (!target) continue;
-        adapter.send({
-          chatId: target.chatId,
-          receiveIdType: target.receiveIdType,
-          text: text2,
-          buttons: buttons?.map((b) => ({
-            label: b.label,
-            callbackData: b.callbackData,
-            style: b.style
-          }))
-        }).then((sentMsgId) => {
-          if (sentMsgId) {
-            terminalNotificationMsgIds.add(sentMsgId);
-            socket.write(JSON.stringify({
-              type: "message_sent",
-              payload: { messageId: sentMsgId, sessionId, channelType: adapter.channelType }
-            }) + "\n");
-          }
-        }).catch((err) => {
-          logger.warn(`IPC \u2192 ${adapter.channelType} failed: ${err}`);
-        });
-      }
-    },
-    session_status(payload) {
-      logger.info(`IPC session status: ${JSON.stringify(payload)}`);
-    }
-  };
-  manager.onInboundMessage = (channelType, msg) => {
-    if (msg.replyToMessageId && terminalNotificationMsgIds.has(msg.replyToMessageId)) {
-      const ipcMsg = JSON.stringify({
-        type: "terminal_input",
-        payload: { text: msg.text }
-      }) + "\n";
-      for (const client of ipcClients) client.write(ipcMsg);
-      return true;
-    }
-    return false;
-  };
-  manager.onTerminalPermissionCallback = (action, toolUseId, sessionId) => {
-    const msg = JSON.stringify({
-      type: "permission_action",
-      payload: { action, toolUseId, sessionId }
-    }) + "\n";
-    for (const client of ipcClients) client.write(msg);
-  };
-  if (existsSync5(IPC_PATH)) unlinkSync3(IPC_PATH);
-  ipcServer.listen(IPC_PATH, () => logger.info(`IPC server listening at ${IPC_PATH}`));
+  relay.start();
+  manager.onInboundMessage = (_ch, msg) => relay.interceptReply(msg);
+  manager.onTerminalPermissionCallback = (action, id, sid) => relay.forwardPermissionAction(action, id, sid);
   if (llm instanceof ClaudeSDKProvider) {
-    llm.onPermissionTimeout = (toolName, _toolUseId) => {
+    llm.onPermissionTimeout = (toolName) => {
       const text2 = `\u23F0 Permission timed out (5m)
 Tool: ${toolName}
 Action: Denied by default`;
       for (const adapter of manager.getAdapters()) {
-        adapter.send({ chatId: "", text: text2 }).catch((err) => {
-          logger.warn(`Failed to send timeout notification to ${adapter.channelType}: ${err}`);
+        adapter.send({ chatId: "", text: text2 }).catch(() => {
         });
       }
     };
   }
+  const keepAliveInterval = setInterval(() => {
+  }, 6e4);
   const shutdown = async (reason = "signal") => {
     logger.info("Shutting down...");
     clearInterval(keepAliveInterval);
-    for (const client of ipcClients) client.destroy();
-    ipcServer.close();
-    if (existsSync5(IPC_PATH)) unlinkSync3(IPC_PATH);
+    relay.stop();
     writeStatusFile(tliveHome, {
       pid: process.pid,
       exitedAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -27395,8 +27455,6 @@ Action: Denied by default`;
   };
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
-  const keepAliveInterval = setInterval(() => {
-  }, 6e4);
 }
 main().catch((err) => {
   console.error("Fatal error:", err);
