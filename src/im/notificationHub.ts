@@ -1,10 +1,9 @@
 import { EventEmitter } from 'node:events';
+import { type NotificationKind, shouldPush, shouldAggregate } from './notificationRules.js';
 
 export interface NotificationEvent {
-  kind: 'permission_required' | 'task_complete' | 'error' | 'question' | 'activity';
+  kind: NotificationKind;
   dedupeKey: string;
-  severity: 'info' | 'warning' | 'critical';
-  requiresUserAction: boolean;
   sessionId: string;
   title: string;
   body?: string;
@@ -13,6 +12,7 @@ export interface NotificationEvent {
 
 export interface NotificationHubOptions {
   batchDelay?: number;
+  isUserActive?: () => boolean;
 }
 
 export class NotificationHub extends EventEmitter {
@@ -20,21 +20,28 @@ export class NotificationHub extends EventEmitter {
   private batch: NotificationEvent[] = [];
   private batchTimer: ReturnType<typeof setTimeout> | null = null;
   private batchDelay: number;
+  private isUserActive?: () => boolean;
   private readonly TTL = 15 * 60 * 1000;
 
   constructor(opts: NotificationHubOptions = {}) {
     super();
     this.batchDelay = opts.batchDelay ?? 250;
+    this.isUserActive = opts.isUserActive;
   }
 
   push(event: NotificationEvent): void {
     if (this.seen.has(event.dedupeKey)) return;
     this.seen.set(event.dedupeKey, Date.now());
-    if (event.severity === 'critical' || event.requiresUserAction) {
+
+    const active = this.isUserActive?.() ?? false;
+    if (!shouldPush(event.kind, active)) return;
+
+    if (!shouldAggregate(event.kind)) {
       this.flush();
       this.emit('notify', [event]);
       return;
     }
+
     this.batch.push(event);
     if (!this.batchTimer) {
       this.batchTimer = setTimeout(() => this.flush(), this.batchDelay);

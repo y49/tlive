@@ -3,10 +3,8 @@ import { NotificationHub, type NotificationEvent } from '../../src/im/notificati
 
 function makeEvent(overrides: Partial<NotificationEvent> = {}): NotificationEvent {
   return {
-    kind: 'activity',
+    kind: 'activity_tool',
     dedupeKey: `key-${Math.random()}`,
-    severity: 'info',
-    requiresUserAction: false,
     sessionId: 'sid',
     title: 'test',
     ...overrides,
@@ -19,7 +17,7 @@ describe('NotificationHub', () => {
     hub = new NotificationHub({ batchDelay: 50 });
   });
 
-  it('batches info events and flushes after delay', async () => {
+  it('batches aggregatable events and flushes after delay', async () => {
     const batches: NotificationEvent[][] = [];
     hub.on('notify', (b: NotificationEvent[]) => batches.push(b));
     hub.push(makeEvent({ dedupeKey: 'a' }));
@@ -30,18 +28,18 @@ describe('NotificationHub', () => {
     expect(batches[0]).toHaveLength(2);
   });
 
-  it('sends critical events immediately', () => {
+  it('sends alwaysPush events immediately', () => {
     const batches: NotificationEvent[][] = [];
     hub.on('notify', (b: NotificationEvent[]) => batches.push(b));
-    hub.push(makeEvent({ dedupeKey: 'c', severity: 'critical' }));
+    hub.push(makeEvent({ dedupeKey: 'c', kind: 'permission_request' }));
     expect(batches).toHaveLength(1);
     expect(batches[0]).toHaveLength(1);
   });
 
-  it('sends requiresUserAction events immediately', () => {
+  it('sends ask_user_question events immediately', () => {
     const batches: NotificationEvent[][] = [];
     hub.on('notify', (b: NotificationEvent[]) => batches.push(b));
-    hub.push(makeEvent({ dedupeKey: 'd', requiresUserAction: true }));
+    hub.push(makeEvent({ dedupeKey: 'd', kind: 'ask_user_question' }));
     expect(batches).toHaveLength(1);
   });
 
@@ -63,14 +61,37 @@ describe('NotificationHub', () => {
     expect(batches).toHaveLength(0);
   });
 
-  it('flushes pending batch before critical event', () => {
+  it('flushes pending batch before immediate event', () => {
     const batches: NotificationEvent[][] = [];
     hub.on('notify', (b: NotificationEvent[]) => batches.push(b));
-    hub.push(makeEvent({ dedupeKey: 'info1' }));
-    hub.push(makeEvent({ dedupeKey: 'crit', severity: 'critical' }));
+    hub.push(makeEvent({ dedupeKey: 'batch1' }));
+    hub.push(makeEvent({ dedupeKey: 'crit', kind: 'permission_request' }));
     expect(batches).toHaveLength(2);
     expect(batches[0]).toHaveLength(1);
     expect(batches[1]).toHaveLength(1);
     expect(batches[1][0].dedupeKey).toBe('crit');
+  });
+
+  it('suppresses activity events when user is active', () => {
+    const activeHub = new NotificationHub({
+      batchDelay: 50,
+      isUserActive: () => true,
+    });
+    const batches: NotificationEvent[][] = [];
+    activeHub.on('notify', (b: NotificationEvent[]) => batches.push(b));
+    activeHub.push(makeEvent({ dedupeKey: 'act1', kind: 'activity_text' }));
+    activeHub.push(makeEvent({ dedupeKey: 'act2', kind: 'activity_tool' }));
+    expect(batches).toHaveLength(0);
+  });
+
+  it('still pushes alwaysPush events when user is active', () => {
+    const activeHub = new NotificationHub({
+      batchDelay: 50,
+      isUserActive: () => true,
+    });
+    const batches: NotificationEvent[][] = [];
+    activeHub.on('notify', (b: NotificationEvent[]) => batches.push(b));
+    activeHub.push(makeEvent({ dedupeKey: 'perm', kind: 'permission_request' }));
+    expect(batches).toHaveLength(1);
   });
 });
