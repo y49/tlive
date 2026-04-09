@@ -125,3 +125,30 @@ function formatFilePath(args: Record<string, unknown>): string {
 function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max) + '...' : s;
 }
+
+// ---------------------------------------------------------------------------
+// TodoWrite extraction
+// ---------------------------------------------------------------------------
+
+export interface TodoItem {
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed';
+}
+
+export function extractTodos(toolInput: unknown): TodoItem[] | null {
+  if (!toolInput || typeof toolInput !== 'object') return null;
+  const input = toolInput as Record<string, unknown>;
+  const todos = input.todos;
+  if (!Array.isArray(todos)) return null;
+  return todos.map(t => ({
+    content: (t as any).content ?? (t as any).subject ?? String(t),
+    status: (t as any).status ?? 'pending',
+  }));
+}
+
+export function formatTodos(todos: TodoItem[]): string {
+  const icons: Record<string, string> = {
+    completed: '☑️', in_progress: '🔄', pending: '⬜',
+  };
+  return todos.map(t => `${icons[t.status] ?? '⬜'} ${t.content}`).join('\n');
+}

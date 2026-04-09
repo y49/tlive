@@ -9,7 +9,7 @@ import { NotificationHub, type NotificationEvent } from './im/notificationHub.js
 import { SessionRouter } from './im/sessionRouter.js';
 import type { ProviderAdapter, NormalizedMessage } from './sdk/providerAdapter.js';
 import type { ToolUseEvent, SessionEvent } from './core/sessionScanner.js';
-import { normalizeSessionLine, formatForIM } from './sdk/messageNormalizer.js';
+import { normalizeSessionLine, formatForIM, extractTodos, formatTodos } from './sdk/messageNormalizer.js';
 import type { TLiveConfig } from './config.js';
 import type { NotificationKind } from './im/notificationRules.js';
 import { CostTracker } from './core/costTracker.js';
@@ -111,6 +111,21 @@ export class TLiveLoop extends EventEmitter {
     );
 
     for (const msg of normalized) {
+      // Intercept TodoWrite → structured task list notification
+      if (msg.kind === 'tool_use' && msg.toolName === 'TodoWrite') {
+        const todos = extractTodos(msg.toolInput);
+        if (todos) {
+          this.notifications.push({
+            kind: 'todo_update',
+            dedupeKey: `todo:${event.uuid}`,
+            sessionId: this.session.info.sessionId,
+            title: `📋 Tasks · ${this.sessionTag()}`,
+            body: formatTodos(todos),
+          });
+          continue; // Don't also push as activity_tool
+        }
+      }
+
       const text = formatForIM(msg);
       if (!text) continue;
 
