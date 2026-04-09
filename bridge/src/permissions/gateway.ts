@@ -13,18 +13,21 @@ export class PendingPermissions {
     resolve: (r: PermissionResult) => void;
     timer: NodeJS.Timeout;
   }>();
-  private timeoutMs = 5 * 60 * 1000; // 5 minutes
+  private timeoutMs = 0; // No timeout — wait for user action (IM or terminal)
 
   waitFor(toolUseId: string, options?: WaitForOptions): Promise<PermissionResult> {
     const timeoutMs = options?.timeoutMs ?? this.timeoutMs;
     return new Promise<PermissionResult>((resolve) => {
-      const timer = setTimeout(() => {
-        console.log(`[gateway] TIMEOUT: ${toolUseId} (was pending: ${this.pending.has(toolUseId)})`);
-        this.pending.delete(toolUseId);
-        options?.onTimeout?.(toolUseId);
-        resolve({ behavior: 'deny', message: 'Permission request timed out' });
-      }, timeoutMs);
-      this.pending.set(toolUseId, { resolve, timer });
+      let timer: NodeJS.Timeout | null = null;
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => {
+          console.log(`[gateway] TIMEOUT: ${toolUseId} (was pending: ${this.pending.has(toolUseId)})`);
+          this.pending.delete(toolUseId);
+          options?.onTimeout?.(toolUseId);
+          resolve({ behavior: 'deny', message: 'Permission request timed out' });
+        }, timeoutMs);
+      }
+      this.pending.set(toolUseId, { resolve, timer: timer as any });
       console.log(`[gateway] CREATED: ${toolUseId} (total pending: ${this.pending.size})`);
     });
   }
@@ -33,7 +36,7 @@ export class PendingPermissions {
     const entry = this.pending.get(permissionRequestId);
     console.log(`[gateway] RESOLVE: ${permissionRequestId} → ${decision} (found: ${!!entry}, total pending: ${this.pending.size})`);
     if (!entry) return false;
-    clearTimeout(entry.timer);
+    if (entry.timer) clearTimeout(entry.timer);
     const result: PermissionResult = decision === 'deny'
       ? { behavior: 'deny', message: message || 'Denied by user' }
       : { behavior: decision };
@@ -45,7 +48,7 @@ export class PendingPermissions {
   denyAll(): void {
     console.log(`[gateway] DENY_ALL: ${this.pending.size} entries`);
     for (const [, entry] of this.pending) {
-      clearTimeout(entry.timer);
+      if (entry.timer) clearTimeout(entry.timer);
       entry.resolve({ behavior: 'deny', message: 'Bridge shutting down' });
     }
     this.pending.clear();

@@ -2,7 +2,7 @@ import { loadConfig } from './config.js';
 import { initBridgeContext, type PermissionGateway, type CoreClient } from './context.js';
 import { Logger } from './logger.js';
 import { JsonFileStore } from './store/json-file.js';
-import { resolveProvider, ClaudeSDKProvider } from './providers/index.js';
+import { resolveProvider } from './providers/index.js';
 import { PendingPermissions } from './permissions/gateway.js';
 import { BridgeManager } from './engine/bridge-manager.js';
 import { TerminalRelay } from './engine/terminal-relay.js';
@@ -80,16 +80,6 @@ async function main() {
   // Wire IM → terminal: reply interception + permission callbacks
   manager.onInboundMessage = (_ch, msg) => relay.interceptReply(msg);
   manager.onTerminalPermissionCallback = (action, id, sid) => relay.forwardPermissionAction(action, id, sid);
-
-  // Permission timeout notification
-  if (llm instanceof ClaudeSDKProvider) {
-    llm.onPermissionTimeout = (toolName: string) => {
-      const text = `⏰ Permission timed out (5m)\nTool: ${toolName}\nAction: Denied by default`;
-      for (const adapter of manager.getAdapters()) {
-        adapter.send({ chatId: '', text }).catch(() => {});
-      }
-    };
-  }
 
   // Graceful shutdown
   const keepAliveInterval = setInterval(() => {}, 60_000);

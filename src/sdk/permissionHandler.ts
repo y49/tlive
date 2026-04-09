@@ -99,7 +99,7 @@ export class ClaudePermissionHandler extends BasePermissionHandler {
     }
     const id = `perm-${++this.requestCounter}`;
     const isInteractive = INTERACTIVE_TOOLS.has(toolName);
-    const timeoutMs = isInteractive ? 0 : (this.opts.timeout ?? 55000);
+    const timeoutMs = isInteractive ? 0 : (this.opts.timeout ?? 0);
     this.opts.onPermissionRequest?.(id, toolName, input);
     return this.waitForApproval(id, toolName, input, { signal: callOpts?.signal, timeoutMs });
   }

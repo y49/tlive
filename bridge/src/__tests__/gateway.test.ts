@@ -31,7 +31,7 @@ describe('PendingPermissions', () => {
     expect(gateway.resolve('unknown', 'allow')).toBe(false);
   });
 
-  it('times out after 5 minutes and auto-denies', async () => {
+  it('waitFor creates a pending entry', async () => {
     // Just verify the waitFor call creates a pending entry
     gateway.waitFor('tool1');
     expect(gateway.pendingCount()).toBe(1);
@@ -73,15 +73,23 @@ describe('PendingPermissions', () => {
       vi.useRealTimers();
     });
 
-    it('uses default timeout when options not provided', async () => {
+    it('does not timeout when default (0) is used — waits indefinitely', async () => {
       vi.useFakeTimers();
       const gw = new PendingPermissions();
 
-      const promise = gw.waitFor('tool-2');
-      vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+      let resolved = false;
+      const promise = gw.waitFor('tool-2').then((r) => { resolved = true; return r; });
 
+      // Advance well past the old 5-minute default — should NOT resolve
+      vi.advanceTimersByTime(10 * 60 * 1000);
+      await Promise.resolve(); // flush microtasks
+      expect(resolved).toBe(false);
+      expect(gw.isPending('tool-2')).toBe(true);
+
+      // Clean up by resolving manually
+      gw.resolve('tool-2', 'allow');
       const result = await promise;
-      expect(result.behavior).toBe('deny');
+      expect(result.behavior).toBe('allow');
 
       vi.useRealTimers();
     });
