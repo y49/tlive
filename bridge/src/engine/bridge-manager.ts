@@ -78,7 +78,7 @@ export class BridgeManager {
     this.coreUrl = config.coreUrl;
     this.token = config.token;
     this.permissions = new PermissionCoordinator(gateway, broker, this.coreUrl, this.token, this.renderers);
-    this.sdkEngine = new SDKEngine(this.state, this.router, this.permissions);
+    this.sdkEngine = new SDKEngine(this.state, this.router, this.permissions, this.renderers);
     this.messageRouter = new MessageRouter(
       this.permissions, this.state, this.sdkEngine,
       () => this.coreAvailable, this.coreUrl, this.token,

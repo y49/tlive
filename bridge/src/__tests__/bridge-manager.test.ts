@@ -295,8 +295,8 @@ describe('BridgeManager', () => {
         text: 'hello', messageId: 'm1', replyToMessageId: 'unknown-msg',
       });
 
-      // Should fall through to normal handling
-      expect(adapter.send).toHaveBeenCalled();
+      // Should fall through to normal handling (SDK engine uses sendRendered for progress)
+      expect(adapter.sendRendered).toHaveBeenCalled();
     });
   });
 

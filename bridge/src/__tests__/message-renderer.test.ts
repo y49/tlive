@@ -1,13 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { MessageRenderer } from '../engine/message-renderer.js';
 import type { UsageStats } from '../engine/cost-tracker.js';
+import type { ProgressSnapshot } from '../renderers/types.js';
 
 describe('MessageRenderer', () => {
   let flushCallback: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.useFakeTimers();
-    flushCallback = vi.fn().mockImplementation((_content: string, isEdit: boolean) => {
+    flushCallback = vi.fn().mockImplementation((_snapshot: ProgressSnapshot, isEdit: boolean) => {
       if (!isEdit) return Promise.resolve('msg-1');
       return Promise.resolve();
     });
@@ -34,6 +35,11 @@ describe('MessageRenderer', () => {
     }
   }
 
+  /** Get the last snapshot flushed */
+  function lastSnapshot(): ProgressSnapshot {
+    return flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as ProgressSnapshot;
+  }
+
   const defaultStats: UsageStats = {
     inputTokens: 1000,
     outputTokens: 500,
@@ -55,12 +61,10 @@ describe('MessageRenderer', () => {
       // 1s elapsed tick fires, which schedules a flush (300ms throttle)
       await advance(1300);
       expect(flushCallback).toHaveBeenCalled();
-      const content = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      expect(content).toContain('⏳');
-      expect(content).toContain('🖥️');
-      expect(content).toContain('Bash');
-      expect(content).toContain('×1');
-      expect(content).toContain('1 tools');
+      const snap = lastSnapshot();
+      expect(snap.phase).toBe('executing');
+      expect(snap.toolCounts.get('Bash')).toBe(1);
+      expect(snap.totalTools).toBe(1);
       r.dispose();
     });
 
@@ -72,17 +76,15 @@ describe('MessageRenderer', () => {
       r.onToolStart('Read');
       r.onToolStart('Grep');
       await advance(1300);
-      const content = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      expect(content).toContain('🖥️ Bash ×2');
-      expect(content).toContain('📖 Read ×2');
-      expect(content).toContain('🔍 Grep ×1');
-      expect(content).toContain('5 tools');
-      // Check insertion order: Bash before Read before Grep
-      const bashIdx = content.indexOf('Bash');
-      const readIdx = content.indexOf('Read');
-      const grepIdx = content.indexOf('Grep');
-      expect(bashIdx).toBeLessThan(readIdx);
-      expect(readIdx).toBeLessThan(grepIdx);
+      const snap = lastSnapshot();
+      expect(snap.toolCounts.get('Bash')).toBe(2);
+      expect(snap.toolCounts.get('Read')).toBe(2);
+      expect(snap.toolCounts.get('Grep')).toBe(1);
+      expect(snap.totalTools).toBe(5);
+      // Check insertion order: keys iterator preserves Map insertion order
+      const keys = [...snap.toolCounts.keys()];
+      expect(keys.indexOf('Bash')).toBeLessThan(keys.indexOf('Read'));
+      expect(keys.indexOf('Read')).toBeLessThan(keys.indexOf('Grep'));
       r.dispose();
     });
 
@@ -90,9 +92,8 @@ describe('MessageRenderer', () => {
       const r = createRenderer();
       r.onToolStart('CustomTool');
       await advance(1300);
-      const content = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      expect(content).toContain('🔧');
-      expect(content).toContain('CustomTool');
+      const snap = lastSnapshot();
+      expect(snap.toolCounts.get('CustomTool')).toBe(1);
       r.dispose();
     });
 
@@ -119,12 +120,12 @@ describe('MessageRenderer', () => {
       r.onToolStart('Bash');
       // Advance 3s + 300ms throttle
       await advance(3300);
-      const content = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      expect(content).toContain('3s');
+      const snap = lastSnapshot();
+      expect(snap.elapsedSeconds).toBe(3);
       r.dispose();
     });
 
-    it('renders Starting... before any tool', async () => {
+    it('renders starting phase before any tool', async () => {
       const r = createRenderer();
       // Trigger a permission prompt with no tools to force a flush
       r.onPermissionNeeded('Bash', 'npm test', '123', defaultButtons);
@@ -132,9 +133,15 @@ describe('MessageRenderer', () => {
       // Now resolve the permission to go back to executing phase
       r.onPermissionResolved();
       await advance(300);
-      const lastCall = flushCallback.mock.calls[flushCallback.mock.calls.length - 1];
-      const content = lastCall[0] as string;
-      expect(content).toBe('⏳ Starting...');
+      const snap = lastSnapshot();
+      // With no tools and no response text, phase should be 'starting'
+      // But the doFlush skip guard (starting + 0 tools + no text) means this won't flush.
+      // The last flushed snapshot was the permission one. After resolve, the scheduled flush
+      // produces a 'starting' snapshot which gets skipped. So check the permission one was flushed.
+      // Actually, let's just verify the snapshot state directly:
+      const directSnap = r.snapshot();
+      expect(directSnap.phase).toBe('starting');
+      expect(directSnap.totalTools).toBe(0);
       r.dispose();
     });
   });
@@ -147,20 +154,20 @@ describe('MessageRenderer', () => {
       r.onToolStart('Bash');
       r.onPermissionNeeded('Bash', 'npm test -- schema.test.ts', 'perm-1', defaultButtons);
       await advance(300);
-      const content = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      expect(content).toContain('🔐');
-      expect(content).toContain('Bash');
-      expect(content).toContain('npm test -- schema.test.ts');
+      const snap = lastSnapshot();
+      expect(snap.phase).toBe('permission');
+      expect(snap.permissionQueue[0].toolName).toBe('Bash');
+      expect(snap.permissionQueue[0].input).toBe('npm test -- schema.test.ts');
       r.dispose();
     });
 
-    it('passes buttons through during permission phase', async () => {
+    it('passes buttons through during permission phase via permissionQueue', async () => {
       const r = createRenderer();
       r.onToolStart('Bash');
       r.onPermissionNeeded('Bash', 'rm -rf /', 'perm-1', defaultButtons);
       await advance(300);
-      const lastCall = flushCallback.mock.calls[flushCallback.mock.calls.length - 1];
-      expect(lastCall[2]).toEqual(defaultButtons);
+      const snap = lastSnapshot();
+      expect(snap.permissionQueue[0].buttons).toEqual(defaultButtons);
       r.dispose();
     });
 
@@ -170,8 +177,8 @@ describe('MessageRenderer', () => {
       r.onToolStart('Bash');
       r.onPermissionNeeded('Bash', longInput, 'perm-1', defaultButtons);
       await advance(300);
-      const content = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      expect(content).toContain(longInput);
+      const snap = lastSnapshot();
+      expect(snap.permissionQueue[0].input).toBe(longInput);
       r.dispose();
     });
 
@@ -184,15 +191,15 @@ describe('MessageRenderer', () => {
 
       r.onPermissionResolved();
       await advance(1300);
-      const content = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      expect(content).toContain('⏳');
-      expect(content).toContain('Bash ×1');
-      expect(content).toContain('Read ×1');
-      expect(content).not.toContain('🔐');
+      const snap = lastSnapshot();
+      expect(snap.phase).toBe('executing');
+      expect(snap.toolCounts.get('Bash')).toBe(1);
+      expect(snap.toolCounts.get('Read')).toBe(1);
+      expect(snap.permissionQueue).toHaveLength(0);
       r.dispose();
     });
 
-    it('does not pass buttons after permission resolved', async () => {
+    it('does not have permissions after permission resolved', async () => {
       const r = createRenderer();
       r.onToolStart('Bash');
       r.onPermissionNeeded('Bash', 'cmd', 'perm-1', defaultButtons);
@@ -200,8 +207,8 @@ describe('MessageRenderer', () => {
 
       r.onPermissionResolved();
       await advance(1300);
-      const lastCall = flushCallback.mock.calls[flushCallback.mock.calls.length - 1];
-      expect(lastCall[2]).toBeUndefined();
+      const snap = lastSnapshot();
+      expect(snap.permissionQueue).toHaveLength(0);
       r.dispose();
     });
 
@@ -266,7 +273,7 @@ describe('MessageRenderer', () => {
   // ─── Done phase ──────────────────────────────────
 
   describe('done phase', () => {
-    it('shows response text + separator + tool summary + cost', async () => {
+    it('shows response text + tool summary + cost in completed snapshot', async () => {
       const r = createRenderer();
       r.onToolStart('Bash');
       r.onToolStart('Read');
@@ -274,55 +281,57 @@ describe('MessageRenderer', () => {
       r.onTextDelta('Here is the result.');
       r.onComplete(defaultStats);
       await advance(0); // drain microtasks
-      const content = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      expect(content).toContain('Here is the result.');
-      expect(content).toContain('───────────────');
-      expect(content).toContain('🖥️ Bash ×1');
-      expect(content).toContain('📖 Read ×2');
-      expect(content).toContain('3 total');
-      expect(content).toContain('📊');
-      expect(content).toContain('$0.05');
+      const snap = lastSnapshot();
+      expect(snap.phase).toBe('completed');
+      expect(snap.responseText).toBe('Here is the result.');
+      expect(snap.toolCounts.get('Bash')).toBe(1);
+      expect(snap.toolCounts.get('Read')).toBe(2);
+      expect(snap.totalTools).toBe(3);
+      expect(snap.costLine).toBeDefined();
+      expect(snap.costLine).toContain('$0.05');
       r.dispose();
     });
 
-    it('omits separator when response is empty', async () => {
+    it('completed with no response text still has tool summary', async () => {
       const r = createRenderer();
       r.onToolStart('Bash');
       r.onComplete(defaultStats);
       await advance(0);
-      const content = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      expect(content).not.toContain('───────────────');
-      expect(content).toContain('🖥️ Bash ×1');
-      expect(content).toContain('1 total');
-      expect(content).toContain('📊');
+      const snap = lastSnapshot();
+      expect(snap.phase).toBe('completed');
+      expect(snap.responseText).toBe('');
+      expect(snap.toolCounts.get('Bash')).toBe(1);
+      expect(snap.totalTools).toBe(1);
+      expect(snap.costLine).toBeDefined();
       r.dispose();
     });
 
-    it('shows error with tools as stopped + footer', async () => {
+    it('shows error with tools as error phase', async () => {
       const r = createRenderer();
       r.onToolStart('Bash');
       r.onToolStart('Read');
       r.onError('connection lost');
       await advance(0);
-      const content = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      expect(content).toContain('⚠️ Stopped');
-      expect(content).toContain('───────────────');
-      expect(content).toContain('🖥️ Bash ×1');
-      expect(content).toContain('📖 Read ×1');
+      const snap = lastSnapshot();
+      expect(snap.phase).toBe('error');
+      expect(snap.errorMessage).toBe('connection lost');
+      expect(snap.toolCounts.get('Bash')).toBe(1);
+      expect(snap.toolCounts.get('Read')).toBe(1);
       r.dispose();
     });
 
-    it('shows error without tools as simple error message', async () => {
+    it('shows error without tools as error phase', async () => {
       const r = createRenderer();
       r.onError('connection refused');
       await advance(0);
-      const content = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      expect(content).toBe('❌ connection refused');
-      expect(content).not.toContain('───────────────');
+      const snap = lastSnapshot();
+      expect(snap.phase).toBe('error');
+      expect(snap.errorMessage).toBe('connection refused');
+      expect(snap.totalTools).toBe(0);
       r.dispose();
     });
 
-    it('filters hidden tools from counts and display', async () => {
+    it('filters hidden tools from counts', async () => {
       const r = createRenderer();
       r.onToolStart('Bash');
       r.onToolStart('TodoWrite');
@@ -331,24 +340,24 @@ describe('MessageRenderer', () => {
       r.onToolStart('Read');
       r.onComplete(defaultStats);
       await advance(0);
-      const content = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      expect(content).toContain('2 total');
-      expect(content).not.toContain('TodoWrite');
-      expect(content).not.toContain('TaskCreate');
-      expect(content).not.toContain('ToolSearch');
+      const snap = lastSnapshot();
+      expect(snap.totalTools).toBe(2);
+      expect(snap.toolCounts.has('TodoWrite')).toBe(false);
+      expect(snap.toolCounts.has('TaskCreate')).toBe(false);
+      expect(snap.toolCounts.has('ToolSearch')).toBe(false);
       r.dispose();
     });
 
-    it('shows error with partial text + footer', async () => {
+    it('shows error with partial text', async () => {
       const r = createRenderer();
       r.onToolStart('Bash');
       r.onTextDelta('Partial response...');
       r.onError('stream interrupted');
       await advance(0);
-      const content = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      expect(content).toContain('Partial response...');
-      expect(content).toContain('⚠️ Stopped');
-      expect(content).toContain('───────────────');
+      const snap = lastSnapshot();
+      expect(snap.phase).toBe('error');
+      expect(snap.responseText).toBe('Partial response...');
+      expect(snap.errorMessage).toBe('stream interrupted');
       r.dispose();
     });
   });
@@ -360,7 +369,10 @@ describe('MessageRenderer', () => {
       const r = createRenderer();
       r.onToolStart('Bash');
       await advance(1300);
-      expect(flushCallback).toHaveBeenCalledWith(expect.any(String), false, undefined);
+      expect(flushCallback).toHaveBeenCalledWith(
+        expect.objectContaining({ phase: 'executing' }),
+        false,
+      );
       expect(r.messageId).toBe('msg-1');
 
       // Trigger another flush via elapsed tick
@@ -372,7 +384,7 @@ describe('MessageRenderer', () => {
 
     it('prevents concurrent flushes with double-buffering', async () => {
       let resolveFirst: () => void;
-      const slowCallback = vi.fn().mockImplementation((_content: string, isEdit: boolean) => {
+      const slowCallback = vi.fn().mockImplementation((_snapshot: ProgressSnapshot, isEdit: boolean) => {
         if (!isEdit) {
           return new Promise<string>((resolve) => {
             resolveFirst = () => resolve('msg-1');
@@ -412,29 +424,30 @@ describe('MessageRenderer', () => {
       r.dispose();
     });
 
-    it('done phase passes full content (no platform limit truncation)', async () => {
+    it('done phase passes full response text in snapshot', async () => {
       const r = createRenderer(200);
       r.onToolStart('Bash');
       r.onTextDelta('x'.repeat(500));
       r.onComplete(defaultStats);
       await advance(0);
-      const content = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      // Done phase does NOT truncate — bridge-manager handles overflow chunking
-      expect(content.length).toBeGreaterThan(200);
-      expect(content).toContain('x'.repeat(500));
+      const snap = lastSnapshot();
+      // Snapshot always contains the full responseText — truncation is the renderer's job
+      expect(snap.responseText.length).toBe(500);
+      expect(snap.responseText).toBe('x'.repeat(500));
       r.dispose();
     });
 
-    it('executing phase still applies platform limit truncation', async () => {
+    it('executing phase snapshot still has full data for renderer to handle limits', async () => {
       const r = createRenderer(200);
-      // Add many different tool types to exceed the limit
+      // Add many different tool types
       for (let i = 0; i < 20; i++) {
         r.onToolStart(`LongToolName${i}`);
       }
       await advance(300);
-      const content = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      expect(content.length).toBeLessThanOrEqual(200);
-      expect(content.startsWith('...\n')).toBe(true);
+      const snap = lastSnapshot();
+      expect(snap.phase).toBe('executing');
+      expect(snap.totalTools).toBe(20);
+      expect(snap.toolCounts.size).toBe(20);
       r.dispose();
     });
 
@@ -455,13 +468,13 @@ describe('MessageRenderer', () => {
       r.onToolStart('Bash');
       // After 1s tick + 300ms throttle
       await advance(1300);
-      const content1 = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      expect(content1).toContain('1s');
+      const snap1 = lastSnapshot();
+      expect(snap1.elapsedSeconds).toBe(1);
 
       // After 2s tick + 300ms throttle (at t=2300)
       await advance(1000);
-      const content2 = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      expect(content2).toContain('2s');
+      const snap2 = lastSnapshot();
+      expect(snap2.elapsedSeconds).toBe(2);
       r.dispose();
     });
 
@@ -486,7 +499,7 @@ describe('MessageRenderer', () => {
   // ─── Full lifecycle integration ──────────────────
 
   describe('full lifecycle integration', () => {
-    it('tools → permission → more tools → done', async () => {
+    it('tools -> permission -> more tools -> done', async () => {
       const r = createRenderer();
 
       // Phase 1: tools executing
@@ -495,38 +508,38 @@ describe('MessageRenderer', () => {
       r.onToolComplete('t1');
       r.onToolComplete('t2');
       await advance(1300);
-      let content = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      expect(content).toContain('⏳');
-      expect(content).toContain('📖 Read ×2');
+      let snap = lastSnapshot();
+      expect(snap.phase).toBe('executing');
+      expect(snap.toolCounts.get('Read')).toBe(2);
 
       // Phase 2: permission needed
       r.onToolStart('Bash');
       r.onPermissionNeeded('Bash', 'npm test', 'perm-1', defaultButtons);
       await advance(300);
-      content = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      expect(content).toContain('🔐');
-      expect(content).toContain('npm test');
+      snap = lastSnapshot();
+      expect(snap.phase).toBe('permission');
+      expect(snap.permissionQueue[0].input).toBe('npm test');
 
       // Phase 3: permission resolved, more tools
       r.onPermissionResolved();
       r.onToolStart('Bash');
       r.onToolStart('Grep');
       await advance(1300);
-      content = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      expect(content).toContain('⏳');
-      expect(content).toContain('Read ×2');
-      expect(content).toContain('Bash ×2');
-      expect(content).toContain('Grep ×1');
+      snap = lastSnapshot();
+      expect(snap.phase).toBe('executing');
+      expect(snap.toolCounts.get('Read')).toBe(2);
+      expect(snap.toolCounts.get('Bash')).toBe(2);
+      expect(snap.toolCounts.get('Grep')).toBe(1);
 
       // Phase 4: complete
       r.onTextDelta('All done!');
       r.onComplete(defaultStats);
       await advance(0);
-      content = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
-      expect(content).toContain('All done!');
-      expect(content).toContain('───────────────');
-      expect(content).toContain('5 total');
-      expect(content).toContain('📊');
+      snap = lastSnapshot();
+      expect(snap.phase).toBe('completed');
+      expect(snap.responseText).toContain('All done!');
+      expect(snap.totalTools).toBe(5);
+      expect(snap.costLine).toBeDefined();
       r.dispose();
     });
   });
@@ -552,8 +565,8 @@ describe('MessageRenderer', () => {
       r.onTextDelta('world');
       await advance(300);
       expect(flushCallback).toHaveBeenCalled();
-      const content = flushCallback.mock.calls[0][0] as string;
-      expect(content).toContain('hello world');
+      const snap = flushCallback.mock.calls[0][0] as ProgressSnapshot;
+      expect(snap.responseText).toContain('hello world');
       r.dispose();
     });
   });

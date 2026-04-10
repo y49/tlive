@@ -1,5 +1,5 @@
 import type { BaseChannelAdapter } from '../channels/base.js';
-import type { InboundMessage, OutboundMessage } from '../channels/types.js';
+import type { InboundMessage, ChannelType } from '../channels/types.js';
 import type { LLMProvider, QueryControls, LiveSession } from '../providers/base.js';
 import type { PermissionCoordinator } from './permission-coordinator.js';
 import type { SessionStateManager } from './session-state.js';
@@ -10,11 +10,9 @@ import { MessageRenderer } from './message-renderer.js';
 import { CostTracker } from './cost-tracker.js';
 import type { UsageStats } from './cost-tracker.js';
 import { getToolCommand } from './tool-registry.js';
-import { markdownToTelegram } from '../markdown/index.js';
-import { downgradeHeadings } from '../markdown/feishu.js';
-import { chunkByParagraph } from '../delivery/delivery.js';
 import type { FeishuStreamingSession } from '../channels/feishu-streaming.js';
 import { getBridgeContext } from '../context.js';
+import type { NotificationRenderer, RenderedMessage, ProgressSnapshot, FeishuOutbound } from '../renderers/types.js';
 
 /** Managed session — wraps a LiveSession with per-chat metadata */
 interface ManagedSession {
@@ -54,6 +52,7 @@ export class SDKEngine {
     private state: SessionStateManager,
     private router: ChannelRouter,
     private permissions: PermissionCoordinator,
+    private renderers: Map<ChannelType, NotificationRenderer>,
   ) {}
 
   /** Start periodic cleanup of idle LiveSessions */
@@ -281,24 +280,21 @@ export class SDKEngine {
       ? (msg.channelType === 'feishu' ? '\n\n💬 点击选项切换选中，然后按 Submit 确认' : '\n\n💬 Tap options to toggle, then Submit')
       : (msg.channelType === 'feishu' ? '\n\n💬 回复数字选择，或直接输入内容' : '\n\n💬 Reply with number to select, or type your answer');
 
-    const outMsg: OutboundMessage = {
-      chatId: msg.chatId,
-      text: msg.channelType !== 'telegram' ? questionText + hint : undefined,
-      html: msg.channelType === 'telegram' ? questionText.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>') + hint : undefined,
-      buttons,
-      feishuHeader: msg.channelType === 'feishu' ? { template: 'blue', title: '❓ Question' } : undefined,
-    };
-    const sendResult = await adapter.send(outMsg);
+    const r = this.renderers.get(adapter.channelType)!;
+    const rendered = r.renderCommandResponse({
+      title: '❓ Question',
+      body: questionText + hint,
+      buttons: buttons.map(b => ({ ...b, style: b.style as 'primary' | 'danger' | 'default' })),
+      color: 'info',
+    });
+    const sendResult = await adapter.sendRendered(msg.chatId, rendered);
     this.permissions.trackPermissionMessage(sendResult.messageId, permId, sessionId, msg.channelType);
 
     const result = await waitPromise;
 
     if (result.behavior === 'deny') {
       this.sdkQuestionData.delete(permId);
-      adapter.editMessage(msg.chatId, sendResult.messageId, {
-        chatId: msg.chatId, text: '⏭ Skipped', buttons: [],
-        feishuHeader: msg.channelType === 'feishu' ? { template: 'grey', title: '⏭ Skipped' } : undefined,
-      }).catch(() => {});
+      adapter.editRendered(msg.chatId, sendResult.messageId, r.renderSimpleText('⏭ Skipped')).catch(() => {});
       throw new Error('User skipped question');
     }
 
@@ -307,12 +303,8 @@ export class SDKEngine {
     this.sdkQuestionData.delete(permId);
 
     if (textAnswer !== undefined) {
-      adapter.editMessage(msg.chatId, sendResult.messageId, {
-        chatId: msg.chatId,
-        text: `✅ Answer: ${textAnswer.length > 50 ? textAnswer.slice(0, 47) + '...' : textAnswer}`,
-        buttons: [],
-        feishuHeader: msg.channelType === 'feishu' ? { template: 'green', title: '✅ Answered' } : undefined,
-      }).catch(() => {});
+      const preview = textAnswer.length > 50 ? textAnswer.slice(0, 47) + '...' : textAnswer;
+      adapter.editRendered(msg.chatId, sendResult.messageId, r.renderSimpleText(`✅ Answer: ${preview}`)).catch(() => {});
       return textAnswer;
     }
 
@@ -322,10 +314,7 @@ export class SDKEngine {
     const answerLabel = selected?.label ?? '';
 
     if (!selected) {
-      adapter.editMessage(msg.chatId, sendResult.messageId, {
-        chatId: msg.chatId, text: '✅ Answered', buttons: [],
-        feishuHeader: msg.channelType === 'feishu' ? { template: 'green', title: '✅ Answered' } : undefined,
-      }).catch(() => {});
+      adapter.editRendered(msg.chatId, sendResult.messageId, r.renderSimpleText('✅ Answered')).catch(() => {});
     }
 
     return answerLabel;
@@ -397,47 +386,50 @@ export class SDKEngine {
       onPermissionTimeout: async (toolName, input, buttons) => {
         permissionReminderTool = toolName;
         permissionReminderInput = input;
-        const text = `⚠️ Permission pending — ${toolName}: ${permissionReminderInput}`;
+        const r = this.renderers.get(adapter.channelType)!;
+        const rendered = r.renderCommandResponse({
+          title: '⚠️ Permission Pending',
+          body: `${toolName}: ${input}`,
+          buttons: buttons.map(b => ({ ...b, style: b.style as 'primary' | 'danger' | 'default' })),
+          color: 'warning',
+        });
         const targetChatId = threadId && adapter.channelType === 'discord' ? threadId : msg.chatId;
-        const outMsg: OutboundMessage = adapter.channelType === 'telegram'
-          ? { chatId: targetChatId, html: markdownToTelegram(text) }
-          : { chatId: targetChatId, text };
-        outMsg.buttons = buttons.map(b => ({ ...b, style: b.style as 'primary' | 'danger' | 'default' }));
-        if (threadId) outMsg.threadId = threadId;
         try {
-          const result = await adapter.send(outMsg);
+          const result = await adapter.sendRendered(targetChatId, rendered);
           permissionReminderMsgId = result.messageId;
         } catch { /* non-fatal */ }
       },
-      flushCallback: async (content, isEdit, buttons) => {
-        if (feishuSession && !buttons?.length) {
-          if (!isEdit) {
-            try {
-              const messageId = await feishuSession.start(downgradeHeadings(content));
+      flushCallback: async (snapshot: ProgressSnapshot, isEdit: boolean) => {
+        const r = this.renderers.get(adapter.channelType)!;
+        const rendered = r.renderProgress(snapshot);
+
+        // FIXME: Feishu streaming path — feishuSession is currently unused (always null).
+        // When enabled, streaming API sends plain text, not card JSON. For now, extract
+        // text from card JSON for the streaming path.
+        if (feishuSession && snapshot.permissionQueue.length === 0) {
+          try {
+            const cardJson = JSON.parse((rendered as FeishuOutbound).card || '{}');
+            const textContent = cardJson.body?.elements
+              ?.filter((e: any) => e.tag === 'markdown')
+              ?.map((e: any) => e.content)
+              ?.join('\n') || '';
+            if (!isEdit) {
+              const messageId = await feishuSession.start(textContent);
               clearInterval(typingInterval);
               return messageId;
-            } catch {
-              feishuSession = null;
+            } else {
+              feishuSession.update(textContent).catch(() => {});
+              return;
             }
-          } else {
-            feishuSession.update(downgradeHeadings(content)).catch(() => {});
-            return;
+          } catch {
+            feishuSession = null;
           }
         }
-        let outMsg: OutboundMessage;
-        if (adapter.channelType === 'telegram') {
-          outMsg = { chatId: msg.chatId, html: markdownToTelegram(content), threadId };
-        } else if (adapter.channelType === 'discord') {
-          outMsg = { chatId: msg.chatId, text: content, threadId };
-        } else {
-          outMsg = { chatId: msg.chatId, text: content };
-        }
-        if (buttons?.length) {
-          outMsg.buttons = buttons.map(b => ({ ...b, style: b.style as 'primary' | 'danger' | 'default' }));
-        }
+
         if (!isEdit) {
+          const sendTarget = threadId && adapter.channelType === 'discord' ? threadId : msg.chatId;
           if (adapter.channelType === 'discord' && !threadId && 'createThread' in adapter) {
-            const result = await adapter.send(outMsg);
+            const result = await adapter.sendRendered(msg.chatId, rendered);
             clearInterval(typingInterval);
             const preview = (msg.text || 'Claude').slice(0, 80);
             const newThreadId = await (adapter as any).createThread(msg.chatId, result.messageId, `💬 ${preview}`);
@@ -447,29 +439,16 @@ export class SDKEngine {
             }
             return result.messageId;
           }
-          const result = await adapter.send(outMsg);
+          const result = await adapter.sendRendered(sendTarget, rendered);
           clearInterval(typingInterval);
           return result.messageId;
         } else {
-          const limit = platformLimits[adapter.channelType] ?? 4096;
-          if (content.length > limit) {
-            const chunks = chunkByParagraph(content, limit);
-            const firstOutMsg: OutboundMessage = adapter.channelType === 'telegram'
-              ? { chatId: msg.chatId, html: markdownToTelegram(chunks[0]), threadId }
-              : adapter.channelType === 'discord'
-                ? { chatId: msg.chatId, text: chunks[0], threadId }
-                : { chatId: msg.chatId, text: chunks[0] };
-            await adapter.editMessage(msg.chatId, renderer.messageId!, firstOutMsg);
-            const target = threadId && adapter.channelType === 'discord' ? threadId : msg.chatId;
-            for (let i = 1; i < chunks.length; i++) {
-              const overflowMsg: OutboundMessage = adapter.channelType === 'telegram'
-                ? { chatId: target, html: markdownToTelegram(chunks[i]) }
-                : { chatId: target, text: chunks[i] };
-              await adapter.send(overflowMsg);
-            }
-          } else {
-            await adapter.editMessage(msg.chatId, renderer.messageId!, outMsg);
-          }
+          // Edit existing message — let the platform handle truncation.
+          // The renderer already applies platform limits for executing/permission phases.
+          // TODO: For completed phase with very long responseText, platform may truncate.
+          // Proper overflow chunking for rendered messages can be added later if needed.
+          const editTarget = threadId && adapter.channelType === 'discord' ? threadId : msg.chatId;
+          await adapter.editRendered(editTarget, renderer.messageId!, rendered);
         }
       },
     });
@@ -504,9 +483,10 @@ export class SDKEngine {
           renderer.onPermissionResolved(permId);
           if (permissionReminderMsgId) {
             const icon = result.behavior === 'deny' ? '❌' : '✅';
-            adapter.editMessage(msg.chatId, permissionReminderMsgId, {
-              chatId: msg.chatId, text: `${permissionReminderTool}: ${permissionReminderInput} ${icon}`,
-            }).catch(() => {});
+            const r = this.renderers.get(adapter.channelType)!;
+            adapter.editRendered(msg.chatId, permissionReminderMsgId,
+              r.renderSimpleText(`${permissionReminderTool}: ${permissionReminderInput} ${icon}`)
+            ).catch(() => {});
             permissionReminderMsgId = undefined;
           }
           this.permissions.clearPendingSdkPerm(chatKey);
@@ -605,11 +585,13 @@ export class SDKEngine {
         onPromptSuggestion: (suggestion) => {
           const chatId = threadId && adapter.channelType === 'discord' ? threadId : msg.chatId;
           const truncated = suggestion.length > 60 ? suggestion.slice(0, 57) + '...' : suggestion;
-          adapter.send({
-            chatId,
-            text: `💡 ${truncated}`,
+          const r = this.renderers.get(adapter.channelType)!;
+          const rendered = r.renderCommandResponse({
+            title: '',
+            body: `💡 ${truncated}`,
             buttons: [{ label: '💡 ' + truncated, callbackData: `suggest:${suggestion.slice(0, 200)}`, style: 'default' as const }],
-          }).catch(() => {});
+          });
+          adapter.sendRendered(chatId, rendered).catch(() => {});
         },
         onError: (err) => renderer.onError(err),
       });

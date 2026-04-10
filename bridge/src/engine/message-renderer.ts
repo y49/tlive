@@ -7,9 +7,8 @@ export interface MessageRendererOptions {
   platformLimit: number;
   throttleMs?: number;
   flushCallback: (
-    content: string,
+    snapshot: ProgressSnapshot,
     isEdit: boolean,
-    buttons?: Array<{ label: string; callbackData: string; style: string }>,
   ) => Promise<string | void>;
   /** Called when permission waits >60s without response */
   onPermissionTimeout?: (toolName: string, input: string, buttons: Array<{ label: string; callbackData: string; style: string }>) => void;
@@ -141,15 +140,13 @@ export class MessageRenderer {
     this.completed = true;
     this.costLine = CostTracker.format(stats);
     this.stopTimers();
-    const content = this.render();
-    this.doFlush(content);
+    this.doFlush(this.snapshot());
   }
 
   onError(error: string): void {
     this.errorMessage = error;
     this.stopTimers();
-    const content = this.render();
-    this.doFlush(content);
+    this.doFlush(this.snapshot());
   }
 
   snapshot(): ProgressSnapshot {
@@ -301,8 +298,8 @@ export class MessageRenderer {
     if (this.timer) return;
     this.timer = setTimeout(() => {
       this.timer = null;
-      const content = this.render();
-      this.doFlush(content);
+      const snap = this.snapshot();
+      this.doFlush(snap);
     }, this.throttleMs);
   }
 
@@ -325,8 +322,10 @@ export class MessageRenderer {
     }
   }
 
-  private async doFlush(content: string): Promise<void> {
-    if (!content) return;
+  private async doFlush(snap: ProgressSnapshot): Promise<void> {
+    // Skip if no meaningful content yet
+    if (snap.phase === 'starting' && snap.totalTools === 0 && !snap.responseText) return;
+
     if (this.flushing) {
       this.pendingFlush = true;
       return;
@@ -334,10 +333,9 @@ export class MessageRenderer {
     this.flushing = true;
     try {
       const isEdit = !!this._messageId;
-      const flushButtons = this.permissionQueue[0]?.buttons;
       let result: string | void = undefined;
       try {
-        result = await this.flushCallback(content, isEdit, flushButtons);
+        result = await this.flushCallback(snap, isEdit);
       } catch (err: any) {
         // Retry once for transient / retryable errors
         const code = err?.code ?? '';
@@ -345,7 +343,7 @@ export class MessageRenderer {
         if (retryable) {
           await new Promise(r => setTimeout(r, 1000));
           try {
-            result = await this.flushCallback(content, isEdit, flushButtons);
+            result = await this.flushCallback(snap, isEdit);
           } catch {
             // give up after one retry
           }
@@ -361,8 +359,10 @@ export class MessageRenderer {
       if (this.pendingFlush) {
         this.pendingFlush = false;
         try {
-          const retryContent = this.render();
-          if (retryContent) await this.doFlush(retryContent);
+          const retrySnap = this.snapshot();
+          if (retrySnap.phase !== 'starting' || retrySnap.totalTools > 0 || retrySnap.responseText) {
+            await this.doFlush(retrySnap);
+          }
         } catch {
           // Never let recursive flush errors propagate — the next scheduled
           // flush will pick up the latest content.
