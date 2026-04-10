@@ -147,7 +147,7 @@ export class SessionManager extends EventEmitter {
     }
     this.permissionHandler = null;
     this.sdkAbortController = null;
-    if (this._state === 'sdk_active') await this.restorePTY();
+    if ((this._state as SessionState) === 'sdk_active') await this.restorePTY();
   }
 
   async restorePTY(): Promise<void> {

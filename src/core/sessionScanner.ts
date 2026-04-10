@@ -41,7 +41,7 @@ export class SessionScanner extends EventEmitter {
   private lastSize = 0;
   private pendingToolUse = new Map<string, PendingPermission>();
   private jsonlPath: string;
-  private opts: Required<ScannerOptions>;
+  private opts: Required<Omit<ScannerOptions, 'sessionDir'>>;
 
   constructor(opts: ScannerOptions) {
     super();
