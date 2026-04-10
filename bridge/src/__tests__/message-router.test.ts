@@ -112,7 +112,7 @@ describe('MessageRouter', () => {
       permissions as any,
       state as any,
       sdkEngine as any,
-      coreAvailable,
+      coreAvailable as any,
       'http://localhost:4590',
       'test-token',
       renderers,

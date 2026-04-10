@@ -77,7 +77,7 @@ describe('ControlPanel', () => {
     controls = new Map();
     onNewSession = vi.fn();
     renderers = createRenderers();
-    panel = new ControlPanel(state as any, sdkEngine as any, controls, router as any, renderers, onNewSession);
+    panel = new ControlPanel(state as any, sdkEngine as any, controls, router as any, renderers, onNewSession as any);
   });
 
   describe('buildMainPanel', () => {

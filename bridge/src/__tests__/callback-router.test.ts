@@ -93,7 +93,7 @@ describe('CallbackRouter', () => {
       permissions as any,
       sdkState,
       () => true,
-      handleInboundMessage,
+      handleInboundMessage as any,
       createRenderers(),
     );
   });

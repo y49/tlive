@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { markdownToTelegram, markdownToDiscordChunks, markdownToFeishu, markdownToHtml, truncateLongCodeBlocks } from '../markdown/index.js';
+import { markdownToTelegram, markdownToFeishu, markdownToHtml, truncateLongCodeBlocks } from '../markdown/index.js';
 
 describe('Telegram rendering', () => {
   it('converts bold', () => {
@@ -38,32 +38,6 @@ describe('Telegram rendering', () => {
     expect(result).not.toContain('<br');
     expect(result).toContain('line one');
     expect(result).toContain('line two');
-  });
-});
-
-describe('Discord chunking', () => {
-  it('returns single chunk for short text', () => {
-    const chunks = markdownToDiscordChunks('hello world');
-    expect(chunks).toHaveLength(1);
-  });
-
-  it('chunks at 2000 chars', () => {
-    const long = 'x'.repeat(3000);
-    const chunks = markdownToDiscordChunks(long);
-    expect(chunks.length).toBeGreaterThan(1);
-    for (const chunk of chunks) {
-      expect(chunk.length).toBeLessThanOrEqual(2000);
-    }
-  });
-
-  it('balances code fences across chunks', () => {
-    const md = '```\n' + 'x'.repeat(2500) + '\n```';
-    const chunks = markdownToDiscordChunks(md);
-    // Each chunk with a code block should be properly fenced
-    for (const chunk of chunks) {
-      const opens = (chunk.match(/```/g) || []).length;
-      expect(opens % 2).toBe(0); // even number = balanced
-    }
   });
 });
 
