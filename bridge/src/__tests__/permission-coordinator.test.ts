@@ -2,16 +2,23 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PermissionCoordinator } from '../engine/permission-coordinator.js';
 import { PendingPermissions } from '../permissions/gateway.js';
 import { PermissionBroker } from '../permissions/broker.js';
+import type { ChannelType } from '../channels/types.js';
+import type { NotificationRenderer, RenderedMessage } from '../renderers/types.js';
+import { TelegramRenderer } from '../renderers/telegram.js';
 
 describe('PermissionCoordinator', () => {
   let gateway: PendingPermissions;
   let broker: PermissionBroker;
   let coord: PermissionCoordinator;
+  let renderers: Map<ChannelType, NotificationRenderer>;
 
   beforeEach(() => {
     gateway = new PendingPermissions();
-    broker = new PermissionBroker(gateway, 'http://localhost:4590');
-    coord = new PermissionCoordinator(gateway, broker, 'http://localhost:9090', 'test-token');
+    renderers = new Map<ChannelType, NotificationRenderer>([
+      ['telegram', new TelegramRenderer()],
+    ]);
+    broker = new PermissionBroker(gateway, 'http://localhost:4590', renderers);
+    coord = new PermissionCoordinator(gateway, broker, 'http://localhost:9090', 'test-token', renderers);
   });
 
   describe('parsePermissionText', () => {

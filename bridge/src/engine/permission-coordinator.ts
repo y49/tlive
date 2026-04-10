@@ -1,5 +1,7 @@
 import { PendingPermissions } from '../permissions/gateway.js';
 import { PermissionBroker } from '../permissions/broker.js';
+import type { ChannelType } from '../channels/types.js';
+import type { NotificationRenderer, RenderedMessage } from '../renderers/types.js';
 
 /**
  * Coordinates all permission-related state and resolution logic.
@@ -14,6 +16,7 @@ export class PermissionCoordinator {
   private broker: PermissionBroker;
   private coreUrl: string;
   private token: string;
+  private renderers: Map<ChannelType, NotificationRenderer>;
 
   /** Track pending SDK permission IDs per chat for text-based resolution (key: stateKey, value: permId) */
   private pendingSdkPerms = new Map<string, string>();
@@ -40,11 +43,12 @@ export class PermissionCoordinator {
   /** Dynamic Bash prefix whitelist — commands approved via "Allow Bash(prefix *)" */
   private allowedBashPrefixes = new Set<string>();
 
-  constructor(gateway: PendingPermissions, broker: PermissionBroker, coreUrl: string, token: string) {
+  constructor(gateway: PendingPermissions, broker: PermissionBroker, coreUrl: string, token: string, renderers: Map<ChannelType, NotificationRenderer>) {
     this.gateway = gateway;
     this.broker = broker;
     this.coreUrl = coreUrl;
     this.token = token;
+    this.renderers = renderers;
   }
 
   /** Expose the PendingPermissions gateway instance */
@@ -373,7 +377,7 @@ export class PermissionCoordinator {
     decision: string,
     sessionId: string,
     messageId: string,
-    adapter: { editMessage: (chatId: string, messageId: string, msg: any) => Promise<any>; send: (msg: any) => Promise<any> },
+    adapter: { editRendered: (chatId: string, messageId: string, msg: RenderedMessage) => Promise<any>; sendRendered: (chatId: string, msg: RenderedMessage) => Promise<any>; channelType: ChannelType },
     chatId: string,
     coreAvailable: boolean,
   ): Promise<boolean> {
@@ -381,8 +385,10 @@ export class PermissionCoordinator {
     if (this.resolvedHookIds.has(hookId)) return true;
     this.resolvedHookIds.set(hookId, Date.now());
 
+    const renderer = this.renderers.get(adapter.channelType)!;
+
     if (!coreAvailable) {
-      await adapter.send({ chatId, text: '❌ Go Core not available' });
+      await adapter.sendRendered(chatId, renderer.renderSimpleText('❌ Go Core not available'));
       return true;
     }
 
@@ -406,34 +412,19 @@ export class PermissionCoordinator {
       // AskUserQuestion cards use hookQuestionData, not hookPermissionTexts
       if (this.hookQuestionData.has(hookId)) {
         this.hookQuestionData.delete(hookId);
-        await adapter.editMessage(chatId, messageId, {
-          chatId,
-          text: decision === 'deny' ? '❌ Skipped' : label,
-          buttons: [], // clear buttons
-          feishuHeader: {
-            template: decision === 'deny' ? 'red' : 'green',
-            title: decision === 'deny' ? '❌ Skipped' : label,
-          },
-        });
+        const text = decision === 'deny' ? '❌ Skipped' : label;
+        await adapter.editRendered(chatId, messageId, renderer.renderSimpleText(text));
       } else {
         const originalText = this.hookPermissionTexts.get(hookId)?.text || '';
         this.hookPermissionTexts.delete(hookId);
-        await adapter.editMessage(chatId, messageId, {
-          chatId,
-          text: originalText + `\n\n${label}`,
-          buttons: [], // clear buttons
-          feishuHeader: {
-            template: decision === 'deny' ? 'red' : 'green',
-            title: label,
-          },
-        });
+        await adapter.editRendered(chatId, messageId, renderer.renderSimpleText(originalText + `\n\n${label}`));
       }
       // Track confirmation message for reply routing
       if (sessionId) {
         this.trackHookMessage(messageId, sessionId);
       }
     } catch (err) {
-      await adapter.send({ chatId, text: `❌ Failed to resolve: ${err}` });
+      await adapter.sendRendered(chatId, renderer.renderSimpleText(`❌ Failed to resolve: ${err}`));
     }
     return true;
   }
@@ -444,7 +435,7 @@ export class PermissionCoordinator {
     optionIndex: number,
     sessionId: string,
     messageId: string,
-    adapter: { editMessage: (chatId: string, messageId: string, msg: any) => Promise<any>; send: (msg: any) => Promise<any> },
+    adapter: { editRendered: (chatId: string, messageId: string, msg: RenderedMessage) => Promise<any>; sendRendered: (chatId: string, msg: RenderedMessage) => Promise<any>; channelType: ChannelType },
     chatId: string,
     coreAvailable: boolean,
   ): Promise<boolean> {
@@ -452,20 +443,22 @@ export class PermissionCoordinator {
     // Mark resolved immediately to prevent double-click races (async yields below)
     this.resolvedHookIds.set(hookId, Date.now());
 
+    const renderer = this.renderers.get(adapter.channelType)!;
+
     if (!coreAvailable) {
-      await adapter.send({ chatId, text: '❌ Go Core not available' });
+      await adapter.sendRendered(chatId, renderer.renderSimpleText('❌ Go Core not available'));
       return true;
     }
     const questionData = this.hookQuestionData.get(hookId);
     if (!questionData) {
-      await adapter.send({ chatId, text: '❌ Question data not found' });
+      await adapter.sendRendered(chatId, renderer.renderSimpleText('❌ Question data not found'));
       return true;
     }
 
     const q = questionData.questions[0];
     const selected = q.options[optionIndex];
     if (!selected) {
-      await adapter.send({ chatId, text: `❌ Invalid option (1-${q.options.length})` });
+      await adapter.sendRendered(chatId, renderer.renderSimpleText(`❌ Invalid option (1-${q.options.length})`));
       return true;
     }
     const answers: Record<string, string> = { [q.question]: selected.label };
@@ -483,22 +476,14 @@ export class PermissionCoordinator {
       });
       const ctx = questionData.contextSuffix || '';
       this.hookQuestionData.delete(hookId);
-      await adapter.editMessage(chatId, messageId, {
-        chatId,
-        text: `✅ Selected: ${selected.label}`,
-        buttons: [],
-        feishuHeader: {
-          template: 'green',
-          title: `✅ Terminal${ctx}`,
-        },
-      });
+      await adapter.editRendered(chatId, messageId, renderer.renderSimpleText(`✅ Selected: ${selected.label}`));
       if (sessionId) {
         this.trackHookMessage(messageId, sessionId);
       }
       // Inject PTY input for interactive mode (updatedInput only works in headless)
       this.injectPtyAnswer(sessionId, optionIndex, q.multiSelect, undefined, q.options.length);
     } catch (err) {
-      await adapter.send({ chatId, text: `❌ Failed to resolve: ${err}` });
+      await adapter.sendRendered(chatId, renderer.renderSimpleText(`❌ Failed to resolve: ${err}`));
     }
     return true;
   }
@@ -536,23 +521,26 @@ export class PermissionCoordinator {
     hookId: string,
     sessionId: string,
     messageId: string,
-    adapter: { editMessage: (chatId: string, messageId: string, msg: any) => Promise<any>; send: (msg: any) => Promise<any> },
+    adapter: { editRendered: (chatId: string, messageId: string, msg: RenderedMessage) => Promise<any>; sendRendered: (chatId: string, msg: RenderedMessage) => Promise<any>; channelType: ChannelType },
     chatId: string,
     coreAvailable: boolean,
   ): Promise<boolean> {
     if (this.resolvedHookIds.has(hookId)) return true;
+
+    const renderer = this.renderers.get(adapter.channelType)!;
+
     if (!coreAvailable) {
-      await adapter.send({ chatId, text: '❌ Go Core not available' });
+      await adapter.sendRendered(chatId, renderer.renderSimpleText('❌ Go Core not available'));
       return true;
     }
     const questionData = this.hookQuestionData.get(hookId);
     if (!questionData) {
-      await adapter.send({ chatId, text: '❌ Question data not found' });
+      await adapter.sendRendered(chatId, renderer.renderSimpleText('❌ Question data not found'));
       return true;
     }
     const selected = this.toggledSelections.get(hookId) ?? new Set<number>();
     if (selected.size === 0) {
-      await adapter.send({ chatId, text: '⚠️ No options selected' });
+      await adapter.sendRendered(chatId, renderer.renderSimpleText('⚠️ No options selected'));
       return true;
     }
 
@@ -577,12 +565,7 @@ export class PermissionCoordinator {
       const ctx = questionData.contextSuffix || '';
       this.hookQuestionData.delete(hookId);
       this.toggledSelections.delete(hookId);
-      await adapter.editMessage(chatId, messageId, {
-        chatId,
-        text: `✅ Selected: ${selectedLabels.join(', ')}`,
-        buttons: [],
-        feishuHeader: { template: 'green', title: `✅ Terminal${ctx}` },
-      });
+      await adapter.editRendered(chatId, messageId, renderer.renderSimpleText(`✅ Selected: ${selectedLabels.join(', ')}`));
       if (sessionId) {
         this.trackHookMessage(messageId, sessionId);
       }
@@ -591,7 +574,7 @@ export class PermissionCoordinator {
         this.injectPtyAnswer(sessionId, idx, true, undefined, q.options.length);
       }
     } catch (err) {
-      await adapter.send({ chatId, text: `❌ Failed to resolve: ${err}` });
+      await adapter.sendRendered(chatId, renderer.renderSimpleText(`❌ Failed to resolve: ${err}`));
     }
     return true;
   }
@@ -602,19 +585,21 @@ export class PermissionCoordinator {
     hookId: string,
     sessionId: string,
     messageId: string,
-    adapter: { editMessage: (chatId: string, messageId: string, msg: any) => Promise<any>; send: (msg: any) => Promise<any> },
+    adapter: { editRendered: (chatId: string, messageId: string, msg: RenderedMessage) => Promise<any>; sendRendered: (chatId: string, msg: RenderedMessage) => Promise<any>; channelType: ChannelType },
     chatId: string,
     coreAvailable: boolean,
   ): Promise<boolean> {
     if (this.resolvedHookIds.has(hookId)) return true;
 
+    const renderer = this.renderers.get(adapter.channelType)!;
+
     if (!coreAvailable) {
-      await adapter.send({ chatId, text: '❌ Go Core not available' });
+      await adapter.sendRendered(chatId, renderer.renderSimpleText('❌ Go Core not available'));
       return true;
     }
     const questionData = this.hookQuestionData.get(hookId);
     if (!questionData) {
-      await adapter.send({ chatId, text: '❌ Question data not found' });
+      await adapter.sendRendered(chatId, renderer.renderSimpleText('❌ Question data not found'));
       return true;
     }
 
@@ -633,19 +618,13 @@ export class PermissionCoordinator {
         body: JSON.stringify({ decision: 'allow', updated_input: updatedInput }),
         signal: AbortSignal.timeout(5000),
       });
-      const ctx = questionData.contextSuffix || '';
       this.hookQuestionData.delete(hookId);
-      await adapter.editMessage(chatId, messageId, {
-        chatId,
-        text: '⏭ Skipped',
-        buttons: [],
-        feishuHeader: { template: 'grey', title: `⏭ Terminal${ctx}` },
-      });
+      await adapter.editRendered(chatId, messageId, renderer.renderSimpleText('⏭ Skipped'));
       if (sessionId) {
         this.trackHookMessage(messageId, sessionId);
       }
     } catch (err) {
-      await adapter.send({ chatId, text: `❌ Failed to resolve: ${err}` });
+      await adapter.sendRendered(chatId, renderer.renderSimpleText(`❌ Failed to resolve: ${err}`));
     }
     return true;
   }
@@ -656,19 +635,21 @@ export class PermissionCoordinator {
     text: string,
     sessionId: string,
     messageId: string,
-    adapter: { editMessage: (chatId: string, messageId: string, msg: any) => Promise<any>; send: (msg: any) => Promise<any> },
+    adapter: { editRendered: (chatId: string, messageId: string, msg: RenderedMessage) => Promise<any>; sendRendered: (chatId: string, msg: RenderedMessage) => Promise<any>; channelType: ChannelType },
     chatId: string,
     coreAvailable: boolean,
   ): Promise<boolean> {
     if (this.resolvedHookIds.has(hookId)) return true;
 
+    const renderer = this.renderers.get(adapter.channelType)!;
+
     if (!coreAvailable) {
-      await adapter.send({ chatId, text: '❌ Go Core not available' });
+      await adapter.sendRendered(chatId, renderer.renderSimpleText('❌ Go Core not available'));
       return true;
     }
     const questionData = this.hookQuestionData.get(hookId);
     if (!questionData) {
-      await adapter.send({ chatId, text: '❌ Question data not found' });
+      await adapter.sendRendered(chatId, renderer.renderSimpleText('❌ Question data not found'));
       return true;
     }
 
@@ -687,15 +668,9 @@ export class PermissionCoordinator {
         body: JSON.stringify({ decision: 'allow', updated_input: updatedInput }),
         signal: AbortSignal.timeout(5000),
       });
-      const ctx = questionData.contextSuffix || '';
       this.hookQuestionData.delete(hookId);
       const preview = text.length > 50 ? text.slice(0, 47) + '...' : text;
-      await adapter.editMessage(chatId, messageId, {
-        chatId,
-        text: `✅ Answer: ${preview}`,
-        buttons: [],
-        feishuHeader: { template: 'green', title: `✅ Terminal${ctx}` },
-      });
+      await adapter.editRendered(chatId, messageId, renderer.renderSimpleText(`✅ Answer: ${preview}`));
       if (sessionId) {
         this.trackHookMessage(messageId, sessionId);
       }
@@ -707,7 +682,7 @@ export class PermissionCoordinator {
         this.injectPtyAnswer(sessionId, 0, false, text);
       }
     } catch (err) {
-      await adapter.send({ chatId, text: `❌ Failed to resolve: ${err}` });
+      await adapter.sendRendered(chatId, renderer.renderSimpleText(`❌ Failed to resolve: ${err}`));
     }
     return true;
   }

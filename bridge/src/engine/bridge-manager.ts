@@ -77,7 +77,7 @@ export class BridgeManager {
     const broker = new PermissionBroker(gateway, effectivePublicUrl, this.renderers);
     this.coreUrl = config.coreUrl;
     this.token = config.token;
-    this.permissions = new PermissionCoordinator(gateway, broker, this.coreUrl, this.token);
+    this.permissions = new PermissionCoordinator(gateway, broker, this.coreUrl, this.token, this.renderers);
     this.sdkEngine = new SDKEngine(this.state, this.router, this.permissions);
     this.messageRouter = new MessageRouter(
       this.permissions, this.state, this.sdkEngine,
