@@ -279,15 +279,25 @@ export class MessageRouter {
             }
           }
         }
-        await fetch(`${this.coreUrl}/api/sessions/${entry.sessionId}/input`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${this.token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ text: inputText + '\r' }),
-          signal: AbortSignal.timeout(5000),
-        });
+        const sendInput = async () => {
+          const resp = await fetch(`${this.coreUrl}/api/sessions/${entry.sessionId}/input`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${this.token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ text: inputText + '\r' }),
+            signal: AbortSignal.timeout(5000),
+          });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        };
+        // Retry once on failure (PTY may not be ready)
+        try {
+          await sendInput();
+        } catch {
+          await new Promise(r => setTimeout(r, 500));
+          await sendInput();
+        }
         const r = this.renderers.get(adapter.channelType)!;
         await adapter.send(msg.chatId, r.renderSimpleText('✓ Sent to local session'));
       } catch (err) {

@@ -49,6 +49,7 @@ export class SessionManager extends EventEmitter {
     this.thinkingTracker.on('change', (thinking: boolean) => this.emit('thinking', thinking));
     this.scanner = new SessionScanner({
       sessionId: this.sessionId,
+      sessionDir: opts.adapter.getSessionDir(opts.workdir),
       workdir: this.workdir,
       proactiveNotifyDelay: opts.config.proactiveNotifyDelay,
       proactiveQuestionDelay: opts.config.proactiveQuestionDelay,

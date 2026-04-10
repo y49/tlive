@@ -24,6 +24,7 @@ export interface NormalizedMessage {
   }>;
   toolName?: string;
   toolInput?: unknown;
+  toolUseId?: string;
   parentToolUseId?: string;
 }
 

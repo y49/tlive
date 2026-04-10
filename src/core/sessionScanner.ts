@@ -26,6 +26,8 @@ export interface PendingPermission {
 
 export interface ScannerOptions {
   sessionId: string;
+  /** Session directory (from ProviderAdapter.getSessionDir). Falls back to Claude default if omitted. */
+  sessionDir?: string;
   workdir: string;
   proactiveNotifyDelay?: number;   // default 60000ms
   proactiveQuestionDelay?: number; // default 5000ms
@@ -49,19 +51,19 @@ export class SessionScanner extends EventEmitter {
       pollingInterval: 3000,
       ...opts,
     };
-    this.jsonlPath = this.resolveJsonlPath(opts.workdir, opts.sessionId);
+    const sessionDir = opts.sessionDir ?? this.defaultSessionDir(opts.workdir);
+    this.jsonlPath = join(sessionDir, `${opts.sessionId}.jsonl`);
   }
 
   get filePath(): string {
     return this.jsonlPath;
   }
 
-  private resolveJsonlPath(workdir: string, sessionId: string): string {
-    // Match Claude's project path encoding (same as happy's getProjectPath):
-    // resolve() first, then replace non-alphanumeric chars with '-'
+  /** Claude default — used when no sessionDir provided via adapter */
+  private defaultSessionDir(workdir: string): string {
     const projectDir = resolve(workdir).replace(/[^a-zA-Z0-9-]/g, '-');
     const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
-    return join(claudeConfigDir, 'projects', projectDir, `${sessionId}.jsonl`);
+    return join(claudeConfigDir, 'projects', projectDir);
   }
 
   start(): void {

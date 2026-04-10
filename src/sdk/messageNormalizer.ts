@@ -37,7 +37,7 @@ export function normalizeSessionLine(
       if (block.type === 'text' && block.text) {
         messages.push({ kind: 'text', provider, sessionId, text: block.text as string });
       } else if (block.type === 'tool_use') {
-        messages.push({ kind: 'tool_use', provider, sessionId, toolName: block.name as string, toolInput: block.input });
+        messages.push({ kind: 'tool_use', provider, sessionId, toolName: block.name as string, toolInput: block.input, toolUseId: block.id as string });
       }
       // Skip 'thinking' blocks — internal
     }

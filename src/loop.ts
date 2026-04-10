@@ -134,18 +134,19 @@ export class TLiveLoop extends EventEmitter {
         const rawOptions = Array.isArray(firstQ?.options) ? firstQ.options as Array<Record<string, unknown>> : [];
         const options = rawOptions.map(o => (o.label ?? o.description ?? '?') as string);
 
-        const toolUseId = `scanq:${event.uuid}`;
+        // Use tool_use block ID for dedup — must match handlePermissionNeeded's key
+        const blockId = msg.toolUseId || event.uuid;
         const buttons: Array<{ label: string; callbackData: string; style?: 'primary' | 'danger' }> = [];
         for (let i = 0; i < options.length; i++) {
-          buttons.push({ label: options[i], callbackData: `askq:${toolUseId}:${i}` });
+          buttons.push({ label: options[i], callbackData: `askq:${blockId}:${i}` });
         }
         if (buttons.length > 0) {
-          buttons.push({ label: 'Skip', callbackData: `askq:${toolUseId}:skip`, style: 'danger' });
+          buttons.push({ label: 'Skip', callbackData: `askq:${blockId}:skip`, style: 'danger' });
         }
         const askEvent = toNotificationEvent(msg);
         this.notifications.push({
           kind: 'ask_user_question',
-          dedupeKey: `askq:${event.uuid}`,
+          dedupeKey: `askq:${blockId}`,
           sessionId: this.session.info.sessionId,
           title: `${LABEL.question} · ${this.sessionTag()}`,
           body: questionText || 'Question from Claude',
