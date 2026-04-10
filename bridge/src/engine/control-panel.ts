@@ -1,9 +1,10 @@
 import type { BaseChannelAdapter } from '../channels/base.js';
+import type { ChannelType, Button } from '../channels/types.js';
 import type { SessionStateManager } from './session-state.js';
 import type { SDKEngine } from './sdk-engine.js';
 import type { ChannelRouter } from './router.js';
-import type { OutboundMessage, Button } from '../channels/types.js';
 import type { QueryControls } from '../providers/base.js';
+import type { NotificationRenderer, RenderedMessage, CommandResponseData } from '../renderers/types.js';
 import { getBridgeContext } from '../context.js';
 
 /**
@@ -16,13 +17,14 @@ export class ControlPanel {
     private sdkEngine: SDKEngine,
     private activeControls: Map<string, QueryControls>,
     private router: ChannelRouter,
+    private renderers: Map<ChannelType, NotificationRenderer>,
     private onNewSession?: (channelType: string, chatId: string) => void,
   ) {}
 
   /** Render the main panel card */
   async show(adapter: BaseChannelAdapter, chatId: string): Promise<void> {
     const msg = this.buildMainPanel(adapter.channelType, chatId);
-    await adapter.send(msg);
+    await adapter.sendRendered(chatId, msg);
   }
 
   /** Handle a panel callback — called by CallbackRouter */
@@ -46,9 +48,9 @@ export class ControlPanel {
           } else {
             this.state.setModel(adapter.channelType, chatId, modelName);
           }
-          await adapter.editMessage(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
+          await adapter.editRendered(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
         } else {
-          await adapter.editMessage(chatId, messageId, this.buildModelPicker(adapter.channelType, chatId));
+          await adapter.editRendered(chatId, messageId, this.buildModelPicker(adapter.channelType, chatId));
         }
         break;
 
@@ -56,21 +58,21 @@ export class ControlPanel {
         if (parts[1] === 'select') {
           const level = parts[2] as 'low' | 'medium' | 'high' | 'max';
           this.state.setEffort(adapter.channelType, chatId, level);
-          await adapter.editMessage(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
+          await adapter.editRendered(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
         } else {
-          await adapter.editMessage(chatId, messageId, this.buildEffortPicker(adapter.channelType, chatId));
+          await adapter.editRendered(chatId, messageId, this.buildEffortPicker(adapter.channelType, chatId));
         }
         break;
 
       case 'perm': {
         const current = this.state.getPermMode(adapter.channelType, chatId);
         this.state.setPermMode(adapter.channelType, chatId, current === 'on' ? 'off' : 'on');
-        await adapter.editMessage(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
+        await adapter.editRendered(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
         break;
       }
 
       case 'sessions':
-        await adapter.editMessage(chatId, messageId, await this.buildSessionList(adapter.channelType, chatId));
+        await adapter.editRendered(chatId, messageId, await this.buildSessionList(adapter.channelType, chatId));
         break;
 
       case 'stop': {
@@ -80,12 +82,12 @@ export class ControlPanel {
           this.activeControls.delete(chatKey);
           await ctrl.interrupt();
         }
-        await adapter.editMessage(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
+        await adapter.editRendered(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
         break;
       }
 
       case 'stats':
-        await adapter.editMessage(chatId, messageId, this.buildStatsCard(adapter.channelType, chatId));
+        await adapter.editRendered(chatId, messageId, this.buildStatsCard(adapter.channelType, chatId));
         break;
 
       case 'session':
@@ -94,19 +96,19 @@ export class ControlPanel {
           const targetSessionId = parts[2];
           await this.router.rebind(adapter.channelType, chatId, targetSessionId);
           this.state.clearLastActive(adapter.channelType, chatId);
-          await adapter.editMessage(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
+          await adapter.editRendered(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
         } else if (parts[1] === 'new') {
           this.onNewSession?.(adapter.channelType, chatId);
           const newSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           await this.router.rebind(adapter.channelType, chatId, newSessionId);
           this.state.clearLastActive(adapter.channelType, chatId);
           this.state.clearThread(adapter.channelType, chatId);
-          await adapter.editMessage(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
+          await adapter.editRendered(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
         }
         break;
 
       case 'back':
-        await adapter.editMessage(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
+        await adapter.editRendered(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
         break;
 
       default:
@@ -116,7 +118,7 @@ export class ControlPanel {
 
   // ── Card Builders ──────────────────────────────────────────────
 
-  buildMainPanel(channelType: string, chatId: string): OutboundMessage {
+  buildMainPanel(channelType: string, chatId: string): RenderedMessage {
     const model = this.state.getModel(channelType, chatId) || 'default';
     const effort = this.state.getEffort(channelType, chatId) || 'default';
     const perm = this.state.getPermMode(channelType, chatId);
@@ -136,47 +138,29 @@ export class ControlPanel {
       { label: '📊 Stats', callbackData: `panel:stats:${chatKey}`, style: 'default', row: 1 },
     ];
 
-    if (channelType === 'telegram') {
-      const html = [
-        `<b>⚙️ TLive</b>`,
-        ``,
-        `${runtimeIcon} <code>${runtime}</code>  ·  🤖 <code>${model}</code>`,
-        `${effortIcons[effort] || '⚡'} <code>${effort}</code>  ·  ${permIcon} Perm: <code>${perm.toUpperCase()}</code>`,
-      ].join('\n');
-      return { chatId, html, buttons };
-    }
-
-    if (channelType === 'discord') {
-      return {
-        chatId,
-        embed: {
-          title: '⚙️ TLive',
-          color: 0x3399FF,
-          fields: [
-            { name: `${runtimeIcon} Runtime`, value: `\`${runtime}\``, inline: true },
-            { name: '🤖 Model', value: `\`${model}\``, inline: true },
-            { name: `${effortIcons[effort] || '⚡'} Effort`, value: `\`${effort}\``, inline: true },
-            { name: `${permIcon} Perm`, value: `\`${perm.toUpperCase()}\``, inline: true },
-          ],
-        },
-        buttons,
-      };
-    }
-
-    // Feishu
     const body = [
       `${runtimeIcon} ${runtime}  ·  🤖 ${model}`,
       `${effortIcons[effort] || '⚡'} ${effort}  ·  ${permIcon} Perm: ${perm.toUpperCase()}`,
     ].join('\n');
-    return {
-      chatId,
-      text: body,
-      feishuHeader: { template: 'blue', title: '⚙️ TLive' },
+
+    const data: CommandResponseData = {
+      title: '⚙️ TLive',
+      body,
+      fields: [
+        { name: `${runtimeIcon} Runtime`, value: `\`${runtime}\``, inline: true },
+        { name: '🤖 Model', value: `\`${model}\``, inline: true },
+        { name: `${effortIcons[effort] || '⚡'} Effort`, value: `\`${effort}\``, inline: true },
+        { name: `${permIcon} Perm`, value: `\`${perm.toUpperCase()}\``, inline: true },
+      ],
+      color: 'info',
       buttons,
     };
+
+    const renderer = this.renderers.get(channelType as ChannelType)!;
+    return renderer.renderCommandResponse(data);
   }
 
-  buildModelPicker(channelType: string, chatId: string): OutboundMessage {
+  buildModelPicker(channelType: string, chatId: string): RenderedMessage {
     const current = this.state.getModel(channelType, chatId) || 'default';
     const runtime = this.state.getRuntime(channelType, chatId) || 'claude';
     const chatKey = `${channelType}:${chatId}`;
@@ -208,16 +192,15 @@ export class ControlPanel {
       row: models.length + 1,
     });
 
-    return this.renderCard(channelType, chatId, {
+    const renderer = this.renderers.get(channelType as ChannelType)!;
+    return renderer.renderCommandResponse({
       title: '🤖 Select Model',
       body: `Current: ${current}`,
       buttons,
-      color: 0x9B59B6,
-      feishuTemplate: 'indigo',
     });
   }
 
-  buildEffortPicker(channelType: string, chatId: string): OutboundMessage {
+  buildEffortPicker(channelType: string, chatId: string): RenderedMessage {
     const current = this.state.getEffort(channelType, chatId) || 'default';
     const chatKey = `${channelType}:${chatId}`;
 
@@ -242,17 +225,17 @@ export class ControlPanel {
       row: 2,
     });
 
-    return this.renderCard(channelType, chatId, {
+    const renderer = this.renderers.get(channelType as ChannelType)!;
+    return renderer.renderCommandResponse({
       title: '⚡ Select Effort',
       body: `Current: ${current}`,
       buttons,
-      color: 0xF39C12,
-      feishuTemplate: 'orange',
     });
   }
 
-  async buildSessionList(channelType: string, chatId: string): Promise<OutboundMessage> {
+  async buildSessionList(channelType: string, chatId: string): Promise<RenderedMessage> {
     const chatKey = `${channelType}:${chatId}`;
+    const renderer = this.renderers.get(channelType as ChannelType)!;
 
     try {
       const { store } = getBridgeContext();
@@ -265,15 +248,14 @@ export class ControlPanel {
         .slice(0, 5);
 
       if (sorted.length === 0) {
-        return this.renderCard(channelType, chatId, {
+        return renderer.renderCommandResponse({
           title: '📋 Sessions',
           body: 'No sessions found.',
+          color: 'info',
           buttons: [
             { label: '➕ New', callbackData: `panel:session:new:${chatKey}`, style: 'primary', row: 0 },
             { label: '↩ Back', callbackData: `panel:back:${chatKey}`, style: 'default', row: 0 },
           ],
-          color: 0x3399FF,
-          feishuTemplate: 'blue',
         });
       }
 
@@ -308,115 +290,51 @@ export class ControlPanel {
         { label: '↩ Back', callbackData: `panel:back:${chatKey}`, style: 'default', row: lastRow },
       );
 
-      return this.renderCard(channelType, chatId, {
+      return renderer.renderCommandResponse({
         title: '📋 Sessions',
         body: lines.join('\n'),
+        color: 'info',
         buttons,
-        color: 0x3399FF,
-        feishuTemplate: 'blue',
       });
     } catch {
-      return this.renderCard(channelType, chatId, {
+      return renderer.renderCommandResponse({
         title: '📋 Sessions',
         body: 'Unable to load sessions.',
+        color: 'error',
         buttons: [{ label: '↩ Back', callbackData: `panel:back:${chatKey}`, style: 'default', row: 0 }],
-        color: 0xE74C3C,
-        feishuTemplate: 'red',
       });
     }
   }
 
-  buildStatsCard(channelType: string, chatId: string): OutboundMessage {
+  buildStatsCard(channelType: string, chatId: string): RenderedMessage {
     const chatKey = `${channelType}:${chatId}`;
     const tracker = this.sdkEngine.getCostTracker(channelType, chatId);
     const backBtn: Button = { label: '↩ Back', callbackData: `panel:back:${chatKey}`, style: 'default', row: 0 };
+    const renderer = this.renderers.get(channelType as ChannelType)!;
 
     if (!tracker || tracker.queryCount === 0) {
-      return this.renderCard(channelType, chatId, {
+      return renderer.renderCommandResponse({
         title: '📊 Session Stats',
         body: 'No stats available yet.\nSend a message to start tracking.',
         buttons: [backBtn],
-        color: 0x95A5A6,
-        feishuTemplate: 'grey',
       });
     }
 
     const queries = tracker.queryCount;
     const cost = `$${tracker.sessionTotalUsd.toFixed(2)}`;
 
-    if (channelType === 'discord') {
-      return {
-        chatId,
-        embed: {
-          title: '📊 Session Stats',
-          color: 0x2ECC71,
-          fields: [
-            { name: '💬 Queries', value: `\`${queries}\``, inline: true },
-            { name: '💰 Cost', value: `\`${cost}\``, inline: true },
-          ],
-        },
-        buttons: [backBtn],
-      };
-    }
-
-    if (channelType === 'telegram') {
-      const html = [
-        `<b>📊 Session Stats</b>`,
-        ``,
-        `💬 Queries: <code>${queries}</code>`,
-        `💰 Cost: <code>${cost}</code>`,
-      ].join('\n');
-      return { chatId, html, buttons: [backBtn] };
-    }
-
-    // Feishu
-    return {
-      chatId,
-      text: `💬 Queries: ${queries}\n💰 Cost: ${cost}`,
-      feishuHeader: { template: 'green', title: '📊 Session Stats' },
+    return renderer.renderCommandResponse({
+      title: '📊 Session Stats',
+      fields: [
+        { name: '💬 Queries', value: `\`${queries}\``, inline: true },
+        { name: '💰 Cost', value: `\`${cost}\``, inline: true },
+      ],
+      color: 'success',
       buttons: [backBtn],
-    };
+    });
   }
 
-  // ── Rendering helpers ──────────────────────────────────────────
-
-  private renderCard(
-    channelType: string,
-    chatId: string,
-    opts: { title: string; body: string; buttons: Button[]; color: number; feishuTemplate: string },
-  ): OutboundMessage {
-    if (channelType === 'telegram') {
-      return {
-        chatId,
-        html: `<b>${opts.title}</b>\n\n${this.escapeHtml(opts.body)}`,
-        buttons: opts.buttons,
-      };
-    }
-
-    if (channelType === 'discord') {
-      return {
-        chatId,
-        embed: {
-          title: opts.title,
-          description: opts.body,
-          color: opts.color,
-        },
-        buttons: opts.buttons,
-      };
-    }
-
-    // Feishu
-    return {
-      chatId,
-      text: opts.body,
-      feishuHeader: { template: opts.feishuTemplate, title: opts.title },
-      buttons: opts.buttons,
-    };
-  }
-
-  private escapeHtml(text: string): string {
-    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
+  // ── Helpers ────────────────────────────────────────────────────
 
   private timeAgo(date: Date): string {
     const diff = Date.now() - date.getTime();

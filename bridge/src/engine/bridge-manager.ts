@@ -92,6 +92,7 @@ export class BridgeManager {
       this.sdkEngine.getActiveControls(),
       this.permissions,
       (channelType, chatId) => this.sdkEngine.closeSession(channelType, chatId),
+      this.renderers,
     );
     this.callbackRouter = new CallbackRouter(
       this.permissions,
@@ -107,6 +108,7 @@ export class BridgeManager {
       this.sdkEngine,
       this.sdkEngine.getActiveControls(),
       this.router,
+      this.renderers,
       (channelType, chatId) => this.sdkEngine.closeSession(channelType, chatId),
     );
     this.commands.setControlPanel(controlPanel);

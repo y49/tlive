@@ -1,10 +1,11 @@
 import type { BaseChannelAdapter } from '../channels/base.js';
-import type { InboundMessage } from '../channels/types.js';
+import type { ChannelType, InboundMessage } from '../channels/types.js';
 import type { SessionStateManager } from './session-state.js';
 import type { ChannelRouter } from './router.js';
 import type { QueryControls } from '../providers/base.js';
 import type { VerboseLevel } from './session-state.js';
 import type { ControlPanel } from './control-panel.js';
+import type { NotificationRenderer } from '../renderers/types.js';
 import { getBridgeContext } from '../context.js';
 import { ClaudeSDKProvider } from '../providers/claude-sdk.js';
 import { checkCodexAvailable } from '../providers/index.js';
@@ -24,6 +25,7 @@ export class CommandRouter {
     private activeControls: Map<string, QueryControls>,
     private permissions: { clearSessionWhitelist(): void },
     private onNewSession?: (channelType: string, chatId: string) => void,
+    private renderers?: Map<ChannelType, NotificationRenderer>,
   ) {}
 
   private static MENU_HINT = '\n\n💡 Tip: Use /menu for the new control panel';
@@ -36,13 +38,14 @@ export class CommandRouter {
   async handle(adapter: BaseChannelAdapter, msg: InboundMessage): Promise<boolean> {
     const parts = msg.text.split(' ');
     const cmd = parts[0].toLowerCase();
+    const r = this.renderers!.get(adapter.channelType)!;
 
     switch (cmd) {
       case '/menu': {
         if (this.controlPanel) {
           await this.controlPanel.show(adapter, msg.chatId);
         } else {
-          await adapter.send({ chatId: msg.chatId, text: '⚠️ Control panel not available' });
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText('⚠️ Control panel not available'));
         }
         return true;
       }
@@ -52,35 +55,15 @@ export class CommandRouter {
         const coreStatus = healthy ? '🟢 connected' : '🔴 disconnected';
         const channelList = Array.from(this.getAdapters().keys()).join(', ') || 'none';
 
-        if (adapter.channelType === 'telegram') {
-          const html = [
-            `📡 <b>TLive Status</b>`,
-            '',
-            `<b>Bridge:</b>    🟢 running`,
-            `<b>Core:</b>      ${coreStatus}`,
-            `<b>Channels:</b>  <code>${channelList}</code>`,
-          ].join('\n');
-          await adapter.send({ chatId: msg.chatId, html });
-        } else if (adapter.channelType === 'discord') {
-          await adapter.send({
-            chatId: msg.chatId,
-            embed: {
-              title: '📡 TLive Status',
-              color: 0x3399FF,
-              fields: [
-                { name: 'Bridge', value: '🟢 Running', inline: true },
-                { name: 'Core', value: coreStatus, inline: true },
-                { name: 'Channels', value: `\`${channelList}\``, inline: true },
-              ],
-            },
-          });
-        } else {
-          await adapter.send({
-            chatId: msg.chatId,
-            text: `**Bridge:** 🟢 running\n**Core:** ${coreStatus}\n**Channels:** ${channelList}`,
-            feishuHeader: { template: 'blue', title: '📡 TLive Status' },
-          });
-        }
+        await adapter.sendRendered(msg.chatId, r.renderCommandResponse({
+          title: '📡 TLive Status',
+          fields: [
+            { name: 'Bridge', value: '🟢 Running', inline: true },
+            { name: 'Core', value: coreStatus, inline: true },
+            { name: 'Channels', value: `\`${channelList}\``, inline: true },
+          ],
+          color: 'info',
+        }));
         return true;
       }
       case '/new': {
@@ -92,20 +75,11 @@ export class CommandRouter {
         // Clear Discord thread binding so next conversation creates a fresh thread
         this.state.clearThread(msg.channelType, msg.chatId);
         this.permissions.clearSessionWhitelist();
-        if (adapter.channelType === 'feishu') {
-          await adapter.send({
-            chatId: msg.chatId,
-            text: 'Session cleared. Send a message to begin.',
-            feishuHeader: { template: 'green', title: '🆕 New Session' },
-          });
-        } else if (adapter.channelType === 'discord') {
-          await adapter.send({
-            chatId: msg.chatId,
-            embed: { title: '🆕 New Session', description: 'Session cleared. Send a message to begin.', color: 0x00CC66 },
-          });
-        } else {
-          await adapter.send({ chatId: msg.chatId, html: '🆕 <b>New session started.</b> Send a message to begin.' });
-        }
+        await adapter.sendRendered(msg.chatId, r.renderCommandResponse({
+          title: '🆕 New Session',
+          body: 'Session cleared. Send a message to begin.',
+          color: 'success',
+        }));
         return true;
       }
       case '/verbose': {
@@ -114,18 +88,10 @@ export class CommandRouter {
           this.state.setVerboseLevel(msg.channelType, msg.chatId, level);
           const labels = ['🤫 quiet', '📝 terminal card'];
           const text = `Verbose: ${labels[level]}${CommandRouter.MENU_HINT}`;
-          if (adapter.channelType === 'discord') {
-            await adapter.send({ chatId: msg.chatId, embed: { description: text, color: 0x3399FF } });
-          } else {
-            await adapter.send({ chatId: msg.chatId, text });
-          }
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText(text));
         } else {
           const usage = 'Usage: `/verbose 0|1`\n0=quiet, 1=terminal card';
-          if (adapter.channelType === 'discord') {
-            await adapter.send({ chatId: msg.chatId, embed: { description: usage, color: 0x888888 } });
-          } else {
-            await adapter.send({ chatId: msg.chatId, text: usage });
-          }
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText(usage));
         }
         return true;
       }
@@ -136,19 +102,11 @@ export class CommandRouter {
           const text = (sub === 'on'
             ? '🔐 Permission prompts: ON — dangerous tools will ask for confirmation'
             : '⚡ Permission prompts: OFF — all tools auto-allowed') + CommandRouter.MENU_HINT;
-          if (adapter.channelType === 'discord') {
-            await adapter.send({ chatId: msg.chatId, embed: { description: text, color: sub === 'on' ? 0xFFA500 : 0x00CC00 } });
-          } else {
-            await adapter.send({ chatId: msg.chatId, text });
-          }
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText(text));
         } else {
           const current = this.state.getPermMode(msg.channelType, msg.chatId);
           const text = `🔐 Permission mode: **${current}**\nUsage: \`/perm on|off\`\non = prompt for dangerous tools (default)\noff = auto-allow all`;
-          if (adapter.channelType === 'discord') {
-            await adapter.send({ chatId: msg.chatId, embed: { description: text, color: 0x888888 } });
-          } else {
-            await adapter.send({ chatId: msg.chatId, text });
-          }
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText(text));
         }
         return true;
       }
@@ -158,9 +116,9 @@ export class CommandRouter {
         if (ctrl) {
           this.activeControls.delete(chatKey);
           await ctrl.interrupt();
-          await adapter.send({ chatId: msg.chatId, text: '⏹ Interrupted current execution' + CommandRouter.MENU_HINT });
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText('⏹ Interrupted current execution' + CommandRouter.MENU_HINT));
         } else {
-          await adapter.send({ chatId: msg.chatId, text: '⚠️ No active execution to stop' });
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText('⚠️ No active execution to stop'));
         }
         return true;
       }
@@ -171,11 +129,11 @@ export class CommandRouter {
           this.state.setEffort(msg.channelType, msg.chatId, level as typeof LEVELS[number]);
           const icons: Record<string, string> = { low: '⚡', medium: '🧠', high: '💪', max: '🔥' };
           const text = `${icons[level] || '🧠'} Effort: **${level}**${CommandRouter.MENU_HINT}`;
-          await adapter.send({ chatId: msg.chatId, text });
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText(text));
         } else {
           const current = this.state.getEffort(msg.channelType, msg.chatId) || 'default';
           const text = `🧠 Effort: **${current}**\nUsage: \`/effort low|medium|high|max\`\nlow = fast · medium = balanced · high = thorough · max = maximum`;
-          await adapter.send({ chatId: msg.chatId, text });
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText(text));
         }
         return true;
       }
@@ -185,13 +143,13 @@ export class CommandRouter {
         if (sub === 'pause') {
           mkdirSync(dirname(pauseFile), { recursive: true });
           writeFileSync(pauseFile, '');
-          await adapter.send({ chatId: msg.chatId, text: '⏸ Hooks paused — auto-allow, no notifications.' });
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText('⏸ Hooks paused — auto-allow, no notifications.'));
         } else if (sub === 'resume') {
           try { unlinkSync(pauseFile); } catch {}
-          await adapter.send({ chatId: msg.chatId, text: '▶ Hooks resumed — forwarding to IM.' });
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText('▶ Hooks resumed — forwarding to IM.'));
         } else {
           const paused = existsSync(pauseFile);
-          await adapter.send({ chatId: msg.chatId, text: `Hooks: ${paused ? '⏸ paused' : '▶ active'}` });
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText(`Hooks: ${paused ? '⏸ paused' : '▶ active'}`));
         }
         return true;
       }
@@ -202,7 +160,7 @@ export class CommandRouter {
         const currentSessionId = binding?.sessionId;
 
         if (allSessions.length === 0) {
-          await adapter.send({ chatId: msg.chatId, text: 'No sessions found.' });
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText('No sessions found.'));
           return true;
         }
 
@@ -226,30 +184,17 @@ export class CommandRouter {
 
         const footer = '\nUse /session <n> to switch';
 
-        if (adapter.channelType === 'telegram') {
-          await adapter.send({ chatId: msg.chatId, html: `<b>📋 Sessions</b>\n\n${lines.join('\n')}${footer}` });
-        } else if (adapter.channelType === 'discord') {
-          await adapter.send({
-            chatId: msg.chatId,
-            embed: {
-              title: '📋 Sessions',
-              color: 0x3399FF,
-              description: lines.join('\n') + footer,
-            },
-          });
-        } else {
-          await adapter.send({
-            chatId: msg.chatId,
-            text: `${lines.join('\n')}${footer}`,
-            feishuHeader: { template: 'blue', title: '📋 Sessions' },
-          });
-        }
+        await adapter.sendRendered(msg.chatId, r.renderCommandResponse({
+          title: '📋 Sessions',
+          body: lines.join('\n') + footer,
+          color: 'info',
+        }));
         return true;
       }
       case '/session': {
         const idx = parseInt(parts[1], 10);
         if (isNaN(idx) || idx < 1) {
-          await adapter.send({ chatId: msg.chatId, text: 'Usage: /session <number>\nUse /sessions to list.' });
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText('Usage: /session <number>\nUse /sessions to list.'));
           return true;
         }
 
@@ -260,7 +205,7 @@ export class CommandRouter {
           .slice(0, 10);
 
         if (idx > sorted.length) {
-          await adapter.send({ chatId: msg.chatId, text: `Session ${idx} not found. Use /sessions to list.` });
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText(`Session ${idx} not found. Use /sessions to list.`));
           return true;
         }
 
@@ -274,10 +219,9 @@ export class CommandRouter {
           ? (firstUser.content.length > 50 ? firstUser.content.slice(0, 47) + '...' : firstUser.content)
           : '(empty)';
         const hasContext = target.sdkSessionId ? '✅ has context' : '⚠️ no SDK session';
-        await adapter.send({
-          chatId: msg.chatId,
-          text: `🔄 Switched to session ${idx}\n${preview}\n${hasContext}`,
-        });
+        await adapter.sendRendered(msg.chatId, r.renderSimpleText(
+          `🔄 Switched to session ${idx}\n${preview}\n${hasContext}`,
+        ));
         return true;
       }
       case '/runtime': {
@@ -286,10 +230,9 @@ export class CommandRouter {
         if (runtime && RUNTIMES.includes(runtime as any)) {
           // Pre-check: reject if Codex SDK not installed
           if (runtime === 'codex' && !await checkCodexAvailable()) {
-            await adapter.send({
-              chatId: msg.chatId,
-              text: '❌ Codex SDK not installed.\nRun: `npm install @openai/codex-sdk` in the bridge directory.',
-            });
+            await adapter.sendRendered(msg.chatId, r.renderSimpleText(
+              '❌ Codex SDK not installed.\nRun: `npm install @openai/codex-sdk` in the bridge directory.',
+            ));
             return true;
           }
           const prevRuntime = this.state.getRuntime(msg.channelType, msg.chatId) || 'claude';
@@ -302,12 +245,12 @@ export class CommandRouter {
           }
           const icons: Record<string, string> = { claude: '🟣', codex: '🟢' };
           const text = `${icons[runtime] || '🔄'} Runtime: **${runtime}**`;
-          await adapter.send({ chatId: msg.chatId, text });
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText(text));
         } else {
           const current = this.state.getRuntime(msg.channelType, msg.chatId) || 'claude';
           const codexStatus = await checkCodexAvailable() ? '✅' : '❌ (not installed)';
           const text = `🔄 Runtime: **${current}**\nUsage: \`/runtime claude|codex\`\nclaude: ✅ · codex: ${codexStatus}`;
-          await adapter.send({ chatId: msg.chatId, text });
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText(text));
         }
         return true;
       }
@@ -316,15 +259,15 @@ export class CommandRouter {
         if (model) {
           if (model === 'reset' || model === 'default') {
             this.state.setModel(msg.channelType, msg.chatId, undefined);
-            await adapter.send({ chatId: msg.chatId, text: '🤖 Model: reset to default' + CommandRouter.MENU_HINT });
+            await adapter.sendRendered(msg.chatId, r.renderSimpleText('🤖 Model: reset to default' + CommandRouter.MENU_HINT));
           } else {
             this.state.setModel(msg.channelType, msg.chatId, model);
-            await adapter.send({ chatId: msg.chatId, text: `🤖 Model: **${model}**${CommandRouter.MENU_HINT}` });
+            await adapter.sendRendered(msg.chatId, r.renderSimpleText(`🤖 Model: **${model}**${CommandRouter.MENU_HINT}`));
           }
         } else {
           const current = this.state.getModel(msg.channelType, msg.chatId) || 'default';
           const text = `🤖 Model: **${current}**\nUsage: \`/model <name>\` or \`/model reset\`\nExamples: \`claude-sonnet-4-6\`, \`claude-opus-4-6\``;
-          await adapter.send({ chatId: msg.chatId, text });
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText(text));
         }
         return true;
       }
@@ -344,7 +287,7 @@ export class CommandRouter {
             'Use `/model`, `/effort`, `/perm` to change.',
             'Codex sandbox & network settings are set in config.',
           ].join('\n');
-          await adapter.send({ chatId: msg.chatId, text });
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText(text));
           return true;
         }
 
@@ -362,7 +305,7 @@ export class CommandRouter {
             full: '📦 full — auth, CLAUDE.md, MCP, skills',
             isolated: '🔒 isolated — no external settings',
           };
-          await adapter.send({ chatId: msg.chatId, text: `⚙️ Settings: ${labels[arg]}` });
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText(`⚙️ Settings: ${labels[arg]}`));
         } else {
           const current = llm.getSettingSources();
           const preset = current.length === 0 ? 'isolated'
@@ -376,85 +319,39 @@ export class CommandRouter {
             '  full — + CLAUDE.md, MCP servers, skills',
             '  isolated — no external settings',
           ].join('\n');
-          await adapter.send({ chatId: msg.chatId, text });
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText(text));
         }
         return true;
       }
       case '/help': {
-        if (adapter.channelType === 'telegram') {
-          const html = [
-            '<b>❓ TLive Commands</b>',
-            '',
-            '<code>/menu</code> — ⚙️ <b>Control Panel</b> ✨',
-            '<code>/new</code> — New conversation',
-            '',
-            '<i>Legacy (use /menu instead):</i>',
-            '<code>/sessions</code> · <code>/perm</code> · <code>/effort</code>',
-            '<code>/model</code> · <code>/stop</code> · <code>/verbose</code>',
-            '',
-            '<code>/runtime claude|codex</code> — Switch AI provider',
-            '<code>/settings user|full|isolated</code> — Claude settings scope',
-            '<code>/hooks pause|resume</code> — Toggle IM approval',
-            '<code>/status</code> — Bridge status',
-            '<code>/approve &lt;code&gt;</code> — Approve pairing request',
-            '<code>/help</code> — This message',
-            '',
-            '<i>💬 Reply <b>allow</b>/<b>deny</b> to approve permissions</i>',
-          ].join('\n');
-          await adapter.send({ chatId: msg.chatId, html });
-        } else if (adapter.channelType === 'discord') {
-          await adapter.send({
-            chatId: msg.chatId,
-            embed: {
-              title: '❓ TLive Commands',
-              color: 0x5865F2,
-              description: [
-                '`/menu` — **⚙️ Control Panel** ✨',
-                '`/new` — New conversation',
-                '',
-                '*Legacy (use /menu instead):*',
-                '`/sessions` · `/perm` · `/effort` · `/model` · `/stop` · `/verbose`',
-                '',
-                '`/runtime claude|codex` — Switch AI provider',
-                '`/settings user|full|isolated` — Claude settings scope',
-                '`/hooks pause|resume` — Toggle IM approval',
-                '`/status` — Bridge status',
-                '`/approve <code>` — Approve pairing request',
-                '`/help` — This message',
-                '',
-                '*💬 Reply `allow`/`deny` to approve permissions*',
-              ].join('\n'),
-            },
-          });
-        } else {
-          const feishuLines = [
-            '/menu — ⚙️ **Control Panel** ✨',
-            '/new — New conversation',
-            '',
-            '*Legacy (use /menu instead):*',
-            '/sessions · /perm · /effort · /model · /stop · /verbose',
-            '',
-            '/runtime claude|codex — Switch AI provider',
-            '/settings user|full|isolated — Claude settings scope',
-            '/hooks pause|resume — Toggle IM approval',
-            '/status — Bridge status',
-            '/approve <code> — Approve pairing request',
-            '/help — This message',
-            '',
-            '💬 回复 **allow** / **deny** 审批权限',
-          ];
-          await adapter.send({
-            chatId: msg.chatId,
-            text: feishuLines.join('\n'),
-            feishuHeader: { template: 'indigo', title: '❓ TLive Commands' },
-          });
-        }
+        const helpBody = [
+          '`/menu` — **⚙️ Control Panel** ✨',
+          '`/new` — New conversation',
+          '',
+          '*Legacy (use /menu instead):*',
+          '`/sessions` · `/perm` · `/effort` · `/model` · `/stop` · `/verbose`',
+          '',
+          '`/runtime claude|codex` — Switch AI provider',
+          '`/settings user|full|isolated` — Claude settings scope',
+          '`/hooks pause|resume` — Toggle IM approval',
+          '`/status` — Bridge status',
+          '`/approve <code>` — Approve pairing request',
+          '`/help` — This message',
+          '',
+          '💬 Reply **allow** / **deny** to approve permissions',
+        ].join('\n');
+
+        await adapter.sendRendered(msg.chatId, r.renderCommandResponse({
+          title: '❓ TLive Commands',
+          body: helpBody,
+          color: 'info',
+        }));
         return true;
       }
       case '/approve': {
         const code = parts[1];
         if (!code) {
-          await adapter.send({ chatId: msg.chatId, text: 'Usage: /approve <pairing_code>' });
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText('Usage: /approve <pairing_code>'));
           return true;
         }
         // Try to approve pairing on Telegram adapter
@@ -462,15 +359,14 @@ export class CommandRouter {
         if (tgAdapter && 'approvePairing' in tgAdapter) {
           const result = (tgAdapter as any).approvePairing(code);
           if (result) {
-            await adapter.send({
-              chatId: msg.chatId,
-              text: `✅ Approved user ${result.username} (${result.userId})`,
-            });
+            await adapter.sendRendered(msg.chatId, r.renderSimpleText(
+              `✅ Approved user ${result.username} (${result.userId})`,
+            ));
           } else {
-            await adapter.send({ chatId: msg.chatId, text: '❌ Code not found or expired' });
+            await adapter.sendRendered(msg.chatId, r.renderSimpleText('❌ Code not found or expired'));
           }
         } else {
-          await adapter.send({ chatId: msg.chatId, text: '⚠️ Pairing not available' });
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText('⚠️ Pairing not available'));
         }
         return true;
       }
@@ -479,16 +375,17 @@ export class CommandRouter {
         if (tgAdapter && 'listPairings' in tgAdapter) {
           const pairings = (tgAdapter as any).listPairings() as Array<{ code: string; userId: string; username: string }>;
           if (pairings.length === 0) {
-            await adapter.send({ chatId: msg.chatId, text: 'No pending pairing requests.' });
+            await adapter.sendRendered(msg.chatId, r.renderSimpleText('No pending pairing requests.'));
           } else {
-            const lines = pairings.map(p => `• <code>${p.code}</code> — ${p.username} (${p.userId})`);
-            await adapter.send({
-              chatId: msg.chatId,
-              html: `<b>🔐 Pending Pairings</b>\n\n${lines.join('\n')}\n\nUse /approve <code> to approve.`,
-            });
+            const lines = pairings.map(p => `\`${p.code}\` — ${p.username} (${p.userId})`);
+            await adapter.sendRendered(msg.chatId, r.renderCommandResponse({
+              title: '🔐 Pending Pairings',
+              body: lines.join('\n') + '\n\nUse /approve <code> to approve.',
+              color: 'info',
+            }));
           }
         } else {
-          await adapter.send({ chatId: msg.chatId, text: '⚠️ Pairing not available' });
+          await adapter.sendRendered(msg.chatId, r.renderSimpleText('⚠️ Pairing not available'));
         }
         return true;
       }

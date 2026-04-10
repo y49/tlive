@@ -5,7 +5,11 @@ import type { SessionStateManager } from '../engine/session-state.js';
 import type { SDKEngine } from '../engine/sdk-engine.js';
 import type { ChannelRouter } from '../engine/router.js';
 import type { QueryControls } from '../providers/base.js';
-import type { OutboundMessage } from '../channels/types.js';
+import type { ChannelType } from '../channels/types.js';
+import type { NotificationRenderer, RenderedMessage, TelegramOutbound, DiscordOutbound } from '../renderers/types.js';
+import { TelegramRenderer } from '../renderers/telegram.js';
+import { DiscordRenderer } from '../renderers/discord.js';
+import { FeishuRenderer } from '../renderers/feishu.js';
 
 function mockAdapter(channelType = 'telegram'): BaseChannelAdapter {
   return {
@@ -15,6 +19,8 @@ function mockAdapter(channelType = 'telegram'): BaseChannelAdapter {
     consumeOne: vi.fn().mockResolvedValue(null),
     send: vi.fn().mockResolvedValue({ messageId: 'msg1', success: true }),
     editMessage: vi.fn().mockResolvedValue(undefined),
+    sendRendered: vi.fn().mockResolvedValue({ messageId: 'msg1', success: true }),
+    editRendered: vi.fn().mockResolvedValue(undefined),
     sendTyping: vi.fn().mockResolvedValue(undefined),
     validateConfig: vi.fn().mockReturnValue(null),
     isAuthorized: vi.fn().mockReturnValue(true),
@@ -49,6 +55,14 @@ function mockRouter(): ChannelRouter {
   } as any;
 }
 
+function createRenderers(): Map<ChannelType, NotificationRenderer> {
+  return new Map<ChannelType, NotificationRenderer>([
+    ['telegram', new TelegramRenderer()],
+    ['discord', new DiscordRenderer()],
+    ['feishu', new FeishuRenderer()],
+  ]);
+}
+
 describe('ControlPanel', () => {
   let panel: ControlPanel;
   let state: ReturnType<typeof mockState>;
@@ -56,6 +70,7 @@ describe('ControlPanel', () => {
   let router: ReturnType<typeof mockRouter>;
   let controls: Map<string, QueryControls>;
   let onNewSession: ReturnType<typeof vi.fn>;
+  let renderers: Map<ChannelType, NotificationRenderer>;
 
   beforeEach(() => {
     state = mockState();
@@ -63,13 +78,13 @@ describe('ControlPanel', () => {
     router = mockRouter();
     controls = new Map();
     onNewSession = vi.fn();
-    panel = new ControlPanel(state as any, sdkEngine as any, controls, router as any, onNewSession);
+    renderers = createRenderers();
+    panel = new ControlPanel(state as any, sdkEngine as any, controls, router as any, renderers, onNewSession);
   });
 
   describe('buildMainPanel', () => {
     it('returns card with 6 buttons for telegram', () => {
-      const msg = panel.buildMainPanel('telegram', 'chat1');
-      expect(msg.chatId).toBe('chat1');
+      const msg = panel.buildMainPanel('telegram', 'chat1') as TelegramOutbound;
       expect(msg.html).toContain('TLive');
       expect(msg.buttons).toHaveLength(6);
 
@@ -81,9 +96,8 @@ describe('ControlPanel', () => {
     });
 
     it('returns embed with fields for discord', () => {
-      const msg = panel.buildMainPanel('discord', 'chat1');
+      const msg = panel.buildMainPanel('discord', 'chat1') as DiscordOutbound;
       expect(msg.embed?.title).toBe('⚙️ TLive');
-      expect(msg.embed?.color).toBe(0x3399FF);
       expect(msg.embed?.fields).toBeDefined();
       expect(msg.embed?.fields?.length).toBeGreaterThanOrEqual(4);
       expect(msg.buttons).toHaveLength(6);
@@ -91,9 +105,9 @@ describe('ControlPanel', () => {
 
     it('returns feishu card', () => {
       const msg = panel.buildMainPanel('feishu', 'chat1');
-      expect(msg.feishuHeader?.title).toBe('⚙️ TLive');
-      expect(msg.feishuHeader?.template).toBe('blue');
+      // FeishuOutbound has card (JSON string) and buttons
       expect(msg.buttons).toHaveLength(6);
+      expect('card' in msg).toBe(true);
     });
 
     it('reflects current state values', () => {
@@ -102,7 +116,7 @@ describe('ControlPanel', () => {
       (state.getPermMode as any).mockReturnValue('off');
       (state.getRuntime as any).mockReturnValue('codex');
 
-      const msg = panel.buildMainPanel('telegram', 'chat1');
+      const msg = panel.buildMainPanel('telegram', 'chat1') as TelegramOutbound;
       expect(msg.html).toContain('claude-opus-4-6');
       expect(msg.html).toContain('high');
       expect(msg.html).toContain('OFF');
@@ -114,8 +128,8 @@ describe('ControlPanel', () => {
     it('sends main panel via adapter', async () => {
       const adapter = mockAdapter();
       await panel.show(adapter, 'chat1');
-      expect(adapter.send).toHaveBeenCalledTimes(1);
-      const sent = (adapter.send as any).mock.calls[0][0] as OutboundMessage;
+      expect(adapter.sendRendered).toHaveBeenCalledTimes(1);
+      const sent = (adapter.sendRendered as any).mock.calls[0][1] as TelegramOutbound;
       expect(sent.buttons).toHaveLength(6);
     });
   });
@@ -124,8 +138,8 @@ describe('ControlPanel', () => {
     it('model shows model picker', async () => {
       const adapter = mockAdapter();
       await panel.handleCallback(adapter, 'chat1', 'msg1', 'model:telegram:chat1');
-      expect(adapter.editMessage).toHaveBeenCalledTimes(1);
-      const edited = (adapter.editMessage as any).mock.calls[0][2] as OutboundMessage;
+      expect(adapter.editRendered).toHaveBeenCalledTimes(1);
+      const edited = (adapter.editRendered as any).mock.calls[0][2] as TelegramOutbound;
       expect(edited.html).toContain('Select Model');
     });
 
@@ -133,7 +147,7 @@ describe('ControlPanel', () => {
       const adapter = mockAdapter();
       await panel.handleCallback(adapter, 'chat1', 'msg1', 'model:select:claude-opus-4-6:telegram:chat1');
       expect(state.setModel).toHaveBeenCalledWith('telegram', 'chat1', 'claude-opus-4-6');
-      const edited = (adapter.editMessage as any).mock.calls[0][2] as OutboundMessage;
+      const edited = (adapter.editRendered as any).mock.calls[0][2] as TelegramOutbound;
       expect(edited.html).toContain('⚙️ TLive');
     });
 
@@ -146,7 +160,7 @@ describe('ControlPanel', () => {
     it('effort shows effort picker', async () => {
       const adapter = mockAdapter();
       await panel.handleCallback(adapter, 'chat1', 'msg1', 'effort:telegram:chat1');
-      const edited = (adapter.editMessage as any).mock.calls[0][2] as OutboundMessage;
+      const edited = (adapter.editRendered as any).mock.calls[0][2] as TelegramOutbound;
       expect(edited.html).toContain('Select Effort');
     });
 
@@ -182,21 +196,21 @@ describe('ControlPanel', () => {
     it('stats shows stats card', async () => {
       const adapter = mockAdapter();
       await panel.handleCallback(adapter, 'chat1', 'msg1', 'stats:telegram:chat1');
-      const edited = (adapter.editMessage as any).mock.calls[0][2] as OutboundMessage;
+      const edited = (adapter.editRendered as any).mock.calls[0][2] as TelegramOutbound;
       expect(edited.html).toContain('Session Stats');
     });
 
     it('back returns to main panel', async () => {
       const adapter = mockAdapter();
       await panel.handleCallback(adapter, 'chat1', 'msg1', 'back:telegram:chat1');
-      const edited = (adapter.editMessage as any).mock.calls[0][2] as OutboundMessage;
+      const edited = (adapter.editRendered as any).mock.calls[0][2] as TelegramOutbound;
       expect(edited.html).toContain('⚙️ TLive');
     });
   });
 
   describe('buildModelPicker', () => {
     it('shows claude models by default', () => {
-      const msg = panel.buildModelPicker('telegram', 'chat1');
+      const msg = panel.buildModelPicker('telegram', 'chat1') as TelegramOutbound;
       expect(msg.html).toContain('Select Model');
       const labels = msg.buttons!.map(b => b.label);
       expect(labels).toContain('claude-sonnet-4-6');
@@ -207,7 +221,7 @@ describe('ControlPanel', () => {
 
     it('shows codex models for codex runtime', () => {
       (state.getRuntime as any).mockReturnValue('codex');
-      const msg = panel.buildModelPicker('telegram', 'chat1');
+      const msg = panel.buildModelPicker('telegram', 'chat1') as TelegramOutbound;
       const labels = msg.buttons!.map(b => b.label);
       expect(labels).toContain('codex-mini');
       expect(labels).toContain('o4-mini');
@@ -215,7 +229,7 @@ describe('ControlPanel', () => {
 
     it('marks current model with checkmark', () => {
       (state.getModel as any).mockReturnValue('claude-opus-4-6');
-      const msg = panel.buildModelPicker('telegram', 'chat1');
+      const msg = panel.buildModelPicker('telegram', 'chat1') as TelegramOutbound;
       const opusBtn = msg.buttons!.find(b => b.label.includes('claude-opus-4-6'));
       expect(opusBtn?.label).toBe('✓ claude-opus-4-6');
       expect(opusBtn?.style).toBe('primary');
@@ -224,7 +238,7 @@ describe('ControlPanel', () => {
 
   describe('buildEffortPicker', () => {
     it('shows 4 effort levels + back', () => {
-      const msg = panel.buildEffortPicker('telegram', 'chat1');
+      const msg = panel.buildEffortPicker('telegram', 'chat1') as TelegramOutbound;
       expect(msg.buttons).toHaveLength(5);
       const labels = msg.buttons!.map(b => b.label);
       expect(labels).toContain('⚡ Low');
@@ -236,7 +250,7 @@ describe('ControlPanel', () => {
 
     it('marks current effort with checkmark', () => {
       (state.getEffort as any).mockReturnValue('high');
-      const msg = panel.buildEffortPicker('telegram', 'chat1');
+      const msg = panel.buildEffortPicker('telegram', 'chat1') as TelegramOutbound;
       const highBtn = msg.buttons!.find(b => b.label.includes('High'));
       expect(highBtn?.label).toBe('💪 High ✓');
       expect(highBtn?.style).toBe('primary');
@@ -245,8 +259,7 @@ describe('ControlPanel', () => {
 
   describe('buildStatsCard', () => {
     it('shows "no stats" when no tracker', () => {
-      const msg = panel.buildStatsCard('telegram', 'chat1');
-      // Grey card for empty state
+      const msg = panel.buildStatsCard('telegram', 'chat1') as TelegramOutbound;
       expect(msg.html).toContain('No stats available');
     });
 
@@ -255,7 +268,7 @@ describe('ControlPanel', () => {
         queryCount: 5,
         sessionTotalUsd: 1.47,
       });
-      const msg = panel.buildStatsCard('telegram', 'chat1');
+      const msg = panel.buildStatsCard('telegram', 'chat1') as TelegramOutbound;
       expect(msg.html).toContain('5');
       expect(msg.html).toContain('$1.47');
     });
@@ -265,7 +278,7 @@ describe('ControlPanel', () => {
         queryCount: 3,
         sessionTotalUsd: 0.52,
       });
-      const msg = panel.buildStatsCard('discord', 'chat1');
+      const msg = panel.buildStatsCard('discord', 'chat1') as DiscordOutbound;
       expect(msg.embed?.title).toBe('📊 Session Stats');
       expect(msg.embed?.fields).toHaveLength(2);
     });
@@ -277,7 +290,7 @@ describe('ControlPanel', () => {
       await panel.handleCallback(adapter, 'chat1', 'msg1', 'session:switch:sess-123:telegram:chat1');
       expect(router.rebind).toHaveBeenCalledWith('telegram', 'chat1', 'sess-123');
       expect(state.clearLastActive).toHaveBeenCalledWith('telegram', 'chat1');
-      const edited = (adapter.editMessage as any).mock.calls[0][2] as OutboundMessage;
+      const edited = (adapter.editRendered as any).mock.calls[0][2] as TelegramOutbound;
       expect(edited.html).toContain('⚙️ TLive');
     });
 
@@ -293,7 +306,7 @@ describe('ControlPanel', () => {
 
   describe('callback data format', () => {
     it('includes chatKey in all main panel buttons', () => {
-      const msg = panel.buildMainPanel('telegram', 'chat1');
+      const msg = panel.buildMainPanel('telegram', 'chat1') as TelegramOutbound;
       for (const btn of msg.buttons!) {
         expect(btn.callbackData).toContain('telegram:chat1');
         expect(btn.callbackData).toMatch(/^panel:/);
