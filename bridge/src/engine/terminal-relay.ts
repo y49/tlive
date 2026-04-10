@@ -6,7 +6,9 @@
 import { type Socket } from 'node:net';
 import { join } from 'node:path';
 import type { BaseChannelAdapter } from '../channels/base.js';
+import type { ChannelType } from '../channels/types.js';
 import type { Config } from '../config.js';
+import type { NotificationRenderer } from '../renderers/types.js';
 import { IPCServer } from './ipc-server.js';
 import { SessionRegistry } from './session-registry.js';
 import { WebTerminal } from './web-terminal.js';
@@ -24,6 +26,7 @@ export interface TerminalRelayDeps {
   webDir?: string;
   getAdapters: () => BaseChannelAdapter[];
   getLastChatId: (channelType: string) => string;
+  renderers?: Map<ChannelType, NotificationRenderer>;
   log: (msg: string) => void;
   warn: (msg: string) => void;
 }
@@ -50,7 +53,9 @@ export class TerminalRelay {
     this.replyInterceptor = new ReplyInterceptor(deps.log);
     this.replyInterceptor.onForward = (msg) => this.ipcServer.broadcast(msg as Record<string, unknown>);
     this.notificationDispatcher = new NotificationDispatcher(
-      deps.getAdapters, this.targetResolver, deps.log, deps.warn,
+      deps.getAdapters, this.targetResolver,
+      deps.renderers ?? new Map(),
+      deps.log, deps.warn,
     );
     this.notificationDispatcher.onSent = ({ messageId }) => this.replyInterceptor.trackMessage(messageId);
   }

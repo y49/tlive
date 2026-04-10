@@ -73,6 +73,7 @@ async function main() {
     webDir: process.env.TL_WEB_DIR || '',
     getAdapters: () => manager.getAdapters(),
     getLastChatId: (ch) => manager.getLastChatId(ch),
+    renderers: manager.getRenderers(),
     log: (msg) => logger.info(msg),
     warn: (msg) => logger.warn(msg),
   });

@@ -9,7 +9,8 @@ import { NotificationHub, type NotificationEvent } from './im/notificationHub.js
 import { SessionRouter } from './im/sessionRouter.js';
 import type { ProviderAdapter, NormalizedMessage } from './sdk/providerAdapter.js';
 import type { ToolUseEvent, SessionEvent } from './core/sessionScanner.js';
-import { normalizeSessionLine, formatForIM, extractTodos, formatTodos } from './sdk/messageNormalizer.js';
+import { normalizeSessionLine, formatForIM, toNotificationEvent, formatToolArgsBrief, extractTodos, formatTodos } from './sdk/messageNormalizer.js';
+import type { StructuredNotificationEvent } from './sdk/messageNormalizer.js';
 import type { TLiveConfig } from './config.js';
 import type { NotificationKind } from './im/notificationRules.js';
 import { CostTracker } from './core/costTracker.js';
@@ -25,7 +26,7 @@ export interface LoopOptions {
 }
 
 export interface IMSendFn {
-  (chatId: string, text: string, buttons?: NotificationEvent['buttons']): Promise<string | undefined>;
+  (chatId: string, text: string, buttons?: NotificationEvent['buttons'], event?: StructuredNotificationEvent): Promise<string | undefined>;
 }
 
 export class TLiveLoop extends EventEmitter {
@@ -109,12 +110,14 @@ export class TLiveLoop extends EventEmitter {
         const text = formatForIM(msg);
         if (!text) continue;
         const body = text.length > MAX_IM_TEXT_LEN ? text.slice(0, MAX_IM_TEXT_LEN) + '...' : text;
+        const structEvent = toNotificationEvent(msg);
         this.notifications.push({
           kind: 'activity_text',
           dedupeKey: `activity:${event.uuid}:${msg.kind}`,
           sessionId: this.session.info.sessionId,
           title: `${LABEL.terminal} · ${this.sessionTag()}`,
           body: body + `\n\n${LABEL.replyHint}`,
+          event: structEvent ?? undefined,
         });
         continue;
       }
@@ -139,6 +142,7 @@ export class TLiveLoop extends EventEmitter {
         if (buttons.length > 0) {
           buttons.push({ label: 'Skip', callbackData: `askq:${toolUseId}:skip`, style: 'danger' });
         }
+        const askEvent = toNotificationEvent(msg);
         this.notifications.push({
           kind: 'ask_user_question',
           dedupeKey: `askq:${event.uuid}`,
@@ -146,6 +150,7 @@ export class TLiveLoop extends EventEmitter {
           title: `${LABEL.question} · ${this.sessionTag()}`,
           body: questionText || 'Question from Claude',
           buttons: buttons.length > 0 ? buttons : undefined,
+          event: askEvent ?? undefined,
         });
         continue;
       }
@@ -160,6 +165,7 @@ export class TLiveLoop extends EventEmitter {
             sessionId: this.session.info.sessionId,
             title: `${LABEL.tasks} · ${this.sessionTag()}`,
             body: formatTodos(todos),
+            event: { kind: 'todo_update', items: todos },
           });
           continue;
         }
@@ -168,12 +174,14 @@ export class TLiveLoop extends EventEmitter {
       // Other tools → activity notification
       const text = formatForIM(msg);
       if (!text) continue;
+      const toolEvent = toNotificationEvent(msg);
       this.notifications.push({
         kind: 'activity_tool',
         dedupeKey: `activity:${event.uuid}:tool`,
         sessionId: this.session.info.sessionId,
         title: `${LABEL.terminal} · ${this.sessionTag()}`,
         body: text,
+        event: toolEvent ?? undefined,
       });
     }
   }
@@ -207,6 +215,11 @@ export class TLiveLoop extends EventEmitter {
         title: `${LABEL.question} · ${this.sessionTag()}`,
         body: toolUse.questionText ?? 'Question from Claude',
         buttons,
+        event: {
+          kind: 'ask_user_question',
+          question: toolUse.questionText ?? 'Question from Claude',
+          toolUseId: toolUse.toolUseId,
+        },
       });
       return;
     }
@@ -227,16 +240,24 @@ export class TLiveLoop extends EventEmitter {
         { label: 'Deny', callbackData: `perm:deny:${toolUse.toolUseId}`, style: 'danger' as const },
         { label: 'Takeover', callbackData: `perm:takeover:${toolUse.toolUseId}` },
       ],
+      event: {
+        kind: 'permission_request',
+        toolName: toolUse.toolName,
+        toolInput: formatToolArgsBrief(toolUse.toolName, toolUse.input),
+        permissionId: toolUse.toolUseId,
+      },
     });
   }
 
   private handleSessionComplete(): void {
+    const summary = this.costTracker.formatSummary();
     this.notifications.push({
       kind: 'session_complete',
       dedupeKey: `complete:${this.session.info.sessionId}`,
       sessionId: this.session.info.sessionId,
       title: `${LABEL.done} · ${this.sessionTag()}`,
-      body: this.costTracker.formatSummary(),
+      body: summary,
+      event: { kind: 'session_complete', summary },
     });
   }
 
@@ -248,7 +269,7 @@ export class TLiveLoop extends EventEmitter {
     if (!this.imSend || !this.imChatId) return;
     for (const event of events) {
       const text = event.body ? `${event.title}\n${event.body}` : event.title;
-      const messageId = await this.imSend(this.imChatId, text, event.buttons);
+      const messageId = await this.imSend(this.imChatId, text, event.buttons, event.event);
       if (messageId && (event.kind === 'permission_request' || event.kind === 'ask_user_question')) {
         this.router.registerTerminalNotification(
           messageId, this.session.info.sessionId, this.session.info.workdir,
@@ -288,6 +309,12 @@ export class TLiveLoop extends EventEmitter {
             { label: 'Allow', callbackData: `perm:allow:${id}` },
             { label: 'Deny', callbackData: `perm:deny:${id}`, style: 'danger' as const },
           ],
+          event: {
+            kind: 'permission_request',
+            toolName,
+            toolInput: formatToolArgsBrief(toolName, input),
+            permissionId: id,
+          },
         });
       },
     });

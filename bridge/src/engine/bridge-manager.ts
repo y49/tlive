@@ -133,6 +133,11 @@ export class BridgeManager {
     return Array.from(this.adapters.values());
   }
 
+  /** Returns the renderer map (for passing to TerminalRelay). */
+  getRenderers(): Map<ChannelType, NotificationRenderer> {
+    return this.renderers;
+  }
+
   /** Get the last active chatId for a given channel type (for hook routing) */
   getLastChatId(channelType: string): string {
     return this.messageRouter.getLastChatId(channelType);

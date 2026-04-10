@@ -129,6 +129,81 @@ function truncate(s: string, max: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// NormalizedMessage → StructuredNotificationEvent (for IPC to bridge)
+// ---------------------------------------------------------------------------
+
+/**
+ * Structured notification event sent via IPC to the bridge.
+ * Mirrors bridge/src/renderers/types.ts NotificationEvent shape
+ * without cross-package imports.
+ */
+export interface StructuredNotificationEvent {
+  kind: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Convert a NormalizedMessage into a structured notification event.
+ * The bridge-side Renderer handles all display formatting.
+ */
+export function toNotificationEvent(msg: NormalizedMessage): StructuredNotificationEvent | null {
+  switch (msg.kind) {
+    case 'tool_use': {
+      if (msg.toolName === 'AskUserQuestion') {
+        const input = (msg.toolInput ?? {}) as Record<string, unknown>;
+        return {
+          kind: 'ask_user_question',
+          question: (input.question as string) ?? '',
+          header: input.header as string | undefined,
+          options: input.options as unknown[] | undefined,
+          toolUseId: msg.parentToolUseId ?? '',
+        };
+      }
+      return {
+        kind: 'activity_tool',
+        toolName: msg.toolName ?? 'unknown',
+        toolInput: formatToolArgsBrief(msg.toolName, msg.toolInput),
+      };
+    }
+    case 'permission_request':
+      return {
+        kind: 'permission_request',
+        toolName: msg.toolName ?? 'unknown',
+        toolInput: formatToolArgsBrief(msg.toolName, msg.toolInput),
+        permissionId: '',  // assigned by bridge
+      };
+    case 'text':
+      return { kind: 'activity_text', text: msg.text ?? '' };
+    case 'error':
+      return { kind: 'error', message: msg.text ?? 'Unknown error' };
+    case 'complete':
+      return {
+        kind: 'session_complete',
+        summary: msg.text ?? '',
+      };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Brief tool argument summary for IPC — the bridge-side Renderer handles display formatting.
+ * Unlike formatToolArgs(), this produces clean one-liners without backtick wrapping or \n prefixes.
+ */
+export function formatToolArgsBrief(toolName: string | undefined, input: unknown): string {
+  if (!input || typeof input !== 'object' || !toolName) return '';
+  const args = input as Record<string, unknown>;
+  if (toolName === 'Bash') return (args.command as string) ?? '';
+  if (toolName === 'Read') return (args.file_path as string) ?? '';
+  if (toolName === 'Edit' || toolName === 'Write') return (args.file_path as string) ?? '';
+  if (toolName === 'Grep') return (args.pattern as string) ?? '';
+  for (const v of Object.values(args)) {
+    if (typeof v === 'string' && v.length > 0) return v.slice(0, 200);
+  }
+  return '';
+}
+
+// ---------------------------------------------------------------------------
 // TodoWrite extraction
 // ---------------------------------------------------------------------------
 

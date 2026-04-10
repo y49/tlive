@@ -4,7 +4,9 @@
 // Extracted from terminal-relay.ts.
 
 import type { BaseChannelAdapter } from '../channels/base.js';
-import { TargetResolver, type ResolvedTarget } from './target-resolver.js';
+import type { ChannelType } from '../channels/types.js';
+import type { NotificationRenderer, NotificationEvent as RendererNotificationEvent } from '../renderers/types.js';
+import { TargetResolver } from './target-resolver.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -15,6 +17,8 @@ export interface NotificationPayload {
   buttons?: Array<{ label: string; callbackData: string; style?: string }>;
   sessionId?: string;
   workdir?: string;
+  /** Structured notification event from terminal (v1.0 IPC upgrade). */
+  event?: Record<string, unknown>;
 }
 
 export interface DispatchResult {
@@ -33,6 +37,7 @@ export class NotificationDispatcher {
   constructor(
     private getAdapters: () => BaseChannelAdapter[],
     private targetResolver: TargetResolver,
+    private renderers: Map<ChannelType, NotificationRenderer>,
     private log: (msg: string) => void,
     private warn: (msg: string) => void,
   ) {}
@@ -42,35 +47,35 @@ export class NotificationDispatcher {
    * Returns a map of channelType -> messageId for successfully sent messages.
    */
   async dispatch(notification: NotificationPayload): Promise<Map<string, string>> {
-    const { text, buttons } = notification;
     const results = new Map<string, string>();
 
     for (const adapter of this.getAdapters()) {
       const target = this.targetResolver.resolve(adapter.channelType);
       if (!target) continue;
 
-      // Determine card header style based on notification content
-      const isPermission = text.includes('Permission');
-      const isQuestion = text.includes('Question');
-      const isDone = text.includes('Done');
-      const isThinking = text.includes('Thinking');
-      const feishuHeader = adapter.channelType === 'feishu' ? {
-        template: isPermission ? 'orange' : isQuestion ? 'blue' : isDone ? 'green' : isThinking ? 'grey' : 'turquoise',
-        title: isPermission ? 'Permission Request' : isQuestion ? 'Question' : isDone ? 'Done' : isThinking ? 'Thinking...' : 'Terminal',
-      } : undefined;
+      const renderer = this.renderers.get(adapter.channelType as ChannelType);
 
       try {
-        const result = await adapter.send({
-          chatId: target.chatId,
-          receiveIdType: target.receiveIdType,
-          text,
-          buttons: buttons?.map((b) => ({
-            label: b.label,
-            callbackData: b.callbackData,
-            style: b.style as 'primary' | 'danger' | undefined,
-          })),
-          feishuHeader,
-        } as any);
+        let result;
+        if (notification.event && renderer) {
+          // New path: structured event → Renderer
+          const rendered = renderer.renderNotification(notification.event as RendererNotificationEvent);
+          result = await adapter.sendRendered(target.chatId, rendered);
+        } else if (renderer) {
+          // Legacy fallback with renderer: use renderSimpleText
+          result = await adapter.sendRendered(target.chatId, renderer.renderSimpleText(notification.text));
+        } else {
+          // No renderer available: legacy send
+          result = await adapter.send({
+            chatId: target.chatId,
+            text: notification.text,
+            buttons: notification.buttons?.map((b) => ({
+              label: b.label,
+              callbackData: b.callbackData,
+              style: b.style as 'primary' | 'danger' | undefined,
+            })),
+          } as any);
+        }
 
         const msgId = result?.messageId;
         if (msgId) {
