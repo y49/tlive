@@ -1,12 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { RateLimitError } from '../channels/errors.js';
 
 // Mock grammy before importing
 const mockSendMessage = vi.fn().mockResolvedValue({ message_id: 42 });
 const mockEditMessageText = vi.fn().mockResolvedValue({});
 const mockSendChatAction = vi.fn().mockResolvedValue(true);
-const mockSendPhoto = vi.fn().mockResolvedValue({ message_id: 42 });
-const mockSendDocument = vi.fn().mockResolvedValue({ message_id: 42 });
 const mockGetMe = vi.fn().mockResolvedValue({ id: 1, username: 'testbot', can_read_all_group_messages: true });
 const mockSetMyCommands = vi.fn().mockResolvedValue(true);
 const mockSetMessageReaction = vi.fn().mockResolvedValue(true);
@@ -21,8 +18,6 @@ vi.mock('grammy', () => {
       sendMessage: mockSendMessage,
       editMessageText: mockEditMessageText,
       sendChatAction: mockSendChatAction,
-      sendPhoto: mockSendPhoto,
-      sendDocument: mockSendDocument,
       getMe: mockGetMe,
       setMyCommands: mockSetMyCommands,
       setMessageReaction: mockSetMessageReaction,
@@ -34,10 +29,7 @@ vi.mock('grammy', () => {
     on = mockOn;
     handleUpdate = vi.fn();
   }
-  class InputFile {
-    constructor(public data: any, public filename?: string) {}
-  }
-  return { Bot: MockBot, InputFile };
+  return { Bot: MockBot };
 });
 
 vi.mock('@grammyjs/runner', () => ({
@@ -116,9 +108,9 @@ describe('TelegramAdapter', () => {
     expect(pairingAdapter.approvePairing('000000')).toBeNull();
   });
 
-  it('sends message via grammY api', async () => {
+  it('sends rendered HTML message via grammY api', async () => {
     await adapter.start();
-    const result = await adapter.send({ chatId: '12345', html: '<b>hello</b>' });
+    const result = await adapter.send('12345', { html: '<b>hello</b>' });
     expect(result.success).toBe(true);
     expect(result.messageId).toBe('42');
     expect(mockSendMessage).toHaveBeenCalledWith(
@@ -129,12 +121,11 @@ describe('TelegramAdapter', () => {
 
   it('sends message with buttons as inline keyboard', async () => {
     await adapter.start();
-    const result = await adapter.send({
-      chatId: '12345',
-      text: 'Choose:',
+    const result = await adapter.send('12345', {
+      html: 'Choose:',
       buttons: [
         { label: 'Allow', callbackData: 'perm:allow:123' },
-        { label: 'Deny', callbackData: 'perm:deny:123', style: 'danger' },
+        { label: 'Deny', callbackData: 'perm:deny:123', style: 'danger' as const },
       ],
     });
     expect(result.success).toBe(true);
@@ -150,7 +141,7 @@ describe('TelegramAdapter', () => {
 
   it('disables link preview by default', async () => {
     await adapter.start();
-    await adapter.send({ chatId: '12345', text: 'https://example.com' });
+    await adapter.send('12345', { html: 'https://example.com' });
     expect(mockSendMessage).toHaveBeenCalledWith(
       '12345', 'https://example.com',
       expect.objectContaining({
@@ -159,45 +150,10 @@ describe('TelegramAdapter', () => {
     );
   });
 
-  describe('topic support', () => {
-    it('passes message_thread_id when threadId is set', async () => {
-      await adapter.start();
-      await adapter.send({ chatId: '12345', text: 'topic message', threadId: '999' });
-      expect(mockSendMessage).toHaveBeenCalledWith(
-        '12345', 'topic message',
-        expect.objectContaining({ message_thread_id: 999 })
-      );
-    });
-
-    it('omits message_thread_id for General topic (1)', async () => {
-      await adapter.start();
-      await adapter.send({ chatId: '12345', text: 'general', threadId: '1' });
-      expect(mockSendMessage).toHaveBeenCalledWith(
-        '12345', 'general',
-        expect.objectContaining({ message_thread_id: undefined })
-      );
-    });
-  });
-
-  describe('chunked send', () => {
-    it('sends single message when under 4096 chars', async () => {
-      await adapter.start();
-      await adapter.send({ chatId: '12345', text: 'short' });
-      expect(mockSendMessage).toHaveBeenCalledTimes(1);
-    });
-
-    it('splits long messages into multiple sends', async () => {
-      await adapter.start();
-      const longText = 'x\n'.repeat(3000);
-      await adapter.send({ chatId: '12345', text: longText });
-      expect(mockSendMessage.mock.calls.length).toBeGreaterThan(1);
-    });
-  });
-
   describe('editMessage', () => {
     it('calls editMessageText', async () => {
       await adapter.start();
-      await adapter.editMessage('12345', '42', { chatId: '12345', text: 'updated' });
+      await adapter.editMessage('12345', '42', { html: 'updated' });
       expect(mockEditMessageText).toHaveBeenCalledWith('12345', 42, 'updated', expect.any(Object));
     });
 
@@ -205,7 +161,7 @@ describe('TelegramAdapter', () => {
       await adapter.start();
       mockEditMessageText.mockRejectedValueOnce(new Error('message is not modified'));
       await expect(
-        adapter.editMessage('12345', '42', { chatId: '12345', text: 'same' })
+        adapter.editMessage('12345', '42', { html: 'same' })
       ).resolves.toBeUndefined();
     });
   });
@@ -266,7 +222,7 @@ describe('TelegramAdapter', () => {
         description: 'Too Many Requests',
         parameters: { retry_after: 5 },
       });
-      await expect(adapter.send({ chatId: '12345', text: 'hi' }))
+      await expect(adapter.send('12345', { html: 'hi' }))
         .rejects.toBeDefined();
     });
 
@@ -275,7 +231,7 @@ describe('TelegramAdapter', () => {
       mockSendMessage
         .mockRejectedValueOnce({ error_code: 400, description: 'Bad Request: can\'t parse' })
         .mockResolvedValueOnce({ message_id: 99 });
-      const result = await adapter.send({ chatId: '12345', html: '<invalid>' });
+      const result = await adapter.send('12345', { html: '<invalid>' });
       expect(result.success).toBe(true);
       expect(mockSendMessage).toHaveBeenCalledTimes(2);
       // Second call should not have parse_mode

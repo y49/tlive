@@ -1,13 +1,12 @@
-import { Bot, InputFile, type Api, type RawApi } from 'grammy';
+import { Bot, type Api, type RawApi } from 'grammy';
 import { run, type RunnerHandle } from '@grammyjs/runner';
 import { apiThrottler } from '@grammyjs/transformer-throttler';
 import { createServer, type Server } from 'node:http';
 import { BaseChannelAdapter, registerAdapterFactory } from './base.js';
-import type { InboundMessage, OutboundMessage, SendResult, FileAttachment } from './types.js';
+import type { InboundMessage, SendResult, FileAttachment } from './types.js';
 import type { TelegramOutbound } from '../renderers/types.js';
 import { loadConfig } from '../config.js';
 import { createNodeAgent, maskProxyUrl } from '../proxy.js';
-import { chunkMarkdown } from '../delivery/delivery.js';
 import { classifyError } from './errors.js';
 
 interface TelegramConfig {
@@ -264,100 +263,6 @@ export class TelegramAdapter extends BaseChannelAdapter<TelegramOutbound> {
     return this.bot.api;
   }
 
-  async send(message: OutboundMessage): Promise<SendResult> {
-    const api = this.api;
-
-    // General topic (thread_id=1): Telegram rejects message_thread_id=1
-    const threadId = (message.threadId && message.threadId !== '1')
-      ? parseInt(message.threadId, 10) : undefined;
-
-    // Media sending
-    if (message.media) {
-      try {
-        const media = message.media;
-        let source: InputFile | string;
-        if (media.buffer) {
-          source = new InputFile(media.buffer, media.filename || 'file');
-        } else if (media.url?.startsWith('data:')) {
-          const base64 = media.url.split(',')[1];
-          source = new InputFile(Buffer.from(base64, 'base64'), media.filename || 'file');
-        } else if (media.url) {
-          source = media.url;
-        } else {
-          throw new Error('No media source');
-        }
-
-        if (media.type === 'image') {
-          const result = await api.sendPhoto(message.chatId, source, {
-            caption: message.html ?? message.text,
-            parse_mode: message.html ? 'HTML' : undefined,
-            message_thread_id: threadId,
-          });
-          return { messageId: String(result.message_id), success: true };
-        } else {
-          const result = await api.sendDocument(message.chatId, source, {
-            caption: message.text,
-            message_thread_id: threadId,
-          });
-          return { messageId: String(result.message_id), success: true };
-        }
-      } catch (err) {
-        if (!message.text && !message.html) throw classifyError('telegram', err);
-      }
-    }
-
-    const text = message.html ?? message.text ?? '';
-    const chunks = text.length > 4096 ? chunkMarkdown(text, 4096) : [text];
-
-    let lastMessageId = '';
-    try {
-      for (let i = 0; i < chunks.length; i++) {
-        const opts: Record<string, unknown> = {
-          parse_mode: message.html ? 'HTML' : undefined,
-          message_thread_id: threadId,
-        };
-
-        if (this.config.disableLinkPreview) {
-          opts.link_preview_options = { is_disabled: true };
-        }
-
-        if (message.replyToMessageId && i === 0) {
-          opts.reply_to_message_id = parseInt(message.replyToMessageId, 10);
-        }
-
-        // Buttons on last chunk only
-        if (i === chunks.length - 1 && message.buttons?.length) {
-          opts.reply_markup = {
-            inline_keyboard: [message.buttons.map(b => {
-              if (b.url) {
-                return { text: b.label, url: b.url };
-              }
-              return { text: b.label, callback_data: b.callbackData };
-            })],
-          };
-        }
-
-        try {
-          const result = await api.sendMessage(message.chatId, chunks[i], opts);
-          lastMessageId = String(result.message_id);
-        } catch (sendErr: any) {
-          // Parse-mode fallback: retry without HTML if formatting fails
-          if (opts.parse_mode && sendErr?.error_code === 400) {
-            delete opts.parse_mode;
-            const result = await api.sendMessage(message.chatId, chunks[i], opts);
-            lastMessageId = String(result.message_id);
-          } else {
-            throw sendErr;
-          }
-        }
-      }
-    } catch (err) {
-      throw classifyError('telegram', err);
-    }
-
-    return { messageId: lastMessageId, success: true };
-  }
-
   async deleteMessage(chatId: string, messageId: string): Promise<void> {
     if (!this.bot) return;
     try {
@@ -367,73 +272,7 @@ export class TelegramAdapter extends BaseChannelAdapter<TelegramOutbound> {
     }
   }
 
-  async editMessage(chatId: string, messageId: string, message: OutboundMessage): Promise<void> {
-    if (!this.bot) return;
-    const text = message.html ?? message.text ?? '';
-    const opts: Record<string, unknown> = {
-      parse_mode: message.html ? 'HTML' : undefined,
-    };
-    if (message.buttons?.length) {
-      // Group buttons by row field; buttons without row go in one default row
-      const hasRows = message.buttons.some(b => b.row !== undefined);
-      let rows: Array<typeof message.buttons>;
-      if (hasRows) {
-        const rowMap = new Map<number, typeof message.buttons>();
-        for (const b of message.buttons) {
-          const r = b.row ?? Number.MAX_SAFE_INTEGER;
-          if (!rowMap.has(r)) rowMap.set(r, []);
-          rowMap.get(r)!.push(b);
-        }
-        rows = [...rowMap.entries()].sort(([a], [b]) => a - b).map(([, btns]) => btns);
-      } else {
-        rows = [message.buttons];
-      }
-      opts.reply_markup = {
-        inline_keyboard: rows.map(row => row.map(b => {
-          if (b.url) return { text: b.label, url: b.url };
-          return { text: b.label, callback_data: b.callbackData };
-        })),
-      };
-    } else if (message.buttons) {
-      // Empty array = clear existing buttons
-      opts.reply_markup = { inline_keyboard: [] };
-    }
-    try {
-      await this.api.editMessageText(chatId, parseInt(messageId, 10), text, opts);
-    } catch (err: unknown) {
-      if (err instanceof Error && err.message?.includes('message is not modified')) return;
-
-      const classified = classifyError('telegram', err);
-
-      // 429 Rate limit: wait retry_after and retry once
-      if (classified.retryable && 'retryAfterMs' in classified) {
-        const delay = Math.min((classified as any).retryAfterMs || 1000, 30_000);
-        await new Promise(r => setTimeout(r, delay));
-        try {
-          await this.api.editMessageText(chatId, parseInt(messageId, 10), text, opts);
-          return;
-        } catch {
-          // give up — next flush will catch up
-        }
-      }
-
-      // 400 Format error: retry without HTML (same pattern as sendMessage)
-      if (!classified.retryable && opts.parse_mode) {
-        try {
-          delete opts.parse_mode;
-          await this.api.editMessageText(chatId, parseInt(messageId, 10), text, opts);
-          return;
-        } catch {
-          // give up
-        }
-      }
-
-      // Streaming edits are non-fatal: log and swallow so the bridge stays alive
-      console.warn(`[telegram] editMessage failed (${classified.constructor.name}): ${classified.message}`);
-    }
-  }
-
-  async sendRendered(chatId: string, message: TelegramOutbound): Promise<SendResult> {
+  async send(chatId: string, message: TelegramOutbound): Promise<SendResult> {
     const api = this.api;
     const opts: Record<string, unknown> = { parse_mode: 'HTML' };
 
@@ -464,7 +303,7 @@ export class TelegramAdapter extends BaseChannelAdapter<TelegramOutbound> {
     }
   }
 
-  async editRendered(chatId: string, messageId: string, message: TelegramOutbound): Promise<void> {
+  async editMessage(chatId: string, messageId: string, message: TelegramOutbound): Promise<void> {
     if (!this.bot) return;
     const opts: Record<string, unknown> = { parse_mode: 'HTML' };
 
@@ -505,7 +344,7 @@ export class TelegramAdapter extends BaseChannelAdapter<TelegramOutbound> {
         } catch { /* give up */ }
       }
 
-      console.warn(`[telegram] editRendered failed (${classified.constructor.name}): ${classified.message}`);
+      console.warn(`[telegram] editMessage failed (${classified.constructor.name}): ${classified.message}`);
     }
   }
 

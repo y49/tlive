@@ -10,9 +10,7 @@ function createMockAdapter(): BaseChannelAdapter {
   return {
     channelType: 'telegram',
     send: vi.fn().mockResolvedValue({ messageId: '42', success: true }),
-    sendRendered: vi.fn().mockResolvedValue({ messageId: '42', success: true }),
     editMessage: vi.fn(),
-    editRendered: vi.fn(),
     start: vi.fn(), stop: vi.fn(), consumeOne: vi.fn(),
     validateConfig: vi.fn(), isAuthorized: vi.fn(),
   } as any;
@@ -35,15 +33,15 @@ describe('PermissionBroker', () => {
     broker = new PermissionBroker(gateway, 'https://termlive.example.com', createRenderers());
   });
 
-  it('forwards permission request to adapter via sendRendered with buttons', async () => {
+  it('forwards permission request to adapter via send with buttons', async () => {
     await broker.forwardPermissionRequest(
       { permissionRequestId: 'perm1', toolName: 'Edit', toolInput: { file: 'src/auth.ts' } },
       () => 'chat123',
       [adapter]
     );
 
-    expect(adapter.sendRendered).toHaveBeenCalledOnce();
-    const [chatId, rendered] = (adapter.sendRendered as any).mock.calls[0];
+    expect(adapter.send).toHaveBeenCalledOnce();
+    const [chatId, rendered] = (adapter.send as any).mock.calls[0];
     expect(chatId).toBe('chat123');
     expect(rendered.buttons).toHaveLength(2); // Yes, No
     expect(rendered.buttons[0].callbackData).toBe('perm:allow:perm1');
@@ -60,7 +58,7 @@ describe('PermissionBroker', () => {
       [adapter]
     );
 
-    const [, rendered] = (adapter.sendRendered as any).mock.calls[0];
+    const [, rendered] = (adapter.send as any).mock.calls[0];
     const text = rendered.html || '';
     // The full 500-char input should not appear
     expect(text.length).toBeLessThan(600);

@@ -108,75 +108,42 @@ describe('FeishuAdapter', () => {
   });
 
   describe('send()', () => {
-    it('always sends interactive card', async () => {
+    it('sends interactive card via Feishu API', async () => {
       await adapter.start();
-      const result = await adapter.send({
-        chatId: 'oc_chat123',
-        text: 'Hello from TermLive',
+      const result = await adapter.send('oc_chat123', {
+        card: '{"schema":"2.0","body":{"elements":[{"tag":"markdown","content":"Hello"}]}}',
       });
 
       expect(mockMessageCreate).toHaveBeenCalledOnce();
       const call = mockMessageCreate.mock.calls[0][0];
       expect(call.data.msg_type).toBe('interactive');
-      const card = JSON.parse(call.data.content);
-      expect(card.config.wide_screen_mode).toBe(true);
-      expect(card.body.elements[0].tag).toBe('markdown');
-      expect(card.body.elements[0].content).toBe('Hello from TermLive');
+      expect(call.data.receive_id).toBe('oc_chat123');
 
       expect(result.success).toBe(true);
       expect(result.messageId).toBe('msg-feishu-1');
       await adapter.stop();
     });
 
-    it('includes action buttons in card when provided', async () => {
+    it('detects receive_id_type from chatId prefix', async () => {
       await adapter.start();
-      await adapter.send({
-        chatId: 'oc_chat123',
-        text: 'Permission?',
-        buttons: [
-          { label: 'Allow', callbackData: 'perm:allow:123', style: 'primary' },
-          { label: 'Deny', callbackData: 'perm:deny:123', style: 'danger' },
-        ],
-      });
-
-      const call = mockMessageCreate.mock.calls[0][0];
-      const card = JSON.parse(call.data.content);
-      // Schema 2.0: buttons in column_set with behaviors
-      expect(card.body.elements[1].tag).toBe('column_set');
-      expect(card.body.elements[1].columns).toHaveLength(2);
-      const btn0 = card.body.elements[1].columns[0].elements[0];
-      const btn1 = card.body.elements[1].columns[1].elements[0];
-      expect(btn0.tag).toBe('button');
-      expect(btn0.text.content).toBe('Allow');
-      expect(btn1.type).toBe('danger');
-      await adapter.stop();
-    });
-
-    it('sets receive_id and receive_id_type correctly', async () => {
-      await adapter.start();
-      await adapter.send({ chatId: 'oc_specific_chat', text: 'hi' });
+      await adapter.send('oc_specific_chat', { card: '{}' });
 
       const call = mockMessageCreate.mock.calls[0][0];
       expect(call.params.receive_id_type).toBe('chat_id');
-      expect(call.data.receive_id).toBe('oc_specific_chat');
       await adapter.stop();
     });
 
-    it('passes root_id when replyToMessageId is set', async () => {
+    it('uses open_id type for ou_ prefix', async () => {
       await adapter.start();
-      await adapter.send({
-        chatId: 'oc_chat123',
-        text: 'Reply text',
-        replyToMessageId: 'msg-parent-1',
-      });
+      await adapter.send('ou_user123', { card: '{}' });
 
       const call = mockMessageCreate.mock.calls[0][0];
-      expect(call.data.root_id).toBe('msg-parent-1');
+      expect(call.params.receive_id_type).toBe('open_id');
       await adapter.stop();
     });
 
     it('throws when client is not started', async () => {
-      await expect(adapter.send({ chatId: 'oc_chat123', text: 'hi' })).rejects.toThrow(
+      await expect(adapter.send('oc_chat123', { card: '{}' })).rejects.toThrow(
         'Feishu client not started',
       );
     });
@@ -186,16 +153,13 @@ describe('FeishuAdapter', () => {
     it('initializes client and WSClient on start', async () => {
       await adapter.start();
       expect(mockWsStart).toHaveBeenCalledOnce();
-      await expect(
-        adapter.send({ chatId: 'oc_chat', text: 'test' }),
-      ).resolves.toBeDefined();
       await adapter.stop();
     });
 
     it('clears client on stop so subsequent sends fail', async () => {
       await adapter.start();
       await adapter.stop();
-      await expect(adapter.send({ chatId: 'oc_chat', text: 'test' })).rejects.toThrow(
+      await expect(adapter.send('oc_chat', { card: '{}' })).rejects.toThrow(
         'Feishu client not started',
       );
     });
@@ -214,14 +178,13 @@ describe('FeishuAdapter', () => {
       mockMessagePatch.mockRejectedValueOnce(new Error('400 not a card'));
       // Should not throw
       await adapter.editMessage('oc_chat123', 'msg-feishu-1', {
-        chatId: 'oc_chat123',
-        text: 'Updated content',
+        card: '{"schema":"2.0","body":{"elements":[{"tag":"markdown","content":"Updated"}]}}',
       });
       await adapter.stop();
     });
 
     it('does nothing when client is not started', async () => {
-      await adapter.editMessage('oc_chat', 'msg-1', { chatId: 'oc_chat', text: 'hi' });
+      await adapter.editMessage('oc_chat', 'msg-1', { card: '{}' });
       expect(mockMessagePatch).not.toHaveBeenCalled();
     });
   });

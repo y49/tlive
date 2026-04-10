@@ -287,14 +287,14 @@ export class SDKEngine {
       buttons: buttons.map(b => ({ ...b, style: b.style as 'primary' | 'danger' | 'default' })),
       color: 'info',
     });
-    const sendResult = await adapter.sendRendered(msg.chatId, rendered);
+    const sendResult = await adapter.send(msg.chatId, rendered);
     this.permissions.trackPermissionMessage(sendResult.messageId, permId, sessionId, msg.channelType);
 
     const result = await waitPromise;
 
     if (result.behavior === 'deny') {
       this.sdkQuestionData.delete(permId);
-      adapter.editRendered(msg.chatId, sendResult.messageId, r.renderSimpleText('⏭ Skipped')).catch(() => {});
+      adapter.editMessage(msg.chatId, sendResult.messageId, r.renderSimpleText('⏭ Skipped')).catch(() => {});
       throw new Error('User skipped question');
     }
 
@@ -304,7 +304,7 @@ export class SDKEngine {
 
     if (textAnswer !== undefined) {
       const preview = textAnswer.length > 50 ? textAnswer.slice(0, 47) + '...' : textAnswer;
-      adapter.editRendered(msg.chatId, sendResult.messageId, r.renderSimpleText(`✅ Answer: ${preview}`)).catch(() => {});
+      adapter.editMessage(msg.chatId, sendResult.messageId, r.renderSimpleText(`✅ Answer: ${preview}`)).catch(() => {});
       return textAnswer;
     }
 
@@ -314,7 +314,7 @@ export class SDKEngine {
     const answerLabel = selected?.label ?? '';
 
     if (!selected) {
-      adapter.editRendered(msg.chatId, sendResult.messageId, r.renderSimpleText('✅ Answered')).catch(() => {});
+      adapter.editMessage(msg.chatId, sendResult.messageId, r.renderSimpleText('✅ Answered')).catch(() => {});
     }
 
     return answerLabel;
@@ -395,7 +395,7 @@ export class SDKEngine {
         });
         const targetChatId = threadId && adapter.channelType === 'discord' ? threadId : msg.chatId;
         try {
-          const result = await adapter.sendRendered(targetChatId, rendered);
+          const result = await adapter.send(targetChatId, rendered);
           permissionReminderMsgId = result.messageId;
         } catch { /* non-fatal */ }
       },
@@ -429,7 +429,7 @@ export class SDKEngine {
         if (!isEdit) {
           const sendTarget = threadId && adapter.channelType === 'discord' ? threadId : msg.chatId;
           if (adapter.channelType === 'discord' && !threadId && 'createThread' in adapter) {
-            const result = await adapter.sendRendered(msg.chatId, rendered);
+            const result = await adapter.send(msg.chatId, rendered);
             clearInterval(typingInterval);
             const preview = (msg.text || 'Claude').slice(0, 80);
             const newThreadId = await (adapter as any).createThread(msg.chatId, result.messageId, `💬 ${preview}`);
@@ -439,7 +439,7 @@ export class SDKEngine {
             }
             return result.messageId;
           }
-          const result = await adapter.sendRendered(sendTarget, rendered);
+          const result = await adapter.send(sendTarget, rendered);
           clearInterval(typingInterval);
           return result.messageId;
         } else {
@@ -448,7 +448,7 @@ export class SDKEngine {
           // TODO: For completed phase with very long responseText, platform may truncate.
           // Proper overflow chunking for rendered messages can be added later if needed.
           const editTarget = threadId && adapter.channelType === 'discord' ? threadId : msg.chatId;
-          await adapter.editRendered(editTarget, renderer.messageId!, rendered);
+          await adapter.editMessage(editTarget, renderer.messageId!, rendered);
         }
       },
     });
@@ -484,7 +484,7 @@ export class SDKEngine {
           if (permissionReminderMsgId) {
             const icon = result.behavior === 'deny' ? '❌' : '✅';
             const r = this.renderers.get(adapter.channelType)!;
-            adapter.editRendered(msg.chatId, permissionReminderMsgId,
+            adapter.editMessage(msg.chatId, permissionReminderMsgId,
               r.renderSimpleText(`${permissionReminderTool}: ${permissionReminderInput} ${icon}`)
             ).catch(() => {});
             permissionReminderMsgId = undefined;
@@ -591,7 +591,7 @@ export class SDKEngine {
             body: `💡 ${truncated}`,
             buttons: [{ label: '💡 ' + truncated, callbackData: `suggest:${suggestion.slice(0, 200)}`, style: 'default' as const }],
           });
-          adapter.sendRendered(chatId, rendered).catch(() => {});
+          adapter.send(chatId, rendered).catch(() => {});
         },
         onError: (err) => renderer.onError(err),
       });

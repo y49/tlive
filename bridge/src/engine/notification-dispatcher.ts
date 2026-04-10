@@ -58,23 +58,16 @@ export class NotificationDispatcher {
       try {
         let result;
         if (notification.event && renderer) {
-          // New path: structured event → Renderer
+          // Structured event → Renderer
           const rendered = renderer.renderNotification(notification.event as RendererNotificationEvent);
-          result = await adapter.sendRendered(target.chatId, rendered);
+          result = await adapter.send(target.chatId, rendered);
         } else if (renderer) {
-          // Legacy fallback with renderer: use renderSimpleText
-          result = await adapter.sendRendered(target.chatId, renderer.renderSimpleText(notification.text));
+          // Fallback: plain text via renderer
+          result = await adapter.send(target.chatId, renderer.renderSimpleText(notification.text));
         } else {
-          // No renderer available: legacy send
-          result = await adapter.send({
-            chatId: target.chatId,
-            text: notification.text,
-            buttons: notification.buttons?.map((b) => ({
-              label: b.label,
-              callbackData: b.callbackData,
-              style: b.style as 'primary' | 'danger' | undefined,
-            })),
-          } as any);
+          // Should not happen — all channels have renderers now
+          this.warn(`No renderer for ${adapter.channelType}, skipping notification`);
+          continue;
         }
 
         const msgId = result?.messageId;

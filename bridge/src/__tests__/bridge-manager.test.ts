@@ -11,9 +11,7 @@ function mockAdapter(channelType = 'telegram'): BaseChannelAdapter {
     stop: vi.fn().mockResolvedValue(undefined),
     consumeOne: vi.fn().mockImplementation(() => messageQueue.shift() ?? null),
     send: vi.fn().mockResolvedValue({ messageId: '1', success: true }),
-    sendRendered: vi.fn().mockResolvedValue({ messageId: '1', success: true }),
     editMessage: vi.fn().mockResolvedValue(undefined),
-    editRendered: vi.fn().mockResolvedValue(undefined),
     sendTyping: vi.fn().mockResolvedValue(undefined),
     addReaction: vi.fn().mockResolvedValue(undefined),
     removeReaction: vi.fn().mockResolvedValue(undefined),
@@ -111,7 +109,7 @@ describe('BridgeManager', () => {
       channelType: 'telegram', chatId: 'c1', userId: 'u1', text: '/status', messageId: 'm1',
     });
     expect(handled).toBe(true);
-    expect(adapter.sendRendered).toHaveBeenCalled();
+    expect(adapter.send).toHaveBeenCalled();
   });
 
   it('sends typing indicator on message', async () => {
@@ -133,7 +131,7 @@ describe('BridgeManager', () => {
       channelType: 'telegram', chatId: 'c1', userId: 'u1', text: '/verbose 1', messageId: 'm1',
     });
 
-    expect(adapter.sendRendered).toHaveBeenCalledWith(
+    expect(adapter.send).toHaveBeenCalledWith(
       'c1',
       expect.objectContaining({ html: expect.stringContaining('terminal card') })
     );
@@ -147,7 +145,7 @@ describe('BridgeManager', () => {
       channelType: 'telegram', chatId: 'c1', userId: 'u1', text: '/verbose 5', messageId: 'm1',
     });
 
-    expect(adapter.sendRendered).toHaveBeenCalledWith(
+    expect(adapter.send).toHaveBeenCalledWith(
       'c1',
       expect.objectContaining({ html: expect.stringContaining('Usage') })
     );
@@ -161,7 +159,7 @@ describe('BridgeManager', () => {
       channelType: 'telegram', chatId: 'c1', userId: 'u1', text: '/new', messageId: 'm1',
     });
 
-    expect(adapter.sendRendered).toHaveBeenCalledWith(
+    expect(adapter.send).toHaveBeenCalledWith(
       'c1',
       expect.objectContaining({ html: expect.stringContaining('New Session') })
     );
@@ -175,7 +173,7 @@ describe('BridgeManager', () => {
       channelType: 'telegram', chatId: 'c1', userId: 'u1', text: '/help', messageId: 'm1',
     });
 
-    expect(adapter.sendRendered).toHaveBeenCalledWith(
+    expect(adapter.send).toHaveBeenCalledWith(
       'c1',
       expect.objectContaining({ html: expect.stringContaining('/verbose') })
     );
@@ -280,7 +278,8 @@ describe('BridgeManager', () => {
         expect.objectContaining({ method: 'POST' })
       );
       expect(adapter.send).toHaveBeenCalledWith(
-        expect.objectContaining({ text: '✓ Sent to local session' })
+        'c1',
+        expect.objectContaining({ html: expect.stringContaining('Sent to local session') })
       );
 
       global.fetch = originalFetch;
@@ -295,8 +294,8 @@ describe('BridgeManager', () => {
         text: 'hello', messageId: 'm1', replyToMessageId: 'unknown-msg',
       });
 
-      // Should fall through to normal handling (SDK engine uses sendRendered for progress)
-      expect(adapter.sendRendered).toHaveBeenCalled();
+      // Should fall through to normal handling (SDK engine uses send for progress)
+      expect(adapter.send).toHaveBeenCalled();
     });
   });
 
@@ -309,7 +308,7 @@ describe('BridgeManager', () => {
         channelType: 'telegram', chatId: 'c1', userId: 'u1', text: '/hooks', messageId: 'm1',
       });
 
-      expect(adapter.sendRendered).toHaveBeenCalledWith(
+      expect(adapter.send).toHaveBeenCalledWith(
         'c1',
         expect.objectContaining({ html: expect.stringContaining('Hooks:') })
       );
@@ -323,7 +322,7 @@ describe('BridgeManager', () => {
         channelType: 'telegram', chatId: 'c1', userId: 'u1', text: '/hooks pause', messageId: 'm1',
       });
 
-      expect(adapter.sendRendered).toHaveBeenCalledWith(
+      expect(adapter.send).toHaveBeenCalledWith(
         'c1',
         expect.objectContaining({ html: expect.stringContaining('paused') })
       );
@@ -337,7 +336,7 @@ describe('BridgeManager', () => {
         channelType: 'telegram', chatId: 'c1', userId: 'u1', text: '/hooks resume', messageId: 'm1',
       });
 
-      expect(adapter.sendRendered).toHaveBeenCalledWith(
+      expect(adapter.send).toHaveBeenCalledWith(
         'c1',
         expect.objectContaining({ html: expect.stringContaining('resumed') })
       );
@@ -366,7 +365,7 @@ describe('BridgeManager', () => {
       channelType: 'discord', chatId: 'c1', userId: 'u1', text: '/status', messageId: 'm1',
     });
 
-    expect(adapter.sendRendered).toHaveBeenCalledWith(
+    expect(adapter.send).toHaveBeenCalledWith(
       'c1',
       expect.objectContaining({
         embed: expect.objectContaining({ title: expect.stringContaining('TLive Status') }),
@@ -382,7 +381,7 @@ describe('BridgeManager', () => {
       channelType: 'discord', chatId: 'c1', userId: 'u1', text: '/help', messageId: 'm1',
     });
 
-    expect(adapter.sendRendered).toHaveBeenCalledWith(
+    expect(adapter.send).toHaveBeenCalledWith(
       'c1',
       expect.objectContaining({
         embed: expect.objectContaining({ title: expect.stringContaining('TLive Commands') }),
@@ -398,7 +397,7 @@ describe('BridgeManager', () => {
       channelType: 'discord', chatId: 'c1', userId: 'u1', text: '/new', messageId: 'm1',
     });
 
-    expect(adapter.sendRendered).toHaveBeenCalledWith(
+    expect(adapter.send).toHaveBeenCalledWith(
       'c1',
       expect.objectContaining({
         embed: expect.objectContaining({ title: expect.stringContaining('New Session') }),

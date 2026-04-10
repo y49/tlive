@@ -36,7 +36,7 @@ export class PermissionBroker {
         permissionId: request.permissionRequestId,
         expiresInMinutes: 5,
       };
-      await adapter.sendRendered(chatId, renderer.renderNotification(event));
+      await adapter.send(chatId, renderer.renderNotification(event));
     }
   }
 

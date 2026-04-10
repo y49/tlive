@@ -24,7 +24,7 @@ export class ControlPanel {
   /** Render the main panel card */
   async show(adapter: BaseChannelAdapter, chatId: string): Promise<void> {
     const msg = this.buildMainPanel(adapter.channelType, chatId);
-    await adapter.sendRendered(chatId, msg);
+    await adapter.send(chatId, msg);
   }
 
   /** Handle a panel callback — called by CallbackRouter */
@@ -48,9 +48,9 @@ export class ControlPanel {
           } else {
             this.state.setModel(adapter.channelType, chatId, modelName);
           }
-          await adapter.editRendered(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
+          await adapter.editMessage(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
         } else {
-          await adapter.editRendered(chatId, messageId, this.buildModelPicker(adapter.channelType, chatId));
+          await adapter.editMessage(chatId, messageId, this.buildModelPicker(adapter.channelType, chatId));
         }
         break;
 
@@ -58,21 +58,21 @@ export class ControlPanel {
         if (parts[1] === 'select') {
           const level = parts[2] as 'low' | 'medium' | 'high' | 'max';
           this.state.setEffort(adapter.channelType, chatId, level);
-          await adapter.editRendered(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
+          await adapter.editMessage(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
         } else {
-          await adapter.editRendered(chatId, messageId, this.buildEffortPicker(adapter.channelType, chatId));
+          await adapter.editMessage(chatId, messageId, this.buildEffortPicker(adapter.channelType, chatId));
         }
         break;
 
       case 'perm': {
         const current = this.state.getPermMode(adapter.channelType, chatId);
         this.state.setPermMode(adapter.channelType, chatId, current === 'on' ? 'off' : 'on');
-        await adapter.editRendered(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
+        await adapter.editMessage(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
         break;
       }
 
       case 'sessions':
-        await adapter.editRendered(chatId, messageId, await this.buildSessionList(adapter.channelType, chatId));
+        await adapter.editMessage(chatId, messageId, await this.buildSessionList(adapter.channelType, chatId));
         break;
 
       case 'stop': {
@@ -82,12 +82,12 @@ export class ControlPanel {
           this.activeControls.delete(chatKey);
           await ctrl.interrupt();
         }
-        await adapter.editRendered(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
+        await adapter.editMessage(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
         break;
       }
 
       case 'stats':
-        await adapter.editRendered(chatId, messageId, this.buildStatsCard(adapter.channelType, chatId));
+        await adapter.editMessage(chatId, messageId, this.buildStatsCard(adapter.channelType, chatId));
         break;
 
       case 'session':
@@ -96,19 +96,19 @@ export class ControlPanel {
           const targetSessionId = parts[2];
           await this.router.rebind(adapter.channelType, chatId, targetSessionId);
           this.state.clearLastActive(adapter.channelType, chatId);
-          await adapter.editRendered(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
+          await adapter.editMessage(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
         } else if (parts[1] === 'new') {
           this.onNewSession?.(adapter.channelType, chatId);
           const newSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           await this.router.rebind(adapter.channelType, chatId, newSessionId);
           this.state.clearLastActive(adapter.channelType, chatId);
           this.state.clearThread(adapter.channelType, chatId);
-          await adapter.editRendered(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
+          await adapter.editMessage(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
         }
         break;
 
       case 'back':
-        await adapter.editRendered(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
+        await adapter.editMessage(chatId, messageId, this.buildMainPanel(adapter.channelType, chatId));
         break;
 
       default:

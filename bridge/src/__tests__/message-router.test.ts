@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { MessageRouter } from '../engine/message-router.js';
 import type { BaseChannelAdapter } from '../channels/base.js';
-import type { InboundMessage, FileAttachment } from '../channels/types.js';
+import type { InboundMessage, ChannelType, FileAttachment } from '../channels/types.js';
+import type { NotificationRenderer } from '../renderers/types.js';
+import { TelegramRenderer } from '../renderers/telegram.js';
 
 // ── Mocks ──────────────────────────────────────────────────────────────
 
@@ -103,6 +105,9 @@ describe('MessageRouter', () => {
     coreAvailable = vi.fn().mockReturnValue(true);
     adapter = mockAdapter();
 
+    const renderers = new Map<ChannelType, NotificationRenderer>([
+      ['telegram', new TelegramRenderer()],
+    ]);
     router = new MessageRouter(
       permissions as any,
       state as any,
@@ -110,6 +115,7 @@ describe('MessageRouter', () => {
       coreAvailable,
       'http://localhost:4590',
       'test-token',
+      renderers,
     );
   });
 
@@ -132,6 +138,7 @@ describe('MessageRouter', () => {
       expect(result).toEqual({ action: 'unauthorized' });
       expect(tgAdapter.requestPairing).toHaveBeenCalledWith('u1', 'c1', 'u1');
       expect(tgAdapter.send).toHaveBeenCalledWith(
+        'c1',
         expect.objectContaining({ html: expect.stringContaining('ABC123') }),
       );
     });
@@ -258,7 +265,8 @@ describe('MessageRouter', () => {
 
       expect(result).toEqual({ action: 'handled' });
       expect(adapter.send).toHaveBeenCalledWith(
-        expect.objectContaining({ text: expect.stringContaining('Multiple permissions pending') }),
+        'c1',
+        expect.objectContaining({ html: expect.stringContaining('Multiple permissions pending') }),
       );
     });
   });
@@ -280,7 +288,8 @@ describe('MessageRouter', () => {
       expect(result).toEqual({ action: 'handled' });
       expect(permissions.resolveHookPermission).toHaveBeenCalledWith('hp1', 'allow', 'telegram', true);
       expect(adapter.send).toHaveBeenCalledWith(
-        expect.objectContaining({ text: expect.stringContaining('Allowed') }),
+        'c1',
+        expect.objectContaining({ html: expect.stringContaining('Allowed') }),
       );
     });
   });
@@ -415,7 +424,8 @@ describe('MessageRouter', () => {
         expect.objectContaining({ method: 'POST' }),
       );
       expect(adapter.send).toHaveBeenCalledWith(
-        expect.objectContaining({ text: '✓ Sent to local session' }),
+        'c1',
+        expect.objectContaining({ html: expect.stringContaining('Sent to local session') }),
       );
     });
 
@@ -434,7 +444,8 @@ describe('MessageRouter', () => {
 
       expect(result).toEqual({ action: 'handled' });
       expect(adapter.send).toHaveBeenCalledWith(
-        expect.objectContaining({ text: expect.stringContaining('Failed to send') }),
+        'c1',
+        expect.objectContaining({ html: expect.stringContaining('Failed to send') }),
       );
     });
 

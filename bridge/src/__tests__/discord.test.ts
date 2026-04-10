@@ -123,114 +123,40 @@ describe('DiscordAdapter', () => {
   });
 
   describe('send()', () => {
-    it('calls channel.send with message content', async () => {
+    it('sends embed-based message via channel.send', async () => {
       await adapter.start();
-      const result = await adapter.send({ chatId: 'channel1', text: 'Hello Discord!' });
+      const result = await adapter.send('channel1', {
+        embed: { title: 'Test', description: 'Hello', color: 0xFF0000 },
+      });
       expect(mockFetchChannel).toHaveBeenCalledWith('channel1');
-      expect(mockSend).toHaveBeenCalledWith(expect.objectContaining({ content: 'Hello Discord!' }));
+      expect(mockSend).toHaveBeenCalled();
       expect(result.success).toBe(true);
       expect(result.messageId).toBe('msg-99');
     });
 
-    it('calls channel.send with button components', async () => {
+    it('sends message with button components', async () => {
       await adapter.start();
-      await adapter.send({
-        chatId: 'channel1',
-        text: 'Choose:',
+      await adapter.send('channel1', {
+        embed: { title: 'Choose' },
         buttons: [
-          { label: 'Allow', callbackData: 'perm:allow:123', style: 'primary' },
-          { label: 'Deny', callbackData: 'perm:deny:123', style: 'danger' },
+          { label: 'Allow', callbackData: 'perm:allow:123', style: 'primary' as const },
+          { label: 'Deny', callbackData: 'perm:deny:123', style: 'danger' as const },
         ],
       });
       const call = mockSend.mock.calls[0][0];
       expect(call.components).toHaveLength(1);
     });
-
-    it('chunks content exceeding 2000 chars into multiple messages', async () => {
-      await adapter.start();
-      const longText = 'a'.repeat(2500);
-      await adapter.send({ chatId: 'channel1', text: longText });
-      expect(mockSend.mock.calls.length).toBeGreaterThan(1);
-      // All chunks combined should equal original content
-      const allContent = mockSend.mock.calls.map((c: any) => c[0].content).join('');
-      expect(allContent).toBe(longText);
-    });
-
-    it('sends multiple messages for long content with newlines', async () => {
-      await adapter.start();
-      const longText = 'x\n'.repeat(1500);
-      await adapter.send({ chatId: 'channel1', text: longText });
-      const channel = await (adapter as any).client.channels.fetch('channel1');
-      expect(channel.send.mock.calls.length).toBeGreaterThan(1);
-    });
-
-    it('attaches buttons only to last chunk', async () => {
-      await adapter.start();
-      const longText = 'a'.repeat(2500);
-      await adapter.send({
-        chatId: 'channel1',
-        text: longText,
-        buttons: [{ label: 'OK', callbackData: 'ok', style: 'primary' as const }],
-      });
-      const calls = mockSend.mock.calls;
-      expect(calls.length).toBeGreaterThan(1);
-      // Only the last call should have components
-      for (let i = 0; i < calls.length - 1; i++) {
-        expect(calls[i][0].components).toBeUndefined();
-      }
-      expect(calls[calls.length - 1][0].components).toHaveLength(1);
-    });
-
-    it('uses html content when text is not provided', async () => {
-      await adapter.start();
-      await adapter.send({ chatId: 'channel1', html: '<b>bold</b>' });
-      expect(mockSend).toHaveBeenCalledWith(expect.objectContaining({ content: '<b>bold</b>' }));
-    });
-  });
-
-  describe('reply support', () => {
-    it('includes reply reference when replyToMessageId set', async () => {
-      await adapter.start();
-      await adapter.send({ chatId: 'channel1', text: 'response', replyToMessageId: 'msg-123' });
-      const channel = await (adapter as any).client.channels.fetch('channel1');
-      const payload = channel.send.mock.calls[0][0];
-      expect(payload.reply?.messageReference).toBe('msg-123');
-    });
-
-    it('reply reference only on first chunk', async () => {
-      await adapter.start();
-      const longText = 'a'.repeat(2500);
-      await adapter.send({ chatId: 'channel1', text: longText, replyToMessageId: 'msg-456' });
-      const calls = mockSend.mock.calls;
-      expect(calls.length).toBeGreaterThan(1);
-      expect(calls[0][0].reply?.messageReference).toBe('msg-456');
-      for (let i = 1; i < calls.length; i++) {
-        expect(calls[i][0].reply).toBeUndefined();
-      }
-    });
-  });
-
-  describe('error wrapping', () => {
-    it('wraps send errors as BridgeError', async () => {
-      await adapter.start();
-      mockSend.mockRejectedValueOnce(new Error('Discord API failed'));
-      try {
-        await adapter.send({ chatId: 'channel1', text: 'fail' });
-        expect.unreachable('should have thrown');
-      } catch (err: any) {
-        expect(err.name).toBeDefined();
-        expect(err.retryable).toBeDefined();
-      }
-    });
   });
 
   describe('editMessage()', () => {
-    it('fetches then edits the message', async () => {
+    it('fetches then edits the message with embed', async () => {
       await adapter.start();
-      await adapter.editMessage('channel1', 'msg-99', { chatId: 'channel1', text: 'Updated!' });
+      await adapter.editMessage('channel1', 'msg-99', {
+        embed: { title: 'Updated', description: 'New content' },
+      });
       expect(mockFetchChannel).toHaveBeenCalledWith('channel1');
       expect(mockFetchMessage).toHaveBeenCalledWith('msg-99');
-      expect(mockEdit).toHaveBeenCalledWith(expect.objectContaining({ content: 'Updated!' }));
+      expect(mockEdit).toHaveBeenCalled();
     });
   });
 
@@ -288,28 +214,6 @@ describe('DiscordAdapter', () => {
   describe('removeReaction()', () => {
     it('swallows errors when client not started', async () => {
       await expect(adapter.removeReaction('channel1', 'msg-99')).resolves.toBeUndefined();
-    });
-  });
-
-  describe('embed messages', () => {
-    it('sends embed-based messages', async () => {
-      await adapter.start();
-      const result = await adapter.send({
-        chatId: 'channel1',
-        embed: { title: 'Test', description: 'Hello', color: 0xFF0000 },
-      });
-      expect(result.success).toBe(true);
-      expect(mockSend).toHaveBeenCalled();
-    });
-  });
-
-  describe('thread support', () => {
-    it('sends to thread when threadId is specified', async () => {
-      await adapter.start();
-      const result = await adapter.send({ chatId: 'channel1', text: 'in thread', threadId: 'thread-1' });
-      // Should fetch the thread channel, not the parent channel
-      expect(mockFetchChannel).toHaveBeenCalledWith('thread-1');
-      expect(result.success).toBe(true);
     });
   });
 

@@ -98,19 +98,21 @@ async function main() {
       if (relay.hasActiveClient()) continue;
 
       // Notify IM
+      const renderers = manager.getRenderers();
       for (const adapter of manager.getAdapters()) {
         const target = relay.resolveTarget(adapter.channelType);
         if (!target) continue;
 
-        adapter.send({
-          chatId: target.chatId,
-          receiveIdType: target.receiveIdType,
-          text: `🖥 Claude session detected\n${session.projectName} · #${session.sessionId.slice(0, 6)}\n\nClaude is waiting for input`,
+        const renderer = renderers.get(adapter.channelType as ChannelType);
+        if (!renderer) continue;
+        adapter.send(target.chatId, renderer.renderCommandResponse({
+          title: '🖥 Claude session detected',
+          body: `${session.projectName} · #${session.sessionId.slice(0, 6)}\n\nClaude is waiting for input`,
           buttons: [
             { label: '💬 Resume from IM', callbackData: `resume:${session.sessionId}:${session.workdir}` },
             { label: '🔕 Ignore', callbackData: `resume:ignore:${session.sessionId}` },
           ],
-        }).catch(() => {});
+        })).catch(() => {});
       }
     }
   }, DISCOVERY_INTERVAL);

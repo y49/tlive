@@ -1,16 +1,3 @@
-import type { BaseChannelAdapter } from '../channels/base.js';
-import type { OutboundMessage } from '../channels/types.js';
-import { BridgeError, RateLimitError } from '../channels/errors.js';
-import { ChatRateLimiter } from './rate-limiter.js';
-
-interface DeliveryOptions {
-  platformLimit?: number;
-  maxRetries?: number;
-  interChunkDelayMs?: number;
-  /** Use paragraph-aware chunking (default: true) */
-  paragraphChunk?: boolean;
-}
-
 /**
  * Split text by paragraph boundaries (double newlines) first, then by length.
  * Keeps paragraphs together when possible for better readability.
@@ -142,65 +129,4 @@ export function chunkMarkdown(text: string, limit: number, maxLines?: number): s
     }
   }
   return result;
-}
-
-export class DeliveryLayer {
-  private rateLimiter = new ChatRateLimiter(20, 60_000);
-
-  async deliver(
-    adapter: BaseChannelAdapter,
-    chatId: string,
-    text: string,
-    options: DeliveryOptions = {}
-  ): Promise<void> {
-    const { platformLimit = 4096, maxRetries = 3, interChunkDelayMs = 300, paragraphChunk = true } = options;
-    const chunks = paragraphChunk
-      ? chunkByParagraph(text, platformLimit)
-      : this.chunk(text, platformLimit);
-
-    for (let i = 0; i < chunks.length; i++) {
-      // Rate limit
-      while (!this.rateLimiter.tryConsume(chatId)) {
-        await new Promise(r => setTimeout(r, 1000));
-      }
-
-      await this.sendWithRetry(adapter, { chatId, text: chunks[i] }, maxRetries);
-
-      if (i < chunks.length - 1) {
-        await new Promise(r => setTimeout(r, interChunkDelayMs));
-      }
-    }
-  }
-
-  private async sendWithRetry(
-    adapter: BaseChannelAdapter,
-    message: OutboundMessage,
-    maxRetries: number
-  ): Promise<void> {
-    let lastError: Error | null = null;
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        await adapter.send(message);
-        return;
-      } catch (err) {
-        lastError = err as Error;
-        // Don't retry non-retryable errors
-        if (err instanceof BridgeError && !err.retryable) throw err;
-        if (attempt < maxRetries - 1) {
-          const baseDelay = Math.min(1000 * Math.pow(2, attempt), 10_000);
-          // Add jitter (±25%) to avoid thundering herd
-          const jitter = baseDelay * (0.75 + Math.random() * 0.5);
-          const delay = (err instanceof RateLimitError && err.retryAfterMs > 0)
-            ? Math.max(err.retryAfterMs, jitter)
-            : jitter;
-          await new Promise(r => setTimeout(r, delay));
-        }
-      }
-    }
-    throw lastError;
-  }
-
-  private chunk(text: string, limit: number): string[] {
-    return chunkMarkdown(text, limit);
-  }
 }

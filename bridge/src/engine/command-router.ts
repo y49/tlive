@@ -45,7 +45,7 @@ export class CommandRouter {
         if (this.controlPanel) {
           await this.controlPanel.show(adapter, msg.chatId);
         } else {
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText('⚠️ Control panel not available'));
+          await adapter.send(msg.chatId, r.renderSimpleText('⚠️ Control panel not available'));
         }
         return true;
       }
@@ -55,7 +55,7 @@ export class CommandRouter {
         const coreStatus = healthy ? '🟢 connected' : '🔴 disconnected';
         const channelList = Array.from(this.getAdapters().keys()).join(', ') || 'none';
 
-        await adapter.sendRendered(msg.chatId, r.renderCommandResponse({
+        await adapter.send(msg.chatId, r.renderCommandResponse({
           title: '📡 TLive Status',
           fields: [
             { name: 'Bridge', value: '🟢 Running', inline: true },
@@ -75,7 +75,7 @@ export class CommandRouter {
         // Clear Discord thread binding so next conversation creates a fresh thread
         this.state.clearThread(msg.channelType, msg.chatId);
         this.permissions.clearSessionWhitelist();
-        await adapter.sendRendered(msg.chatId, r.renderCommandResponse({
+        await adapter.send(msg.chatId, r.renderCommandResponse({
           title: '🆕 New Session',
           body: 'Session cleared. Send a message to begin.',
           color: 'success',
@@ -88,10 +88,10 @@ export class CommandRouter {
           this.state.setVerboseLevel(msg.channelType, msg.chatId, level);
           const labels = ['🤫 quiet', '📝 terminal card'];
           const text = `Verbose: ${labels[level]}${CommandRouter.MENU_HINT}`;
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText(text));
+          await adapter.send(msg.chatId, r.renderSimpleText(text));
         } else {
           const usage = 'Usage: `/verbose 0|1`\n0=quiet, 1=terminal card';
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText(usage));
+          await adapter.send(msg.chatId, r.renderSimpleText(usage));
         }
         return true;
       }
@@ -102,11 +102,11 @@ export class CommandRouter {
           const text = (sub === 'on'
             ? '🔐 Permission prompts: ON — dangerous tools will ask for confirmation'
             : '⚡ Permission prompts: OFF — all tools auto-allowed') + CommandRouter.MENU_HINT;
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText(text));
+          await adapter.send(msg.chatId, r.renderSimpleText(text));
         } else {
           const current = this.state.getPermMode(msg.channelType, msg.chatId);
           const text = `🔐 Permission mode: **${current}**\nUsage: \`/perm on|off\`\non = prompt for dangerous tools (default)\noff = auto-allow all`;
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText(text));
+          await adapter.send(msg.chatId, r.renderSimpleText(text));
         }
         return true;
       }
@@ -116,9 +116,9 @@ export class CommandRouter {
         if (ctrl) {
           this.activeControls.delete(chatKey);
           await ctrl.interrupt();
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText('⏹ Interrupted current execution' + CommandRouter.MENU_HINT));
+          await adapter.send(msg.chatId, r.renderSimpleText('⏹ Interrupted current execution' + CommandRouter.MENU_HINT));
         } else {
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText('⚠️ No active execution to stop'));
+          await adapter.send(msg.chatId, r.renderSimpleText('⚠️ No active execution to stop'));
         }
         return true;
       }
@@ -129,11 +129,11 @@ export class CommandRouter {
           this.state.setEffort(msg.channelType, msg.chatId, level as typeof LEVELS[number]);
           const icons: Record<string, string> = { low: '⚡', medium: '🧠', high: '💪', max: '🔥' };
           const text = `${icons[level] || '🧠'} Effort: **${level}**${CommandRouter.MENU_HINT}`;
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText(text));
+          await adapter.send(msg.chatId, r.renderSimpleText(text));
         } else {
           const current = this.state.getEffort(msg.channelType, msg.chatId) || 'default';
           const text = `🧠 Effort: **${current}**\nUsage: \`/effort low|medium|high|max\`\nlow = fast · medium = balanced · high = thorough · max = maximum`;
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText(text));
+          await adapter.send(msg.chatId, r.renderSimpleText(text));
         }
         return true;
       }
@@ -143,13 +143,13 @@ export class CommandRouter {
         if (sub === 'pause') {
           mkdirSync(dirname(pauseFile), { recursive: true });
           writeFileSync(pauseFile, '');
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText('⏸ Hooks paused — auto-allow, no notifications.'));
+          await adapter.send(msg.chatId, r.renderSimpleText('⏸ Hooks paused — auto-allow, no notifications.'));
         } else if (sub === 'resume') {
           try { unlinkSync(pauseFile); } catch {}
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText('▶ Hooks resumed — forwarding to IM.'));
+          await adapter.send(msg.chatId, r.renderSimpleText('▶ Hooks resumed — forwarding to IM.'));
         } else {
           const paused = existsSync(pauseFile);
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText(`Hooks: ${paused ? '⏸ paused' : '▶ active'}`));
+          await adapter.send(msg.chatId, r.renderSimpleText(`Hooks: ${paused ? '⏸ paused' : '▶ active'}`));
         }
         return true;
       }
@@ -160,7 +160,7 @@ export class CommandRouter {
         const currentSessionId = binding?.sessionId;
 
         if (allSessions.length === 0) {
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText('No sessions found.'));
+          await adapter.send(msg.chatId, r.renderSimpleText('No sessions found.'));
           return true;
         }
 
@@ -184,7 +184,7 @@ export class CommandRouter {
 
         const footer = '\nUse /session <n> to switch';
 
-        await adapter.sendRendered(msg.chatId, r.renderCommandResponse({
+        await adapter.send(msg.chatId, r.renderCommandResponse({
           title: '📋 Sessions',
           body: lines.join('\n') + footer,
           color: 'info',
@@ -194,7 +194,7 @@ export class CommandRouter {
       case '/session': {
         const idx = parseInt(parts[1], 10);
         if (isNaN(idx) || idx < 1) {
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText('Usage: /session <number>\nUse /sessions to list.'));
+          await adapter.send(msg.chatId, r.renderSimpleText('Usage: /session <number>\nUse /sessions to list.'));
           return true;
         }
 
@@ -205,7 +205,7 @@ export class CommandRouter {
           .slice(0, 10);
 
         if (idx > sorted.length) {
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText(`Session ${idx} not found. Use /sessions to list.`));
+          await adapter.send(msg.chatId, r.renderSimpleText(`Session ${idx} not found. Use /sessions to list.`));
           return true;
         }
 
@@ -219,7 +219,7 @@ export class CommandRouter {
           ? (firstUser.content.length > 50 ? firstUser.content.slice(0, 47) + '...' : firstUser.content)
           : '(empty)';
         const hasContext = target.sdkSessionId ? '✅ has context' : '⚠️ no SDK session';
-        await adapter.sendRendered(msg.chatId, r.renderSimpleText(
+        await adapter.send(msg.chatId, r.renderSimpleText(
           `🔄 Switched to session ${idx}\n${preview}\n${hasContext}`,
         ));
         return true;
@@ -230,7 +230,7 @@ export class CommandRouter {
         if (runtime && RUNTIMES.includes(runtime as any)) {
           // Pre-check: reject if Codex SDK not installed
           if (runtime === 'codex' && !await checkCodexAvailable()) {
-            await adapter.sendRendered(msg.chatId, r.renderSimpleText(
+            await adapter.send(msg.chatId, r.renderSimpleText(
               '❌ Codex SDK not installed.\nRun: `npm install @openai/codex-sdk` in the bridge directory.',
             ));
             return true;
@@ -245,12 +245,12 @@ export class CommandRouter {
           }
           const icons: Record<string, string> = { claude: '🟣', codex: '🟢' };
           const text = `${icons[runtime] || '🔄'} Runtime: **${runtime}**`;
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText(text));
+          await adapter.send(msg.chatId, r.renderSimpleText(text));
         } else {
           const current = this.state.getRuntime(msg.channelType, msg.chatId) || 'claude';
           const codexStatus = await checkCodexAvailable() ? '✅' : '❌ (not installed)';
           const text = `🔄 Runtime: **${current}**\nUsage: \`/runtime claude|codex\`\nclaude: ✅ · codex: ${codexStatus}`;
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText(text));
+          await adapter.send(msg.chatId, r.renderSimpleText(text));
         }
         return true;
       }
@@ -259,15 +259,15 @@ export class CommandRouter {
         if (model) {
           if (model === 'reset' || model === 'default') {
             this.state.setModel(msg.channelType, msg.chatId, undefined);
-            await adapter.sendRendered(msg.chatId, r.renderSimpleText('🤖 Model: reset to default' + CommandRouter.MENU_HINT));
+            await adapter.send(msg.chatId, r.renderSimpleText('🤖 Model: reset to default' + CommandRouter.MENU_HINT));
           } else {
             this.state.setModel(msg.channelType, msg.chatId, model);
-            await adapter.sendRendered(msg.chatId, r.renderSimpleText(`🤖 Model: **${model}**${CommandRouter.MENU_HINT}`));
+            await adapter.send(msg.chatId, r.renderSimpleText(`🤖 Model: **${model}**${CommandRouter.MENU_HINT}`));
           }
         } else {
           const current = this.state.getModel(msg.channelType, msg.chatId) || 'default';
           const text = `🤖 Model: **${current}**\nUsage: \`/model <name>\` or \`/model reset\`\nExamples: \`claude-sonnet-4-6\`, \`claude-opus-4-6\``;
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText(text));
+          await adapter.send(msg.chatId, r.renderSimpleText(text));
         }
         return true;
       }
@@ -287,7 +287,7 @@ export class CommandRouter {
             'Use `/model`, `/effort`, `/perm` to change.',
             'Codex sandbox & network settings are set in config.',
           ].join('\n');
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText(text));
+          await adapter.send(msg.chatId, r.renderSimpleText(text));
           return true;
         }
 
@@ -305,7 +305,7 @@ export class CommandRouter {
             full: '📦 full — auth, CLAUDE.md, MCP, skills',
             isolated: '🔒 isolated — no external settings',
           };
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText(`⚙️ Settings: ${labels[arg]}`));
+          await adapter.send(msg.chatId, r.renderSimpleText(`⚙️ Settings: ${labels[arg]}`));
         } else {
           const current = llm.getSettingSources();
           const preset = current.length === 0 ? 'isolated'
@@ -319,7 +319,7 @@ export class CommandRouter {
             '  full — + CLAUDE.md, MCP servers, skills',
             '  isolated — no external settings',
           ].join('\n');
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText(text));
+          await adapter.send(msg.chatId, r.renderSimpleText(text));
         }
         return true;
       }
@@ -341,7 +341,7 @@ export class CommandRouter {
           '💬 Reply **allow** / **deny** to approve permissions',
         ].join('\n');
 
-        await adapter.sendRendered(msg.chatId, r.renderCommandResponse({
+        await adapter.send(msg.chatId, r.renderCommandResponse({
           title: '❓ TLive Commands',
           body: helpBody,
           color: 'info',
@@ -351,7 +351,7 @@ export class CommandRouter {
       case '/approve': {
         const code = parts[1];
         if (!code) {
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText('Usage: /approve <pairing_code>'));
+          await adapter.send(msg.chatId, r.renderSimpleText('Usage: /approve <pairing_code>'));
           return true;
         }
         // Try to approve pairing on Telegram adapter
@@ -359,14 +359,14 @@ export class CommandRouter {
         if (tgAdapter && 'approvePairing' in tgAdapter) {
           const result = (tgAdapter as any).approvePairing(code);
           if (result) {
-            await adapter.sendRendered(msg.chatId, r.renderSimpleText(
+            await adapter.send(msg.chatId, r.renderSimpleText(
               `✅ Approved user ${result.username} (${result.userId})`,
             ));
           } else {
-            await adapter.sendRendered(msg.chatId, r.renderSimpleText('❌ Code not found or expired'));
+            await adapter.send(msg.chatId, r.renderSimpleText('❌ Code not found or expired'));
           }
         } else {
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText('⚠️ Pairing not available'));
+          await adapter.send(msg.chatId, r.renderSimpleText('⚠️ Pairing not available'));
         }
         return true;
       }
@@ -375,17 +375,17 @@ export class CommandRouter {
         if (tgAdapter && 'listPairings' in tgAdapter) {
           const pairings = (tgAdapter as any).listPairings() as Array<{ code: string; userId: string; username: string }>;
           if (pairings.length === 0) {
-            await adapter.sendRendered(msg.chatId, r.renderSimpleText('No pending pairing requests.'));
+            await adapter.send(msg.chatId, r.renderSimpleText('No pending pairing requests.'));
           } else {
             const lines = pairings.map(p => `\`${p.code}\` — ${p.username} (${p.userId})`);
-            await adapter.sendRendered(msg.chatId, r.renderCommandResponse({
+            await adapter.send(msg.chatId, r.renderCommandResponse({
               title: '🔐 Pending Pairings',
               body: lines.join('\n') + '\n\nUse /approve <code> to approve.',
               color: 'info',
             }));
           }
         } else {
-          await adapter.sendRendered(msg.chatId, r.renderSimpleText('⚠️ Pairing not available'));
+          await adapter.send(msg.chatId, r.renderSimpleText('⚠️ Pairing not available'));
         }
         return true;
       }

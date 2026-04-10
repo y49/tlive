@@ -19,8 +19,6 @@ function mockAdapter(channelType = 'telegram'): BaseChannelAdapter {
     consumeOne: vi.fn().mockResolvedValue(null),
     send: vi.fn().mockResolvedValue({ messageId: 'msg1', success: true }),
     editMessage: vi.fn().mockResolvedValue(undefined),
-    sendRendered: vi.fn().mockResolvedValue({ messageId: 'msg1', success: true }),
-    editRendered: vi.fn().mockResolvedValue(undefined),
     sendTyping: vi.fn().mockResolvedValue(undefined),
     validateConfig: vi.fn().mockReturnValue(null),
     isAuthorized: vi.fn().mockReturnValue(true),
@@ -128,8 +126,8 @@ describe('ControlPanel', () => {
     it('sends main panel via adapter', async () => {
       const adapter = mockAdapter();
       await panel.show(adapter, 'chat1');
-      expect(adapter.sendRendered).toHaveBeenCalledTimes(1);
-      const sent = (adapter.sendRendered as any).mock.calls[0][1] as TelegramOutbound;
+      expect(adapter.send).toHaveBeenCalledTimes(1);
+      const sent = (adapter.send as any).mock.calls[0][1] as TelegramOutbound;
       expect(sent.buttons).toHaveLength(6);
     });
   });
@@ -138,8 +136,8 @@ describe('ControlPanel', () => {
     it('model shows model picker', async () => {
       const adapter = mockAdapter();
       await panel.handleCallback(adapter, 'chat1', 'msg1', 'model:telegram:chat1');
-      expect(adapter.editRendered).toHaveBeenCalledTimes(1);
-      const edited = (adapter.editRendered as any).mock.calls[0][2] as TelegramOutbound;
+      expect(adapter.editMessage).toHaveBeenCalledTimes(1);
+      const edited = (adapter.editMessage as any).mock.calls[0][2] as TelegramOutbound;
       expect(edited.html).toContain('Select Model');
     });
 
@@ -147,7 +145,7 @@ describe('ControlPanel', () => {
       const adapter = mockAdapter();
       await panel.handleCallback(adapter, 'chat1', 'msg1', 'model:select:claude-opus-4-6:telegram:chat1');
       expect(state.setModel).toHaveBeenCalledWith('telegram', 'chat1', 'claude-opus-4-6');
-      const edited = (adapter.editRendered as any).mock.calls[0][2] as TelegramOutbound;
+      const edited = (adapter.editMessage as any).mock.calls[0][2] as TelegramOutbound;
       expect(edited.html).toContain('⚙️ TLive');
     });
 
@@ -160,7 +158,7 @@ describe('ControlPanel', () => {
     it('effort shows effort picker', async () => {
       const adapter = mockAdapter();
       await panel.handleCallback(adapter, 'chat1', 'msg1', 'effort:telegram:chat1');
-      const edited = (adapter.editRendered as any).mock.calls[0][2] as TelegramOutbound;
+      const edited = (adapter.editMessage as any).mock.calls[0][2] as TelegramOutbound;
       expect(edited.html).toContain('Select Effort');
     });
 
@@ -196,14 +194,14 @@ describe('ControlPanel', () => {
     it('stats shows stats card', async () => {
       const adapter = mockAdapter();
       await panel.handleCallback(adapter, 'chat1', 'msg1', 'stats:telegram:chat1');
-      const edited = (adapter.editRendered as any).mock.calls[0][2] as TelegramOutbound;
+      const edited = (adapter.editMessage as any).mock.calls[0][2] as TelegramOutbound;
       expect(edited.html).toContain('Session Stats');
     });
 
     it('back returns to main panel', async () => {
       const adapter = mockAdapter();
       await panel.handleCallback(adapter, 'chat1', 'msg1', 'back:telegram:chat1');
-      const edited = (adapter.editRendered as any).mock.calls[0][2] as TelegramOutbound;
+      const edited = (adapter.editMessage as any).mock.calls[0][2] as TelegramOutbound;
       expect(edited.html).toContain('⚙️ TLive');
     });
   });
@@ -290,7 +288,7 @@ describe('ControlPanel', () => {
       await panel.handleCallback(adapter, 'chat1', 'msg1', 'session:switch:sess-123:telegram:chat1');
       expect(router.rebind).toHaveBeenCalledWith('telegram', 'chat1', 'sess-123');
       expect(state.clearLastActive).toHaveBeenCalledWith('telegram', 'chat1');
-      const edited = (adapter.editRendered as any).mock.calls[0][2] as TelegramOutbound;
+      const edited = (adapter.editMessage as any).mock.calls[0][2] as TelegramOutbound;
       expect(edited.html).toContain('⚙️ TLive');
     });
 

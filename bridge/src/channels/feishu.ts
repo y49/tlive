@@ -1,11 +1,9 @@
 import { Client, WSClient, EventDispatcher } from '@larksuiteoapi/node-sdk';
 import { BaseChannelAdapter, registerAdapterFactory } from './base.js';
-import type { InboundMessage, OutboundMessage, SendResult, FileAttachment } from './types.js';
+import type { InboundMessage, SendResult, FileAttachment } from './types.js';
 import type { FeishuOutbound } from '../renderers/types.js';
 import { loadConfig } from '../config.js';
 import { classifyError } from './errors.js';
-import { markdownToFeishu, downgradeHeadings } from '../markdown/feishu.js';
-import { buildFeishuCard } from '../formatting/feishu-card.js';
 import { FeishuStreamingSession } from './feishu-streaming.js';
 import { Readable } from 'node:stream';
 
@@ -71,9 +69,6 @@ async function readFeishuBuffer(resp: unknown): Promise<Buffer | null> {
   }
   return null;
 }
-
-/** Feishu interactive card element – now imported from shared types */
-type FeishuCardElement = import('../formatting/types.js').FeishuCardElement;
 
 /** Shape of the Feishu message.create API response */
 interface FeishuCreateMessageResult {
@@ -260,197 +255,12 @@ export class FeishuAdapter extends BaseChannelAdapter<FeishuOutbound> {
     return this.messageQueue.shift() ?? null;
   }
 
-  private buildCard(text: string, buttons?: OutboundMessage['buttons'], header?: { template: string; title: string }): string {
-    const elements: FeishuCardElement[] = [
-      { tag: 'markdown', content: downgradeHeadings(text) },
-    ];
-
-    if (buttons?.length) {
-      // Group buttons by row; each group becomes a column_set
-      const hasRows = buttons.some(b => b.row !== undefined);
-      const makeBtn = (btn: NonNullable<OutboundMessage['buttons']>[0]) => ({
-        tag: 'column' as const,
-        width: 'auto' as const,
-        vertical_align: 'top' as const,
-        elements: [{
-          tag: 'button' as const,
-          text: { tag: 'plain_text' as const, content: btn.label },
-          type: btn.style === 'danger' ? 'danger' as const : btn.style === 'primary' ? 'primary_filled' as const : 'default' as const,
-          behaviors: [{ type: 'callback' as const, value: { action: btn.callbackData } }],
-        }],
-      });
-      if (hasRows) {
-        const rowMap = new Map<number, typeof buttons>();
-        for (const b of buttons) {
-          const r = b.row ?? Number.MAX_SAFE_INTEGER;
-          if (!rowMap.has(r)) rowMap.set(r, []);
-          rowMap.get(r)!.push(b);
-        }
-        for (const [, rowBtns] of [...rowMap.entries()].sort(([a], [b]) => a - b)) {
-          elements.push({
-            tag: 'column_set', flex_mode: 'flow',
-            columns: rowBtns.map(makeBtn),
-          } as any);
-        }
-      } else {
-        elements.push({
-          tag: 'column_set', flex_mode: 'flow',
-          columns: buttons.map(makeBtn),
-        } as any);
-      }
-    }
-
-    return buildFeishuCard({
-      header: header as any,
-      elements,
-    });
-  }
-
-  async send(message: OutboundMessage): Promise<SendResult> {
-    if (!this.client) throw new Error('Feishu client not started');
-
-    // Prefer raw text (markdown) over HTML — schema 2.0 cards render markdown natively
-    const raw = message.text
-      ? message.text
-      : markdownToFeishu(message.html ?? '');
-
-    // Media sending
-    if (message.media) {
-      try {
-        const media = message.media;
-        let buffer: Buffer;
-        if (media.buffer) {
-          buffer = media.buffer;
-        } else if (media.url?.startsWith('data:')) {
-          const base64 = media.url.split(',')[1];
-          buffer = Buffer.from(base64, 'base64');
-        } else if (media.url) {
-          // Fetch URL to buffer
-          const resp = await fetch(media.url);
-          buffer = Buffer.from(await resp.arrayBuffer());
-        } else {
-          throw new Error('No media source');
-        }
-
-        if (media.type === 'image') {
-          // Upload image first, then send
-          // Pass Buffer directly — Readable.from() causes form-data issues
-          // See: https://github.com/larksuite/node-sdk/issues/121
-          const uploadResult = await this.client.im.image.create({
-            data: {
-              image_type: 'message',
-              image: buffer as any,
-            },
-          });
-          const imageKey = (uploadResult as any)?.data?.image_key;
-          if (imageKey) {
-            const idType = message.receiveIdType || 'chat_id';
-            const result = await this.client.im.message.create({
-              params: { receive_id_type: idType as any },
-              data: {
-                receive_id: message.chatId,
-                msg_type: 'image',
-                content: JSON.stringify({ image_key: imageKey }),
-              },
-            });
-            const messageId = (result as any)?.data?.message_id ?? '';
-            return { messageId: String(messageId), success: true };
-          }
-        } else {
-          // Upload file then send
-          // Pass Buffer directly — Readable.from() causes form-data issues
-          const uploadResult = await this.client.im.file.create({
-            data: {
-              file_type: 'stream',
-              file_name: media.filename || 'file',
-              file: buffer as any,
-            },
-          });
-          const fileKey = (uploadResult as any)?.data?.file_key;
-          if (fileKey) {
-            const idType = message.receiveIdType || 'chat_id';
-            const result = await this.client.im.message.create({
-              params: { receive_id_type: idType as any },
-              data: {
-                receive_id: message.chatId,
-                msg_type: 'file',
-                content: JSON.stringify({ file_key: fileKey }),
-              },
-            });
-            const messageId = (result as any)?.data?.message_id ?? '';
-            return { messageId: String(messageId), success: true };
-          }
-        }
-      } catch (err) {
-        // Fall through to text-only if media fails
-        if (!message.text && !message.html) throw classifyError('feishu', err);
-      }
-    }
-
-    try {
-      const idType = message.receiveIdType || 'chat_id';
-      // If feishuElements provided, build card directly from structured elements
-      const cardContent = message.feishuElements
-        ? buildFeishuCard({ header: message.feishuHeader as any, elements: message.feishuElements as any })
-        : this.buildCard(raw, message.buttons, message.feishuHeader);
-      const data: Record<string, unknown> = {
-        receive_id: message.chatId,
-        msg_type: 'interactive',
-        content: cardContent,
-      };
-      if (message.replyToMessageId) data.root_id = message.replyToMessageId;
-
-      let result: FeishuCreateMessageResult;
-      try {
-        result = await this.client.im.message.create({
-          params: { receive_id_type: idType as any },
-          data: data as any,
-        }) as FeishuCreateMessageResult;
-      } catch (createErr) {
-        // Reply target withdrawn/deleted — retry without root_id
-        const code = (createErr as any)?.code;
-        if (message.replyToMessageId && (code === 230011 || code === 231003)) {
-          delete data.root_id;
-          result = await this.client.im.message.create({
-            params: { receive_id_type: idType as any },
-            data: data as any,
-          }) as FeishuCreateMessageResult;
-        } else {
-          throw createErr;
-        }
-      }
-
-      const messageId = result?.data?.message_id ?? '';
-      return { messageId: String(messageId), success: true };
-    } catch (err) {
-      throw classifyError('feishu', err);
-    }
-  }
-
   async deleteMessage(_chatId: string, messageId: string): Promise<void> {
     if (!this.client) return;
     try {
       await this.client.im.message.delete({ path: { message_id: messageId } });
     } catch {
       // Non-fatal
-    }
-  }
-
-  async editMessage(_chatId: string, messageId: string, message: OutboundMessage): Promise<void> {
-    if (!this.client) return;
-    const text = message.text
-      ? message.text
-      : markdownToFeishu(message.html ?? '');
-
-    try {
-      await this.client.im.message.patch({
-        path: { message_id: messageId },
-        data: {
-          content: this.buildCard(text, message.buttons, message.feishuHeader),
-        },
-      });
-    } catch (err: any) {
-      console.warn(`[feishu] editMessage failed: ${err?.message ?? err}`);
     }
   }
 
@@ -461,7 +271,7 @@ export class FeishuAdapter extends BaseChannelAdapter<FeishuOutbound> {
     return 'user_id';
   }
 
-  async sendRendered(chatId: string, message: FeishuOutbound): Promise<SendResult> {
+  async send(chatId: string, message: FeishuOutbound): Promise<SendResult> {
     if (!this.client) throw new Error('Feishu client not started');
 
     const idType = this.detectReceiveIdType(chatId);
@@ -482,7 +292,7 @@ export class FeishuAdapter extends BaseChannelAdapter<FeishuOutbound> {
     }
   }
 
-  async editRendered(chatId: string, messageId: string, message: FeishuOutbound): Promise<void> {
+  async editMessage(chatId: string, messageId: string, message: FeishuOutbound): Promise<void> {
     if (!this.client) return;
     // chatId unused for Feishu edits (message_id is globally unique), but kept for interface consistency
     try {
@@ -491,7 +301,7 @@ export class FeishuAdapter extends BaseChannelAdapter<FeishuOutbound> {
         data: { content: message.card },
       });
     } catch (err: any) {
-      console.warn(`[feishu] editRendered failed: ${err?.message ?? err}`);
+      console.warn(`[feishu] editMessage failed: ${err?.message ?? err}`);
     }
   }
 

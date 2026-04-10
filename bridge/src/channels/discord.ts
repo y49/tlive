@@ -11,10 +11,9 @@ import {
   type Message,
 } from 'discord.js';
 import { BaseChannelAdapter, registerAdapterFactory } from './base.js';
-import type { InboundMessage, OutboundMessage, SendResult, FileAttachment } from './types.js';
+import type { InboundMessage, SendResult, FileAttachment } from './types.js';
 import type { DiscordOutbound } from '../renderers/types.js';
 import { loadConfig } from '../config.js';
-import { chunkMarkdown } from '../delivery/delivery.js';
 import { classifyError } from './errors.js';
 import { createUndiciAgent, maskProxyUrl } from '../proxy.js';
 
@@ -149,20 +148,8 @@ export class DiscordAdapter extends BaseChannelAdapter<DiscordOutbound> {
     } catch { return null; }
   }
 
-  /** Resolve send target: thread if specified, otherwise channel */
-  private async resolveChannel(message: OutboundMessage): Promise<TextChannel | ThreadChannel> {
-    if (!this.client) throw new Error('Discord client not started');
-    // If threadId specified, send to the thread directly
-    const targetId = message.threadId ?? message.chatId;
-    const channel = await this.client.channels.fetch(targetId);
-    if (!channel || (!('send' in channel))) {
-      throw new Error(`Channel ${targetId} not found or not a text channel`);
-    }
-    return channel as TextChannel | ThreadChannel;
-  }
-
   /** Split buttons into ActionRows (Discord max 5 buttons per row) */
-  private static buildButtonRows(buttons: NonNullable<OutboundMessage['buttons']>): ActionRowBuilder<ButtonBuilder>[] {
+  private static buildButtonRows(buttons: import('./types.js').Button[]): ActionRowBuilder<ButtonBuilder>[] {
     const rows: ActionRowBuilder<ButtonBuilder>[] = [];
     let current = new ActionRowBuilder<ButtonBuilder>();
     for (const btn of buttons) {
@@ -184,134 +171,7 @@ export class DiscordAdapter extends BaseChannelAdapter<DiscordOutbound> {
     return rows;
   }
 
-  async send(message: OutboundMessage): Promise<SendResult> {
-    const channel = await this.resolveChannel(message);
-
-    // Media sending
-    if (message.media) {
-      try {
-        const media = message.media;
-        let buffer: Buffer;
-        if (media.buffer) {
-          buffer = media.buffer;
-        } else if (media.url?.startsWith('data:')) {
-          const base64 = media.url.split(',')[1];
-          buffer = Buffer.from(base64, 'base64');
-        } else if (media.url) {
-          // URL-based: use AttachmentBuilder with URL
-          const { AttachmentBuilder } = await import('discord.js');
-          const attachment = new AttachmentBuilder(media.url, { name: media.filename || 'image.png' });
-          const sent = await channel.send({ content: message.text || '', files: [attachment] }) as Message;
-          return { messageId: sent.id, success: true };
-        } else {
-          throw new Error('No media source');
-        }
-
-        const { AttachmentBuilder } = await import('discord.js');
-        const attachment = new AttachmentBuilder(buffer, { name: media.filename || 'image.png' });
-        const sent = await channel.send({ content: message.text || '', files: [attachment] }) as Message;
-        return { messageId: sent.id, success: true };
-      } catch (err) {
-        if (!message.text && !message.embed) throw classifyError('discord', err);
-      }
-    }
-
-    // Embed-based messages (permission cards, notifications)
-    if (message.embed) {
-      const embed = new EmbedBuilder();
-      if (message.embed.title) embed.setTitle(message.embed.title);
-      if (message.embed.description) embed.setDescription(message.embed.description);
-      if (message.embed.color !== undefined) embed.setColor(message.embed.color);
-      if (message.embed.fields) {
-        for (const f of message.embed.fields) embed.addFields(f);
-      }
-      if (message.embed.footer) embed.setFooter({ text: message.embed.footer });
-
-      const payload: Record<string, unknown> = { embeds: [embed] };
-      if (message.buttons?.length) {
-        payload.components = DiscordAdapter.buildButtonRows(message.buttons);
-      }
-
-      try {
-        const sent = await channel.send(payload as any) as Message;
-        return { messageId: sent.id, success: true };
-      } catch (err) {
-        throw classifyError('discord', err);
-      }
-    }
-
-    const content = message.text ?? message.html ?? '';
-    const chunks = chunkMarkdown(content, 2000);
-
-    let lastSent: Message | undefined;
-    try {
-      for (let i = 0; i < chunks.length; i++) {
-        const payload: Parameters<TextChannel['send']>[0] = { content: chunks[i] };
-
-        // Reply reference on first chunk only
-        if (i === 0 && message.replyToMessageId) {
-          (payload as Record<string, unknown>).reply = { messageReference: message.replyToMessageId };
-        }
-
-        // Buttons on last chunk only
-        if (i === chunks.length - 1 && message.buttons?.length) {
-          payload.components = DiscordAdapter.buildButtonRows(message.buttons);
-        }
-
-        lastSent = await channel.send(payload) as Message;
-      }
-    } catch (err) {
-      throw classifyError('discord', err);
-    }
-
-    return { messageId: lastSent?.id ?? '', success: true };
-  }
-
-  async editMessage(chatId: string, messageId: string, message: OutboundMessage): Promise<void> {
-    if (!this.client) return;
-
-    try {
-      // Use threadId if available, otherwise chatId
-      const targetId = message.threadId ?? chatId;
-      const channel = await this.client.channels.fetch(targetId) as TextChannel;
-      if (!channel || !channel.messages) return;
-
-      const existing = await channel.messages.fetch(messageId);
-      if (!existing) return;
-
-      if (message.embed) {
-        const embed = new EmbedBuilder();
-        if (message.embed.title) embed.setTitle(message.embed.title);
-        if (message.embed.description) embed.setDescription(message.embed.description);
-        if (message.embed.color !== undefined) embed.setColor(message.embed.color);
-        if (message.embed.fields) {
-          for (const f of message.embed.fields) embed.addFields(f);
-        }
-        if (message.embed.footer) embed.setFooter({ text: message.embed.footer });
-        await existing.edit({ embeds: [embed] });
-        return;
-      }
-
-      const content = message.text ?? message.html ?? '';
-      const truncated = content.length > 2000 ? content.slice(0, 2000) : content;
-
-      const payload: Parameters<Message['edit']>[0] = { content: truncated };
-
-      if (message.buttons?.length) {
-        payload.components = DiscordAdapter.buildButtonRows(message.buttons);
-      } else if (message.buttons) {
-        payload.components = []; // clear existing buttons
-      }
-
-      await existing.edit(payload);
-    } catch (err: unknown) {
-      // Streaming edits are non-fatal: log and swallow so the bridge stays alive
-      const classified = classifyError('discord', err);
-      console.warn(`[discord] editMessage failed (${classified.constructor.name}): ${classified.message}`);
-    }
-  }
-
-  async sendRendered(chatId: string, message: DiscordOutbound): Promise<SendResult> {
+  async send(chatId: string, message: DiscordOutbound): Promise<SendResult> {
     if (!this.client) throw new Error('Discord client not started');
     const channel = await this.client.channels.fetch(chatId);
     if (!channel || !('send' in channel)) {
@@ -340,7 +200,7 @@ export class DiscordAdapter extends BaseChannelAdapter<DiscordOutbound> {
     }
   }
 
-  async editRendered(chatId: string, messageId: string, message: DiscordOutbound): Promise<void> {
+  async editMessage(chatId: string, messageId: string, message: DiscordOutbound): Promise<void> {
     if (!this.client) return;
 
     try {
@@ -369,7 +229,7 @@ export class DiscordAdapter extends BaseChannelAdapter<DiscordOutbound> {
       await existing.edit(payload as any);
     } catch (err: unknown) {
       const classified = classifyError('discord', err);
-      console.warn(`[discord] editRendered failed (${classified.constructor.name}): ${classified.message}`);
+      console.warn(`[discord] editMessage failed (${classified.constructor.name}): ${classified.message}`);
     }
   }
 

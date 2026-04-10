@@ -22,9 +22,7 @@ function mockAdapter(channelType = 'telegram'): BaseChannelAdapter {
     stop: vi.fn().mockResolvedValue(undefined),
     consumeOne: vi.fn().mockImplementation(() => messageQueue.shift() ?? null),
     send: vi.fn().mockResolvedValue({ messageId: '1', success: true }),
-    sendRendered: vi.fn().mockResolvedValue({ messageId: '1', success: true }),
     editMessage: vi.fn().mockResolvedValue(undefined),
-    editRendered: vi.fn().mockResolvedValue(undefined),
     sendTyping: vi.fn().mockResolvedValue(undefined),
     addReaction: vi.fn().mockResolvedValue(undefined),
     removeReaction: vi.fn().mockResolvedValue(undefined),
@@ -150,7 +148,7 @@ describe('CallbackRouter', () => {
       expect(permissions.toggleMultiSelectOption).toHaveBeenCalledWith('h1', 2);
       expect(permissions.buildMultiSelectCard).toHaveBeenCalledWith('h1', 'sess1', new Set([0, 2]), 'telegram');
       expect(adapter.editMessage).toHaveBeenCalledWith('c1', 'm1', expect.objectContaining({
-        text: 'card text',
+        html: expect.stringContaining('Select Options'),
         buttons: expect.any(Array),
       }));
     });
@@ -181,11 +179,8 @@ describe('CallbackRouter', () => {
       await router.handle(feishuAdapter, msg);
 
       expect(feishuAdapter.editMessage).toHaveBeenCalledWith('c1', 'm1', expect.objectContaining({
-        text: 'card text',
+        card: expect.stringContaining('Select Options'),
       }));
-      // feishuHeader is no longer passed — Renderer handles platform formatting
-      const callArgs = (feishuAdapter.editMessage as any).mock.calls[0][2];
-      expect(callArgs.feishuHeader).toBeUndefined();
     });
   });
 
@@ -220,8 +215,8 @@ describe('CallbackRouter', () => {
       const result = await router.handle(adapter, msg);
 
       expect(result).toBe(true);
-      expect(adapter.sendRendered).toHaveBeenCalledOnce();
-      const [chatId, rendered] = (adapter.sendRendered as any).mock.calls[0];
+      expect(adapter.send).toHaveBeenCalledOnce();
+      const [chatId, rendered] = (adapter.send as any).mock.calls[0];
       expect(chatId).toBe('c1');
       expect(rendered.html).toContain('No options selected');
       expect(gateway.resolve).not.toHaveBeenCalled();
@@ -250,8 +245,8 @@ describe('CallbackRouter', () => {
       expect(sdkState.sdkQuestionTextAnswers.get('p1')).toBe('Alpha, Gamma');
       expect(permissions.cleanupQuestion).toHaveBeenCalledWith('p1');
       expect(gateway.resolve).toHaveBeenCalledWith('p1', 'allow');
-      expect(adapter.editRendered).toHaveBeenCalledOnce();
-      const [chatId, msgId, rendered] = (adapter.editRendered as any).mock.calls[0];
+      expect(adapter.editMessage).toHaveBeenCalledOnce();
+      const [chatId, msgId, rendered] = (adapter.editMessage as any).mock.calls[0];
       expect(chatId).toBe('c1');
       expect(msgId).toBe('m1');
       expect(rendered.html).toContain('Selected: Alpha, Gamma');
@@ -350,8 +345,8 @@ describe('CallbackRouter', () => {
       expect(result).toBe(true);
       expect(sdkState.sdkQuestionAnswers.get('p1')).toBe(1);
       expect(gateway.resolve).toHaveBeenCalledWith('p1', 'allow');
-      expect(adapter.editRendered).toHaveBeenCalledOnce();
-      const [chatId, msgId, rendered] = (adapter.editRendered as any).mock.calls[0];
+      expect(adapter.editMessage).toHaveBeenCalledOnce();
+      const [chatId, msgId, rendered] = (adapter.editMessage as any).mock.calls[0];
       expect(chatId).toBe('c1');
       expect(msgId).toBe('m1');
       expect(rendered.html).toContain('Selected: Option B');
@@ -383,8 +378,8 @@ describe('CallbackRouter', () => {
 
       expect(result).toBe(true);
       expect(gateway.resolve).toHaveBeenCalledWith('p1', 'deny', 'Skipped');
-      expect(adapter.editRendered).toHaveBeenCalledOnce();
-      const [chatId, msgId, rendered] = (adapter.editRendered as any).mock.calls[0];
+      expect(adapter.editMessage).toHaveBeenCalledOnce();
+      const [chatId, msgId, rendered] = (adapter.editMessage as any).mock.calls[0];
       expect(chatId).toBe('c1');
       expect(msgId).toBe('m1');
       expect(rendered.html).toContain('Skipped');

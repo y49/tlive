@@ -1,7 +1,5 @@
 import { CostTracker, type UsageStats } from './cost-tracker.js';
-import { redactSensitiveContent } from './content-filter.js';
-import { getToolIcon } from './tool-registry.js';
-import type { ProgressSnapshot } from '../renderers/types.js';
+import type { ProgressSnapshot, PermissionState } from '../renderers/types.js';
 
 export interface MessageRendererOptions {
   platformLimit: number;
@@ -19,15 +17,6 @@ const HIDDEN_TOOLS = new Set([
   'TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet',
   'TaskStop', 'TaskOutput', 'ToolSearch', 'TodoRead',
 ]);
-
-const SEPARATOR = '───────────────';
-
-interface PermissionState {
-  toolName: string;
-  input: string;
-  permId: string;
-  buttons: Array<{ label: string; callbackData: string; style: string }>;
-}
 
 export class MessageRenderer {
   private toolCounts = new Map<string, number>();
@@ -179,120 +168,6 @@ export class MessageRenderer {
   }
 
   // --- Internal ---
-
-  private render(): string {
-    // Error without tools
-    if (this.errorMessage && this.totalTools === 0) {
-      return this.applyPlatformLimit(redactSensitiveContent(`❌ ${this.errorMessage}`));
-    }
-
-    // Permission phase — show queue head, full command (user needs to assess risk)
-    if (this.permissionQueue.length > 0) {
-      const p = this.permissionQueue[0];
-      const queueHint = this.permissionQueue.length > 1
-        ? `\n⏳ +${this.permissionQueue.length - 1} more pending`
-        : '';
-      return this.applyPlatformLimit(redactSensitiveContent(`🔐 ${p.toolName}: ${p.input}${queueHint}`));
-    }
-
-    // Done phase (completed or error with tools)
-    if (this.completed || this.errorMessage) {
-      return this.renderDone();
-    }
-
-    // Executing phase
-    return this.renderExecuting();
-  }
-
-  private renderExecuting(): string {
-    if (this.totalTools === 0 && !this.responseText) {
-      return '⏳ Starting...';
-    }
-    const lines: string[] = [];
-
-    // Show response text above status line if available
-    if (this.responseText.trim()) {
-      lines.push(this.responseText.trim());
-      lines.push('');
-    }
-
-    if (this.todoItems.length > 0) {
-      lines.push(this.renderTodoProgress());
-      lines.push('');
-    }
-
-    if (this.totalTools > 0) {
-      const parts: string[] = [];
-      for (const [name, count] of this.toolCounts) {
-        parts.push(`${getToolIcon(name)} ${name} ×${count}`);
-      }
-      const toolSummary = parts.join(' · ');
-      const elapsed = `${this.elapsedSeconds}s`;
-      lines.push(`⏳ ${toolSummary} (${this.totalTools} tools · ${elapsed})`);
-    }
-
-    return this.applyPlatformLimit(redactSensitiveContent(lines.join('\n')));
-  }
-
-  private renderTodoProgress(): string {
-    const done = this.todoItems.filter(t => t.status === 'completed').length;
-    const header = `📋 Progress (${done}/${this.todoItems.length})`;
-    const lines = this.todoItems.map(t => {
-      const icon = t.status === 'completed' ? '✅' : t.status === 'in_progress' ? '🔧' : '⬜';
-      return `${icon} ${t.content}`;
-    });
-    return `${header}\n${lines.join('\n')}`;
-  }
-
-  private renderToolSummary(): string {
-    const parts: string[] = [];
-    for (const [name, count] of this.toolCounts) {
-      parts.push(`${getToolIcon(name)} ${name} ×${count}`);
-    }
-    return `${parts.join(' · ')} (${this.totalTools} total)`;
-  }
-
-  private renderDone(): string {
-    const lines: string[] = [];
-
-    // Error with tools — show partial text + stopped + footer
-    if (this.errorMessage) {
-      if (this.responseText) {
-        lines.push(this.responseText);
-      }
-      lines.push('⚠️ Stopped');
-      lines.push(SEPARATOR);
-      if (this.totalTools > 0) {
-        lines.push(this.renderToolSummary());
-      }
-      if (this.costLine) {
-        lines.push(this.costLine);
-      }
-      return this.applyPlatformLimit(redactSensitiveContent(lines.join('\n')));
-    }
-
-    // Completed — no platform limit applied here; bridge-manager handles overflow chunking
-    if (this.responseText) {
-      // Ensure text ends cleanly before separator (strip trailing whitespace but keep content)
-      lines.push(this.responseText.trimEnd());
-      lines.push(SEPARATOR);
-    }
-    if (this.totalTools > 0) {
-      lines.push(this.renderToolSummary());
-    }
-    if (this.costLine) {
-      lines.push(this.costLine);
-    }
-    return redactSensitiveContent(lines.join('\n'));
-  }
-
-  private applyPlatformLimit(content: string): string {
-    if (content.length > this.platformLimit) {
-      const tail = content.slice(-(this.platformLimit - 100));
-      return '...\n' + tail;
-    }
-    return content;
-  }
 
   private scheduleFlush(): void {
     if (this.timer) return;

@@ -1,8 +1,9 @@
 import type { BaseChannelAdapter } from '../channels/base.js';
-import type { InboundMessage, FileAttachment } from '../channels/types.js';
+import type { InboundMessage, ChannelType, FileAttachment } from '../channels/types.js';
 import type { PermissionCoordinator } from './permission-coordinator.js';
 import type { SessionStateManager } from './session-state.js';
 import type { SDKEngine } from './sdk-engine.js';
+import type { NotificationRenderer } from '../renderers/types.js';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
@@ -32,6 +33,7 @@ export class MessageRouter {
     private coreAvailable: () => boolean,
     private coreUrl: string,
     private token: string,
+    private renderers: Map<ChannelType, NotificationRenderer>,
   ) {
     this.chatIdFile = join(homedir(), '.tlive', 'runtime', 'chat-ids.json');
   }
@@ -61,17 +63,10 @@ export class MessageRouter {
         const username = msg.userId;
         const code = tgAdapter.requestPairing(msg.userId, msg.chatId, username);
         if (code) {
-          await adapter.send({
-            chatId: msg.chatId,
-            html: [
-              `🔐 <b>Pairing Required</b>`,
-              '',
-              `Your pairing code: <code>${code}</code>`,
-              '',
-              `Ask an admin to run <code>/approve ${code}</code> in an authorized channel.`,
-              `Code expires in 1 hour.`,
-            ].join('\n'),
-          });
+          const r = this.renderers.get(adapter.channelType)!;
+          await adapter.send(msg.chatId, r.renderSimpleText(
+            `🔐 Pairing Required\n\nYour pairing code: ${code}\n\nAsk an admin to run /approve ${code} in an authorized channel.\nCode expires in 1 hour.`
+          ));
         }
       }
       return { action: 'unauthorized' };
@@ -138,7 +133,8 @@ export class MessageRouter {
           const hint = adapter.channelType === 'feishu'
             ? '⚠️ 多个权限待审批，请引用回复具体的权限消息'
             : '⚠️ Multiple permissions pending — reply to the specific permission message';
-          await adapter.send({ chatId: msg.chatId, text: hint });
+          const r = this.renderers.get(adapter.channelType)!;
+          await adapter.send(msg.chatId, r.renderSimpleText(hint));
           return { action: 'handled' };
         }
         const permEntry = this.permissions.findHookPermission(msg.replyToMessageId, adapter.channelType);
@@ -146,9 +142,11 @@ export class MessageRouter {
           try {
             await this.permissions.resolveHookPermission(permEntry.permissionId, decision, adapter.channelType, this.coreAvailable());
             const label = decision === 'deny' ? '❌ Denied' : decision === 'allow_always' ? '📌 Always allowed' : '✅ Allowed';
-            await adapter.send({ chatId: msg.chatId, text: label });
+            const r2 = this.renderers.get(adapter.channelType)!;
+            await adapter.send(msg.chatId, r2.renderSimpleText(label));
           } catch (err) {
-            await adapter.send({ chatId: msg.chatId, text: `❌ Failed to resolve: ${err}` });
+            const r2 = this.renderers.get(adapter.channelType)!;
+            await adapter.send(msg.chatId, r2.renderSimpleText(`❌ Failed to resolve: ${err}`));
           }
           return { action: 'handled' };
         }
@@ -290,12 +288,15 @@ export class MessageRouter {
           body: JSON.stringify({ text: inputText + '\r' }),
           signal: AbortSignal.timeout(5000),
         });
-        await adapter.send({ chatId: msg.chatId, text: '✓ Sent to local session' });
+        const r = this.renderers.get(adapter.channelType)!;
+        await adapter.send(msg.chatId, r.renderSimpleText('✓ Sent to local session'));
       } catch (err) {
-        await adapter.send({ chatId: msg.chatId, text: `❌ Failed to send: ${err}` });
+        const r = this.renderers.get(adapter.channelType)!;
+        await adapter.send(msg.chatId, r.renderSimpleText(`❌ Failed to send: ${err}`));
       }
     } else {
-      await adapter.send({ chatId: msg.chatId, text: '⚠️ Local session not available (no session ID)' });
+      const r = this.renderers.get(adapter.channelType)!;
+      await adapter.send(msg.chatId, r.renderSimpleText('⚠️ Local session not available (no session ID)'));
     }
   }
 }

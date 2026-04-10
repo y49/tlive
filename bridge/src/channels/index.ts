@@ -4,4 +4,4 @@ import './discord.js';    // Task 24
 import './feishu.js';     // Task 25
 
 export { BaseChannelAdapter, createAdapter, registerAdapterFactory, getRegisteredTypes } from './base.js';
-export type { ChannelType, InboundMessage, OutboundMessage, SendResult, Button, FileAttachment } from './types.js';
+export type { ChannelType, InboundMessage, SendResult, Button, FileAttachment } from './types.js';

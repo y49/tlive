@@ -82,6 +82,7 @@ export class BridgeManager {
     this.messageRouter = new MessageRouter(
       this.permissions, this.state, this.sdkEngine,
       () => this.coreAvailable, this.coreUrl, this.token,
+      this.renderers,
     );
     this.messageRouter.loadChatIds();
     this.commands = new CommandRouter(
@@ -218,7 +219,7 @@ export class BridgeManager {
     } catch (err) {
       console.error(`[tlive:engine] Failed to resume session ${sessionId}:`, err);
       const renderer = this.renderers.get(adapter.channelType)!;
-      adapter.sendRendered(chatId, renderer.renderSimpleText(`⚠️ Failed to resume session: ${err}`)).catch(() => {});
+      adapter.send(chatId, renderer.renderSimpleText(`⚠️ Failed to resume session: ${err}`)).catch(() => {});
     }
   }
 
@@ -336,13 +337,13 @@ export class BridgeManager {
           const renderer = this.renderers.get(adapter.channelType)!;
           if (coalesced.text && this.sdkEngine.canSteer(coalesced.channelType, coalesced.chatId, coalesced.replyToMessageId)) {
             this.sdkEngine.steer(coalesced.channelType, coalesced.chatId, coalesced.text);
-            await adapter.sendRendered(coalesced.chatId, renderer.renderSimpleText('💬 Message sent to active session')).catch(() => {});
+            await adapter.send(coalesced.chatId, renderer.renderSimpleText('💬 Message sent to active session')).catch(() => {});
           } else if (coalesced.text) {
             const queued = this.sdkEngine.queueMessage(coalesced.channelType, coalesced.chatId, coalesced);
             if (queued) {
-              await adapter.sendRendered(coalesced.chatId, renderer.renderSimpleText('📥 Queued — will process after current task')).catch(() => {});
+              await adapter.send(coalesced.chatId, renderer.renderSimpleText('📥 Queued — will process after current task')).catch(() => {});
             } else {
-              await adapter.sendRendered(coalesced.chatId, renderer.renderSimpleText('⚠️ Queue full — please wait for current tasks to finish')).catch(() => {});
+              await adapter.send(coalesced.chatId, renderer.renderSimpleText('⚠️ Queue full — please wait for current tasks to finish')).catch(() => {});
             }
           }
           continue;
@@ -384,7 +385,7 @@ export class BridgeManager {
       const provider = this.getProvider(msg.channelType, msg.chatId);
       if (!provider.capabilities().slashCommands) {
         const renderer = this.renderers.get(adapter.channelType)!;
-        await adapter.sendRendered(msg.chatId, renderer.renderSimpleText('⚠️ Slash commands not supported by current runtime'));
+        await adapter.send(msg.chatId, renderer.renderSimpleText('⚠️ Slash commands not supported by current runtime'));
         return true;
       }
     }
