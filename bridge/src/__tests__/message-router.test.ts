@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MessageRouter } from '../engine/message-router.js';
 import type { BaseChannelAdapter } from '../channels/base.js';
 import type { InboundMessage, ChannelType, FileAttachment } from '../channels/types.js';
@@ -33,17 +33,6 @@ function mockPermissions() {
   return {
     parsePermissionText: vi.fn().mockReturnValue(null),
     tryResolveByText: vi.fn().mockReturnValue(false),
-    pendingPermissionCount: vi.fn().mockReturnValue(0),
-    findHookPermission: vi.fn().mockReturnValue(null),
-    resolveHookPermission: vi.fn().mockResolvedValue(undefined),
-    getLatestPendingQuestion: vi.fn().mockReturnValue(null),
-    getQuestionData: vi.fn().mockReturnValue(null),
-    resolveAskQuestion: vi.fn().mockResolvedValue(undefined),
-    resolveAskQuestionWithText: vi.fn().mockResolvedValue(undefined),
-    isHookMessage: vi.fn().mockReturnValue(false),
-    getHookMessage: vi.fn().mockReturnValue(null),
-    storeQuestionData: vi.fn(),
-    trackPermissionMessage: vi.fn(),
     getGateway: vi.fn().mockReturnValue({
       isPending: vi.fn().mockReturnValue(false),
       resolve: vi.fn(),
@@ -96,13 +85,10 @@ describe('MessageRouter', () => {
   let state: ReturnType<typeof mockState>;
   let sdkEngine: ReturnType<typeof mockSdkEngine>;
   let adapter: ReturnType<typeof mockAdapter>;
-  let coreAvailable: ReturnType<typeof vi.fn>;
-
   beforeEach(() => {
     permissions = mockPermissions();
     state = mockState();
     sdkEngine = mockSdkEngine();
-    coreAvailable = vi.fn().mockReturnValue(true);
     adapter = mockAdapter();
 
     const renderers = new Map<ChannelType, NotificationRenderer>([
@@ -112,9 +98,6 @@ describe('MessageRouter', () => {
       permissions as any,
       state as any,
       sdkEngine as any,
-      coreAvailable as any,
-      'http://localhost:4590',
-      'test-token',
       renderers,
     );
   });
@@ -253,69 +236,10 @@ describe('MessageRouter', () => {
     });
   });
 
-  // ── 8. Multiple pending permissions ──────────────────────────────────
+  // ── 8. AskQuestion text reply (SDK) ──────────────────────────────────
 
-  describe('multiple pending permissions', () => {
-    it('warns user to quote-reply when >1 pending and no replyToMessageId', async () => {
-      permissions.parsePermissionText.mockReturnValue('allow');
-      permissions.tryResolveByText.mockReturnValue(false);
-      permissions.pendingPermissionCount.mockReturnValue(2);
-
-      const result = await router.route(adapter, makeMsg({ text: 'allow' }));
-
-      expect(result).toEqual({ action: 'handled' });
-      expect(adapter.send).toHaveBeenCalledWith(
-        'c1',
-        expect.objectContaining({ html: expect.stringContaining('Multiple permissions pending') }),
-      );
-    });
-  });
-
-  // ── 9. Hook permission text ──────────────────────────────────────────
-
-  describe('hook permission text', () => {
-    it('resolves via hook permission on quote-reply', async () => {
-      permissions.parsePermissionText.mockReturnValue('allow');
-      permissions.tryResolveByText.mockReturnValue(false);
-      permissions.pendingPermissionCount.mockReturnValue(1);
-      permissions.findHookPermission.mockReturnValue({ permissionId: 'hp1' });
-
-      const result = await router.route(adapter, makeMsg({
-        text: 'allow',
-        replyToMessageId: 'perm-msg-1',
-      }));
-
-      expect(result).toEqual({ action: 'handled' });
-      expect(permissions.resolveHookPermission).toHaveBeenCalledWith('hp1', 'allow', 'telegram', true);
-      expect(adapter.send).toHaveBeenCalledWith(
-        'c1',
-        expect.objectContaining({ html: expect.stringContaining('Allowed') }),
-      );
-    });
-  });
-
-  // ── 10-14. AskQuestion text reply ────────────────────────────────────
-
-  describe('AskQuestion text reply', () => {
-    it('numeric reply selects option (hook)', async () => {
-      permissions.getLatestPendingQuestion.mockReturnValue({
-        hookId: 'hq1',
-        sessionId: 'sess1',
-        messageId: 'qmsg1',
-      });
-      permissions.getQuestionData.mockReturnValue({
-        questions: [{ question: 'Pick', options: [{ label: 'A' }, { label: 'B' }] }],
-      });
-
-      const result = await router.route(adapter, makeMsg({ text: '2' }));
-
-      expect(result).toEqual({ action: 'handled' });
-      expect(permissions.resolveAskQuestion).toHaveBeenCalledWith(
-        'hq1', 1, 'sess1', 'qmsg1', adapter, 'c1', true,
-      );
-    });
-
-    it('numeric reply selects option (SDK)', async () => {
+  describe('AskQuestion text reply (SDK)', () => {
+    it('numeric reply selects option', async () => {
       const sdkAnswers = new Map();
       sdkEngine.findPendingQuestion.mockReturnValue({ permId: 'sp1' });
       sdkEngine.getQuestionState.mockReturnValue({
@@ -334,25 +258,7 @@ describe('MessageRouter', () => {
       expect(gateway.resolve).toHaveBeenCalledWith('sp1', 'allow');
     });
 
-    it('free text answer (hook)', async () => {
-      permissions.getLatestPendingQuestion.mockReturnValue({
-        hookId: 'hq2',
-        sessionId: 'sess2',
-        messageId: 'qmsg2',
-      });
-      permissions.getQuestionData.mockReturnValue({
-        questions: [{ question: 'What?', options: [] }],
-      });
-
-      const result = await router.route(adapter, makeMsg({ text: 'my answer' }));
-
-      expect(result).toEqual({ action: 'handled' });
-      expect(permissions.resolveAskQuestionWithText).toHaveBeenCalledWith(
-        'hq2', 'my answer', 'sess2', 'qmsg2', adapter, 'c1', true,
-      );
-    });
-
-    it('free text answer (SDK)', async () => {
+    it('free text answer', async () => {
       const sdkTextAnswers = new Map();
       sdkEngine.findPendingQuestion.mockReturnValue({ permId: 'sp2' });
       sdkEngine.getQuestionState.mockReturnValue({
@@ -370,114 +276,9 @@ describe('MessageRouter', () => {
       expect(sdkTextAnswers.get('sp2')).toBe('free text');
       expect(gateway.resolve).toHaveBeenCalledWith('sp2', 'allow');
     });
-
-    it('out-of-range number falls through to free text', async () => {
-      permissions.getLatestPendingQuestion.mockReturnValue({
-        hookId: 'hq3',
-        sessionId: 'sess3',
-        messageId: 'qmsg3',
-      });
-      permissions.getQuestionData.mockReturnValue({
-        questions: [{ question: 'Pick', options: [{ label: 'A' }] }],
-      });
-
-      const result = await router.route(adapter, makeMsg({ text: '99' }));
-
-      expect(result).toEqual({ action: 'handled' });
-      // Should call free text, not numeric resolve
-      expect(permissions.resolveAskQuestion).not.toHaveBeenCalled();
-      expect(permissions.resolveAskQuestionWithText).toHaveBeenCalledWith(
-        'hq3', '99', 'sess3', 'qmsg3', adapter, 'c1', true,
-      );
-    });
   });
 
-  // ── 15. Hook reply routing ───────────────────────────────────────────
-
-  describe('hook reply routing', () => {
-    let originalFetch: typeof global.fetch;
-
-    beforeEach(() => {
-      originalFetch = global.fetch;
-    });
-
-    afterEach(() => {
-      global.fetch = originalFetch;
-    });
-
-    it('routes reply to hook message via fetch and confirms', async () => {
-      permissions.isHookMessage.mockReturnValue(true);
-      permissions.getHookMessage.mockReturnValue({ sessionId: 'sess-x' });
-
-      global.fetch = vi.fn()
-        .mockResolvedValueOnce({ ok: false }) // pending endpoint fails → skip AskQ check
-        .mockResolvedValueOnce({ ok: true }) as any; // session input succeeds
-
-      const result = await router.route(adapter, makeMsg({
-        text: 'some input',
-        replyToMessageId: 'hook-msg-1',
-      }));
-
-      expect(result).toEqual({ action: 'handled' });
-      expect(global.fetch).toHaveBeenCalledWith(
-        'http://localhost:4590/api/sessions/sess-x/input',
-        expect.objectContaining({ method: 'POST' }),
-      );
-      expect(adapter.send).toHaveBeenCalledWith(
-        'c1',
-        expect.objectContaining({ html: expect.stringContaining('Sent to local session') }),
-      );
-    });
-
-    it('shows error when fetch to session input fails', async () => {
-      permissions.isHookMessage.mockReturnValue(true);
-      permissions.getHookMessage.mockReturnValue({ sessionId: 'sess-y' });
-
-      global.fetch = vi.fn()
-        .mockResolvedValueOnce({ ok: false }) // pending endpoint
-        .mockRejectedValueOnce(new Error('connection refused')) as any;
-
-      const result = await router.route(adapter, makeMsg({
-        text: 'some input',
-        replyToMessageId: 'hook-msg-2',
-      }));
-
-      expect(result).toEqual({ action: 'handled' });
-      expect(adapter.send).toHaveBeenCalledWith(
-        'c1',
-        expect.objectContaining({ html: expect.stringContaining('Failed to send') }),
-      );
-    });
-
-    it('resolves AskUserQuestion found in pending hooks', async () => {
-      permissions.isHookMessage.mockReturnValue(true);
-      permissions.getHookMessage.mockReturnValue({ sessionId: 'sess-z' });
-      permissions.getQuestionData.mockReturnValue(null);
-
-      global.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => [{
-          id: 'ask-1',
-          tool_name: 'AskUserQuestion',
-          input: { questions: [{ question: 'Pick one', header: '', options: [{ label: 'A' }, { label: 'B' }], multiSelect: false }] },
-          session_id: 'sess-z',
-        }],
-      }) as any;
-
-      const result = await router.route(adapter, makeMsg({
-        text: '1',
-        replyToMessageId: 'hook-msg-3',
-      }));
-
-      expect(result).toEqual({ action: 'handled' });
-      expect(permissions.storeQuestionData).toHaveBeenCalledWith('ask-1', expect.any(Array));
-      expect(permissions.resolveAskQuestion).toHaveBeenCalledWith(
-        'ask-1', 0, 'sess-z', 'hook-msg-3', adapter, 'c1', true,
-      );
-    });
-  });
-
-  // ── 16. Pass-through ─────────────────────────────────────────────────
+  // ── 9. Pass-through ─────────────────────────────────────────────────
 
   describe('pass-through', () => {
     it('regular text message returns pass', async () => {

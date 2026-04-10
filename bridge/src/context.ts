@@ -2,7 +2,6 @@ export type { BridgeStore } from './store/interface.js';
 export type { LLMProvider, ProviderCapabilities, LiveSession } from './providers/base.js';
 
 export interface PermissionGateway {}
-export interface CoreClient {}
 
 export interface LifecycleHooks {
   onBridgeStart?(): Promise<void>;
@@ -16,7 +15,6 @@ export interface BridgeContext {
   store: BridgeStore;
   llm: LLMProvider;
   permissions: PermissionGateway;
-  core: CoreClient;
   lifecycle?: LifecycleHooks;
   defaultWorkdir: string;
 }

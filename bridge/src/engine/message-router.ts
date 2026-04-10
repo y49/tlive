@@ -6,7 +6,7 @@ import type { SDKEngine } from './sdk-engine.js';
 import type { NotificationRenderer } from '../renderers/types.js';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir, tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 
 export type RouteResult =
   | { action: 'handled' }
@@ -30,9 +30,6 @@ export class MessageRouter {
     private permissions: PermissionCoordinator,
     private state: SessionStateManager,
     private sdkEngine: SDKEngine,
-    private coreAvailable: () => boolean,
-    private coreUrl: string,
-    private token: string,
     private renderers: Map<ChannelType, NotificationRenderer>,
   ) {
     this.chatIdFile = join(homedir(), '.tlive', 'runtime', 'chat-ids.json');
@@ -128,185 +125,39 @@ export class MessageRouter {
           adapter.addReaction(msg.chatId, msg.messageId, emoji).catch(() => {});
           return { action: 'handled' };
         }
-
-        if (this.permissions.pendingPermissionCount() > 1 && !msg.replyToMessageId) {
-          const hint = adapter.channelType === 'feishu'
-            ? '⚠️ 多个权限待审批，请引用回复具体的权限消息'
-            : '⚠️ Multiple permissions pending — reply to the specific permission message';
-          const r = this.renderers.get(adapter.channelType)!;
-          await adapter.send(msg.chatId, r.renderSimpleText(hint));
-          return { action: 'handled' };
-        }
-        const permEntry = this.permissions.findHookPermission(msg.replyToMessageId, adapter.channelType);
-        if (permEntry && this.coreAvailable()) {
-          try {
-            await this.permissions.resolveHookPermission(permEntry.permissionId, decision, adapter.channelType, this.coreAvailable());
-            const label = decision === 'deny' ? '❌ Denied' : decision === 'allow_always' ? '📌 Always allowed' : '✅ Allowed';
-            const r2 = this.renderers.get(adapter.channelType)!;
-            await adapter.send(msg.chatId, r2.renderSimpleText(label));
-          } catch (err) {
-            const r2 = this.renderers.get(adapter.channelType)!;
-            await adapter.send(msg.chatId, r2.renderSimpleText(`❌ Failed to resolve: ${err}`));
-          }
-          return { action: 'handled' };
-        }
       }
     }
 
-    // 5. Text reply to pending AskUserQuestion — numeric (select option) or free text
+    // 5. Text reply to pending SDK AskUserQuestion — numeric (select option) or free text
     if (msg.text) {
       const trimmed = msg.text.trim();
-      const pendingHookQ = this.permissions.getLatestPendingQuestion(adapter.channelType);
       const pendingSdkQ = this.sdkEngine.findPendingQuestion(adapter.channelType, msg.chatId);
 
-      if (pendingHookQ || pendingSdkQ) {
+      if (pendingSdkQ) {
         let validOptionIndex = -1;
         const numMatch = trimmed.match(/^(\d+)$/);
         if (numMatch) {
           const idx = parseInt(numMatch[1], 10) - 1;
           if (idx >= 0) {
-            const qData = pendingHookQ
-              ? this.permissions.getQuestionData(pendingHookQ.hookId)
-              : pendingSdkQ ? this.sdkEngine.getQuestionState().sdkQuestionData.get(pendingSdkQ.permId) : null;
+            const qData = this.sdkEngine.getQuestionState().sdkQuestionData.get(pendingSdkQ.permId);
             const optionsCount = qData?.questions?.[0]?.options?.length ?? 0;
             if (idx < optionsCount) validOptionIndex = idx;
           }
         }
 
         if (validOptionIndex >= 0) {
-          if (pendingHookQ) {
-            await this.permissions.resolveAskQuestion(
-              pendingHookQ.hookId, validOptionIndex, pendingHookQ.sessionId,
-              pendingHookQ.messageId, adapter, msg.chatId, this.coreAvailable(),
-            );
-            return { action: 'handled' };
-          }
-          if (pendingSdkQ) {
-            this.sdkEngine.getQuestionState().sdkQuestionAnswers.set(pendingSdkQ.permId, validOptionIndex);
-            this.permissions.getGateway().resolve(pendingSdkQ.permId, 'allow');
-            return { action: 'handled' };
-          }
+          this.sdkEngine.getQuestionState().sdkQuestionAnswers.set(pendingSdkQ.permId, validOptionIndex);
+          this.permissions.getGateway().resolve(pendingSdkQ.permId, 'allow');
+          return { action: 'handled' };
         } else {
-          if (pendingHookQ) {
-            await this.permissions.resolveAskQuestionWithText(
-              pendingHookQ.hookId, trimmed, pendingHookQ.sessionId,
-              pendingHookQ.messageId, adapter, msg.chatId, this.coreAvailable(),
-            );
-            return { action: 'handled' };
-          }
-          if (pendingSdkQ) {
-            this.sdkEngine.getQuestionState().sdkQuestionTextAnswers.set(pendingSdkQ.permId, trimmed);
-            this.permissions.getGateway().resolve(pendingSdkQ.permId, 'allow');
-            return { action: 'handled' };
-          }
+          this.sdkEngine.getQuestionState().sdkQuestionTextAnswers.set(pendingSdkQ.permId, trimmed);
+          this.permissions.getGateway().resolve(pendingSdkQ.permId, 'allow');
+          return { action: 'handled' };
         }
       }
     }
 
-    // 6. Reply routing: quote-reply to a hook message → send to PTY stdin
-    if ((msg.text || msg.attachments?.length) && msg.replyToMessageId && this.permissions.isHookMessage(msg.replyToMessageId)) {
-      await this.routeHookReply(adapter, msg);
-      return { action: 'handled' };
-    }
-
-    // 7. Not handled — pass through to callbacks, commands, SDK engine
+    // 6. Not handled — pass through to callbacks, commands, SDK engine
     return { action: 'pass' };
-  }
-
-  /** Route a quote-reply to a hook message → PTY stdin or pending AskUserQuestion */
-  private async routeHookReply(adapter: BaseChannelAdapter, msg: InboundMessage): Promise<void> {
-    // Before forwarding to PTY, check Core for a pending AskUserQuestion that
-    // the bridge hasn't polled yet (race condition: hook creates perm, bridge
-    // polls every 2s, user replies before the next poll cycle).
-    if (msg.text && this.coreAvailable()) {
-      try {
-        const pendingResp = await fetch(`${this.coreUrl}/api/hooks/pending`, {
-          headers: { Authorization: `Bearer ${this.token}` },
-          signal: AbortSignal.timeout(2000),
-        });
-        if (pendingResp.ok) {
-          const pending = await pendingResp.json() as Array<{ id: string; tool_name: string; input: unknown; session_id?: string }>;
-          const askq = pending.find((p: { tool_name: string }) => p.tool_name === 'AskUserQuestion');
-          if (askq) {
-            const inputData = (typeof askq.input === 'string'
-              ? (() => { try { return JSON.parse(askq.input as string); } catch { return {}; } })()
-              : askq.input) as Record<string, unknown>;
-            const questions = (inputData?.questions ?? []) as Array<{
-              question: string; header: string;
-              options: Array<{ label: string; description?: string }>; multiSelect: boolean;
-            }>;
-            if (questions.length > 0) {
-              const q = questions[0];
-              const trimmed = msg.text.trim();
-              if (!this.permissions.getQuestionData(askq.id)) {
-                this.permissions.storeQuestionData(askq.id, questions);
-                this.permissions.trackPermissionMessage(msg.replyToMessageId!, askq.id, askq.session_id || '', adapter.channelType);
-              }
-              const numMatch = trimmed.match(/^(\d+)$/);
-              const idx = numMatch ? parseInt(numMatch[1], 10) - 1 : -1;
-              if (idx >= 0 && idx < q.options.length) {
-                await this.permissions.resolveAskQuestion(
-                  askq.id, idx, askq.session_id || '',
-                  msg.replyToMessageId!, adapter, msg.chatId, this.coreAvailable(),
-                );
-              } else {
-                await this.permissions.resolveAskQuestionWithText(
-                  askq.id, trimmed, askq.session_id || '',
-                  msg.replyToMessageId!, adapter, msg.chatId, this.coreAvailable(),
-                );
-              }
-              return;
-            }
-          }
-        }
-      } catch { /* non-fatal: fall through to normal PTY routing */ }
-    }
-
-    const entry = this.permissions.getHookMessage(msg.replyToMessageId!)!;
-    if (entry.sessionId && this.coreAvailable()) {
-      try {
-        // If images attached, save as temp files and include paths in the text
-        let inputText = msg.text || '';
-        if (msg.attachments?.length) {
-          const imgDir = join(tmpdir(), 'tlive-images');
-          mkdirSync(imgDir, { recursive: true });
-          for (const att of msg.attachments) {
-            if (att.type === 'image') {
-              const ext = att.mimeType === 'image/png' ? '.png' : '.jpg';
-              const filePath = join(imgDir, `img-${Date.now()}${ext}`);
-              writeFileSync(filePath, Buffer.from(att.base64Data, 'base64'));
-              inputText = inputText ? `${inputText}\n${filePath}` : filePath;
-            }
-          }
-        }
-        const sendInput = async () => {
-          const resp = await fetch(`${this.coreUrl}/api/sessions/${entry.sessionId}/input`, {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${this.token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ text: inputText + '\r' }),
-            signal: AbortSignal.timeout(5000),
-          });
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        };
-        // Retry once on failure (PTY may not be ready)
-        try {
-          await sendInput();
-        } catch {
-          await new Promise(r => setTimeout(r, 500));
-          await sendInput();
-        }
-        const r = this.renderers.get(adapter.channelType)!;
-        await adapter.send(msg.chatId, r.renderSimpleText('✓ Sent to local session'));
-      } catch (err) {
-        const r = this.renderers.get(adapter.channelType)!;
-        await adapter.send(msg.chatId, r.renderSimpleText(`❌ Failed to send: ${err}`));
-      }
-    } else {
-      const r = this.renderers.get(adapter.channelType)!;
-      await adapter.send(msg.chatId, r.renderSimpleText('⚠️ Local session not available (no session ID)'));
-    }
   }
 }

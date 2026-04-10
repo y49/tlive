@@ -50,7 +50,7 @@ describe('BridgeManager', () => {
         capabilities: () => ({ slashCommands: true, askUserQuestion: true, liveSession: true, todoTracking: true, costInUsd: true, skills: true, sessionResume: true }),
       } as any,
       permissions: { resolvePendingPermission: vi.fn() } as any,
-      core: { isHealthy: () => true } as any,
+      lifecycle: undefined,
     });
     manager = new BridgeManager();
   });
@@ -256,48 +256,6 @@ describe('BridgeManager', () => {
     clearIntervalSpy.mockRestore();
   });
 
-  describe('hook reply routing', () => {
-    it('routes quote-reply to hook message via session input API', async () => {
-      const adapter = mockAdapter();
-      manager.registerAdapter(adapter);
-
-      // Simulate a tracked hook message and mark core as available
-      manager.trackHookMessage('hook-msg-1', 'session-abc');
-      (manager as any).coreAvailable = true;
-
-      const originalFetch = global.fetch;
-      global.fetch = vi.fn().mockResolvedValue({ ok: true }) as any;
-
-      await manager.handleInboundMessage(adapter, {
-        channelType: 'telegram', chatId: 'c1', userId: 'u1',
-        text: 'A', messageId: 'm1', replyToMessageId: 'hook-msg-1',
-      });
-
-      expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/sessions/session-abc/input'),
-        expect.objectContaining({ method: 'POST' })
-      );
-      expect(adapter.send).toHaveBeenCalledWith(
-        'c1',
-        expect.objectContaining({ html: expect.stringContaining('Sent to local session') })
-      );
-
-      global.fetch = originalFetch;
-    });
-
-    it('ignores quote-reply to non-hook message', async () => {
-      const adapter = mockAdapter();
-      manager.registerAdapter(adapter);
-
-      await manager.handleInboundMessage(adapter, {
-        channelType: 'telegram', chatId: 'c1', userId: 'u1',
-        text: 'hello', messageId: 'm1', replyToMessageId: 'unknown-msg',
-      });
-
-      // Should fall through to normal handling (SDK engine uses send for progress)
-      expect(adapter.send).toHaveBeenCalled();
-    });
-  });
 
   describe('/hooks command', () => {
     it('shows hook status', async () => {

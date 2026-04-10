@@ -18,7 +18,6 @@ const LOG_DIR = join(TLIVE_HOME, 'logs');
 const BRIDGE_PID = join(RUNTIME_DIR, 'bridge.pid');
 const BRIDGE_ENTRY = join(PACKAGE_ROOT, 'bridge', 'dist', 'main.mjs');
 const CONFIG_FILE = join(TLIVE_HOME, 'config.env');
-const CORE_BIN = join(TLIVE_HOME, 'bin', isWindows ? 'tlive-core.exe' : 'tlive-core');
 
 function getVersion() {
   try {
@@ -152,23 +151,6 @@ async function daemonStatus() {
   } else {
     console.log('Bridge:       not running');
   }
-
-  // Check Go Core web terminal
-  const port = process.env.TL_PORT || config.TL_PORT || '4590';
-  const token = process.env.TL_TOKEN || config.TL_TOKEN || '';
-  try {
-    const resp = await fetch(`http://localhost:${port}/api/status`, {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(3000),
-    });
-    if (resp.ok) {
-      console.log(`Web terminal: running at http://localhost:${port}`);
-    } else {
-      console.log('Web terminal: not running (start with: tlive <cmd>)');
-    }
-  } catch {
-    console.log('Web terminal: not running (start with: tlive <cmd>)');
-  }
 }
 
 function daemonLogs(n = 50) {
@@ -275,16 +257,6 @@ async function runDoctor() {
 
   console.log('');
 
-  // Go Core binary
-  console.log('Go Core:');
-  if (existsSync(CORE_BIN)) {
-    console.log(`  binary:  OK (${CORE_BIN})`);
-  } else {
-    console.log('  binary:  NOT FOUND');
-  }
-
-  console.log('');
-
   // Config
   console.log('Config:');
   if (existsSync(CONFIG_FILE)) {
@@ -307,28 +279,6 @@ async function runDoctor() {
 
   console.log('');
 
-  // API check
-  const config = existsSync(CONFIG_FILE) ? loadConfigEnv() : {};
-  const port = process.env.TL_PORT || config.TL_PORT || '4590';
-  const token = process.env.TL_TOKEN || config.TL_TOKEN || '';
-  try {
-    const resp = await fetch(`http://localhost:${port}/api/status`, {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(3000),
-    });
-    if (resp.ok) {
-      const body = await resp.text();
-      console.log('API:');
-      console.log(body);
-    } else {
-      console.log(`API: unreachable (port ${port})`);
-    }
-  } catch {
-    console.log(`API: unreachable (port ${port})`);
-  }
-
-  console.log('');
-
   // Hook scripts (in npm package directory)
   console.log('Hooks:');
   for (const name of ['hook-handler.mjs', 'notify-handler.mjs', 'stop-handler.mjs']) {
@@ -341,21 +291,6 @@ async function runDoctor() {
   console.log(existsSync(pauseFile) ? '  status: paused (auto-allow)' : '  status: active');
 
   console.log('\n=== Done ===');
-}
-
-// ---------------------------------------------------------------------------
-// Go Core forwarding
-// ---------------------------------------------------------------------------
-
-function runCore(coreArgs) {
-  if (!existsSync(CORE_BIN)) {
-    console.error(`Go Core not found at ${CORE_BIN}`);
-    console.error('Run: npm run setup:core');
-    process.exit(1);
-  }
-  ensureBridgeRunning();
-  const result = spawnSync(CORE_BIN, coreArgs, { stdio: 'inherit' });
-  process.exit(result.status ?? 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -410,7 +345,6 @@ In Claude Code (AI-guided):
 `;
 
 const NODE_COMMANDS = new Set(['setup', 'start', 'stop', 'status', 'logs', 'hooks', 'doctor', 'version', 'update']);
-const CORE_COMMANDS = new Set(['install']);
 
 function run(cmd, opts = {}) {
   try {
@@ -531,16 +465,7 @@ switch (command) {
 
   case 'version': {
     const ver = getVersion();
-    const coreExists = existsSync(CORE_BIN);
-    let coreVer = 'not installed';
-    if (coreExists) {
-      try {
-        const vFile = join(TLIVE_HOME, 'bin', '.core-version');
-        coreVer = readFileSync(vFile, 'utf-8').trim();
-      } catch { coreVer = 'unknown'; }
-    }
     console.log(`tlive          ${ver}`);
-    console.log(`tlive-core     ${coreVer}`);
     console.log(`node           ${process.version}`);
     // Check for updates
     try {
@@ -611,81 +536,6 @@ switch (command) {
         }
       }
       console.log(`Reference docs synced: ${docsDir}`);
-
-      // Auto-configure hooks in ~/.claude/settings.json
-      if (target === 'claude') {
-        const settingsPath = join(homedir(), '.claude', 'settings.json');
-        let settings = {};
-        if (existsSync(settingsPath)) {
-          try { settings = JSON.parse(readFileSync(settingsPath, 'utf-8')); } catch {}
-        }
-
-        if (!settings.hooks) settings.hooks = {};
-
-        // Point hooks directly to npm package scripts — no copy needed
-        const hookHandlerCmd = `node "${join(SCRIPTS_DIR, 'hook-handler.mjs')}"`;
-        const notifyHandlerCmd = `node "${join(SCRIPTS_DIR, 'notify-handler.mjs')}"`;
-        const stopHandlerCmd = `node "${join(SCRIPTS_DIR, 'stop-handler.mjs')}"`;
-
-
-        // Remove ALL existing TLive hooks (both .sh and .mjs, any path)
-        // then re-add with current paths — ensures hooks always point to this install
-        const isTliveHook = (cmd) =>
-          cmd?.includes('hook-handler') || cmd?.includes('notify-handler') || cmd?.includes('stop-handler');
-
-        for (const hookType of Object.keys(settings.hooks)) {
-          settings.hooks[hookType] = (settings.hooks[hookType] || []).filter(e => {
-            if (isTliveHook(e.command)) return false;
-            if (e.hooks) {
-              e.hooks = e.hooks.filter(h => !isTliveHook(h.command));
-              return e.hooks.length > 0;
-            }
-            return true;
-          });
-          if (settings.hooks[hookType].length === 0) delete settings.hooks[hookType];
-        }
-
-        // Add hooks with current paths
-        if (!settings.hooks.PostToolUse) settings.hooks.PostToolUse = [];
-        settings.hooks.PostToolUse.push({
-          matcher: 'AskUserQuestion',
-          hooks: [{
-            type: 'command',
-            command: hookHandlerCmd,
-            timeout: 10,
-          }],
-        });
-
-        if (!settings.hooks.PermissionRequest) settings.hooks.PermissionRequest = [];
-        settings.hooks.PermissionRequest.push({
-          hooks: [{
-            type: 'command',
-            command: hookHandlerCmd,
-            timeout: 300,
-          }],
-        });
-
-        if (!settings.hooks.Notification) settings.hooks.Notification = [];
-        settings.hooks.Notification.push({
-          hooks: [{
-            type: 'command',
-            command: notifyHandlerCmd,
-            timeout: 10,
-          }],
-        });
-
-        if (!settings.hooks.Stop) settings.hooks.Stop = [];
-        settings.hooks.Stop.push({
-          hooks: [{
-            type: 'command',
-            command: stopHandlerCmd,
-            async: true,
-          }],
-        });
-
-        writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-        console.log(`Hooks configured in: ${settingsPath}`);
-      }
     } else {
       console.log('Usage: tlive install skills [--codex]');
     }

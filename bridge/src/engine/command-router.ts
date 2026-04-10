@@ -21,7 +21,6 @@ export class CommandRouter {
     private state: SessionStateManager,
     private getAdapters: () => Map<string, BaseChannelAdapter>,
     private router: ChannelRouter,
-    private coreAvailable: () => boolean,
     private activeControls: Map<string, QueryControls>,
     private permissions: { clearSessionWhitelist(): void },
     private onNewSession?: (channelType: string, chatId: string) => void,
@@ -50,16 +49,12 @@ export class CommandRouter {
         return true;
       }
       case '/status': {
-        const ctx = getBridgeContext();
-        const healthy = (ctx.core as { isHealthy?: () => boolean }).isHealthy?.() ?? false;
-        const coreStatus = healthy ? '🟢 connected' : '🔴 disconnected';
         const channelList = Array.from(this.getAdapters().keys()).join(', ') || 'none';
 
         await adapter.send(msg.chatId, r.renderCommandResponse({
           title: '📡 TLive Status',
           fields: [
             { name: 'Bridge', value: '🟢 Running', inline: true },
-            { name: 'Core', value: coreStatus, inline: true },
             { name: 'Channels', value: `\`${channelList}\``, inline: true },
           ],
           color: 'info',

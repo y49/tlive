@@ -288,7 +288,6 @@ export class SDKEngine {
       color: 'info',
     });
     const sendResult = await adapter.send(msg.chatId, rendered);
-    this.permissions.trackPermissionMessage(sendResult.messageId, permId, sessionId, msg.channelType);
 
     const result = await waitPromise;
 

@@ -1,5 +1,5 @@
 import { loadConfig } from './config.js';
-import { initBridgeContext, type PermissionGateway, type CoreClient } from './context.js';
+import { initBridgeContext, type PermissionGateway } from './context.js';
 import { Logger } from './logger.js';
 import { JsonFileStore } from './store/json-file.js';
 import { resolveProvider } from './providers/index.js';
@@ -49,7 +49,6 @@ async function main() {
   initBridgeContext({
     store, llm,
     permissions: permissions as PermissionGateway,
-    core: {} as CoreClient,
     defaultWorkdir: config.defaultWorkdir,
   });
 

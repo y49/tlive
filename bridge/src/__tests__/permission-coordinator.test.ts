@@ -3,22 +3,21 @@ import { PermissionCoordinator } from '../engine/permission-coordinator.js';
 import { PendingPermissions } from '../permissions/gateway.js';
 import { PermissionBroker } from '../permissions/broker.js';
 import type { ChannelType } from '../channels/types.js';
-import type { NotificationRenderer, RenderedMessage } from '../renderers/types.js';
+import type { NotificationRenderer } from '../renderers/types.js';
 import { TelegramRenderer } from '../renderers/telegram.js';
 
 describe('PermissionCoordinator', () => {
   let gateway: PendingPermissions;
   let broker: PermissionBroker;
   let coord: PermissionCoordinator;
-  let renderers: Map<ChannelType, NotificationRenderer>;
 
   beforeEach(() => {
     gateway = new PendingPermissions();
-    renderers = new Map<ChannelType, NotificationRenderer>([
+    const renderers = new Map<ChannelType, NotificationRenderer>([
       ['telegram', new TelegramRenderer()],
     ]);
     broker = new PermissionBroker(gateway, 'http://localhost:4590', renderers);
-    coord = new PermissionCoordinator(gateway, broker, 'http://localhost:9090', 'test-token', renderers);
+    coord = new PermissionCoordinator(gateway, broker);
   });
 
   describe('parsePermissionText', () => {
@@ -139,62 +138,6 @@ describe('PermissionCoordinator', () => {
 
     it('returns false for non-matching callback', () => {
       expect(coord.handleBrokerCallback('unknown:data')).toBe(false);
-    });
-  });
-
-  describe('hook message tracking', () => {
-    it('tracks and retrieves hook messages', () => {
-      expect(coord.isHookMessage('msg-1')).toBe(false);
-      coord.trackHookMessage('msg-1', 'session-1');
-      expect(coord.isHookMessage('msg-1')).toBe(true);
-      expect(coord.getHookMessage('msg-1')).toMatchObject({ sessionId: 'session-1' });
-    });
-
-    it('handles empty sessionId', () => {
-      coord.trackHookMessage('msg-2', '');
-      expect(coord.isHookMessage('msg-2')).toBe(true);
-      expect(coord.getHookMessage('msg-2')?.sessionId).toBe('');
-    });
-
-    it('returns undefined for unknown messages', () => {
-      expect(coord.getHookMessage('unknown')).toBeUndefined();
-    });
-  });
-
-  describe('permission message tracking', () => {
-    it('tracks and finds permission messages', () => {
-      coord.trackPermissionMessage('msg-1', 'perm-1', 'session-1', 'telegram');
-      const found = coord.findHookPermission('msg-1', 'telegram');
-      expect(found).toMatchObject({ permissionId: 'perm-1', sessionId: 'session-1' });
-    });
-
-    it('finds latest when only one pending', () => {
-      coord.trackPermissionMessage('msg-1', 'perm-1', 'session-1', 'telegram');
-      // No replyToMessageId — should find the single pending
-      const found = coord.findHookPermission(undefined, 'telegram');
-      expect(found).toMatchObject({ permissionId: 'perm-1' });
-    });
-
-    it('returns undefined when multiple pending and no reply', () => {
-      coord.trackPermissionMessage('msg-1', 'perm-1', 's1', 'telegram');
-      coord.trackPermissionMessage('msg-2', 'perm-2', 's2', 'telegram');
-      const found = coord.findHookPermission(undefined, 'telegram');
-      expect(found).toBeUndefined();
-    });
-
-    it('counts pending permissions', () => {
-      expect(coord.pendingPermissionCount()).toBe(0);
-      coord.trackPermissionMessage('msg-1', 'perm-1', 's1', 'telegram');
-      expect(coord.pendingPermissionCount()).toBe(1);
-      coord.trackPermissionMessage('msg-2', 'perm-2', 's2', 'telegram');
-      expect(coord.pendingPermissionCount()).toBe(2);
-    });
-  });
-
-  describe('storeHookPermissionText', () => {
-    it('stores and is used by pruneStaleEntries', () => {
-      coord.storeHookPermissionText('hook-1', 'some text');
-      // No error — pruneStaleEntries ran internally
     });
   });
 

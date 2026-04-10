@@ -51,9 +51,6 @@ export class BridgeManager {
   private adapters = new Map<string, BaseChannelAdapter>();
   private running = false;
   private router = new ChannelRouter();
-  private coreUrl: string;
-  private token: string;
-  private coreAvailable = false;
   private state = new SessionStateManager();
   private permissions: PermissionCoordinator;
   private renderers: Map<ChannelType, NotificationRenderer>;
@@ -75,13 +72,10 @@ export class BridgeManager {
       ['feishu', new FeishuRenderer()],
     ]);
     const broker = new PermissionBroker(gateway, effectivePublicUrl, this.renderers);
-    this.coreUrl = config.coreUrl;
-    this.token = config.token;
-    this.permissions = new PermissionCoordinator(gateway, broker, this.coreUrl, this.token, this.renderers);
+    this.permissions = new PermissionCoordinator(gateway, broker);
     this.sdkEngine = new SDKEngine(this.state, this.router, this.permissions, this.renderers);
     this.messageRouter = new MessageRouter(
       this.permissions, this.state, this.sdkEngine,
-      () => this.coreAvailable, this.coreUrl, this.token,
       this.renderers,
     );
     this.messageRouter.loadChatIds();
@@ -89,7 +83,6 @@ export class BridgeManager {
       this.state,
       () => this.adapters,
       this.router,
-      () => this.coreAvailable,
       this.sdkEngine.getActiveControls(),
       this.permissions,
       (channelType, chatId) => this.sdkEngine.closeSession(channelType, chatId),
@@ -98,7 +91,6 @@ export class BridgeManager {
     this.callbackRouter = new CallbackRouter(
       this.permissions,
       this.sdkEngine.getQuestionState(),
-      () => this.coreAvailable,
       (adapter, msg) => this.handleInboundMessage(adapter, msg),
       this.renderers,
     );
@@ -158,25 +150,6 @@ export class BridgeManager {
     return this.providerCache.get(runtime)!;
   }
 
-  /** Delegate: track a hook message for reply routing */
-  trackHookMessage(messageId: string, sessionId: string): void {
-    this.permissions.trackHookMessage(messageId, sessionId);
-  }
-
-  /** Delegate: track a permission message for text-based approval */
-  trackPermissionMessage(messageId: string, permissionId: string, sessionId: string, channelType: string): void {
-    this.permissions.trackPermissionMessage(messageId, permissionId, sessionId, channelType);
-  }
-
-  /** Delegate: store original permission card text */
-  storeHookPermissionText(hookId: string, text: string): void {
-    this.permissions.storeHookPermissionText(hookId, text);
-  }
-
-  /** Delegate: store AskUserQuestion data */
-  storeQuestionData(hookId: string, questions: Array<{ question: string; header: string; options: Array<{ label: string; description?: string }>; multiSelect: boolean }>, contextSuffix?: string): void {
-    this.permissions.storeQuestionData(hookId, questions, contextSuffix);
-  }
 
   /** Callback for forwarding terminal permission actions via IPC */
   onTerminalPermissionCallback?: (action: string, toolUseId: string, sessionId: string) => void;
@@ -235,13 +208,11 @@ export class BridgeManager {
       await adapter.start();
       this.runAdapterLoop(adapter);
     }
-    this.permissions.startPruning();
     this.sdkEngine.startSessionPruning();
   }
 
   async stop(): Promise<void> {
     this.running = false;
-    this.permissions.stopPruning();
     this.sdkEngine.stopSessionPruning();
     this.permissions.getGateway().denyAll();
     for (const adapter of this.adapters.values()) {
@@ -314,8 +285,7 @@ export class BridgeManager {
       // Callbacks, commands, and permission text are fast — await them.
       // Regular messages (Claude queries) are fire-and-forget so they don't
       // block the loop while waiting for LLM responses or permission approvals.
-      const hasPendingQuestion = this.permissions.getLatestPendingQuestion(adapter.channelType) !== null
-        || this.sdkEngine.findPendingQuestion(adapter.channelType, msg.chatId) !== null;
+      const hasPendingQuestion = this.sdkEngine.findPendingQuestion(adapter.channelType, msg.chatId) !== null;
       const isQuickMessage = !!msg.callbackData
         || (msg.text && QUICK_COMMANDS.has(msg.text.split(' ')[0].toLowerCase()))
         || this.permissions.parsePermissionText(msg.text || '') !== null

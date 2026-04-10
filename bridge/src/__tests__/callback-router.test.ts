@@ -41,19 +41,15 @@ function createMockGateway() {
 
 function createMockPermissions(gateway = createMockGateway()) {
   return {
-    resolveAskQuestion: vi.fn().mockResolvedValue(undefined),
     toggleMultiSelectOption: vi.fn().mockReturnValue(new Set<number>()),
     buildMultiSelectCard: vi.fn().mockReturnValue({
       text: 'card text',
       html: '<b>card</b>',
-      buttons: [{ text: 'Submit', callbackData: 'askq_submit:h1:s1' }],
+      buttons: [{ text: 'Submit', callbackData: 'askq_submit_sdk:h1' }],
     }),
-    resolveMultiSelect: vi.fn().mockResolvedValue(undefined),
-    resolveAskQuestionSkip: vi.fn().mockResolvedValue(undefined),
     getToggledSelections: vi.fn().mockReturnValue(new Set<number>()),
     cleanupQuestion: vi.fn(),
     getGateway: vi.fn().mockReturnValue(gateway),
-    resolveHookCallback: vi.fn().mockResolvedValue(undefined),
     addAllowedTool: vi.fn(),
     addAllowedBashPrefix: vi.fn(),
     handleBrokerCallback: vi.fn(),
@@ -92,7 +88,6 @@ describe('CallbackRouter', () => {
     router = new CallbackRouter(
       permissions as any,
       sdkState,
-      () => true,
       handleInboundMessage as any,
       createRenderers(),
     );
@@ -116,29 +111,7 @@ describe('CallbackRouter', () => {
     });
   });
 
-  describe('askq:{hookId}:{idx}:{sessionId}', () => {
-    it('resolves single-select hook answer', async () => {
-      const msg = makeMsg({ callbackData: 'askq:h1:2:sess1' });
-      const result = await router.handle(adapter, msg);
-
-      expect(result).toBe(true);
-      expect(permissions.resolveAskQuestion).toHaveBeenCalledWith(
-        'h1', 2, 'sess1', 'm1', adapter, 'c1', true,
-      );
-    });
-
-    it('handles missing sessionId gracefully', async () => {
-      const msg = makeMsg({ callbackData: 'askq:h1:0' });
-      const result = await router.handle(adapter, msg);
-
-      expect(result).toBe(true);
-      expect(permissions.resolveAskQuestion).toHaveBeenCalledWith(
-        'h1', 0, '', 'm1', adapter, 'c1', true,
-      );
-    });
-  });
-
-  describe('askq_toggle:{hookId}:{idx}:{sessionId}', () => {
+  describe('askq_toggle:{permId}:{idx}:{sessionId}', () => {
     it('toggles multi-select option and rebuilds card', async () => {
       permissions.toggleMultiSelectOption.mockReturnValue(new Set([0, 2]));
       const msg = makeMsg({ callbackData: 'askq_toggle:h1:2:sess1' });
@@ -184,30 +157,6 @@ describe('CallbackRouter', () => {
     });
   });
 
-  describe('askq_submit:{hookId}:{sessionId}', () => {
-    it('resolves multi-select submit', async () => {
-      const msg = makeMsg({ callbackData: 'askq_submit:h1:sess1' });
-      const result = await router.handle(adapter, msg);
-
-      expect(result).toBe(true);
-      expect(permissions.resolveMultiSelect).toHaveBeenCalledWith(
-        'h1', 'sess1', 'm1', adapter, 'c1', true,
-      );
-    });
-  });
-
-  describe('askq_skip:{hookId}:{sessionId}', () => {
-    it('resolves skip handler', async () => {
-      const msg = makeMsg({ callbackData: 'askq_skip:h1:sess1' });
-      const result = await router.handle(adapter, msg);
-
-      expect(result).toBe(true);
-      expect(permissions.resolveAskQuestionSkip).toHaveBeenCalledWith(
-        'h1', 'sess1', 'm1', adapter, 'c1', true,
-      );
-    });
-  });
-
   describe('askq_submit_sdk:{permId}', () => {
     it('sends warning when no options selected', async () => {
       permissions.getToggledSelections.mockReturnValue(new Set());
@@ -250,30 +199,6 @@ describe('CallbackRouter', () => {
       expect(chatId).toBe('c1');
       expect(msgId).toBe('m1');
       expect(rendered.html).toContain('Selected: Alpha, Gamma');
-    });
-  });
-
-  describe('hook:allow:{hookId}:{sessionId}', () => {
-    it('resolves hook permission allow', async () => {
-      const msg = makeMsg({ callbackData: 'hook:allow:h1:sess1' });
-      const result = await router.handle(adapter, msg);
-
-      expect(result).toBe(true);
-      expect(permissions.resolveHookCallback).toHaveBeenCalledWith(
-        'h1', 'allow', 'sess1', 'm1', adapter, 'c1', true,
-      );
-    });
-  });
-
-  describe('hook:deny:{hookId}:{sessionId}', () => {
-    it('resolves hook permission deny', async () => {
-      const msg = makeMsg({ callbackData: 'hook:deny:h1:sess1' });
-      const result = await router.handle(adapter, msg);
-
-      expect(result).toBe(true);
-      expect(permissions.resolveHookCallback).toHaveBeenCalledWith(
-        'h1', 'deny', 'sess1', 'm1', adapter, 'c1', true,
-      );
     });
   });
 

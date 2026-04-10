@@ -30,7 +30,6 @@ export class CallbackRouter {
   constructor(
     private permissions: PermissionCoordinator,
     private sdkState: SdkQuestionState,
-    private coreAvailable: () => boolean,
     private handleInboundMessage: (adapter: BaseChannelAdapter, msg: InboundMessage) => Promise<boolean>,
     private renderers: Map<ChannelType, NotificationRenderer>,
   ) {}
@@ -109,21 +108,7 @@ export class CallbackRouter {
       return this.handleInboundMessage(adapter, msg);
     }
 
-    // AskUserQuestion answer callbacks (askq:{hookId}:{optionIndex}:{sessionId})
-    // NOTE: check toggle/submit/skip BEFORE this — they also start with "askq"
-    if (msg.callbackData.startsWith('askq:') && !msg.callbackData.startsWith('askq_')) {
-      const parts = msg.callbackData.split(':');
-      const hookId = parts[1];
-      const optionIndex = parseInt(parts[2], 10);
-      const sessionId = parts[3] || '';
-      await this.permissions.resolveAskQuestion(
-        hookId, optionIndex, sessionId,
-        msg.messageId, adapter, msg.chatId, this.coreAvailable(),
-      );
-      return true;
-    }
-
-    // AskUserQuestion multi-select toggle (askq_toggle:{hookId}:{idx}:{sessionId})
+    // AskUserQuestion multi-select toggle (askq_toggle:{permId}:{idx}:{sessionId})
     if (msg.callbackData.startsWith('askq_toggle:')) {
       const parts = msg.callbackData.split(':');
       const hookId = parts[1];
@@ -141,30 +126,6 @@ export class CallbackRouter {
           buttons: card.buttons,
         }));
       }
-      return true;
-    }
-
-    // AskUserQuestion multi-select submit (askq_submit:{hookId}:{sessionId})
-    if (msg.callbackData.startsWith('askq_submit:')) {
-      const parts = msg.callbackData.split(':');
-      const hookId = parts[1];
-      const sessionId = parts[2] || '';
-      await this.permissions.resolveMultiSelect(
-        hookId, sessionId,
-        msg.messageId, adapter, msg.chatId, this.coreAvailable(),
-      );
-      return true;
-    }
-
-    // AskUserQuestion skip callback (askq_skip:{hookId}:{sessionId})
-    if (msg.callbackData.startsWith('askq_skip:')) {
-      const parts = msg.callbackData.split(':');
-      const hookId = parts[1];
-      const sessionId = parts[2] || '';
-      await this.permissions.resolveAskQuestionSkip(
-        hookId, sessionId,
-        msg.messageId, adapter, msg.chatId, this.coreAvailable(),
-      );
       return true;
     }
 
@@ -188,16 +149,6 @@ export class CallbackRouter {
       }
       this.permissions.cleanupQuestion(permId);
       this.permissions.getGateway().resolve(permId, 'allow');
-      return true;
-    }
-
-    // Hook permission callbacks (hook:allow:ID:sessionId, hook:allow_always:ID:sessionId, hook:deny:ID:sessionId)
-    if (msg.callbackData.startsWith('hook:')) {
-      const parts = msg.callbackData.split(':');
-      const decision = parts[1];
-      const hookId = parts[2];
-      const sessionId = parts[3] || '';
-      await this.permissions.resolveHookCallback(hookId, decision, sessionId, msg.messageId, adapter, msg.chatId, this.coreAvailable());
       return true;
     }
 
