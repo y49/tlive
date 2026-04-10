@@ -8,7 +8,8 @@
 services:
   bridge:
     build:
-      context: ./bridge
+      context: .
+      dockerfile: bridge/Dockerfile
     ports:
       - "${TL_PORT:-8849}:8849"
     environment:

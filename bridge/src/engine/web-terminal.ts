@@ -49,6 +49,13 @@ export class WebTerminal {
     this.httpServer = createHttpServer((req, res) => {
       const url = new URL(req.url ?? '/', `http://localhost:${port}`);
 
+      // Health check (no auth)
+      if (url.pathname === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', sessions: registry.listSessions().length }));
+        return;
+      }
+
       // Token check for HTML pages
       const needsAuth = url.pathname === '/' || url.pathname === '/index.html' || url.pathname === '/terminal.html';
       if (needsAuth && token && url.searchParams.get('token') !== token) {
