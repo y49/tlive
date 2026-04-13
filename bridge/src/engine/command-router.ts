@@ -9,6 +9,7 @@ import type { NotificationRenderer } from '../renderers/types.js';
 import { getBridgeContext } from '../context.js';
 import { ClaudeSDKProvider } from '../providers/claude-sdk.js';
 import { checkCodexAvailable } from '../providers/index.js';
+import { isKnownFlavor } from '../flavors.js';
 import type { ClaudeSettingSource } from '../config.js';
 import { existsSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -221,8 +222,7 @@ export class CommandRouter {
       }
       case '/runtime': {
         const runtime = parts[1]?.toLowerCase();
-        const RUNTIMES = ['claude', 'codex'] as const;
-        if (runtime && RUNTIMES.includes(runtime as any)) {
+        if (isKnownFlavor(runtime)) {
           // Pre-check: reject if Codex SDK not installed
           if (runtime === 'codex' && !await checkCodexAvailable()) {
             await adapter.send(msg.chatId, r.renderSimpleText(
@@ -231,7 +231,7 @@ export class CommandRouter {
             return true;
           }
           const prevRuntime = this.state.getRuntime(msg.channelType, msg.chatId) || 'claude';
-          this.state.setRuntime(msg.channelType, msg.chatId, runtime as 'claude' | 'codex');
+          this.state.setRuntime(msg.channelType, msg.chatId, runtime);
           // Switching provider → old session ID is invalid for the new provider
           if (prevRuntime !== runtime) {
             const newSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;

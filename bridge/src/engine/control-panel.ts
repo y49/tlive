@@ -7,6 +7,12 @@ import type { QueryControls } from '../providers/base.js';
 import type { NotificationRenderer, RenderedMessage, CommandResponseData } from '../renderers/types.js';
 import { getBridgeContext } from '../context.js';
 
+/** Model list for a given flavor. Flavor-specific constants live here. */
+function modelsForFlavor(flavor: string): string[] {
+  if (flavor === 'codex') return ['codex-mini', 'o4-mini', 'o3'];
+  return ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5'];
+}
+
 /**
  * Button-based control panel for managing TLive sessions.
  * Renders a single card that is edited in-place for sub-menus.
@@ -165,9 +171,7 @@ export class ControlPanel {
     const runtime = this.state.getRuntime(channelType, chatId) || 'claude';
     const chatKey = `${channelType}:${chatId}`;
 
-    const models = runtime === 'codex'
-      ? ['codex-mini', 'o4-mini', 'o3']
-      : ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5'];
+    const models = modelsForFlavor(runtime);
 
     const buttons: Button[] = models.map((m, i) => ({
       label: m === current ? `✓ ${m}` : m,
