@@ -112,22 +112,17 @@ export class SessionManager extends EventEmitter {
       this._messageCount++;
       this.emit('scannerEvent', event);
 
-      // Track thinking state from content blocks
-      const blocks = this.getContentBlocks(event.message);
-      if (event.type === 'assistant') {
-        for (const block of blocks) {
-          if (block.type === 'tool_use' && block.id) {
-            this.thinkingTracker.trackToolUse(block.id as string);
-          } else if (block.type === 'text') {
-            this.thinkingTracker.trackAssistantMessage();
-          }
-        }
-      }
-      if (event.type === 'user') {
-        for (const block of blocks) {
-          if (block.type === 'tool_result' && block.tool_use_id) {
-            this.thinkingTracker.trackToolResult(block.tool_use_id as string);
-          }
+      // Dispatch thinking triggers via adapter. Claude implements the
+      // content-block schema; Codex leaves this undefined (thinking stays
+      // idle for Codex sessions — known v1.0 limitation).
+      const triggers = this.adapter.extractThinkingEvents?.(event) ?? [];
+      for (const t of triggers) {
+        if (t.type === 'tool_use' && t.toolUseId) {
+          this.thinkingTracker.trackToolUse(t.toolUseId);
+        } else if (t.type === 'text') {
+          this.thinkingTracker.trackAssistantMessage();
+        } else if (t.type === 'tool_result' && t.toolUseId) {
+          this.thinkingTracker.trackToolResult(t.toolUseId);
         }
       }
     });
@@ -198,19 +193,6 @@ export class SessionManager extends EventEmitter {
 
   writeToPTY(data: string): void { this.pty.write(data); }
   resizePTY(cols: number, rows: number): void { this.pty.resize(cols, rows); }
-
-  /**
-   * Extract content blocks from a message.
-   * Claude .jsonl format: { message: { role: "assistant", content: [...] } }
-   */
-  private getContentBlocks(message: unknown): Array<Record<string, unknown>> {
-    if (Array.isArray(message)) return message;
-    if (message && typeof message === 'object') {
-      const content = (message as Record<string, unknown>).content;
-      if (Array.isArray(content)) return content;
-    }
-    return [];
-  }
 
   async stop(): Promise<void> {
     this.thinkingTracker.reset();

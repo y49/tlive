@@ -57,6 +57,16 @@ export interface ProviderCapabilityFlags {
   liveSession?: boolean;
 }
 
+/**
+ * Thinking-tracker trigger derived from a scanner event.
+ * Provider adapters map their raw event schema into this neutral shape so
+ * SessionManager can drive the ThinkingTracker without knowing provider details.
+ */
+export interface ThinkingTriggerEvent {
+  type: 'tool_use' | 'text' | 'tool_result';
+  toolUseId?: string;
+}
+
 export interface ProviderAdapter {
   name: string;
   capabilities?: ProviderCapabilityFlags;
@@ -73,4 +83,11 @@ export interface ProviderAdapter {
    * on the scanner's mtime discovery.
    */
   findLastSession?(workdir: string): string | null;
+  /**
+   * Optional: extract thinking-tracker triggers from a scanner event.
+   * Providers with a known content-block schema (Claude) implement this.
+   * Providers without one (Codex) leave it undefined; SessionManager
+   * gracefully no-ops for those and the thinking indicator simply stays idle.
+   */
+  extractThinkingEvents?(event: unknown): ThinkingTriggerEvent[];
 }

@@ -36,6 +36,7 @@ export class TLiveLoop extends EventEmitter {
   private notifications: NotificationHub;
   private router: SessionRouter;
   private config: TLiveConfig;
+  private adapter: ProviderAdapter;
   private costTracker: CostTracker;
   private imSend?: IMSendFn;
   private imChatId?: string;
@@ -44,6 +45,7 @@ export class TLiveLoop extends EventEmitter {
   constructor(opts: LoopOptions) {
     super();
     this.config = opts.config;
+    this.adapter = opts.adapter;
     this.costTracker = new CostTracker();
     this.registry = new ProjectRegistry();
     this.notifications = new NotificationHub({
@@ -111,7 +113,8 @@ export class TLiveLoop extends EventEmitter {
 
     const normalized = normalizeSessionLine(
       { uuid: event.uuid, type: event.type, message: event.message },
-      'claude', this.session.info.sessionId,
+      this.adapter.name as 'claude' | 'codex',
+      this.session.info.sessionId,
     );
 
     for (const msg of normalized) {
@@ -242,7 +245,7 @@ export class TLiveLoop extends EventEmitter {
       sessionId: this.session.info.sessionId,
       title: `${LABEL.permission} · ${this.sessionTag()}`,
       body: formatForIM({
-        kind: 'permission_request', provider: 'claude',
+        kind: 'permission_request', provider: this.adapter.name as 'claude' | 'codex',
         sessionId: this.session.info.sessionId,
         toolName: toolUse.toolName, toolInput: toolUse.input,
       }),
@@ -312,7 +315,7 @@ export class TLiveLoop extends EventEmitter {
           sessionId: this.session.info.sessionId,
           title: `${LABEL.permission}: ${toolName}`,
           body: formatForIM({
-            kind: 'permission_request', provider: 'claude',
+            kind: 'permission_request', provider: this.adapter.name as 'claude' | 'codex',
             sessionId: this.session.info.sessionId,
             toolName, toolInput: input,
           }),

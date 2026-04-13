@@ -42,4 +42,98 @@ describe('ClaudeAdapter', () => {
     const dir = adapter.getSessionDir('/home/user/myproject');
     expect(dir).toMatch(/\.claude\/projects\/-home-user-myproject$/);
   });
+
+  describe('extractThinkingEvents', () => {
+    it('emits tool_use trigger for assistant event with tool_use block', () => {
+      const adapter = new ClaudeAdapter();
+      const event = {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'tool-1', name: 'Bash', input: {} },
+          ],
+        },
+      };
+      expect(adapter.extractThinkingEvents(event)).toEqual([
+        { type: 'tool_use', toolUseId: 'tool-1' },
+      ]);
+    });
+
+    it('emits text trigger for assistant event with text block', () => {
+      const adapter = new ClaudeAdapter();
+      const event = {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'hello' }],
+        },
+      };
+      expect(adapter.extractThinkingEvents(event)).toEqual([
+        { type: 'text' },
+      ]);
+    });
+
+    it('emits tool_result trigger for user event with tool_result block', () => {
+      const adapter = new ClaudeAdapter();
+      const event = {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'tool-1', content: 'ok' },
+          ],
+        },
+      };
+      expect(adapter.extractThinkingEvents(event)).toEqual([
+        { type: 'tool_result', toolUseId: 'tool-1' },
+      ]);
+    });
+
+    it('emits mixed sequence preserving block order', () => {
+      const adapter = new ClaudeAdapter();
+      const event = {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'thinking…' },
+            { type: 'tool_use', id: 'tool-a', name: 'Read', input: {} },
+            { type: 'tool_use', id: 'tool-b', name: 'Grep', input: {} },
+          ],
+        },
+      };
+      expect(adapter.extractThinkingEvents(event)).toEqual([
+        { type: 'text' },
+        { type: 'tool_use', toolUseId: 'tool-a' },
+        { type: 'tool_use', toolUseId: 'tool-b' },
+      ]);
+    });
+
+    it('returns empty array for unknown event type', () => {
+      const adapter = new ClaudeAdapter();
+      expect(adapter.extractThinkingEvents({ type: 'system', message: {} })).toEqual([]);
+    });
+
+    it('returns empty array when message has no content blocks', () => {
+      const adapter = new ClaudeAdapter();
+      expect(adapter.extractThinkingEvents({ type: 'assistant' })).toEqual([]);
+      expect(adapter.extractThinkingEvents({ type: 'assistant', message: null })).toEqual([]);
+    });
+
+    it('ignores tool_use blocks missing an id', () => {
+      const adapter = new ClaudeAdapter();
+      const event = {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', name: 'Bash', input: {} }, // no id
+            { type: 'tool_use', id: 'tool-ok', name: 'Read', input: {} },
+          ],
+        },
+      };
+      expect(adapter.extractThinkingEvents(event)).toEqual([
+        { type: 'tool_use', toolUseId: 'tool-ok' },
+      ]);
+    });
+  });
 });

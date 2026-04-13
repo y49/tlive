@@ -55,4 +55,10 @@ export class CodexAdapter implements ProviderAdapter {
     const codexHome = process.env.CODEX_HOME || join(homedir(), '.codex');
     return join(codexHome, 'sessions');
   }
+
+  // Note: `extractThinkingEvents` is intentionally not implemented. Codex's
+  // reasoning/thinking event schema differs from Claude's content-block model
+  // and is out of scope for v1.0. SessionManager no-ops via the optional `?.`
+  // call, so the thinking indicator simply stays idle for Codex sessions.
+  // Follow-up: map Codex reasoning events into ThinkingTriggerEvent here.
 }
