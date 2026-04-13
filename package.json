@@ -26,7 +26,7 @@
     "preuninstall": "node scripts/preuninstall.js",
     "prepublishOnly": "npm run test:all && npm run build:all",
     "build": "cd bridge && npm run build",
-    "build:src": "npx esbuild src/cli/claude.ts --bundle --platform=node --target=node20 --format=esm --outfile=dist/src/tlive-claude.mjs --external:node-pty --external:ws --external:@anthropic-ai/claude-agent-sdk",
+    "build:src": "npx esbuild src/cli/claude.ts --bundle --platform=node --target=node20 --format=esm --outfile=dist/src/tlive-claude.mjs --external:node-pty --external:ws --external:@anthropic-ai/claude-agent-sdk && npx esbuild src/cli/codex.ts --bundle --platform=node --target=node20 --format=esm --outfile=dist/src/tlive-codex.mjs --external:node-pty --external:ws --external:@openai/codex-sdk",
     "build:all": "npm run build && npm run build:src",
     "dev": "cd bridge && npm run dev",
     "test": "cd bridge && npm test",

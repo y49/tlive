@@ -7,6 +7,21 @@ import { ClaudePermissionHandler } from '../sdk/permissionHandler.js';
 import { ThinkingTracker } from './thinkingTracker.js';
 import type { TLiveConfig } from '../config.js';
 
+/**
+ * Minimal shape shared by Claude/Codex scanners: EventEmitter + lifecycle methods.
+ * `start()` may be sync (returns void) or async (returns Promise<void>).
+ */
+export interface ScannerLike extends EventEmitter {
+  start(): void | Promise<void>;
+  stop(): void;
+}
+
+export type ScannerFactory = (
+  sessionId: string,
+  workdir: string,
+  sessionDir: string,
+) => ScannerLike;
+
 export type SessionState = 'idle' | 'pty_active' | 'sdk_active';
 
 export interface SessionInfo {
@@ -23,7 +38,7 @@ export class SessionManager extends EventEmitter {
   private sessionId: string;
   private workdir: string;
   private pty: PTYManager;
-  private scanner: SessionScanner;
+  private scanner: ScannerLike;
   private adapter: ProviderAdapter;
   private config: TLiveConfig;
   private permissionHandler: ClaudePermissionHandler | null = null;
@@ -38,6 +53,7 @@ export class SessionManager extends EventEmitter {
     workdir: string;
     adapter: ProviderAdapter;
     config: TLiveConfig;
+    scannerFactory?: ScannerFactory;
   }) {
     super();
     this.sessionId = opts.sessionId ?? randomUUID();
@@ -47,13 +63,16 @@ export class SessionManager extends EventEmitter {
     this.pty = new PTYManager();
     this.thinkingTracker = new ThinkingTracker();
     this.thinkingTracker.on('change', (thinking: boolean) => this.emit('thinking', thinking));
-    this.scanner = new SessionScanner({
-      sessionId: this.sessionId,
-      sessionDir: opts.adapter.getSessionDir(opts.workdir),
-      workdir: this.workdir,
-      proactiveNotifyDelay: opts.config.proactiveNotifyDelay,
-      proactiveQuestionDelay: opts.config.proactiveQuestionDelay,
-    });
+    const sessionDir = opts.adapter.getSessionDir(opts.workdir);
+    this.scanner = opts.scannerFactory
+      ? opts.scannerFactory(this.sessionId, this.workdir, sessionDir)
+      : new SessionScanner({
+          sessionId: this.sessionId,
+          sessionDir,
+          workdir: this.workdir,
+          proactiveNotifyDelay: opts.config.proactiveNotifyDelay,
+          proactiveQuestionDelay: opts.config.proactiveQuestionDelay,
+        });
     this.setupListeners();
   }
 

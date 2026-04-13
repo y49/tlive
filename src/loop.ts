@@ -3,7 +3,7 @@
 // Wires SessionManager, NotificationHub, SessionRouter, and IM transport.
 
 import { EventEmitter } from 'node:events';
-import { SessionManager, type SessionState } from './core/sessionManager.js';
+import { SessionManager, type SessionState, type ScannerFactory } from './core/sessionManager.js';
 import { ProjectRegistry } from './core/projectRegistry.js';
 import { NotificationHub, type NotificationEvent } from './im/notificationHub.js';
 import { SessionRouter } from './im/sessionRouter.js';
@@ -23,6 +23,7 @@ export interface LoopOptions {
   adapter: ProviderAdapter;
   config: TLiveConfig;
   sessionId?: string;
+  scannerFactory?: ScannerFactory;
 }
 
 export interface IMSendFn {
@@ -53,6 +54,7 @@ export class TLiveLoop extends EventEmitter {
     this.session = new SessionManager({
       sessionId: opts.sessionId, workdir: opts.workdir,
       adapter: opts.adapter, config: opts.config,
+      scannerFactory: opts.scannerFactory,
     });
     this.registry.register(opts.workdir);
     this.wireEvents();

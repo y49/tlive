@@ -305,6 +305,7 @@ Usage:
 
 Web Terminal:
   tlive claude               Wrap Claude Code with web-accessible terminal
+  tlive codex                Wrap Codex CLI with web-accessible terminal
   tlive python train.py      Wrap any long-running command
   tlive npm run build        Access from phone browser via QR code
 
@@ -381,6 +382,23 @@ switch (command) {
     ensureBridgeRunning();
     const { claudeCommand } = await import(claudeEntry);
     await claudeCommand({
+      sessionId: args.includes('--session-id') ? args[args.indexOf('--session-id') + 1] : undefined,
+      resume: args.includes('--resume') || args.includes('--continue'),
+      workdir: process.cwd(),
+      worktree: args.includes('--worktree') ? (args[args.indexOf('--worktree') + 1] || true) : undefined,
+    });
+    break;
+  }
+
+  case 'codex': {
+    const codexEntry = join(PACKAGE_ROOT, 'dist', 'src', 'tlive-codex.mjs');
+    if (!existsSync(codexEntry)) {
+      console.error('v1.0 codex build not found. Run: npm run build:src');
+      process.exit(1);
+    }
+    ensureBridgeRunning();
+    const { codexCommand } = await import(codexEntry);
+    await codexCommand({
       sessionId: args.includes('--session-id') ? args[args.indexOf('--session-id') + 1] : undefined,
       resume: args.includes('--resume') || args.includes('--continue'),
       workdir: process.cwd(),
