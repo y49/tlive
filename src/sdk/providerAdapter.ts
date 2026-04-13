@@ -48,12 +48,29 @@ export interface RemoteOptions {
   ) => void;
 }
 
+export interface ProviderCapabilityFlags {
+  /**
+   * Whether `startRemote` is implemented (i.e. SDK-driven live session is
+   * supported). Used by runFlavor to gate `permission_action` / takeover
+   * handlers so Codex (PTY-only) doesn't crash when a user taps Takeover.
+   */
+  liveSession?: boolean;
+}
+
 export interface ProviderAdapter {
   name: string;
+  capabilities?: ProviderCapabilityFlags;
   resolveExecutable(): Promise<string>;
   getSessionIdArgs(sessionId: string): string[];
   getResumeArgs(sessionId: string): string[];
   spawnArgs(opts: SpawnOptions): string[];
   startRemote(opts: RemoteOptions): AsyncIterable<NormalizedMessage>;
   getSessionDir(workdir: string): string;
+  /**
+   * Optional: find the most recent session ID for a given workdir, used by
+   * `--resume`. Providers that let us pick the session id (Claude) implement
+   * this; providers that assign their own (Codex) leave it undefined and rely
+   * on the scanner's mtime discovery.
+   */
+  findLastSession?(workdir: string): string | null;
 }

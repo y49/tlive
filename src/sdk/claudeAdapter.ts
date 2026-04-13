@@ -5,13 +5,16 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type {
   ProviderAdapter,
+  ProviderCapabilityFlags,
   NormalizedMessage,
   SpawnOptions,
   RemoteOptions,
 } from './providerAdapter.js';
+import { findLastSession } from '../core/sessionDiscovery.js';
 
 export class ClaudeAdapter implements ProviderAdapter {
   name = 'claude' as const;
+  capabilities: ProviderCapabilityFlags = { liveSession: true };
   private executablePath: string | null = null;
 
   async resolveExecutable(): Promise<string> {
@@ -58,5 +61,9 @@ export class ClaudeAdapter implements ProviderAdapter {
     const projectDir = resolve(workdir).replace(/[^a-zA-Z0-9-]/g, '-');
     const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
     return join(claudeConfigDir, 'projects', projectDir);
+  }
+
+  findLastSession(workdir: string): string | null {
+    return findLastSession(workdir);
   }
 }

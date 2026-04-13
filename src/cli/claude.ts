@@ -19,8 +19,8 @@ export async function claudeCommand(opts: ClaudeCommandOptions = {}): Promise<vo
   await runFlavor({
     adapter: new ClaudeAdapter(),
     runtimeLabel: 'Claude',
-    scannerFactory: (sessionId, workdir, sessionDir) =>
-      new SessionScanner({ sessionId, workdir, sessionDir }),
+    scannerFactory: ({ sessionId, workdir, sessionDir, proactiveNotifyDelay, proactiveQuestionDelay }) =>
+      new SessionScanner({ sessionId, workdir, sessionDir, proactiveNotifyDelay, proactiveQuestionDelay }),
     ...opts,
   });
 }

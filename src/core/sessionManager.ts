@@ -16,11 +16,13 @@ export interface ScannerLike extends EventEmitter {
   stop(): void;
 }
 
-export type ScannerFactory = (
-  sessionId: string,
-  workdir: string,
-  sessionDir: string,
-) => ScannerLike;
+export type ScannerFactory = (args: {
+  sessionId: string;
+  workdir: string;
+  sessionDir: string;
+  proactiveNotifyDelay?: number;
+  proactiveQuestionDelay?: number;
+}) => ScannerLike;
 
 export type SessionState = 'idle' | 'pty_active' | 'sdk_active';
 
@@ -65,7 +67,13 @@ export class SessionManager extends EventEmitter {
     this.thinkingTracker.on('change', (thinking: boolean) => this.emit('thinking', thinking));
     const sessionDir = opts.adapter.getSessionDir(opts.workdir);
     this.scanner = opts.scannerFactory
-      ? opts.scannerFactory(this.sessionId, this.workdir, sessionDir)
+      ? opts.scannerFactory({
+          sessionId: this.sessionId,
+          workdir: this.workdir,
+          sessionDir,
+          proactiveNotifyDelay: opts.config.proactiveNotifyDelay,
+          proactiveQuestionDelay: opts.config.proactiveQuestionDelay,
+        })
       : new SessionScanner({
           sessionId: this.sessionId,
           sessionDir,

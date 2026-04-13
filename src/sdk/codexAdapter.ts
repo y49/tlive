@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type {
   ProviderAdapter,
+  ProviderCapabilityFlags,
   NormalizedMessage,
   SpawnOptions,
   RemoteOptions,
@@ -12,6 +13,7 @@ import type {
 
 export class CodexAdapter implements ProviderAdapter {
   name = 'codex' as const;
+  capabilities: ProviderCapabilityFlags = { liveSession: false };
   private executablePath: string | null = null;
 
   async resolveExecutable(): Promise<string> {

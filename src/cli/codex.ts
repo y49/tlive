@@ -16,7 +16,7 @@ export async function codexCommand(opts: CodexCommandOptions = {}): Promise<void
   await runFlavor({
     adapter: new CodexAdapter(),
     runtimeLabel: 'Codex',
-    scannerFactory: (_sessionId, _workdir, sessionDir) =>
+    scannerFactory: ({ sessionDir }) =>
       new CodexSessionScanner({ sessionDir }),
     ...opts,
   });

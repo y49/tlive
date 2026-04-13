@@ -7,7 +7,6 @@ import { networkInterfaces } from 'node:os';
 import { TLiveLoop } from '../loop.js';
 import { IPCClient } from '../ipc.js';
 import { loadConfig } from '../config.js';
-import { findLastSession } from '../core/sessionDiscovery.js';
 import { createWorktree } from '../core/worktreeManager.js';
 import type { ProviderAdapter } from '../sdk/providerAdapter.js';
 import type { ScannerFactory } from '../core/sessionManager.js';
@@ -64,10 +63,13 @@ export async function runFlavor(opts: RunFlavorOptions): Promise<void> {
     }
   }
 
-  // Resolve session ID: explicit > resume last (Claude-only) > new
+  // Resolve session ID: explicit > resume last (adapter-opt-in) > new
+  // Providers that let us choose the session id (Claude) implement
+  // `findLastSession`; providers that assign their own id (Codex) leave it
+  // unset and rely on the scanner's mtime discovery.
   let sessionId = opts.sessionId;
-  if (!sessionId && opts.resume && adapter.name === 'claude') {
-    sessionId = findLastSession(workdir) ?? undefined;
+  if (!sessionId && opts.resume) {
+    sessionId = adapter.findLastSession?.(workdir) ?? undefined;
     if (sessionId) {
       console.error(`  Resuming session ${sessionId.slice(0, 8)}...`);
     }
@@ -118,10 +120,16 @@ export async function runFlavor(opts: RunFlavorOptions): Promise<void> {
       });
     });
 
-    // IPC message handlers — one per message type
-    ipc.on('permission_action', (p: Record<string, unknown>) => {
-      loop.handleIMAction(p.action as string, p.toolUseId as string);
-    });
+    // IPC message handlers — one per message type.
+    // `permission_action` (allow/deny/takeover) routes through SessionManager's
+    // SDK path (`handoffToSDK` → `adapter.startRemote`). Only wire it when the
+    // adapter advertises `liveSession` support — otherwise the Takeover button
+    // would crash a PTY-only provider (Codex) on the first tap.
+    if (adapter.capabilities?.liveSession) {
+      ipc.on('permission_action', (p: Record<string, unknown>) => {
+        loop.handleIMAction(p.action as string, p.toolUseId as string);
+      });
+    }
 
     ipc.on('terminal_input', (p: Record<string, unknown>) => {
       // Claude Code TUI uses \r (carriage return) for submit, not \n
