@@ -234,7 +234,7 @@ export class DiscordRenderer implements NotificationRenderer<DiscordOutbound> {
     if (event.active) {
       return embed({ color: COLOR_GRAY, description: '\uD83E\uDDE0 Thinking...' });
     }
-    return embed({ description: '' });
+    return embed({ color: COLOR_GREEN, description: '\u2705 Done thinking' });
   }
 
   // ─── Progress phase handlers ────────────────────

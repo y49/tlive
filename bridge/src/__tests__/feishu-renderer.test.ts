@@ -430,12 +430,15 @@ describe('FeishuRenderer', () => {
         expect(mdEl!.content).toContain('Thinking...');
       });
 
-      it('renders grey card when inactive', () => {
+      it('renders Done thinking when inactive', () => {
         const event: NotificationEvent = { kind: 'thinking', active: false };
         const result = renderer.renderNotification(event);
         const card = parseCard(result.card);
 
-        expect(card.header.template).toBe('grey');
+        expect(card.header.template).toBe('green');
+        expect(card.header.title.content).toContain('Done thinking');
+        const mdEl = card.body.elements.find(e => e.tag === 'markdown');
+        expect(mdEl!.content).toContain('Done thinking');
       });
     });
   });

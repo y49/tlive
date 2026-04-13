@@ -195,7 +195,7 @@ export class TelegramRenderer implements NotificationRenderer<TelegramOutbound> 
     if (event.active) {
       return { html: '\uD83E\uDDE0 <i>Thinking...</i>' };
     }
-    return { html: '' };
+    return { html: '\u2705 <i>Done thinking</i>' };
   }
 
   // ─── Progress phase handlers ────────────────────

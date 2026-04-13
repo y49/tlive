@@ -308,10 +308,11 @@ describe('DiscordRenderer', () => {
         expect(result.embed.description).toContain('Thinking...');
       });
 
-      it('renders empty description when inactive', () => {
+      it('renders Done thinking when inactive', () => {
         const event: NotificationEvent = { kind: 'thinking', active: false };
         const result = renderer.renderNotification(event);
-        expect(result.embed.description).toBe('');
+        expect(result.embed.description).toContain('Done thinking');
+        expect(result.embed.color).toBe(0x00CC66);
       });
     });
   });

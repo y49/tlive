@@ -318,10 +318,11 @@ describe('TelegramRenderer', () => {
         expect(result.html).toContain('<i>Thinking...</i>');
       });
 
-      it('renders empty string when inactive', () => {
+      it('renders Done thinking when inactive', () => {
         const event: NotificationEvent = { kind: 'thinking', active: false };
         const result = renderer.renderNotification(event);
-        expect(result.html).toBe('');
+        expect(result.html).toContain('Done thinking');
+        expect(result.html).toContain('\u2705');
       });
     });
   });

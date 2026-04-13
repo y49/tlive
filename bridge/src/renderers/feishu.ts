@@ -255,8 +255,8 @@ export class FeishuRenderer implements NotificationRenderer<FeishuOutbound> {
       };
     }
     return {
-      card: buildCard('grey', '\uD83E\uDDE0 Thinking', [
-        { tag: 'markdown', content: ' ' },
+      card: buildCard('green', '\u2705 Done thinking', [
+        { tag: 'markdown', content: '*Done thinking*' },
       ]),
     };
   }
