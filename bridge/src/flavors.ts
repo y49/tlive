@@ -1,3 +1,5 @@
+import type { ProviderCapabilities } from './providers/base.js';
+
 export const Flavors = ['claude', 'codex'] as const;
 export type Flavor = typeof Flavors[number];
 
@@ -61,4 +63,16 @@ export function supportsEffort(flavor: string | null | undefined): boolean {
 }
 export function supportsLiveSession(flavor: string | null | undefined): boolean {
   return hasCapability(flavor, Capabilities.LiveSession);
+}
+
+export function flavorCapabilities(flavor: Flavor): ProviderCapabilities {
+  return {
+    slashCommands: hasCapability(flavor, Capabilities.SlashCommands),
+    askUserQuestion: hasCapability(flavor, Capabilities.AskUserQuestion),
+    liveSession: hasCapability(flavor, Capabilities.LiveSession),
+    todoTracking: hasCapability(flavor, Capabilities.TodoTracking),
+    costInUsd: hasCapability(flavor, Capabilities.CostInUsd),
+    skills: hasCapability(flavor, Capabilities.Skills),
+    sessionResume: hasCapability(flavor, Capabilities.SessionResume),
+  };
 }

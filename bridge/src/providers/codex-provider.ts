@@ -6,6 +6,7 @@
 import type { LLMProvider, StreamChatParams, StreamChatResult, QueryControls, ProviderCapabilities } from './base.js';
 import type { CanonicalEvent } from '../messages/schema.js';
 import { CodexAdapter } from '../messages/codex-adapter.js';
+import { flavorCapabilities } from '../flavors.js';
 
 // Re-export SDK types for use by adapter and commands
 export type {
@@ -76,15 +77,7 @@ export class CodexProvider implements LLMProvider {
   }
 
   capabilities(): ProviderCapabilities {
-    return {
-      slashCommands: false,
-      askUserQuestion: false,
-      liveSession: false,
-      todoTracking: false,
-      costInUsd: false,
-      skills: false,
-      sessionResume: true,
-    };
+    return flavorCapabilities('codex');
   }
 
   streamChat(params: StreamChatParams): StreamChatResult {

@@ -15,6 +15,7 @@ import { ClaudeLiveSession } from './claude-live-session.js';
 import type { PendingPermissions } from '../permissions/gateway.js';
 import type { ClaudeSettingSource } from '../config.js';
 import { buildSubprocessEnv, preparePromptWithImages, SAFE_PERMISSIONS, classifyAuthError } from './claude-shared.js';
+import { flavorCapabilities } from '../flavors.js';
 
 // ── CLI discovery and version check ──
 
@@ -112,15 +113,7 @@ export class ClaudeSDKProvider implements LLMProvider {
   }
 
   capabilities(): ProviderCapabilities {
-    return {
-      slashCommands: true,
-      askUserQuestion: true,
-      liveSession: true,
-      todoTracking: true,
-      costInUsd: true,
-      skills: true,
-      sessionResume: true,
-    };
+    return flavorCapabilities('claude');
   }
 
   createSession(params: { workingDirectory: string; sessionId?: string; effort?: 'low' | 'medium' | 'high' | 'max'; model?: string }): LiveSession {
