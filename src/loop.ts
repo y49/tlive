@@ -85,8 +85,16 @@ export class TLiveLoop extends EventEmitter {
       this.notifications.cancel(`askq:${id}`);
     });
     this.session.on('sdkMessage', (msg: NormalizedMessage) => this.emit('sdkMessage', msg));
-    // Thinking state tracked internally — not pushed to IM (too noisy).
-    // Users see tool_use notifications which serve the same purpose.
+    this.session.on('thinking', (thinking: boolean) => {
+      this.notifications.push({
+        kind: 'thinking',
+        dedupeKey: `thinking:${this.session.info.sessionId}`,
+        sessionId: this.session.info.sessionId,
+        title: thinking ? `💭 ${this.sessionTag()}` : `${this.sessionTag()}`,
+        body: thinking ? 'Thinking…' : undefined,
+        event: { kind: 'thinking', active: thinking } as StructuredNotificationEvent,
+      });
+    });
     this.session.on('usage', (usage: Record<string, unknown>) => this.costTracker.addUsage(usage));
     this.session.on('model', (model: string) => this.costTracker.setModel(model));
     this.session.on('sessionComplete', () => this.handleSessionComplete());

@@ -20,7 +20,7 @@ const RULES: Record<NotificationKind, NotificationRule> = {
   error:               { alwaysPush: true,  aggregate: false, maxTextLength: 300 },
   session_complete:    { alwaysPush: true,  aggregate: false, maxTextLength: 100 },
   todo_update:         { alwaysPush: true,  aggregate: false, maxTextLength: 500 },
-  thinking:            { alwaysPush: true,  aggregate: false, maxTextLength: 50 },
+  thinking:            { alwaysPush: false, aggregate: true,  maxTextLength: 50 },
   activity_text:       { alwaysPush: true,  aggregate: false, maxTextLength: 300 },
   activity_tool:       { alwaysPush: false, aggregate: true,  maxTextLength: 500 },
 };
