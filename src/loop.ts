@@ -88,11 +88,11 @@ export class TLiveLoop extends EventEmitter {
     this.session.on('thinking', (thinking: boolean) => {
       this.notifications.push({
         kind: 'thinking',
-        dedupeKey: `thinking:${this.session.info.sessionId}`,
+        dedupeKey: `thinking:${this.session.info.sessionId}:${thinking ? 'on' : 'off'}`,
         sessionId: this.session.info.sessionId,
         title: thinking ? `💭 ${this.sessionTag()}` : `${this.sessionTag()}`,
         body: thinking ? 'Thinking…' : undefined,
-        event: { kind: 'thinking', active: thinking } as StructuredNotificationEvent,
+        event: { kind: 'thinking', active: thinking },
       });
     });
     this.session.on('usage', (usage: Record<string, unknown>) => this.costTracker.addUsage(usage));

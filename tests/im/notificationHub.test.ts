@@ -95,4 +95,48 @@ describe('NotificationHub', () => {
     activeHub.push(makeEvent({ dedupeKey: 'perm', kind: 'permission_request' }));
     expect(batches).toHaveLength(1);
   });
+
+  it('emits both thinking on and thinking off when dedupeKey encodes active state', () => {
+    const received: NotificationEvent[] = [];
+    hub.on('notify', (evts: NotificationEvent[]) => received.push(...evts));
+
+    // thinking=true → unique key "…:on" — fires
+    hub.push({
+      kind: 'thinking',
+      dedupeKey: 'thinking:s1:on',
+      sessionId: 's1',
+      title: '💭 tag',
+      body: 'Thinking…',
+      event: { kind: 'thinking', active: true },
+    });
+    hub.flush();
+
+    // thinking=false → unique key "…:off" — also fires (regression guard for
+    // the pre-fix bug where a fixed `thinking:<sid>` key suppressed the
+    // off-transition).
+    hub.push({
+      kind: 'thinking',
+      dedupeKey: 'thinking:s1:off',
+      sessionId: 's1',
+      title: 'tag',
+      event: { kind: 'thinking', active: false },
+    });
+    hub.flush();
+
+    expect(received).toHaveLength(2);
+    expect((received[0].event as { active: boolean }).active).toBe(true);
+    expect((received[1].event as { active: boolean }).active).toBe(false);
+
+    // duplicate "on" within TTL should still be suppressed (no spam)
+    hub.push({
+      kind: 'thinking',
+      dedupeKey: 'thinking:s1:on',
+      sessionId: 's1',
+      title: '💭 tag',
+      body: 'Thinking…',
+      event: { kind: 'thinking', active: true },
+    });
+    hub.flush();
+    expect(received).toHaveLength(2);
+  });
 });
