@@ -1,7 +1,8 @@
-import { watch, existsSync, statSync, openSync, readSync, closeSync } from 'node:fs';
+import { BaseSessionScanner, type SessionFileScanResult } from './baseSessionScanner.js';
 import { EventEmitter } from 'node:events';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, basename, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 
 export interface SessionEvent {
   type: 'assistant' | 'user' | 'system' | 'result';
@@ -35,13 +36,11 @@ export interface ScannerOptions {
 }
 
 export class SessionScanner extends EventEmitter {
-  private watcher: ReturnType<typeof watch> | null = null;
-  private pollTimer: ReturnType<typeof setInterval> | null = null;
-  private seenUUIDs = new Set<string>();
-  private lastSize = 0;
-  private pendingToolUse = new Map<string, PendingPermission>();
-  private jsonlPath: string;
+  private readonly base: InternalBase;
+  private readonly jsonlPath: string;
   private opts: Required<Omit<ScannerOptions, 'sessionDir'>>;
+  private seenUUIDs = new Set<string>();
+  private pendingToolUse = new Map<string, PendingPermission>();
 
   constructor(opts: ScannerOptions) {
     super();
@@ -51,62 +50,37 @@ export class SessionScanner extends EventEmitter {
       pollingInterval: 3000,
       ...opts,
     };
-    const sessionDir = opts.sessionDir ?? this.defaultSessionDir(opts.workdir);
+    const sessionDir = opts.sessionDir ?? this.defaultClaudeSessionDir(opts.workdir);
     this.jsonlPath = join(sessionDir, `${opts.sessionId}.jsonl`);
+    this.base = new InternalBase(
+      this.jsonlPath,
+      this.opts.pollingInterval,
+      (msg) => this.processMessage(msg),
+    );
   }
 
   get filePath(): string {
     return this.jsonlPath;
   }
 
-  /** Claude default — used when no sessionDir provided via adapter */
-  private defaultSessionDir(workdir: string): string {
-    const projectDir = resolve(workdir).replace(/[^a-zA-Z0-9-]/g, '-');
-    const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
-    return join(claudeConfigDir, 'projects', projectDir);
-  }
-
+  /** Fire-and-forget — preserves existing non-async signature. */
   start(): void {
-    try {
-      const dir = join(this.jsonlPath, '..');
-      this.watcher = watch(dir, (eventType, filename) => {
-        if (filename === basename(this.jsonlPath)) this.readNewLines();
-      });
-    } catch {
-      // fs.watch unavailable on this platform — rely on polling
-    }
-    this.pollTimer = setInterval(() => this.readNewLines(), this.opts.pollingInterval);
+    void this.base.start();
   }
 
   stop(): void {
-    this.watcher?.close();
-    this.watcher = null;
-    if (this.pollTimer) clearInterval(this.pollTimer);
-    this.pollTimer = null;
+    this.base.stop();
     for (const pending of this.pendingToolUse.values()) {
       clearTimeout(pending.timerId);
     }
     this.pendingToolUse.clear();
   }
 
-  readNewLines(): void {
-    if (!existsSync(this.jsonlPath)) return;
-    const stat = statSync(this.jsonlPath);
-    if (stat.size <= this.lastSize) return;
-
-    const buf = Buffer.alloc(stat.size - this.lastSize);
-    const fd = openSync(this.jsonlPath, 'r');
-    readSync(fd, buf, 0, buf.length, this.lastSize);
-    closeSync(fd);
-    this.lastSize = stat.size;
-
-    const lines = buf.toString('utf-8').split('\n').filter(Boolean);
-    for (const line of lines) {
-      try {
-        const parsed = JSON.parse(line);
-        this.processMessage(parsed);
-      } catch { /* skip malformed */ }
-    }
+  /** Claude default — used when no sessionDir provided via adapter */
+  private defaultClaudeSessionDir(workdir: string): string {
+    const projectDir = resolve(workdir).replace(/[^a-zA-Z0-9-]/g, '-');
+    const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+    return join(claudeConfigDir, 'projects', projectDir);
   }
 
   /**
@@ -204,5 +178,58 @@ export class SessionScanner extends EventEmitter {
       this.pendingToolUse.delete(toolUseId);
       this.emit('permission_resolved', toolUseId);
     }
+  }
+}
+
+/**
+ * Internal adapter that routes BaseSessionScanner events into SessionScanner.processMessage.
+ *
+ * Dedup strategy: base class dedups on (filePath, lineIndex) — byte offset at line start,
+ * monotonic per file. SessionScanner.processMessage adds a second dedup layer keyed by
+ * `msg.uuid` so duplicate UUID payloads (which may land at different byte offsets) are
+ * emitted only once.
+ */
+class InternalBase extends BaseSessionScanner<Record<string, unknown>> {
+  constructor(
+    private readonly filePath: string,
+    pollingInterval: number,
+    private readonly dispatch: (msg: Record<string, unknown>) => void,
+  ) {
+    super({ pollingInterval });
+  }
+
+  protected findSessionFiles(): string[] {
+    // Always return the target path — file may not exist yet; parseSessionFile handles that.
+    return [this.filePath];
+  }
+
+  protected parseSessionFile(filePath: string, cursor: number): SessionFileScanResult<Record<string, unknown>> {
+    if (!existsSync(filePath)) return { events: [], nextCursor: cursor };
+    const content = readFileSync(filePath, 'utf-8');
+    const bytes = Buffer.byteLength(content);
+    if (bytes <= cursor) return { events: [], nextCursor: bytes };
+    const tail = content.slice(cursor);
+    const lines = tail.split('\n').filter(Boolean);
+    const events: Array<{ event: Record<string, unknown>; lineIndex: number }> = [];
+    let idx = cursor; // lineIndex is monotonic per-file; reusing byte-offset-derived counter is fine for dedup
+    for (const line of lines) {
+      try {
+        const parsed = JSON.parse(line) as Record<string, unknown>;
+        events.push({ event: parsed, lineIndex: idx++ });
+      } catch {
+        idx++;
+        // skip malformed line but advance lineIndex so dedup keys remain unique
+      }
+    }
+    return { events, nextCursor: bytes };
+  }
+
+  protected generateEventKey(_event: Record<string, unknown>, ctx: { filePath: string; lineIndex?: number }): string {
+    // Rely on (filePath, lineIndex) for base-layer dedup. SessionScanner does uuid dedup on top.
+    return `${ctx.filePath}:${ctx.lineIndex}`;
+  }
+
+  protected onEvent(event: Record<string, unknown>): void {
+    this.dispatch(event);
   }
 }
