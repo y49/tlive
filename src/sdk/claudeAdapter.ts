@@ -12,6 +12,7 @@ import type {
   ThinkingTriggerEvent,
 } from './providerAdapter.js';
 import { findLastSession } from '../core/sessionDiscovery.js';
+import { normalizeSessionLine } from './messageNormalizer.js';
 
 /**
  * Extract content blocks from a Claude .jsonl message.
@@ -79,6 +80,16 @@ export class ClaudeAdapter implements ProviderAdapter {
 
   findLastSession(workdir: string): string | null {
     return findLastSession(workdir);
+  }
+
+  normalizeSessionEvent(event: unknown, ctx?: { sessionId?: string }): NormalizedMessage[] {
+    const e = event as { uuid?: string; type?: string; message?: unknown };
+    if (!e.uuid || !e.type) return [];
+    return normalizeSessionLine(
+      { uuid: e.uuid, type: e.type, message: e.message },
+      'claude',
+      ctx?.sessionId ?? '',
+    );
   }
 
   /**
