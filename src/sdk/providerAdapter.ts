@@ -90,4 +90,10 @@ export interface ProviderAdapter {
    * gracefully no-ops for those and the thinking indicator simply stays idle.
    */
   extractThinkingEvents?(event: unknown): ThinkingTriggerEvent[];
+  /**
+   * Normalize a raw session event (provider-specific shape) into NormalizedMessage[].
+   * Returns [] if the event produces no user-visible content.
+   * Optional — adapters that don't implement this fall back to legacy normalizeSessionLine.
+   */
+  normalizeSessionEvent?(event: unknown, ctx?: { sessionId?: string }): NormalizedMessage[];
 }
