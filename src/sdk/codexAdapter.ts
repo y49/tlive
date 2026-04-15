@@ -9,6 +9,7 @@ import type {
   NormalizedMessage,
   SpawnOptions,
   RemoteOptions,
+  ThinkingTriggerEvent,
 } from './providerAdapter.js';
 
 export class CodexAdapter implements ProviderAdapter {
@@ -56,9 +57,83 @@ export class CodexAdapter implements ProviderAdapter {
     return join(codexHome, 'sessions');
   }
 
-  // Note: `extractThinkingEvents` is intentionally not implemented. Codex's
-  // reasoning/thinking event schema differs from Claude's content-block model
-  // and is out of scope for v1.0. SessionManager no-ops via the optional `?.`
-  // call, so the thinking indicator simply stays idle for Codex sessions.
-  // Follow-up: map Codex reasoning events into ThinkingTriggerEvent here.
+  normalizeSessionEvent(event: unknown, ctx?: { sessionId?: string }): NormalizedMessage[] {
+    const e = event as { type?: string; payload?: Record<string, unknown> };
+    const sessionId = ctx?.sessionId ?? '';
+
+    if (e.type === 'session_meta' || e.type === 'turn_context') return [];
+
+    if (e.type === 'response_item') {
+      const p = (e.payload ?? {}) as Record<string, unknown>;
+      const ptype = p.type;
+
+      if (ptype === 'message' && p.role === 'assistant') {
+        const content = Array.isArray(p.content) ? p.content : [];
+        const firstText = content.find((c: any) => c?.type === 'output_text' || c?.type === 'text')?.text;
+        if (typeof firstText === 'string' && firstText.length > 0) {
+          return [{ kind: 'text', text: firstText, provider: 'codex', sessionId }];
+        }
+        return [];
+      }
+
+      if (ptype === 'function_call') {
+        const toolName = typeof p.name === 'string' ? p.name : 'unknown';
+        const toolUseId = typeof p.call_id === 'string' ? p.call_id : '';
+        let toolInput: unknown = p.arguments;
+        if (typeof toolInput === 'string') {
+          try { toolInput = JSON.parse(toolInput); } catch { /* keep as string */ }
+        }
+        return [{
+          kind: 'tool_use',
+          toolName,
+          toolUseId,
+          toolInput,
+          provider: 'codex',
+          sessionId,
+        }];
+      }
+
+      if (ptype === 'function_call_output') {
+        const toolUseId = typeof p.call_id === 'string' ? p.call_id : '';
+        const output = typeof p.output === 'string' ? p.output : JSON.stringify(p.output ?? '');
+        return [{
+          kind: 'tool_result',
+          toolUseId,
+          text: output,
+          provider: 'codex',
+          sessionId,
+        }];
+      }
+
+      // reasoning: content is always null/encrypted in .jsonl — emit nothing (thinking state handled separately)
+      return [];
+    }
+
+    if (e.type === 'event_msg') {
+      const p = (e.payload ?? {}) as Record<string, unknown>;
+      const ptype = p.type;
+
+      if (ptype === 'task_complete') {
+        return [{ kind: 'complete', provider: 'codex', sessionId }];
+      }
+
+      return [];
+    }
+
+    return [];
+  }
+
+  extractThinkingEvents(event: unknown): ThinkingTriggerEvent[] {
+    const e = event as { type?: string; payload?: Record<string, unknown> };
+    if (e.type === 'event_msg') {
+      const p = (e.payload ?? {}) as Record<string, unknown>;
+      if (p.type === 'task_started') return [{ type: 'tool_use', toolUseId: '__codex_task__' }];
+      if (p.type === 'task_complete') return [{ type: 'tool_result', toolUseId: '__codex_task__' }];
+    }
+    if (e.type === 'response_item') {
+      const p = (e.payload ?? {}) as Record<string, unknown>;
+      if (p.type === 'reasoning') return [{ type: 'tool_use', toolUseId: '__codex_reasoning__' }];
+    }
+    return [];
+  }
 }
