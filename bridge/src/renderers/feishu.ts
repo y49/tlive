@@ -83,6 +83,10 @@ export class FeishuRenderer implements NotificationRenderer<FeishuOutbound> {
         return this.renderActivityTool(event);
       case 'thinking':
         return this.renderThinking(event);
+      case 'reasoning_summary':
+        return this.renderReasoningSummary(event);
+      case 'file_change_list':
+        return this.renderFileChangeList(event);
     }
   }
 
@@ -258,6 +262,28 @@ export class FeishuRenderer implements NotificationRenderer<FeishuOutbound> {
       card: buildCard('green', '\u2705 Done thinking', [
         { tag: 'markdown', content: '*Done thinking*' },
       ]),
+    };
+  }
+
+  private renderReasoningSummary(event: Extract<NotificationEvent, { kind: 'reasoning_summary' }>): FeishuOutbound {
+    const duration = event.durationMs ? ` (${Math.round(event.durationMs / 1000)}s)` : '';
+    const truncatedNote = event.truncated ? '\n\n*(truncated — full content in web terminal)*' : '';
+    const content = `${event.text}${duration}${truncatedNote}`;
+    return {
+      card: buildCard('grey', '💭 Reasoning', [
+        { tag: 'markdown', content },
+      ]),
+    };
+  }
+
+  private renderFileChangeList(event: Extract<NotificationEvent, { kind: 'file_change_list' }>): FeishuOutbound {
+    const iconFor = (kind: 'add' | 'delete' | 'update') =>
+      kind === 'add' ? '➕' : kind === 'delete' ? '➖' : '✏️';
+    const lines = event.changes.map((c) => `${iconFor(c.kind)} \`${c.path}\``);
+    const header = event.status === 'failed' ? '❌ File changes (failed)' : '📝 File changes';
+    const template = event.status === 'failed' ? 'red' : 'grey';
+    return {
+      card: buildCard(template, header, [{ tag: 'markdown', content: lines.join('\n') }]),
     };
   }
 

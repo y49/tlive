@@ -441,6 +441,65 @@ describe('FeishuRenderer', () => {
         expect(mdEl!.content).toContain('Done thinking');
       });
     });
+
+    describe('reasoning_summary', () => {
+      it('renders grey card with reasoning text', () => {
+        const event: NotificationEvent = {
+          kind: 'reasoning_summary',
+          text: 'reflecting',
+          durationMs: 4000,
+        };
+        const result = renderer.renderNotification(event);
+        const card = parseCard(result.card);
+        expect(card.header.template).toBe('grey');
+        expect(card.header.title.content).toContain('Reasoning');
+        const mdEl = card.body.elements.find((e: any) => e.tag === 'markdown');
+        expect(mdEl!.content).toContain('reflecting');
+        expect(mdEl!.content).toContain('4s');
+      });
+
+      it('adds truncation note', () => {
+        const event: NotificationEvent = {
+          kind: 'reasoning_summary',
+          text: 'x',
+          truncated: true,
+        };
+        const result = renderer.renderNotification(event);
+        const card = parseCard(result.card);
+        const mdEl = card.body.elements.find((e: any) => e.tag === 'markdown');
+        expect(mdEl!.content).toMatch(/truncated/i);
+      });
+    });
+
+    describe('file_change_list', () => {
+      it('renders changes list', () => {
+        const event: NotificationEvent = {
+          kind: 'file_change_list',
+          changes: [
+            { path: 'a.ts', kind: 'add' },
+            { path: 'b.ts', kind: 'update' },
+          ],
+          status: 'completed',
+        };
+        const result = renderer.renderNotification(event);
+        const card = parseCard(result.card);
+        expect(card.header.title.content).toContain('File changes');
+        const mdEl = card.body.elements.find((e: any) => e.tag === 'markdown');
+        expect(mdEl!.content).toContain('a.ts');
+        expect(mdEl!.content).toContain('b.ts');
+      });
+
+      it('renders failed status with red template', () => {
+        const event: NotificationEvent = {
+          kind: 'file_change_list',
+          changes: [{ path: 'a.ts', kind: 'add' }],
+          status: 'failed',
+        };
+        const result = renderer.renderNotification(event);
+        const card = parseCard(result.card);
+        expect(card.header.template).toBe('red');
+      });
+    });
   });
 
   // ─── renderProgress ─────────────────────────────
