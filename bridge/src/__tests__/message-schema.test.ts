@@ -89,4 +89,31 @@ describe('message-schema', () => {
       expect(() => canonicalEventSchema.parse({ kind: 'text_delta' })).toThrow();
     });
   });
+
+  describe('codex events', () => {
+    it('validates reasoning_complete', () => {
+      const event = { kind: 'reasoning_complete', text: 'my reasoning', durationMs: 5000 };
+      const result = canonicalEventSchema.parse(event);
+      expect(result.kind).toBe('reasoning_complete');
+    });
+
+    it('validates file_change_list', () => {
+      const event = {
+        kind: 'file_change_list',
+        changes: [{ path: 'a.ts', kind: 'add' }, { path: 'b.ts', kind: 'update' }],
+        status: 'completed',
+      };
+      const result = canonicalEventSchema.parse(event);
+      expect(result.kind).toBe('file_change_list');
+    });
+
+    it('validates todo_list_update', () => {
+      const event = {
+        kind: 'todo_list_update',
+        items: [{ text: 'do x', completed: false }],
+      };
+      const result = canonicalEventSchema.parse(event);
+      expect(result.kind).toBe('todo_list_update');
+    });
+  });
 });

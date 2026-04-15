@@ -110,6 +110,29 @@ const todoUpdateSchema = z.object({
   todos: z.array(todoItemSchema),
 }).merge(baseSchema).passthrough();
 
+const reasoningCompleteSchema = z.object({
+  kind: z.literal('reasoning_complete'),
+  text: z.string(),
+  durationMs: z.number().optional(),
+}).passthrough();
+
+const fileChangeListSchema = z.object({
+  kind: z.literal('file_change_list'),
+  changes: z.array(z.object({
+    path: z.string(),
+    kind: z.union([z.literal('add'), z.literal('delete'), z.literal('update')]),
+  })),
+  status: z.union([z.literal('completed'), z.literal('failed')]),
+}).passthrough();
+
+const todoListUpdateSchema = z.object({
+  kind: z.literal('todo_list_update'),
+  items: z.array(z.object({
+    text: z.string(),
+    completed: z.boolean(),
+  })),
+}).passthrough();
+
 const rateLimitSchema = z.object({
   kind: z.literal('rate_limit'),
   status: z.string(),
@@ -132,6 +155,9 @@ export const canonicalEventSchema = z.discriminatedUnion('kind', [
   statusSchema,
   promptSuggestionSchema,
   rateLimitSchema,
+  reasoningCompleteSchema,
+  fileChangeListSchema,
+  todoListUpdateSchema,
 ]);
 
 export type CanonicalEvent = z.infer<typeof canonicalEventSchema>;
