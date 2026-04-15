@@ -211,6 +211,39 @@ describe('CodexAdapter', () => {
     });
   });
 
+  describe('reasoning_complete', () => {
+    it('emits reasoning_complete on item.completed with ReasoningItem', () => {
+      const adapter = new CodexAdapter();
+      // Simulate reasoning_started then reasoning_completed
+      const started = {
+        type: 'item.started' as const,
+        item: { id: 'r1', type: 'reasoning' as const, text: '' },
+      };
+      adapter.adapt(started as any);
+
+      const completed = {
+        type: 'item.completed' as const,
+        item: { id: 'r1', type: 'reasoning' as const, text: 'My final reasoning' },
+      };
+      const events = adapter.adapt(completed as any);
+
+      const reasoning = events.find((e) => e.kind === 'reasoning_complete');
+      expect(reasoning).toBeDefined();
+      expect((reasoning as any).text).toBe('My final reasoning');
+      expect((reasoning as any).durationMs).toBeGreaterThanOrEqual(0);
+    });
+
+    it('does not emit when text is empty', () => {
+      const adapter = new CodexAdapter();
+      adapter.adapt({ type: 'item.started', item: { id: 'r1', type: 'reasoning', text: '' } } as any);
+      const events = adapter.adapt({
+        type: 'item.completed',
+        item: { id: 'r1', type: 'reasoning', text: '' },
+      } as any);
+      expect(events.find((e) => e.kind === 'reasoning_complete')).toBeUndefined();
+    });
+  });
+
   describe('edge cases', () => {
     it('returns empty for unknown types', () => {
       expect(create().adapt({ type: 'unknown_future' } as any)).toHaveLength(0);

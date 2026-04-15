@@ -32,6 +32,7 @@ export class CodexAdapter {
   private hiddenItemIds = new Set<string>();
   private toolIdCounter = 0;
   private threadId = '';
+  private reasoningStartedAt = new Map<string, number>();
 
   adapt(event: ThreadEvent): CanonicalEvent[] {
     switch (event.type) {
@@ -108,6 +109,7 @@ export class CodexAdapter {
         })];
       }
       case 'reasoning':
+        if (item.id) this.reasoningStartedAt.set(item.id, Date.now());
         return [];
       case 'mcp_tool_call': {
         const mcp = item as McpToolCallItem;
@@ -233,6 +235,18 @@ export class CodexAdapter {
       if (text && !this.lastAgentText) {
         return [this.validate({ kind: 'text_delta', text })];
       }
+    }
+
+    if (item.type === 'reasoning') {
+      const text = (item as ReasoningItem).text || '';
+      if (!text) {
+        if (item.id) this.reasoningStartedAt.delete(item.id);
+        return [];
+      }
+      const startedAt = item.id ? this.reasoningStartedAt.get(item.id) : undefined;
+      const durationMs = startedAt !== undefined ? Date.now() - startedAt : undefined;
+      if (item.id) this.reasoningStartedAt.delete(item.id);
+      return [this.validate({ kind: 'reasoning_complete', text, durationMs })];
     }
 
     return [];
