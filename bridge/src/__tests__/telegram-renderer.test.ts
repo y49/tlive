@@ -325,6 +325,67 @@ describe('TelegramRenderer', () => {
         expect(result.html).toContain('\u2705');
       });
     });
+
+    describe('reasoning_summary', () => {
+      it('renders reasoning in spoiler tag with duration', () => {
+        const event: NotificationEvent = {
+          kind: 'reasoning_summary',
+          text: 'I thought about it.',
+          durationMs: 5000,
+        };
+        const result = renderer.renderNotification(event);
+        expect(result.html).toContain('tg-spoiler');
+        expect(result.html).toContain('I thought about it.');
+        expect(result.html).toContain('5s');
+      });
+
+      it('adds truncation note when truncated=true', () => {
+        const event: NotificationEvent = {
+          kind: 'reasoning_summary',
+          text: 'x'.repeat(1800),
+          truncated: true,
+        };
+        const result = renderer.renderNotification(event);
+        expect(result.html).toMatch(/truncated|full.*web/i);
+      });
+
+      it('omits duration when durationMs missing', () => {
+        const event: NotificationEvent = { kind: 'reasoning_summary', text: 'x' };
+        const result = renderer.renderNotification(event);
+        expect(result.html).not.toMatch(/\ds\b/);
+      });
+    });
+
+    describe('file_change_list', () => {
+      it('renders additions/updates/deletions with icons', () => {
+        const event: NotificationEvent = {
+          kind: 'file_change_list',
+          changes: [
+            { path: 'a.ts', kind: 'add' },
+            { path: 'b.ts', kind: 'update' },
+            { path: 'c.ts', kind: 'delete' },
+          ],
+          status: 'completed',
+        };
+        const result = renderer.renderNotification(event);
+        expect(result.html).toContain('a.ts');
+        expect(result.html).toContain('b.ts');
+        expect(result.html).toContain('c.ts');
+        expect(result.html).toMatch(/➕|[+]/);  // add marker
+        expect(result.html).toMatch(/✏️|[✎~]/); // update marker
+        expect(result.html).toMatch(/➖|[-]/);  // delete marker
+      });
+
+      it('renders failed status', () => {
+        const event: NotificationEvent = {
+          kind: 'file_change_list',
+          changes: [{ path: 'a.ts', kind: 'add' }],
+          status: 'failed',
+        };
+        const result = renderer.renderNotification(event);
+        expect(result.html).toMatch(/failed|❌/i);
+      });
+    });
   });
 
   // ─── renderProgress ─────────────────────────────

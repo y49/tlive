@@ -71,6 +71,10 @@ export class TelegramRenderer implements NotificationRenderer<TelegramOutbound> 
         return this.renderActivityTool(event);
       case 'thinking':
         return this.renderThinking(event);
+      case 'reasoning_summary':
+        return this.renderReasoningSummary(event);
+      case 'file_change_list':
+        return this.renderFileChangeList(event);
     }
   }
 
@@ -196,6 +200,26 @@ export class TelegramRenderer implements NotificationRenderer<TelegramOutbound> 
       return { html: '\uD83E\uDDE0 <i>Thinking...</i>' };
     }
     return { html: '\u2705 <i>Done thinking</i>' };
+  }
+
+  private renderReasoningSummary(event: Extract<NotificationEvent, { kind: 'reasoning_summary' }>): TelegramOutbound {
+    const duration = event.durationMs ? ` <i>(${Math.round(event.durationMs / 1000)}s)</i>` : '';
+    const truncatedNote = event.truncated
+      ? ' <i>(truncated — full in web terminal)</i>'
+      : '';
+    return {
+      html: `💭 <b>Reasoning</b>${duration}\n<tg-spoiler>${escapeHtml(event.text)}</tg-spoiler>${truncatedNote}`,
+    };
+  }
+
+  private renderFileChangeList(event: Extract<NotificationEvent, { kind: 'file_change_list' }>): TelegramOutbound {
+    const iconFor = (kind: 'add' | 'delete' | 'update') =>
+      kind === 'add' ? '➕' : kind === 'delete' ? '➖' : '✏️';
+    const lines = event.changes.map((c) => `${iconFor(c.kind)} <code>${escapeHtml(c.path)}</code>`);
+    const header = event.status === 'failed'
+      ? `❌ <b>File changes (failed)</b>`
+      : `📝 <b>File changes</b>`;
+    return { html: `${header}\n${lines.join('\n')}` };
   }
 
   // ─── Progress phase handlers ────────────────────
