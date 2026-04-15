@@ -12,7 +12,54 @@ import type { UsageStats } from './cost-tracker.js';
 import { getToolCommand } from './tool-registry.js';
 import type { FeishuStreamingSession } from '../channels/feishu-streaming.js';
 import { getBridgeContext } from '../context.js';
-import type { NotificationRenderer, RenderedMessage, ProgressSnapshot, FeishuOutbound } from '../renderers/types.js';
+import type { NotificationRenderer, RenderedMessage, ProgressSnapshot, FeishuOutbound, NotificationEvent } from '../renderers/types.js';
+import type { CanonicalEvent } from '../messages/schema.js';
+
+/** Maximum characters for reasoning_complete text before truncation */
+export const MAX_REASONING_CHARS = 1800;
+
+/**
+ * Maps CanonicalEvents to NotificationEvents for terminal rendering.
+ * Handles shape mismatches (e.g., todo_list_update → todo_update field renaming)
+ * and applies truncation to reasoning_complete text.
+ */
+export function mapCanonicalToNotifications(events: CanonicalEvent[]): NotificationEvent[] {
+  const out: NotificationEvent[] = [];
+  for (const ce of events) {
+    switch (ce.kind) {
+      case 'reasoning_complete': {
+        const truncated = ce.text.length > MAX_REASONING_CHARS;
+        out.push({
+          kind: 'reasoning_summary',
+          text: truncated ? ce.text.slice(0, MAX_REASONING_CHARS) : ce.text,
+          durationMs: ce.durationMs,
+          truncated: truncated || undefined,
+        });
+        break;
+      }
+      case 'file_change_list':
+        out.push({
+          kind: 'file_change_list',
+          changes: ce.changes,
+          status: ce.status,
+        });
+        break;
+      case 'todo_list_update':
+        out.push({
+          kind: 'todo_update',
+          items: ce.items.map((t) => ({
+            content: t.text,
+            status: (t.completed ? 'completed' : 'pending') as 'pending' | 'in_progress' | 'completed',
+          })),
+        });
+        break;
+      default:
+        // other kinds don't map to any new NotificationEvent here
+        break;
+    }
+  }
+  return out;
+}
 
 /** Managed session — wraps a LiveSession with per-chat metadata */
 interface ManagedSession {
