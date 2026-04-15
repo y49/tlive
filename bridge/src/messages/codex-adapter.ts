@@ -193,13 +193,13 @@ export class CodexAdapter {
 
     if (item.type === 'file_change') {
       const fc = item as FileChangeItem;
-      const toolId = this.itemIdToToolId.get(item.id) || item.id || '';
-      const summary = fc.changes.map(c => `${c.kind}: ${c.path}`).join(', ');
       return [this.validate({
-        kind: 'tool_result',
-        toolUseId: toolId,
-        content: fc.status === 'completed' ? (summary || 'Applied') : (fc.status || 'done'),
-        isError: fc.status === 'failed',
+        kind: 'file_change_list',
+        changes: fc.changes.map((c) => ({
+          path: c.path,
+          kind: c.kind === 'delete' ? 'delete' : c.kind === 'add' ? 'add' : 'update',
+        })),
+        status: fc.status,
       })];
     }
 

@@ -124,19 +124,62 @@ describe('CodexAdapter', () => {
       expect((events[0] as any).name).toBe('Edit');
     });
 
-    it('maps completed file_change to tool_result', () => {
+    it('maps completed file_change to file_change_list', () => {
       const a = create();
       a.adapt({ type: 'item.started', item: fc('fc_1', [{ path: '/src/new.ts', kind: 'add' }]) });
       const events = a.adapt({ type: 'item.completed', item: fc('fc_1', [{ path: '/src/new.ts', kind: 'add' }], 'completed') });
-      expect(events[0].kind).toBe('tool_result');
-      expect((events[0] as any).isError).toBe(false);
+      expect(events[0].kind).toBe('file_change_list');
+      expect((events[0] as any).status).toBe('completed');
+      expect((events[0] as any).changes).toHaveLength(1);
+      expect((events[0] as any).changes[0].path).toBe('/src/new.ts');
+      expect((events[0] as any).changes[0].kind).toBe('add');
     });
 
-    it('marks failed file_change as error', () => {
+    it('marks failed file_change in file_change_list', () => {
       const a = create();
       a.adapt({ type: 'item.started', item: fc('fc_1', [{ path: '/src/old.ts', kind: 'update' }]) });
       const events = a.adapt({ type: 'item.completed', item: fc('fc_1', [{ path: '/src/old.ts', kind: 'update' }], 'failed') });
-      expect((events[0] as any).isError).toBe(true);
+      expect(events[0].kind).toBe('file_change_list');
+      expect((events[0] as any).status).toBe('failed');
+    });
+  });
+
+  describe('file_change_list', () => {
+    it('emits file_change_list on item.completed with FileChangeItem', () => {
+      const adapter = new CodexAdapter();
+      const event = {
+        type: 'item.completed' as const,
+        item: {
+          id: 'f1',
+          type: 'file_change' as const,
+          changes: [
+            { path: 'a.ts', kind: 'add' as const },
+            { path: 'b.ts', kind: 'update' as const },
+          ],
+          status: 'completed' as const,
+        },
+      };
+      const events = adapter.adapt(event as any);
+      const fcl = events.find((e) => e.kind === 'file_change_list');
+      expect(fcl).toBeDefined();
+      expect((fcl as any).changes).toHaveLength(2);
+      expect((fcl as any).status).toBe('completed');
+    });
+
+    it('emits failed status', () => {
+      const adapter = new CodexAdapter();
+      const event = {
+        type: 'item.completed' as const,
+        item: {
+          id: 'f2',
+          type: 'file_change' as const,
+          changes: [{ path: 'x.ts', kind: 'update' as const }],
+          status: 'failed' as const,
+        },
+      };
+      const events = adapter.adapt(event as any);
+      const fcl = events.find((e) => e.kind === 'file_change_list');
+      expect((fcl as any).status).toBe('failed');
     });
   });
 
