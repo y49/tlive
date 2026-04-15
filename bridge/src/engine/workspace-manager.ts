@@ -1,4 +1,5 @@
 import { basename } from 'node:path';
+import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
 import { validateWorkdir } from './workdir-validator.js';
 
 export type ApprovalPolicy = 'on-request' | 'on-failure' | 'never';
@@ -126,5 +127,30 @@ export class WorkspaceManager {
     let i = 2;
     while (this.byName.has(`${base}-${i}`)) i++;
     return `${base}-${i}`;
+  }
+
+  load(): void {
+    const p = this.opts.persistPath;
+    if (!p || !existsSync(p)) return;
+    try {
+      const raw = JSON.parse(readFileSync(p, 'utf-8')) as { workspaces: Workspace[] };
+      if (!Array.isArray(raw.workspaces)) return;
+      for (const ws of raw.workspaces) {
+        if (typeof ws.name === 'string' && typeof ws.workdir === 'string' && typeof ws.runtime === 'string') {
+          // Session runtime state is not restored; activeSessionId always clears on load
+          this.byName.set(ws.name, { ...ws, activeSessionId: undefined });
+        }
+      }
+    } catch (err) {
+      console.warn(`[WorkspaceManager] Corrupt persist file ${p}: ${(err as Error).message}. Starting empty.`);
+      try { renameSync(p, p + '.bak'); } catch { /* ignore */ }
+    }
+  }
+
+  persist(): void {
+    const p = this.opts.persistPath;
+    if (!p) return;
+    const data = { workspaces: [...this.byName.values()] };
+    writeFileSync(p, JSON.stringify(data, null, 2));
   }
 }

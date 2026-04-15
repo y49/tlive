@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { WorkspaceManager } from '../engine/workspace-manager.js';
@@ -68,5 +68,41 @@ describe('WorkspaceManager create/lookup', () => {
     mgr.openByPath(dir1, { chatId: 'c1', runtime: 'codex' });
     mgr.openByPath(dir2, { chatId: 'c1', runtime: 'codex' });
     expect(mgr.list()).toHaveLength(2);
+  });
+});
+
+describe('WorkspaceManager persistence', () => {
+  const persistDir = mkdtempSync(join(tmpdir(), 'ws-persist-'));
+  const persistPath = join(persistDir, 'workspaces.json');
+  const dir1 = mkdtempSync(join(tmpdir(), 'wsp-'));
+
+  afterEach(() => {
+    if (existsSync(persistPath)) unlinkSync(persistPath);
+  });
+
+  it('persists workspaces to disk', () => {
+    const mgr = new WorkspaceManager({ persistPath, workdirWhitelist: undefined });
+    mgr.openByPath(dir1, { chatId: 'c1', runtime: 'codex' });
+    mgr.persist();
+    expect(existsSync(persistPath)).toBe(true);
+    const raw = JSON.parse(readFileSync(persistPath, 'utf-8'));
+    expect(raw.workspaces).toHaveLength(1);
+    expect(raw.workspaces[0].workdir).toBe(dir1);
+  });
+
+  it('restores workspaces from disk on load', () => {
+    writeFileSync(persistPath, JSON.stringify({
+      workspaces: [{ name: 'restored', workdir: dir1, runtime: 'codex', chatId: 'c1' }],
+    }));
+    const mgr = new WorkspaceManager({ persistPath, workdirWhitelist: undefined });
+    mgr.load();
+    expect(mgr.findByName('restored')?.workdir).toBe(dir1);
+  });
+
+  it('handles corrupt persist file without crashing', () => {
+    writeFileSync(persistPath, '{{{ not json');
+    const mgr = new WorkspaceManager({ persistPath, workdirWhitelist: undefined });
+    expect(() => mgr.load()).not.toThrow();
+    expect(mgr.list()).toHaveLength(0);
   });
 });
