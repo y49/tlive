@@ -287,6 +287,27 @@ describe('CodexAdapter', () => {
     });
   });
 
+  describe('todo_list_update', () => {
+    it('emits todo_list_update on item.updated with TodoListItem', () => {
+      const adapter = new CodexAdapter();
+      const event = {
+        type: 'item.updated' as const,
+        item: {
+          id: 't1',
+          type: 'todo_list' as const,
+          items: [
+            { text: 'do x', completed: false },
+            { text: 'do y', completed: true },
+          ],
+        },
+      };
+      const events = adapter.adapt(event as any);
+      const todo = events.find((e) => e.kind === 'todo_list_update');
+      expect(todo).toBeDefined();
+      expect((todo as any).items).toHaveLength(2);
+    });
+  });
+
   describe('edge cases', () => {
     it('returns empty for unknown types', () => {
       expect(create().adapt({ type: 'unknown_future' } as any)).toHaveLength(0);

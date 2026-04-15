@@ -18,6 +18,7 @@ import type {
   McpToolCallItem,
   AgentMessageItem,
   ReasoningItem,
+  TodoListItem,
 } from '@openai/codex-sdk';
 
 // Internal tools that should not be shown in the IM stream
@@ -137,9 +138,13 @@ export class CodexAdapter {
           input: { query: (item as any).query || '' },
         })];
       }
-      case 'todo_list':
-        // Internal planning — don't show in stream
-        return [];
+      case 'todo_list': {
+        const todo = item as TodoListItem;
+        return [this.validate({
+          kind: 'todo_list_update',
+          items: todo.items.map((t) => ({ text: t.text, completed: t.completed })),
+        })];
+      }
       case 'error':
         return [this.validate({ kind: 'error', message: (item as any).message || 'Codex item error' })];
       default:
@@ -168,6 +173,14 @@ export class CodexAdapter {
       if (text) {
         return [this.validate({ kind: 'thinking_delta', text })];
       }
+    }
+
+    if (item.type === 'todo_list') {
+      const todo = item as TodoListItem;
+      return [this.validate({
+        kind: 'todo_list_update',
+        items: todo.items.map((t) => ({ text: t.text, completed: t.completed })),
+      })];
     }
 
     return [];
@@ -247,6 +260,14 @@ export class CodexAdapter {
       const durationMs = startedAt !== undefined ? Date.now() - startedAt : undefined;
       if (item.id) this.reasoningStartedAt.delete(item.id);
       return [this.validate({ kind: 'reasoning_complete', text, durationMs })];
+    }
+
+    if (item.type === 'todo_list') {
+      const todo = item as TodoListItem;
+      return [this.validate({
+        kind: 'todo_list_update',
+        items: todo.items.map((t) => ({ text: t.text, completed: t.completed })),
+      })];
     }
 
     return [];
