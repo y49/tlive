@@ -315,6 +315,58 @@ describe('DiscordRenderer', () => {
         expect(result.embed.color).toBe(0x00CC66);
       });
     });
+
+    describe('reasoning_summary', () => {
+      it('renders reasoning with spoiler markdown and duration', () => {
+        const event: NotificationEvent = {
+          kind: 'reasoning_summary',
+          text: 'thinking carefully',
+          durationMs: 3000,
+        };
+        const result = renderer.renderNotification(event);
+        expect(result.embed.description).toContain('||');
+        expect(result.embed.description).toContain('thinking carefully');
+        expect(result.embed.description).toContain('3s');
+      });
+
+      it('adds truncation note', () => {
+        const event: NotificationEvent = {
+          kind: 'reasoning_summary',
+          text: 'x',
+          truncated: true,
+        };
+        const result = renderer.renderNotification(event);
+        expect(result.embed.description).toMatch(/truncated|web terminal/i);
+      });
+    });
+
+    describe('file_change_list', () => {
+      it('renders changes list with markers', () => {
+        const event: NotificationEvent = {
+          kind: 'file_change_list',
+          changes: [
+            { path: 'a.ts', kind: 'add' },
+            { path: 'b.ts', kind: 'update' },
+            { path: 'c.ts', kind: 'delete' },
+          ],
+          status: 'completed',
+        };
+        const result = renderer.renderNotification(event);
+        expect(result.embed.description).toContain('a.ts');
+        expect(result.embed.description).toContain('b.ts');
+        expect(result.embed.description).toContain('c.ts');
+      });
+
+      it('renders failed status with red color', () => {
+        const event: NotificationEvent = {
+          kind: 'file_change_list',
+          changes: [{ path: 'a.ts', kind: 'add' }],
+          status: 'failed',
+        };
+        const result = renderer.renderNotification(event);
+        expect(result.embed.color).toBe(0xcc3333);
+      });
+    });
   });
 
   // ─── renderProgress ─────────────────────────────

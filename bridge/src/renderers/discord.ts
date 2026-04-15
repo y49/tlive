@@ -11,6 +11,7 @@ const COLOR_ORANGE  = 0xFFA500;
 const COLOR_BLUE    = 0x3399FF;
 const COLOR_GREEN   = 0x00CC66;
 const COLOR_RED     = 0xFF4444;
+const COLOR_DARK_RED = 0xcc3333;
 const COLOR_TEAL    = 0x00CED1;
 const COLOR_GRAY    = 0x888888;
 
@@ -83,6 +84,10 @@ export class DiscordRenderer implements NotificationRenderer<DiscordOutbound> {
         return this.renderActivityTool(event);
       case 'thinking':
         return this.renderThinking(event);
+      case 'reasoning_summary':
+        return this.renderReasoningSummary(event);
+      case 'file_change_list':
+        return this.renderFileChangeList(event);
     }
   }
 
@@ -235,6 +240,24 @@ export class DiscordRenderer implements NotificationRenderer<DiscordOutbound> {
       return embed({ color: COLOR_GRAY, description: '\uD83E\uDDE0 Thinking...' });
     }
     return embed({ color: COLOR_GREEN, description: '\u2705 Done thinking' });
+  }
+
+  private renderReasoningSummary(event: Extract<NotificationEvent, { kind: 'reasoning_summary' }>): DiscordOutbound {
+    const duration = event.durationMs ? ` (${Math.round(event.durationMs / 1000)}s)` : '';
+    const truncatedNote = event.truncated ? '\n_(truncated — full in web terminal)_' : '';
+    return embed({
+      color: COLOR_GRAY,
+      description: `💭 **Reasoning**${duration}\n||${event.text}||${truncatedNote}`,
+    });
+  }
+
+  private renderFileChangeList(event: Extract<NotificationEvent, { kind: 'file_change_list' }>): DiscordOutbound {
+    const iconFor = (kind: 'add' | 'delete' | 'update') =>
+      kind === 'add' ? '➕' : kind === 'delete' ? '➖' : '✏️';
+    const lines = event.changes.map((c) => `${iconFor(c.kind)} \`${c.path}\``);
+    const header = event.status === 'failed' ? '❌ **File changes (failed)**' : '📝 **File changes**';
+    const color = event.status === 'failed' ? COLOR_DARK_RED : COLOR_GRAY;
+    return embed({ color, description: `${header}\n${lines.join('\n')}` });
   }
 
   // ─── Progress phase handlers ────────────────────
