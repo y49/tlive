@@ -17,6 +17,10 @@ export interface Config {
   runtime: 'claude' | 'codex' | 'auto';
   defaultWorkdir: string;
   defaultModel: string;
+  /** Raw TL_WORKSPACES value, parsed later by WorkspaceManager */
+  workspacesEnv?: string;
+  /** Raw TL_WORKSPACES_ALLOWED value, parsed later into prefix whitelist */
+  workspacesAllowedEnv?: string;
   /** Claude Code settings sources to load (default: ['user']) */
   claudeSettingSources: ClaudeSettingSource[];
   /** Global proxy URL (e.g., http://127.0.0.1:7890, socks5://127.0.0.1:1080) */
@@ -58,6 +62,28 @@ export interface Config {
 function parseList(value: string | undefined): string[] {
   if (!value || !value.trim()) return [];
   return value.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+export function parseWorkspacesEnv(raw: string | undefined): Array<{ name: string; workdir: string }> {
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map((entry) => {
+      const idx = entry.indexOf(':');
+      if (idx <= 0) return null;
+      const name = entry.slice(0, idx).trim();
+      const workdir = entry.slice(idx + 1).trim();
+      if (!name || !workdir) return null;
+      return { name, workdir };
+    })
+    .filter((x): x is { name: string; workdir: string } => x !== null);
+}
+
+export function parseWorkspacesAllowedEnv(raw: string | undefined): string[] | undefined {
+  if (!raw || !raw.trim()) return undefined;
+  return raw.split(',').map((p) => p.trim()).filter((p) => p.length > 0);
 }
 
 function loadEnvFile(path: string): Record<string, string> {
@@ -118,6 +144,8 @@ export function loadConfig(): Config {
     proxy: globalProxy,
     defaultWorkdir: get('TL_DEFAULT_WORKDIR', process.cwd()),
     defaultModel: get('TL_DEFAULT_MODEL'),
+    workspacesEnv: get('TL_WORKSPACES') || undefined,
+    workspacesAllowedEnv: get('TL_WORKSPACES_ALLOWED') || undefined,
     telegram: {
       botToken: get('TL_TG_BOT_TOKEN'),
       chatId: get('TL_TG_CHAT_ID'),

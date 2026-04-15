@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { loadConfig } from '../config.js';
+import { loadConfig, parseWorkspacesEnv, parseWorkspacesAllowedEnv } from '../config.js';
 
 // Prevent loadConfig from reading ~/.tlive/config.env so tests use pure defaults
 vi.mock('node:fs', async (importOriginal) => {
@@ -83,4 +83,50 @@ describe('loadConfig', () => {
     expect(config.feishu.allowedUsers).toEqual(['fsu1']);
   });
 
+});
+
+describe('parseWorkspacesEnv', () => {
+  it('returns [] for empty/undefined', () => {
+    expect(parseWorkspacesEnv(undefined)).toEqual([]);
+    expect(parseWorkspacesEnv('')).toEqual([]);
+  });
+
+  it('parses name:path pairs', () => {
+    expect(parseWorkspacesEnv('a:/tmp/a,b:/tmp/b')).toEqual([
+      { name: 'a', workdir: '/tmp/a' },
+      { name: 'b', workdir: '/tmp/b' },
+    ]);
+  });
+
+  it('trims whitespace in entries', () => {
+    expect(parseWorkspacesEnv(' a : /tmp/a , b : /tmp/b ')).toEqual([
+      { name: 'a', workdir: '/tmp/a' },
+      { name: 'b', workdir: '/tmp/b' },
+    ]);
+  });
+
+  it('skips entries without colon', () => {
+    expect(parseWorkspacesEnv('a:/tmp/a,bogus')).toEqual([
+      { name: 'a', workdir: '/tmp/a' },
+    ]);
+  });
+
+  it('preserves path with colons (e.g., Windows-like — unlikely but safe)', () => {
+    expect(parseWorkspacesEnv('a:/tmp:a')).toEqual([{ name: 'a', workdir: '/tmp:a' }]);
+  });
+});
+
+describe('parseWorkspacesAllowedEnv', () => {
+  it('returns undefined for empty/undefined', () => {
+    expect(parseWorkspacesAllowedEnv(undefined)).toBeUndefined();
+    expect(parseWorkspacesAllowedEnv('')).toBeUndefined();
+  });
+
+  it('parses comma-separated prefixes', () => {
+    expect(parseWorkspacesAllowedEnv('/home/y,/opt')).toEqual(['/home/y', '/opt']);
+  });
+
+  it('trims whitespace', () => {
+    expect(parseWorkspacesAllowedEnv(' /home/y , /opt ')).toEqual(['/home/y', '/opt']);
+  });
 });
