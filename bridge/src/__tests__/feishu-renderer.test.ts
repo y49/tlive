@@ -811,10 +811,10 @@ describe('FeishuRenderer', () => {
       };
       const result = renderer.renderCommandResponse(data);
       const card = parseCard(result.card);
-      const actionEl = card.body.elements.find(e => e.tag === 'column_set');
+      const actionEl = card.body.elements.find(e => e.tag === 'column_set') as any;
       expect(actionEl).toBeDefined();
-      expect(actionEl!.columns).toHaveLength(1);
-      const button = actionEl!.columns[0].elements[0];
+      expect(actionEl.columns).toHaveLength(1);
+      const button = actionEl.columns[0].elements[0];
       expect(button.tag).toBe('button');
       expect(button.value.action).toBe('action:1');
     });

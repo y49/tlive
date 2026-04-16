@@ -570,6 +570,7 @@ export class SDKEngine {
           const inputStr = getToolCommand(toolName, toolInput);
           const buttons: Array<{ label: string; callbackData: string; style: string }> = [
             { label: '✅ Allow', callbackData: `perm:allow:${permId}`, style: 'primary' },
+            { label: '🔓 Always', callbackData: `perm:allow_session:${permId}`, style: 'primary' },
             { label: '❌ Deny', callbackData: `perm:deny:${permId}`, style: 'danger' },
           ];
           renderer.onPermissionNeeded(toolName, inputStr, permId, buttons);
@@ -579,6 +580,12 @@ export class SDKEngine {
           // Back to thinking after user responded
           void statusLine.setPhase({ kind: 'thinking' });
           this.permissions.clearPendingSdkPerm(chatKey);
+          // If user chose "Always", persist tool in session whitelist so future
+          // calls of the same tool auto-allow without re-prompting.
+          if (result.behavior === 'allow_always') {
+            this.permissions.addAllowedTool(toolName);
+            console.log(`[tlive:engine] ${toolName} added to session whitelist`);
+          }
           console.log(`[tlive:engine] Permission resolved: ${toolName} (${permId}) → ${result.behavior}`);
           return result.behavior as 'allow' | 'allow_always' | 'deny';
         }
