@@ -53,19 +53,53 @@ export function getToolTitle(name: string, input: Record<string, unknown>): stri
 
 export function getToolCommand(name: string, input: Record<string, unknown>): string {
   const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+  const truncate = (s: string, n: number): string => s.length > n ? s.slice(0, n - 1) + '…' : s;
+  const MAX = 150;
+
   switch (name) {
-    case 'Read': case 'Edit': case 'Write':
+    case 'Read':
       return str(input.file_path);
+    case 'Edit': {
+      const file = str(input.file_path);
+      const oldStr = truncate(str(input.old_string), 50);
+      const newStr = truncate(str(input.new_string), 50);
+      const parts = [file];
+      if (oldStr) parts.push(`−${oldStr}`);
+      if (newStr) parts.push(`+${newStr}`);
+      return parts.join('\n');
+    }
+    case 'Write': {
+      const file = str(input.file_path);
+      const content = str(input.content);
+      return content ? `${file} (${content.length} chars)` : file;
+    }
     case 'Grep':
       return `"${str(input.pattern)}" in ${str(input.path) || '.'}`;
     case 'Glob':
       return str(input.pattern);
     case 'Bash':
-      return str(input.command);
+      return truncate(str(input.command), MAX);
     case 'Agent':
-      return str(input.description) || str(input.prompt)?.slice(0, 60) || '';
-    default:
-      return '';
+    case 'Task':
+      return str(input.description) || truncate(str(input.prompt), MAX) || '';
+    case 'WebFetch':
+      return str(input.url);
+    case 'WebSearch':
+      return str(input.query);
+    case 'TodoWrite': {
+      const todos = input.todos;
+      const count = Array.isArray(todos) ? todos.length : 0;
+      return `${count} todo items`;
+    }
+    default: {
+      // Generic fallback — small JSON dump, truncated
+      try {
+        const json = JSON.stringify(input);
+        return truncate(json, MAX);
+      } catch {
+        return '';
+      }
+    }
   }
 }
 

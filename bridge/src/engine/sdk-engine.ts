@@ -519,7 +519,7 @@ export class SDKEngine {
           const permId = `sdk-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           this.permissions.setPendingSdkPerm(chatKey, permId);
           console.log(`[tlive:engine] Permission request: ${toolName} (${permId}) for ${chatKey}`);
-          const inputStr = getToolCommand(toolName, toolInput) || JSON.stringify(toolInput, null, 2);
+          const inputStr = getToolCommand(toolName, toolInput);
           const buttons: Array<{ label: string; callbackData: string; style: string }> = [
             { label: '✅ Allow', callbackData: `perm:allow:${permId}`, style: 'primary' },
             { label: '❌ Deny', callbackData: `perm:deny:${permId}`, style: 'danger' },

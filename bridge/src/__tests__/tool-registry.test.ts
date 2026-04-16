@@ -76,8 +76,12 @@ describe('tool-registry', () => {
       expect(getToolCommand('Agent', { description: 'Explore codebase' })).toBe('Explore codebase');
     });
 
-    it('returns empty string for unknown tools', () => {
-      expect(getToolCommand('CustomTool', {})).toBe('');
+    it('returns empty braces for unknown tools with no input', () => {
+      expect(getToolCommand('CustomTool', {})).toBe('{}');
+    });
+
+    it('returns truncated JSON for unknown tools', () => {
+      expect(getToolCommand('CustomTool', { foo: 'bar' })).toBe('{"foo":"bar"}');
     });
   });
 
