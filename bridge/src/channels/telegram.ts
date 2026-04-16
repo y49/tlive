@@ -272,9 +272,27 @@ export class TelegramAdapter extends BaseChannelAdapter<TelegramOutbound> {
     }
   }
 
-  async send(chatId: string, message: TelegramOutbound): Promise<SendResult> {
+  async createTopicIfNeeded(chatId: string, name: string): Promise<string | undefined> {
+    try {
+      const chat = await this.api.getChat(chatId);
+      if (!(chat as any).is_forum) return undefined;
+      const topic = await this.api.createForumTopic(chatId, name);
+      return String(topic.message_thread_id);
+    } catch (err) {
+      console.warn(`[Telegram] createTopic failed for ${name} in ${chatId}: ${(err as Error).message}`);
+      return undefined;
+    }
+  }
+
+  send(chatId: string, message: TelegramOutbound): Promise<SendResult>;
+  send(target: { chatId: string; threadId?: string }, message: TelegramOutbound): Promise<SendResult>;
+  async send(target: string | { chatId: string; threadId?: string }, message: TelegramOutbound): Promise<SendResult> {
+    const chatId = typeof target === 'string' ? target : target.chatId;
+    const threadId = typeof target === 'string' ? undefined : target.threadId;
     const api = this.api;
     const opts: Record<string, unknown> = { parse_mode: 'HTML' };
+
+    if (threadId) opts.message_thread_id = parseInt(threadId, 10);
 
     if (this.config.disableLinkPreview) {
       opts.link_preview_options = { is_disabled: true };
