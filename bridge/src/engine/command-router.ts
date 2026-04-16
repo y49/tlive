@@ -92,17 +92,31 @@ export class CommandRouter {
         return true;
       }
       case '/new': {
-        // Close any active LiveSession(s) for this chat before creating new session
+        // End current session entirely and prepare for a new one
+        // Workspace-aware: clear activeSessionId, abort session
+        if (this.workspaceManager) {
+          const ws = this.workspaceManager.findByThread(msg.chatId);
+          if (ws?.activeSessionId) {
+            const sessionId = ws.activeSessionId;
+            this.workspaceManager.update(ws.name, {
+              activeSessionId: undefined,
+              lastSessionId: sessionId,
+            });
+            if (this.sessionController) {
+              await this.sessionController.abort(sessionId);
+            }
+            this.workspaceManager.persist();
+          }
+        }
+        // Legacy session cleanup
         this.onNewSession?.(msg.channelType, msg.chatId);
         const newSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         await this.router.rebind(msg.channelType, msg.chatId, newSessionId);
         this.state.clearLastActive(msg.channelType, msg.chatId);
-        // Clear Discord thread binding so next conversation creates a fresh thread
-        this.state.clearThread(msg.channelType, msg.chatId);
         this.permissions.clearSessionWhitelist();
         await adapter.send(msg.chatId, r.renderCommandResponse({
           title: '🆕 New Session',
-          body: 'Session cleared. Send a message to begin.',
+          body: 'Session ended. Send a message to start fresh.',
           color: 'success',
         }));
         return true;
@@ -153,34 +167,13 @@ export class CommandRouter {
         return true;
       }
       case '/stop': {
+        // Interrupt the current execution (like Ctrl+C) — session stays alive
         const chatKey = this.state.stateKey(msg.channelType, msg.chatId);
         const ctrl = this.activeControls.get(chatKey);
-        let interrupted = false;
         if (ctrl) {
           this.activeControls.delete(chatKey);
           await ctrl.interrupt();
-          interrupted = true;
-        }
-
-        // Workspace-aware: clear activeSessionId and persist
-        if (this.workspaceManager) {
-          const ws = this.workspaceManager.findByThread(msg.chatId);
-          if (ws?.activeSessionId) {
-            const sessionId = ws.activeSessionId;
-            this.workspaceManager.update(ws.name, {
-              activeSessionId: undefined,
-              lastSessionId: sessionId,
-            });
-            if (this.sessionController) {
-              await this.sessionController.abort(sessionId);
-            }
-            this.workspaceManager.persist();
-            interrupted = true;
-          }
-        }
-
-        if (interrupted) {
-          await adapter.send(msg.chatId, r.renderSimpleText('⏹ Interrupted current execution' + CommandRouter.MENU_HINT));
+          await adapter.send(msg.chatId, r.renderSimpleText('⏹ Interrupted current execution'));
         } else {
           await adapter.send(msg.chatId, r.renderSimpleText('⚠️ No active execution to stop'));
         }
