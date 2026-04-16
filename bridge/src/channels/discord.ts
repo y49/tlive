@@ -171,11 +171,39 @@ export class DiscordAdapter extends BaseChannelAdapter<DiscordOutbound> {
     return rows;
   }
 
-  async send(chatId: string, message: DiscordOutbound): Promise<SendResult> {
+  async createThreadIfNeeded(channelId: string, name: string): Promise<string | undefined> {
+    try {
+      const channel = await this.client!.channels.fetch(channelId);
+      if (!channel || !channel.isTextBased()) return undefined;
+      const me = (channel as any).guild?.members.me;
+      if (me) {
+        const perms = (channel as any).permissionsFor(me);
+        if (!perms?.has('CreatePublicThreads')) return undefined;
+      }
+      const thread = await (channel as any).threads.create({
+        name,
+        autoArchiveDuration: 1440,
+        reason: 'tlive workspace thread',
+      });
+      return thread.id;
+    } catch (err) {
+      console.warn(`[Discord] createThread failed for ${name} in ${channelId}: ${(err as Error).message}`);
+      return undefined;
+    }
+  }
+
+  async send(chatId: string, message: DiscordOutbound): Promise<SendResult>;
+  async send(target: { chatId: string; threadId?: string }, message: DiscordOutbound): Promise<SendResult>;
+  async send(target: string | { chatId: string; threadId?: string }, message: DiscordOutbound): Promise<SendResult> {
     if (!this.client) throw new Error('Discord client not started');
-    const channel = await this.client.channels.fetch(chatId);
+    const chatId = typeof target === 'string' ? target : target.chatId;
+    const threadId = typeof target === 'string' ? undefined : target.threadId;
+
+    // When a threadId is provided, send directly to the thread channel
+    const channelToFetch = threadId ?? chatId;
+    const channel = await this.client.channels.fetch(channelToFetch);
     if (!channel || !('send' in channel)) {
-      throw new Error(`Channel ${chatId} not found or not a text channel`);
+      throw new Error(`Channel ${channelToFetch} not found or not a text channel`);
     }
 
     const embed = new EmbedBuilder();
