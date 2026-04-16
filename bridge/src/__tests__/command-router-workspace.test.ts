@@ -355,3 +355,116 @@ describe('/stop', () => {
     expect(text).toContain('⏹');
   });
 });
+
+describe('workspace-scoped preferences', () => {
+  let router: CommandRouter;
+  let adapter: ReturnType<typeof mockAdapter>;
+  let state: ReturnType<typeof mockState>;
+
+  beforeEach(() => {
+    state = mockState();
+    const channelRouter = mockRouter();
+    const activeControls = new Map();
+    const permissions = { clearSessionWhitelist: vi.fn() };
+    const renderers = createRenderers();
+
+    router = new CommandRouter(
+      state as any,
+      () => new Map(),
+      channelRouter as any,
+      activeControls,
+      permissions,
+      undefined,
+      renderers,
+    );
+
+    adapter = mockAdapter('telegram');
+  });
+
+  it('/perm on sets perm on the current workspace', async () => {
+    const mgr = new WorkspaceManager({ persistPath: null, workdirWhitelist: undefined });
+    mgr.register({ name: 'my-ws', workdir: '/tmp', runtime: 'codex' });
+    mgr.update('my-ws', { chatId: 'chat1' });
+    router.setWorkspaceManager(mgr);
+
+    await router.handle(adapter as any, makeMsg('/perm on', 'chat1'));
+
+    const ws = mgr.findByName('my-ws');
+    expect(ws?.perm).toBe('on');
+    // state.setPermMode must NOT have been called (workspace took priority)
+    expect(state.setPermMode).not.toHaveBeenCalled();
+  });
+
+  it('/perm off sets perm off on the current workspace', async () => {
+    const mgr = new WorkspaceManager({ persistPath: null, workdirWhitelist: undefined });
+    mgr.register({ name: 'my-ws', workdir: '/tmp', runtime: 'codex' });
+    mgr.update('my-ws', { chatId: 'chat1' });
+    router.setWorkspaceManager(mgr);
+
+    await router.handle(adapter as any, makeMsg('/perm off', 'chat1'));
+
+    const ws = mgr.findByName('my-ws');
+    expect(ws?.perm).toBe('off');
+    expect(state.setPermMode).not.toHaveBeenCalled();
+  });
+
+  it('/perm falls back to per-chat state when no workspace', async () => {
+    // No WorkspaceManager set
+    await router.handle(adapter as any, makeMsg('/perm on', 'chat1'));
+    expect(state.setPermMode).toHaveBeenCalledWith('telegram', 'chat1', 'on');
+  });
+
+  it('/effort high sets effort on the current workspace', async () => {
+    const mgr = new WorkspaceManager({ persistPath: null, workdirWhitelist: undefined });
+    mgr.register({ name: 'my-ws', workdir: '/tmp', runtime: 'codex' });
+    mgr.update('my-ws', { chatId: 'chat1' });
+    router.setWorkspaceManager(mgr);
+
+    await router.handle(adapter as any, makeMsg('/effort high', 'chat1'));
+
+    const ws = mgr.findByName('my-ws');
+    expect(ws?.effort).toBe('high');
+    expect(state.setEffort).not.toHaveBeenCalled();
+  });
+
+  it('/model sets model on the current workspace', async () => {
+    const mgr = new WorkspaceManager({ persistPath: null, workdirWhitelist: undefined });
+    mgr.register({ name: 'my-ws', workdir: '/tmp', runtime: 'codex' });
+    mgr.update('my-ws', { chatId: 'chat1' });
+    router.setWorkspaceManager(mgr);
+
+    await router.handle(adapter as any, makeMsg('/model claude-opus-4-6', 'chat1'));
+
+    const ws = mgr.findByName('my-ws');
+    expect(ws?.model).toBe('claude-opus-4-6');
+    expect(state.setModel).not.toHaveBeenCalled();
+  });
+
+  it('/model reset clears workspace model', async () => {
+    const mgr = new WorkspaceManager({ persistPath: null, workdirWhitelist: undefined });
+    mgr.register({ name: 'my-ws', workdir: '/tmp', runtime: 'codex' });
+    mgr.update('my-ws', { chatId: 'chat1', model: 'claude-opus-4-6' });
+    router.setWorkspaceManager(mgr);
+
+    await router.handle(adapter as any, makeMsg('/model reset', 'chat1'));
+
+    const ws = mgr.findByName('my-ws');
+    expect(ws?.model).toBeUndefined();
+  });
+
+  it('/verbose 2 sets workspace verbose', async () => {
+    const mgr = new WorkspaceManager({ persistPath: null, workdirWhitelist: undefined });
+    mgr.register({ name: 'my-ws', workdir: '/tmp', runtime: 'codex' });
+    mgr.update('my-ws', { chatId: 'chat1' });
+    router.setWorkspaceManager(mgr);
+
+    // Also need setVerboseLevel on state mock for fallback path — add it
+    (state as any).setVerboseLevel = vi.fn();
+
+    await router.handle(adapter as any, makeMsg('/verbose 2', 'chat1'));
+
+    const ws = mgr.findByName('my-ws');
+    expect(ws?.verbose).toBe(2);
+    expect((state as any).setVerboseLevel).not.toHaveBeenCalled();
+  });
+});

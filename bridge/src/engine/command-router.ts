@@ -133,14 +133,20 @@ export class CommandRouter {
       }
       case '/perm': {
         const sub = parts[1]?.toLowerCase();
+        const wsForPerm = this.workspaceManager?.findByThread(msg.chatId);
         if (sub === 'on' || sub === 'off') {
-          this.state.setPermMode(msg.channelType, msg.chatId, sub);
+          if (wsForPerm) {
+            this.workspaceManager!.update(wsForPerm.name, { perm: sub });
+            this.workspaceManager!.persist();
+          } else {
+            this.state.setPermMode(msg.channelType, msg.chatId, sub);
+          }
           const text = (sub === 'on'
             ? '🔐 Permission prompts: ON — dangerous tools will ask for confirmation'
             : '⚡ Permission prompts: OFF — all tools auto-allowed') + CommandRouter.MENU_HINT;
           await adapter.send(msg.chatId, r.renderSimpleText(text));
         } else {
-          const current = this.state.getPermMode(msg.channelType, msg.chatId);
+          const current = wsForPerm?.perm ?? this.state.getPermMode(msg.channelType, msg.chatId);
           const text = `🔐 Permission mode: **${current}**\nUsage: \`/perm on|off\`\non = prompt for dangerous tools (default)\noff = auto-allow all`;
           await adapter.send(msg.chatId, r.renderSimpleText(text));
         }
@@ -183,13 +189,19 @@ export class CommandRouter {
       case '/effort': {
         const LEVELS = ['low', 'medium', 'high', 'max'] as const;
         const level = parts[1]?.toLowerCase();
+        const wsForEffort = this.workspaceManager?.findByThread(msg.chatId);
         if (level && LEVELS.includes(level as typeof LEVELS[number])) {
-          this.state.setEffort(msg.channelType, msg.chatId, level as typeof LEVELS[number]);
+          if (wsForEffort) {
+            this.workspaceManager!.update(wsForEffort.name, { effort: level as typeof LEVELS[number] });
+            this.workspaceManager!.persist();
+          } else {
+            this.state.setEffort(msg.channelType, msg.chatId, level as typeof LEVELS[number]);
+          }
           const icons: Record<string, string> = { low: '⚡', medium: '🧠', high: '💪', max: '🔥' };
           const text = `${icons[level] || '🧠'} Effort: **${level}**${CommandRouter.MENU_HINT}`;
           await adapter.send(msg.chatId, r.renderSimpleText(text));
         } else {
-          const current = this.state.getEffort(msg.channelType, msg.chatId) || 'default';
+          const current = wsForEffort?.effort ?? this.state.getEffort(msg.channelType, msg.chatId) ?? 'default';
           const text = `🧠 Effort: **${current}**\nUsage: \`/effort low|medium|high|max\`\nlow = fast · medium = balanced · high = thorough · max = maximum`;
           await adapter.send(msg.chatId, r.renderSimpleText(text));
         }
@@ -313,16 +325,27 @@ export class CommandRouter {
       }
       case '/model': {
         const model = parts.slice(1).join(' ').trim();
+        const wsForModel = this.workspaceManager?.findByThread(msg.chatId);
         if (model) {
           if (model === 'reset' || model === 'default') {
-            this.state.setModel(msg.channelType, msg.chatId, undefined);
+            if (wsForModel) {
+              this.workspaceManager!.update(wsForModel.name, { model: undefined });
+              this.workspaceManager!.persist();
+            } else {
+              this.state.setModel(msg.channelType, msg.chatId, undefined);
+            }
             await adapter.send(msg.chatId, r.renderSimpleText('🤖 Model: reset to default' + CommandRouter.MENU_HINT));
           } else {
-            this.state.setModel(msg.channelType, msg.chatId, model);
+            if (wsForModel) {
+              this.workspaceManager!.update(wsForModel.name, { model });
+              this.workspaceManager!.persist();
+            } else {
+              this.state.setModel(msg.channelType, msg.chatId, model);
+            }
             await adapter.send(msg.chatId, r.renderSimpleText(`🤖 Model: **${model}**${CommandRouter.MENU_HINT}`));
           }
         } else {
-          const current = this.state.getModel(msg.channelType, msg.chatId) || 'default';
+          const current = wsForModel?.model ?? this.state.getModel(msg.channelType, msg.chatId) ?? 'default';
           const text = `🤖 Model: **${current}**\nUsage: \`/model <name>\` or \`/model reset\`\nExamples: \`claude-sonnet-4-6\`, \`claude-opus-4-6\``;
           await adapter.send(msg.chatId, r.renderSimpleText(text));
         }
@@ -332,14 +355,19 @@ export class CommandRouter {
         const llm = getBridgeContext().llm;
         const arg = parts[1]?.toLowerCase();
         const runtime = this.state.getRuntime(msg.channelType, msg.chatId) || 'claude';
+        const wsForSettings = this.workspaceManager?.findByThread(msg.chatId);
 
         if (runtime === 'codex' || !(llm instanceof ClaudeSDKProvider)) {
-          // Codex runtime — show Codex-specific info
+          // Codex runtime — show Codex-specific info (workspace values take precedence)
+          const model = wsForSettings?.model ?? this.state.getModel(msg.channelType, msg.chatId) ?? 'default';
+          const effort = wsForSettings?.effort ?? this.state.getEffort(msg.channelType, msg.chatId) ?? 'default';
+          const perm = wsForSettings?.perm ?? this.state.getPermMode(msg.channelType, msg.chatId);
+          const wsTag = wsForSettings ? ` [workspace: ${wsForSettings.name}]` : '';
           const text = [
-            '⚙️ **Codex Settings**',
-            `  Model: \`${this.state.getModel(msg.channelType, msg.chatId) || 'default'}\``,
-            `  Effort: \`${this.state.getEffort(msg.channelType, msg.chatId) || 'default'}\``,
-            `  Perm: \`${this.state.getPermMode(msg.channelType, msg.chatId)}\``,
+            `⚙️ **Codex Settings**${wsTag}`,
+            `  Model: \`${model}\``,
+            `  Effort: \`${effort}\``,
+            `  Perm: \`${perm}\``,
             '',
             'Use `/model`, `/effort`, `/perm` to change.',
             'Codex sandbox & network settings are set in config.',
