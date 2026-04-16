@@ -426,6 +426,48 @@ export class SDKEngine {
     let permissionReminderMsgId: string | undefined;
     let permissionReminderTool: string | undefined;
     let permissionReminderInput: string | undefined;
+    // ── 3-Track message model ──
+    // Track 1: TextReply — buffered text, flushed as new messages on tool boundaries
+    // Track 2: TodoCard — standalone edit-in-place message for todo checklist
+    // Track 3: DoneLine — one-shot summary on turn complete
+    // Permission cards still go through MessageRenderer (separate flow)
+
+    let textBuffer = '';
+    let todoMessageId: string | undefined;
+    let toolCount = 0;
+    const sendTarget = () => threadId && adapter.channelType === 'discord' ? threadId : msg.chatId;
+
+    const flushTextBuffer = async () => {
+      const text = textBuffer.trim();
+      if (!text) return;
+      textBuffer = '';
+      const r = this.renderers.get(adapter.channelType)!;
+      try {
+        await adapter.send(sendTarget(), r.renderSimpleText(text));
+      } catch { /* non-fatal */ }
+    };
+
+    const flushTodoCard = async (todos: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed' }>) => {
+      const r = this.renderers.get(adapter.channelType)!;
+      const rendered = r.renderNotification({ kind: 'todo_update', items: todos });
+      try {
+        if (todoMessageId) {
+          await adapter.editMessage(sendTarget(), todoMessageId, rendered);
+        } else {
+          const result = await adapter.send(sendTarget(), rendered);
+          todoMessageId = result?.messageId;
+        }
+      } catch { /* non-fatal */ }
+    };
+
+    const sendDoneLine = async (stats: UsageStats) => {
+      const r = this.renderers.get(adapter.channelType)!;
+      const costLine = CostTracker.format(stats);
+      try {
+        await adapter.send(sendTarget(), r.renderSimpleText(`✅ ${toolCount > 0 ? toolCount + ' tools · ' : ''}${costLine}`));
+      } catch { /* non-fatal */ }
+    };
+
     const renderer = new MessageRenderer({
       platformLimit: platformLimits[adapter.channelType] ?? 4096,
       throttleMs: 300,
@@ -439,62 +481,27 @@ export class SDKEngine {
           buttons: buttons.map(b => ({ ...b, style: b.style as 'primary' | 'danger' | 'default' })),
           color: 'warning',
         });
-        const targetChatId = threadId && adapter.channelType === 'discord' ? threadId : msg.chatId;
+        const targetChatId = sendTarget();
         try {
           const result = await adapter.send(targetChatId, rendered);
           permissionReminderMsgId = result.messageId;
         } catch { /* non-fatal */ }
       },
       flushCallback: async (snapshot: ProgressSnapshot, isEdit: boolean) => {
+        // In 3-track mode, only handle permission phase via the renderer card.
+        // Text, todo, and done are handled by separate tracks above.
+        if (snapshot.phase !== 'permission') return isEdit ? undefined : undefined;
+
         const r = this.renderers.get(adapter.channelType)!;
         const rendered = r.renderProgress(snapshot);
-
-        // FIXME: Feishu streaming path — feishuSession is currently unused (always null).
-        // When enabled, streaming API sends plain text, not card JSON. For now, extract
-        // text from card JSON for the streaming path.
-        if (feishuSession && snapshot.permissionQueue.length === 0) {
-          try {
-            const cardJson = JSON.parse((rendered as FeishuOutbound).card || '{}');
-            const textContent = cardJson.body?.elements
-              ?.filter((e: any) => e.tag === 'markdown')
-              ?.map((e: any) => e.content)
-              ?.join('\n') || '';
-            if (!isEdit) {
-              const messageId = await feishuSession.start(textContent);
-              clearInterval(typingInterval);
-              return messageId;
-            } else {
-              feishuSession.update(textContent).catch(() => {});
-              return;
-            }
-          } catch {
-            feishuSession = null;
-          }
-        }
+        const target = sendTarget();
 
         if (!isEdit) {
-          const sendTarget = threadId && adapter.channelType === 'discord' ? threadId : msg.chatId;
-          if (adapter.channelType === 'discord' && !threadId && 'createThread' in adapter) {
-            const result = await adapter.send(msg.chatId, rendered);
-            clearInterval(typingInterval);
-            const preview = (msg.text || 'Claude').slice(0, 80);
-            const newThreadId = await (adapter as any).createThread(msg.chatId, result.messageId, `💬 ${preview}`);
-            if (newThreadId) {
-              threadId = newThreadId;
-              this.state.setThread(msg.channelType, msg.chatId, newThreadId);
-            }
-            return result.messageId;
-          }
-          const result = await adapter.send(sendTarget, rendered);
+          const result = await adapter.send(target, rendered);
           clearInterval(typingInterval);
           return result.messageId;
         } else {
-          // Edit existing message — let the platform handle truncation.
-          // The renderer already applies platform limits for executing/permission phases.
-          // TODO: For completed phase with very long responseText, platform may truncate.
-          // Proper overflow chunking for rendered messages can be added later if needed.
-          const editTarget = threadId && adapter.channelType === 'discord' ? threadId : msg.chatId;
-          await adapter.editMessage(editTarget, renderer.messageId!, rendered);
+          await adapter.editMessage(target, renderer.messageId!, rendered);
         }
       },
     });
@@ -594,29 +601,32 @@ export class SDKEngine {
           this.activeControls.set(chatKey, ctrl);
         },
         onTextDelta: (delta) => {
-          renderer.onTextDelta(delta);
-          if (renderer.messageId && !this.activeMessageIds.has(chatKey)) {
-            this.activeMessageIds.set(chatKey, renderer.messageId);
-          }
+          textBuffer += delta;
+          renderer.onTextDelta(delta); // feed renderer for permission context display
         },
         onToolStart: (event) => {
+          void flushTextBuffer(); // flush buffered text before tool starts
+          toolCount++;
           renderer.onToolStart(event.name);
         },
         onToolResult: (_event) => {},
         onAgentStart: (_data) => {
+          void flushTextBuffer();
+          toolCount++;
           renderer.onToolStart('Agent');
         },
         onAgentProgress: (_data) => {},
         onAgentComplete: (_data) => {},
         onToolProgress: (_data) => {},
         onTodoUpdate: caps.todoTracking ? (todos) => {
-          renderer.onTodoUpdate(todos);
+          void flushTodoCard(todos);
+          renderer.onTodoUpdate(todos); // feed renderer for context
         } : undefined,
         onRateLimit: (data) => {
           if (data.status === 'rejected') {
-            renderer.onTextDelta('\n⚠️ Rate limited. Retrying...\n');
+            textBuffer += '\n⚠️ Rate limited. Retrying...\n';
           } else if (data.status === 'allowed_warning' && data.utilization) {
-            renderer.onTextDelta(`\n⚠️ Rate limit: ${Math.round(data.utilization * 100)}% used\n`);
+            textBuffer += `\n⚠️ Rate limit: ${Math.round(data.utilization * 100)}% used\n`;
           }
         },
         onQueryResult: (event) => {
@@ -627,7 +637,8 @@ export class SDKEngine {
           if (!managed) tracker.start();
           const usage = { input_tokens: event.usage.inputTokens, output_tokens: event.usage.outputTokens, cost_usd: event.usage.costUsd, model_usage: event.usage.modelUsage };
           completedStats = tracker.finish(usage);
-          renderer.onComplete(completedStats);
+          // 3-track: flush remaining text + send done line (no monolithic card)
+          void flushTextBuffer().then(() => sendDoneLine(completedStats!));
         },
         onPromptSuggestion: (suggestion) => {
           const chatId = threadId && adapter.channelType === 'discord' ? threadId : msg.chatId;
