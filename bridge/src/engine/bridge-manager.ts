@@ -63,6 +63,7 @@ export class BridgeManager {
   private messageRouter: MessageRouter;
   /** Cached LLM providers keyed by runtime name */
   private providerCache = new Map<string, LLMProvider>();
+  private workspaceManager!: WorkspaceManager;
 
   constructor() {
     const config = loadConfig();
@@ -112,16 +113,29 @@ export class BridgeManager {
     // Wire workspace manager
     const persistPath = join(homedir(), '.tlive', 'workspaces.json');
     const workdirWhitelist = parseWorkspacesAllowedEnv(config.workspacesAllowedEnv);
-    const workspaceManager = new WorkspaceManager({ persistPath, workdirWhitelist });
-    workspaceManager.load();
+    this.workspaceManager = new WorkspaceManager({ persistPath, workdirWhitelist });
+    this.workspaceManager.load();
     const preConfigured = parseWorkspacesEnv(config.workspacesEnv);
     for (const ws of preConfigured) {
-      workspaceManager.register({ name: ws.name, workdir: ws.workdir, runtime: config.runtime === 'codex' ? 'codex' : 'claude' });
+      this.workspaceManager.register({
+        name: ws.name,
+        workdir: ws.workdir,
+        runtime: config.runtime === 'codex' ? 'codex' : 'claude',
+      });
     }
-    if (preConfigured.length > 0) {
-      console.log(`[bridge] Workspaces registered: ${preConfigured.length} (${preConfigured.map(w => w.name).join(', ')})`);
+    // Auto-register the bridge's cwd as a default workspace (dedups if TL_WORKSPACES already covers it)
+    const autoDefault = this.workspaceManager.ensureDefault({
+      workdir: getBridgeContext().defaultWorkdir,
+      runtime: config.runtime === 'codex' ? 'codex' : 'claude',
+    });
+    if (this.workspaceManager.list().length > 0) {
+      const names = this.workspaceManager.list().map(w => w.name).join(', ');
+      console.log(`[bridge] Workspaces registered: ${this.workspaceManager.list().length} (${names})`);
     }
-    this.commands.setWorkspaceManager(workspaceManager);
+    if (autoDefault) {
+      this.workspaceManager.persist(); // survive restart even without /open
+    }
+    this.commands.setWorkspaceManager(this.workspaceManager);
 
     // Wire terminal permission callback through to IPC
     this.callbackRouter.onTerminalPermissionCallback = (action, toolUseId, sessionId) => {

@@ -362,4 +362,19 @@ describe('BridgeManager', () => {
       })
     );
   });
+
+  it('auto-registers a default workspace for defaultWorkdir at bootstrap', async () => {
+    const adapter = mockAdapter();
+    manager.registerAdapter(adapter);
+
+    // /workspaces should list the auto-registered default (basename of /tmp = "tmp")
+    await manager.handleInboundMessage(adapter, {
+      channelType: 'telegram', chatId: 'c1', userId: 'u1', text: '/workspaces', messageId: 'm1',
+    });
+
+    expect(adapter.send).toHaveBeenCalledWith(
+      'c1',
+      expect.objectContaining({ html: expect.stringContaining('tmp') })
+    );
+  });
 });
