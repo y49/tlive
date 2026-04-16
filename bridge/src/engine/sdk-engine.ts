@@ -7,9 +7,34 @@ import type { ChannelRouter } from './router.js';
 import type { SdkQuestionState } from './callback-router.js';
 import { ConversationEngine } from './conversation.js';
 import { MessageRenderer } from './message-renderer.js';
+import { SessionStatusLine, type StatusPhase, type StatusPayload } from './session-status-line.js';
 import { CostTracker } from './cost-tracker.js';
 import type { UsageStats } from './cost-tracker.js';
 import { getToolCommand } from './tool-registry.js';
+
+/** Map tool name to status line phase */
+const TOOL_PHASE_MAP: Record<string, 'reading' | 'editing' | 'running'> = {
+  Read: 'reading', Grep: 'reading', Glob: 'reading',
+  WebFetch: 'reading', WebSearch: 'reading',
+  Edit: 'editing', Write: 'editing', MultiEdit: 'editing',
+  Bash: 'running', Task: 'running', Agent: 'running',
+};
+
+function formatStatus(p: StatusPayload): string {
+  switch (p.phase) {
+    case 'thinking': return '🧠 Thinking…';
+    case 'reading': return p.target ? `📖 Reading ${p.target}` : '📖 Reading…';
+    case 'editing': return p.target ? `✏️ Editing ${p.target}` : '✏️ Editing…';
+    case 'running': return p.target ? `⚡ ${p.target}` : '⚡ Running…';
+    case 'awaiting_permission': return '⏸ Awaiting permission';
+    case 'done': {
+      const d = p.durationMs ? ` · ${Math.round(p.durationMs / 1000)}s` : '';
+      const c = p.costUsd != null ? ` · $${p.costUsd.toFixed(2)}` : '';
+      return `✅ Done${d}${c}`;
+    }
+    case 'error': return `⚠️ ${p.message || 'Error'}`;
+  }
+}
 import type { FeishuStreamingSession } from '../channels/feishu-streaming.js';
 import { getBridgeContext } from '../context.js';
 import type { NotificationRenderer, RenderedMessage, ProgressSnapshot, FeishuOutbound, NotificationEvent } from '../renderers/types.js';
@@ -435,6 +460,29 @@ export class SDKEngine {
 
     let todoMessageId: string | undefined;
     const getSendTarget = () => threadId && adapter.channelType === 'discord' ? threadId : msg.chatId;
+    const turnStartTime = Date.now();
+
+    // ── Status line: ephemeral "what's happening now" message ──
+    const statusLine = new SessionStatusLine({
+      send: async (payload) => {
+        const r = this.renderers.get(adapter.channelType)!;
+        const rendered = r.renderSimpleText(formatStatus(payload));
+        const result = await adapter.send(getSendTarget(), rendered);
+        return result.messageId;
+      },
+      edit: async (messageId, payload) => {
+        const r = this.renderers.get(adapter.channelType)!;
+        const rendered = r.renderSimpleText(formatStatus(payload));
+        try {
+          await adapter.editMessage(getSendTarget(), messageId, rendered);
+          return true;
+        } catch { return false; }
+      },
+      // Feishu's edit-in-place has higher latency, loosen throttle
+      throttleMs: adapter.channelType === 'feishu' ? 800 : 300,
+    });
+    // Start immediately — user sees "🧠 Thinking…" right after sending
+    void statusLine.setPhase({ kind: 'thinking' });
 
     const flushTodoCard = async (todos: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed' }>) => {
       const r = this.renderers.get(adapter.channelType)!;
@@ -525,8 +573,11 @@ export class SDKEngine {
             { label: '❌ Deny', callbackData: `perm:deny:${permId}`, style: 'danger' },
           ];
           renderer.onPermissionNeeded(toolName, inputStr, permId, buttons);
+          void statusLine.setPhase({ kind: 'awaiting_permission' });
           const result = await this.permissions.getGateway().waitFor(permId);
           renderer.onPermissionResolved(permId);
+          // Back to thinking after user responded
+          void statusLine.setPhase({ kind: 'thinking' });
           this.permissions.clearPendingSdkPerm(chatKey);
           console.log(`[tlive:engine] Permission resolved: ${toolName} (${permId}) → ${result.behavior}`);
           return result.behavior as 'allow' | 'allow_always' | 'deny';
@@ -592,10 +643,16 @@ export class SDKEngine {
         },
         onToolStart: (event) => {
           renderer.onToolStart(event.name);
+          // Update status line: map tool name → phase, derive target from input
+          const phaseKind = TOOL_PHASE_MAP[event.name] ?? 'running';
+          const input = (event as any).input as Record<string, unknown> | undefined;
+          const target = input ? getToolCommand(event.name, input) : event.name;
+          void statusLine.setPhase({ kind: phaseKind, target: target || event.name } as StatusPhase);
         },
         onToolResult: (_event) => {},
         onAgentStart: (_data) => {
           renderer.onToolStart('Agent');
+          void statusLine.setPhase({ kind: 'running', target: 'Agent' });
         },
         onAgentProgress: (_data) => {},
         onAgentComplete: (_data) => {},
@@ -620,6 +677,12 @@ export class SDKEngine {
           const usage = { input_tokens: event.usage.inputTokens, output_tokens: event.usage.outputTokens, cost_usd: event.usage.costUsd, model_usage: event.usage.modelUsage };
           completedStats = tracker.finish(usage);
           renderer.onComplete(completedStats);
+          // Final status line update — turn complete
+          void statusLine.setPhase({
+            kind: 'done',
+            durationMs: Date.now() - turnStartTime,
+            costUsd: completedStats.costUsd,
+          });
         },
         onPromptSuggestion: (suggestion) => {
           const chatId = threadId && adapter.channelType === 'discord' ? threadId : msg.chatId;
@@ -632,7 +695,10 @@ export class SDKEngine {
           });
           adapter.send(chatId, rendered).catch(() => {});
         },
-        onError: (err) => renderer.onError(err),
+        onError: (err) => {
+          renderer.onError(err);
+          void statusLine.setPhase({ kind: 'error', message: err });
+        },
       });
 
       adapter.addReaction(reactionChatId, msg.messageId, reactions.done).catch(() => {});
