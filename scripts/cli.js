@@ -277,19 +277,6 @@ async function runDoctor() {
   const bridgePid = getBridgePid();
   console.log(bridgePid ? `  Bridge:   running (PID ${bridgePid})` : '  Bridge:   not running');
 
-  console.log('');
-
-  // Hook scripts (in npm package directory)
-  console.log('Hooks:');
-  for (const name of ['hook-handler.mjs', 'notify-handler.mjs', 'stop-handler.mjs']) {
-    const p = join(SCRIPTS_DIR, name);
-    console.log(existsSync(p) ? `  ${name}: OK` : `  ${name}: NOT FOUND`);
-  }
-
-  // hooks-paused
-  const pauseFile = join(TLIVE_HOME, 'hooks-paused');
-  console.log(existsSync(pauseFile) ? '  status: paused (auto-allow)' : '  status: active');
-
   console.log('\n=== Done ===');
 }
 
