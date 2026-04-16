@@ -6,6 +6,7 @@ import type { QueryControls } from '../providers/base.js';
 import type { VerboseLevel } from './session-state.js';
 import type { ControlPanel } from './control-panel.js';
 import type { NotificationRenderer } from '../renderers/types.js';
+import type { WorkspaceManager } from './workspace-manager.js';
 import { getBridgeContext } from '../context.js';
 import { ClaudeSDKProvider } from '../providers/claude-sdk.js';
 import { checkCodexAvailable } from '../providers/index.js';
@@ -15,8 +16,19 @@ import { existsSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 
+function formatSince(ts: number): string {
+  const diffMs = Date.now() - ts;
+  const min = Math.round(diffMs / 60000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min}m ago`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+}
+
 export class CommandRouter {
   private controlPanel?: ControlPanel;
+  private workspaceManager?: WorkspaceManager;
 
   constructor(
     private state: SessionStateManager,
@@ -33,6 +45,11 @@ export class CommandRouter {
   /** Inject ControlPanel after construction (avoids circular deps) */
   setControlPanel(panel: ControlPanel): void {
     this.controlPanel = panel;
+  }
+
+  /** Inject WorkspaceManager after construction (avoids circular deps) */
+  setWorkspaceManager(mgr: WorkspaceManager): void {
+    this.workspaceManager = mgr;
   }
 
   async handle(adapter: BaseChannelAdapter, msg: InboundMessage): Promise<boolean> {
@@ -382,6 +399,26 @@ export class CommandRouter {
         } else {
           await adapter.send(msg.chatId, r.renderSimpleText('⚠️ Pairing not available'));
         }
+        return true;
+      }
+      case '/workspaces': {
+        if (!this.workspaceManager) {
+          await adapter.send(msg.chatId, r.renderSimpleText('Workspaces not configured'));
+          return true;
+        }
+        const workspaces = this.workspaceManager.list();
+        if (workspaces.length === 0) {
+          await adapter.send(msg.chatId, r.renderSimpleText('No workspaces. Use /open <name|path> to create one.'));
+          return true;
+        }
+        const lines = ['📁 Workspaces:'];
+        for (const ws of workspaces) {
+          const marker = ws.activeSessionId ? '●' : '○';
+          const state = ws.activeSessionId ? 'running' : 'idle';
+          const since = ws.lastActivityAt ? formatSince(ws.lastActivityAt) : 'never';
+          lines.push(`${marker} ${ws.name}  ${ws.workdir}  · ${state}  · ${since}`);
+        }
+        await adapter.send(msg.chatId, r.renderSimpleText(lines.join('\n')));
         return true;
       }
       default:
