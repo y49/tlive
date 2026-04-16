@@ -351,15 +351,22 @@ export class FeishuRenderer implements NotificationRenderer<FeishuOutbound> {
       });
     }
 
-    const buttons = p.buttons.map(b => ({
-      label: b.label,
-      callbackData: b.callbackData,
-      style: b.style as 'primary' | 'danger' | 'default',
+    // Embed buttons as Feishu card action elements
+    const actionButtons = p.buttons.map(b => ({
+      tag: 'button' as const,
+      text: { tag: 'plain_text' as const, content: b.label },
+      type: b.style === 'danger' ? 'danger' as const : 'primary' as const,
+      value: { action: b.callbackData },
     }));
+    if (actionButtons.length > 0) {
+      elements.push({
+        tag: 'action',
+        actions: actionButtons,
+      } as unknown as CardElement);
+    }
 
     return {
       card: buildCard('orange', '\uD83D\uDD10 Permission Required', elements),
-      buttons,
     };
   }
 
