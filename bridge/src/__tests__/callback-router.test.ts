@@ -36,6 +36,7 @@ function createMockGateway() {
   return {
     resolve: vi.fn(),
     pendingCount: vi.fn().mockReturnValue(0),
+    isPending: vi.fn().mockReturnValue(true),
   };
 }
 

@@ -324,7 +324,7 @@ describe('TelegramRenderer', () => {
         const event: NotificationEvent = { kind: 'thinking', active: false };
         const result = renderer.renderNotification(event);
         expect(result.html).toContain('Done thinking');
-        expect(result.html).toContain('\u2705');
+        expect(result.html).toContain('\uD83D\uDC4C'); // 👌 ok-hand
       });
     });
 
@@ -435,15 +435,15 @@ describe('TelegramRenderer', () => {
         expect(result.html).toContain('12s');
       });
 
-      it('renders todo progress', () => {
+      it('does NOT render todo progress in executing phase (moved to separate panel)', () => {
         const todoItems: TodoItem[] = [
           { content: 'Step 1', status: 'completed' },
           { content: 'Step 2', status: 'in_progress' },
         ];
         const result = renderer.renderProgress(makeSnapshot({ todoItems }));
-        expect(result.html).toContain('\u2705 Step 1');
-        expect(result.html).toContain('\uD83D\uDD27 Step 2');
-        expect(result.html).toContain('Progress (1/2)');
+        // Todo is now rendered in an independent edit-in-place message, not the executing card
+        expect(result.html).not.toContain('Progress (');
+        expect(result.html).not.toContain('Step 1');
       });
 
       it('redacts sensitive content in response text', () => {

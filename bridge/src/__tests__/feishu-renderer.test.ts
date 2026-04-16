@@ -623,7 +623,10 @@ describe('FeishuRenderer', () => {
         const inputEl = card.body.elements.find(e => e.content?.includes('rm -rf /tmp'));
         expect(inputEl).toBeDefined();
 
-        expect(result.buttons).toHaveLength(2);
+        // Buttons are now embedded in card elements (V2 schema) not in outbound.buttons
+        const actionEl = card.body.elements.find(e => e.tag === 'column_set');
+        expect(actionEl).toBeDefined();
+        expect(actionEl!.columns).toHaveLength(2);
       });
 
       it('shows pending count when multiple permissions queued', () => {
@@ -801,14 +804,19 @@ describe('FeishuRenderer', () => {
       expect(card.header.template).toBe('blue');
     });
 
-    it('passes buttons through', () => {
+    it('embeds buttons in card elements (V2 schema)', () => {
       const data: CommandResponseData = {
         title: 'Actions',
         buttons: [{ label: 'Click', callbackData: 'action:1' }],
       };
       const result = renderer.renderCommandResponse(data);
-      expect(result.buttons).toHaveLength(1);
-      expect(result.buttons![0].callbackData).toBe('action:1');
+      const card = parseCard(result.card);
+      const actionEl = card.body.elements.find(e => e.tag === 'column_set');
+      expect(actionEl).toBeDefined();
+      expect(actionEl!.columns).toHaveLength(1);
+      const button = actionEl!.columns[0].elements[0];
+      expect(button.tag).toBe('button');
+      expect(button.value.action).toBe('action:1');
     });
 
     it('includes hr between body and fields', () => {
@@ -828,12 +836,13 @@ describe('FeishuRenderer', () => {
   // ─── renderSimpleText ───────────────────────────
 
   describe('renderSimpleText', () => {
-    it('renders turquoise card with text', () => {
+    it('renders minimal card with text (no heavy header)', () => {
       const result = renderer.renderSimpleText('Hello world');
       const card = parseCard(result.card);
 
       expect(card.schema).toBe('2.0');
-      expect(card.header.template).toBe('turquoise');
+      // No header — avoids the "💬 Message" wrapper that clutters short replies
+      expect(card.header).toBeUndefined();
       const mdEl = card.body.elements.find(e => e.tag === 'markdown');
       expect(mdEl!.content).toBe('Hello world');
     });
@@ -848,7 +857,6 @@ describe('FeishuRenderer', () => {
       const card = parseCard(result.card);
       expect(card.schema).toBe('2.0');
       expect(card.config.wide_screen_mode).toBe(true);
-      expect(card.header).toBeDefined();
       expect(card.body.elements).toBeDefined();
       expect(card.body.elements.length).toBeGreaterThan(0);
     });

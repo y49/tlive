@@ -298,11 +298,12 @@ describe('/stop', () => {
     adapter = mockAdapter('telegram');
   });
 
-  it('clears activeSessionId but keeps workspace', async () => {
+  it('only interrupts active execution, does NOT end session', async () => {
+    // /stop semantics: interrupt current execution (Ctrl+C). Session stays active.
+    // (session termination is /new's responsibility)
     const tmpDir = mkdtempSync(`${tmpdir()}/stop-test-`);
     const mgr = new WorkspaceManager({ persistPath: null, workdirWhitelist: undefined });
     mgr.register({ name: 'my-ws', workdir: tmpDir, runtime: 'codex' });
-    // Simulate workspace linked to the chat with an active session
     mgr.update('my-ws', { chatId: 'chat1', activeSessionId: 'sess-abc' });
     router.setWorkspaceManager(mgr);
 
@@ -313,22 +314,17 @@ describe('/stop', () => {
     const result = await router.handle(adapter as any, makeMsg('/stop', 'chat1'));
     expect(result).toBe(true);
 
-    // Session was cleared
+    // Session remains — /stop doesn't terminate it
     const ws = mgr.findByName('my-ws');
-    expect(ws).toBeDefined();
-    expect(ws!.activeSessionId).toBeUndefined();
-    expect(ws!.lastSessionId).toBe('sess-abc');
+    expect(ws!.activeSessionId).toBe('sess-abc');
 
-    // workspace itself still exists
-    expect(mgr.list().length).toBe(1);
+    // No sessionController.abort call — /stop doesn't end the session
+    expect(abortFn).not.toHaveBeenCalled();
 
-    // abort was called with the session id
-    expect(abortFn).toHaveBeenCalledWith('sess-abc');
-
-    // confirmation message sent
+    // Response indicates no active execution to interrupt (no activeControls in test)
     const [, outbound] = (adapter.send as ReturnType<typeof vi.fn>).mock.calls[0];
     const text = outbound.html ?? outbound.text ?? outbound.content ?? JSON.stringify(outbound);
-    expect(text).toContain('⏹');
+    expect(text).toContain('No active execution');
   });
 
   it('reports no active execution when no controls and no workspace session', async () => {

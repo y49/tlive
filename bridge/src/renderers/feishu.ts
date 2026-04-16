@@ -155,10 +155,14 @@ export class FeishuRenderer implements NotificationRenderer<FeishuOutbound> {
   }
 
   renderSimpleText(text: string): FeishuOutbound {
+    // Minimal card — no header (avoids the heavy "Message" wrapper for
+    // status line / short replies)
     return {
-      card: buildCard('turquoise', '\uD83D\uDCAC Message', [
-        { tag: 'markdown', content: text },
-      ]),
+      card: JSON.stringify({
+        schema: '2.0',
+        config: { wide_screen_mode: true },
+        body: { elements: [{ tag: 'markdown', content: text }] },
+      }),
     };
   }
 

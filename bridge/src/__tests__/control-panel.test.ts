@@ -103,9 +103,11 @@ describe('ControlPanel', () => {
 
     it('returns feishu card', () => {
       const msg = panel.buildMainPanel('feishu', 'chat1');
-      // FeishuOutbound has card (JSON string) and buttons
-      expect(msg.buttons).toHaveLength(6);
+      // FeishuOutbound has card (JSON string); buttons embedded in card V2 elements
       expect('card' in msg).toBe(true);
+      const card = JSON.parse((msg as any).card);
+      const actionEl = card.body.elements.find((e: any) => e.tag === 'column_set');
+      expect(actionEl?.columns).toHaveLength(6);
     });
 
     it('reflects current state values', () => {
