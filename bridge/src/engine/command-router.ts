@@ -7,6 +7,7 @@ import type { VerboseLevel } from './session-state.js';
 import type { ControlPanel } from './control-panel.js';
 import type { NotificationRenderer } from '../renderers/types.js';
 import type { WorkspaceManager } from './workspace-manager.js';
+
 import { getBridgeContext } from '../context.js';
 import { ClaudeSDKProvider } from '../providers/claude-sdk.js';
 import { checkCodexAvailable } from '../providers/index.js';
@@ -399,6 +400,41 @@ export class CommandRouter {
         } else {
           await adapter.send(msg.chatId, r.renderSimpleText('⚠️ Pairing not available'));
         }
+        return true;
+      }
+      case '/open': {
+        const arg = parts[1]?.trim();
+        if (!arg) {
+          await adapter.send(msg.chatId, r.renderSimpleText('Usage: /open <name|path>'));
+          return true;
+        }
+        if (!this.workspaceManager) {
+          await adapter.send(msg.chatId, r.renderSimpleText('Workspaces not configured'));
+          return true;
+        }
+        const runtime = 'codex' as const; // simplification — can be extended later
+
+        let result;
+        if (arg.startsWith('/') || arg.startsWith('~') || arg.includes('/')) {
+          const resolved = arg.startsWith('~') ? arg.replace(/^~/, process.env.HOME ?? '') : arg;
+          result = this.workspaceManager.openByPath(resolved, { chatId: msg.chatId, runtime });
+        } else {
+          result = this.workspaceManager.openByName(arg, { chatId: msg.chatId });
+        }
+
+        if (!result.ok) {
+          await adapter.send(msg.chatId, r.renderSimpleText(`❌ ${result.error}`));
+          return true;
+        }
+
+        const ws = result.workspace;
+        if (!ws.threadId && typeof (adapter as any).createTopicIfNeeded === 'function') {
+          const threadId = await (adapter as any).createTopicIfNeeded(msg.chatId, ws.name);
+          if (threadId) this.workspaceManager.update(ws.name, { threadId });
+        }
+        this.workspaceManager.persist();
+
+        await adapter.send(msg.chatId, r.renderSimpleText(`📂 Workspace ${ws.name} opened\n${ws.workdir}`));
         return true;
       }
       case '/workspaces': {

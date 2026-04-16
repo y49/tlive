@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { CommandRouter } from '../engine/command-router.js';
 import { WorkspaceManager } from '../engine/workspace-manager.js';
 import type { BaseChannelAdapter } from '../channels/base.js';
@@ -171,5 +173,100 @@ describe('CommandRouter /workspaces', () => {
     router.setWorkspaceManager(mgr);
     const result = await router.handle(adapter as any, makeMsg('/workspaces'));
     expect(result).toBe(true);
+  });
+});
+
+describe('/open', () => {
+  let router: CommandRouter;
+  let adapter: ReturnType<typeof mockAdapter>;
+
+  beforeEach(() => {
+    const state = mockState();
+    const channelRouter = mockRouter();
+    const activeControls = new Map();
+    const permissions = { clearSessionWhitelist: vi.fn() };
+    const renderers = createRenderers();
+
+    router = new CommandRouter(
+      state as any,
+      () => new Map(),
+      channelRouter as any,
+      activeControls,
+      permissions,
+      undefined,
+      renderers,
+    );
+
+    adapter = mockAdapter('telegram');
+  });
+
+  it('opens existing workspace by name', async () => {
+    const tmpDir = mkdtempSync(`${tmpdir()}/open-test-`);
+    const mgr = new WorkspaceManager({ persistPath: null, workdirWhitelist: undefined });
+    mgr.register({ name: 'alpha', workdir: tmpDir, runtime: 'claude' });
+    router.setWorkspaceManager(mgr);
+
+    const result = await router.handle(adapter as any, makeMsg('/open alpha', 'chat42'));
+    expect(result).toBe(true);
+
+    const ws = mgr.findByName('alpha');
+    expect(ws?.chatId).toBe('chat42');
+
+    const [, outbound] = (adapter.send as ReturnType<typeof vi.fn>).mock.calls[0];
+    const text = outbound.html ?? outbound.text ?? outbound.content ?? JSON.stringify(outbound);
+    expect(text).toContain('alpha');
+    expect(text).toContain('opened');
+  });
+
+  it('creates new workspace by path', async () => {
+    const tmpDir = mkdtempSync(`${tmpdir()}/open-path-test-`);
+    const mgr = new WorkspaceManager({ persistPath: null, workdirWhitelist: undefined });
+    router.setWorkspaceManager(mgr);
+
+    const result = await router.handle(adapter as any, makeMsg(`/open ${tmpDir}`, 'chat99'));
+    expect(result).toBe(true);
+
+    const workspaces = mgr.list();
+    expect(workspaces.length).toBe(1);
+    expect(workspaces[0].workdir).toBe(tmpDir);
+    expect(workspaces[0].chatId).toBe('chat99');
+
+    const [, outbound] = (adapter.send as ReturnType<typeof vi.fn>).mock.calls[0];
+    const text = outbound.html ?? outbound.text ?? outbound.content ?? JSON.stringify(outbound);
+    expect(text).toContain('opened');
+    expect(text).toContain(tmpDir);
+  });
+
+  it('rejects /open with invalid path', async () => {
+    const mgr = new WorkspaceManager({ persistPath: null, workdirWhitelist: undefined });
+    router.setWorkspaceManager(mgr);
+
+    const result = await router.handle(adapter as any, makeMsg('/open /no/such/path/tlive-test'));
+    expect(result).toBe(true);
+
+    const [, outbound] = (adapter.send as ReturnType<typeof vi.fn>).mock.calls[0];
+    const text = outbound.html ?? outbound.text ?? outbound.content ?? JSON.stringify(outbound);
+    expect(text).toContain('❌');
+  });
+
+  it('returns usage when no arg given', async () => {
+    const mgr = new WorkspaceManager({ persistPath: null, workdirWhitelist: undefined });
+    router.setWorkspaceManager(mgr);
+
+    const result = await router.handle(adapter as any, makeMsg('/open'));
+    expect(result).toBe(true);
+
+    const [, outbound] = (adapter.send as ReturnType<typeof vi.fn>).mock.calls[0];
+    const text = outbound.html ?? outbound.text ?? outbound.content ?? JSON.stringify(outbound);
+    expect(text).toContain('Usage');
+  });
+
+  it('returns "not configured" when no WorkspaceManager is set', async () => {
+    const result = await router.handle(adapter as any, makeMsg('/open alpha'));
+    expect(result).toBe(true);
+
+    const [, outbound] = (adapter.send as ReturnType<typeof vi.fn>).mock.calls[0];
+    const text = outbound.html ?? outbound.text ?? outbound.content ?? JSON.stringify(outbound);
+    expect(text).toContain('not configured');
   });
 });
