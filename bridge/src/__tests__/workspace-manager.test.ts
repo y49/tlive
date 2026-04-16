@@ -171,6 +171,20 @@ describe('WorkspaceManager.ensureDefault', () => {
     expect(ws).toBeNull();
     expect(restricted.list()).toHaveLength(0);
   });
+
+  it('tags newly-created default with source="auto"', () => {
+    const ws = mgr.ensureDefault({ workdir: dir1, runtime: 'claude' });
+    expect(ws).not.toBeNull();
+    expect(ws!.source).toBe('auto');
+  });
+
+  it('does not modify source of an existing dedup-matched entry', () => {
+    mgr.register({ name: 'preset', workdir: dir1, runtime: 'claude' });
+    const ws = mgr.ensureDefault({ workdir: dir1, runtime: 'claude' });
+    expect(ws).not.toBeNull();
+    expect(ws!.name).toBe('preset');
+    expect(ws!.source).toBeUndefined(); // register() did not tag it
+  });
 });
 
 describe('WorkspaceManager.getDefault / lazyBindDefault', () => {
@@ -190,21 +204,27 @@ describe('WorkspaceManager.getDefault / lazyBindDefault', () => {
     expect(d!.chatId).toBeUndefined();
   });
 
-  it('getDefault returns undefined when no unbound workspace exists', () => {
+  it('getDefault ignores registered-but-unbound workspaces (no source tag)', () => {
     expect(mgr.getDefault()).toBeUndefined();
     mgr.register({ name: 'a', workdir: dir1, runtime: 'claude' });
-    mgr.openByName('a', { chatId: 'c1' }); // now bound
+    // 'a' has chatId=undefined but source is NOT 'auto' — should not be returned
+    expect(mgr.getDefault()).toBeUndefined();
+    mgr.openByName('a', { chatId: 'c1' });
     expect(mgr.getDefault()).toBeUndefined();
   });
 
-  it('getDefault prefers an unbound workspace over bound ones', () => {
+  it('getDefault returns the source=auto workspace even when TL_WORKSPACES entries are also unbound', () => {
     const dir2 = mkdtempSync(join(tmpdir(), 'bind2-'));
+    // Simulate bootstrap: TL_WORKSPACES registered (unbound) + ensureDefault adds another
     mgr.register({ name: 'alpha', workdir: dir1, runtime: 'claude' });
-    mgr.openByName('alpha', { chatId: 'c1' });
+    // 'alpha' has chatId=undefined and source=undefined
     mgr.ensureDefault({ workdir: dir2, runtime: 'claude' });
+    // The auto-default has chatId=undefined and source='auto'
+
     const d = mgr.getDefault();
     expect(d).toBeDefined();
-    expect(d!.workdir).toBe(dir2);
+    expect(d!.workdir).toBe(dir2); // NOT dir1 — getDefault filters on source='auto'
+    expect(d!.source).toBe('auto');
   });
 
   it('lazyBindDefault binds chatId + threadId to the unbound default', () => {
@@ -235,5 +255,18 @@ describe('WorkspaceManager.getDefault / lazyBindDefault', () => {
     expect(ws).toBeDefined();
     expect(ws!.chatId).toBe('chat-xyz');
     expect(ws!.threadId).toBeUndefined();
+  });
+
+  it('lazyBindDefault binds the source=auto workspace, not TL_WORKSPACES entries', () => {
+    mgr.register({ name: 'alpha', workdir: dir1, runtime: 'claude' });
+    const dir2 = mkdtempSync(join(tmpdir(), 'bind3-'));
+    mgr.ensureDefault({ workdir: dir2, runtime: 'claude' });
+
+    const ws = mgr.lazyBindDefault('chat-1', undefined);
+    expect(ws).toBeDefined();
+    expect(ws!.workdir).toBe(dir2); // auto-default, not alpha
+    expect(ws!.source).toBe('auto');
+    // alpha remains unbound
+    expect(mgr.findByName('alpha')!.chatId).toBeUndefined();
   });
 });

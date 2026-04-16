@@ -31,6 +31,9 @@ export interface Workspace {
   lastActivityAt?: number;
 
   runtime: Runtime;
+  /** Where this workspace was created from — distinguishes the auto-registered default
+   *  (source='auto') from user-provided TL_WORKSPACES / /open entries (undefined). */
+  source?: 'auto';
 }
 
 export interface WorkspaceManagerOptions {
@@ -78,16 +81,19 @@ export class WorkspaceManager {
       name,
       workdir: resolved,
       runtime: input.runtime,
+      source: 'auto',
     };
     this.byName.set(name, ws);
     return ws;
   }
 
-  /** Returns the auto-registered default workspace (chatId === undefined) if one exists
-   *  and has not yet been bound to a chat. After lazyBindDefault, this returns undefined. */
+  /** Returns the auto-registered default workspace (source='auto', chatId undefined) if
+   *  one exists and has not yet been bound to a chat. After lazyBindDefault, this returns
+   *  undefined. Workspaces from TL_WORKSPACES or /open (source !== 'auto') are ignored
+   *  even while their chatId is undefined. */
   getDefault(): Workspace | undefined {
     for (const ws of this.byName.values()) {
-      if (ws.chatId === undefined) return ws;
+      if (ws.source === 'auto' && ws.chatId === undefined) return ws;
     }
     return undefined;
   }
