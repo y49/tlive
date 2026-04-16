@@ -51,6 +51,10 @@ export class MessageRenderer {
   private flushing = false;
   private pendingFlush = false;
 
+  private getSafeResponseText(): string {
+    return typeof this.responseText === 'string' ? this.responseText : '';
+  }
+
   get messageId(): string | undefined {
     return this._messageId;
   }
@@ -132,6 +136,7 @@ export class MessageRenderer {
   }
 
   onTextDelta(text: string): void {
+    if (typeof text !== 'string' || !text) return;
     this.responseText += text;
     this.scheduleFlush();
   }
@@ -186,14 +191,15 @@ export class MessageRenderer {
   }
 
   private renderExecuting(): string {
-    if (this.totalTools === 0 && !this.responseText) {
+    const responseText = this.getSafeResponseText();
+    if (this.totalTools === 0 && !responseText) {
       return '⏳ Starting...';
     }
     const lines: string[] = [];
 
     // Show response text above status line if available
-    if (this.responseText.trim()) {
-      lines.push(this.responseText.trim());
+    if (responseText.trim()) {
+      lines.push(responseText.trim());
       lines.push('');
     }
 
@@ -238,8 +244,9 @@ export class MessageRenderer {
 
     // Error with tools — show partial text + stopped + footer
     if (this.errorMessage) {
-      if (this.responseText) {
-        lines.push(this.responseText);
+      const responseText = this.getSafeResponseText();
+      if (responseText) {
+        lines.push(responseText);
       }
       lines.push('⚠️ Stopped');
       lines.push(SEPARATOR);
@@ -253,9 +260,10 @@ export class MessageRenderer {
     }
 
     // Completed — no platform limit applied here; bridge-manager handles overflow chunking
-    if (this.responseText) {
+    const responseText = this.getSafeResponseText();
+    if (responseText) {
       // Ensure text ends cleanly before separator (strip trailing whitespace but keep content)
-      lines.push(this.responseText.trimEnd());
+      lines.push(responseText.trimEnd());
       lines.push(SEPARATOR);
     }
     if (this.totalTools > 0) {

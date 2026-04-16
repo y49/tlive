@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -16,6 +16,8 @@ export interface Config {
   enabledChannels: string[];
   runtime: 'claude' | 'codex' | 'auto';
   defaultWorkdir: string;
+  defaultWorkdirSource: 'env' | 'process.cwd';
+  defaultWorkdirDiagnostics: DefaultWorkdirDiagnostics;
   defaultModel: string;
   coreUrl: string;
   /** Claude Code settings sources to load (default: ['user']) */
@@ -85,6 +87,42 @@ function loadEnvFile(path: string): Record<string, string> {
   }
 }
 
+export interface DefaultWorkdirDiagnostics {
+  path: string;
+  source: 'env' | 'process.cwd';
+  envValueProvided: boolean;
+  processCwd: string;
+  isAbsolute: boolean;
+  exists: boolean;
+  isDirectory: boolean;
+  isRootPath: boolean;
+}
+
+function inspectDefaultWorkdir(path: string, source: 'env' | 'process.cwd'): DefaultWorkdirDiagnostics {
+  const processCwd = process.cwd();
+  const isAbsolute = path.startsWith('/');
+  const exists = isAbsolute && existsSync(path);
+  let isDirectory = false;
+  if (exists) {
+    try {
+      isDirectory = statSync(path).isDirectory();
+    } catch {
+      isDirectory = false;
+    }
+  }
+
+  return {
+    path,
+    source,
+    envValueProvided: source === 'env',
+    processCwd,
+    isAbsolute,
+    exists,
+    isDirectory,
+    isRootPath: path === '/',
+  };
+}
+
 export function maskSecret(value: string): string {
   if (!value || value.length <= 4) return '****';
   return '*'.repeat(value.length - 4) + value.slice(-4);
@@ -108,6 +146,9 @@ export function loadConfig(): Config {
 
   const port = parseInt(get('TL_PORT', '4590'), 10);
   const globalProxy = get('TL_PROXY');
+  const defaultWorkdirSource: Config['defaultWorkdirSource'] = process.env.TL_DEFAULT_WORKDIR !== undefined || envFile.TL_DEFAULT_WORKDIR !== undefined ? 'env' : 'process.cwd';
+  const defaultWorkdir = get('TL_DEFAULT_WORKDIR', process.cwd());
+  const defaultWorkdirDiagnostics = inspectDefaultWorkdir(defaultWorkdir, defaultWorkdirSource);
 
   const config: Config = {
     port,
@@ -117,7 +158,9 @@ export function loadConfig(): Config {
     runtime: (get('TL_RUNTIME', 'claude') as Config['runtime']),
     claudeSettingSources: parseList(get('TL_CLAUDE_SETTINGS', 'user')) as ClaudeSettingSource[],
     proxy: globalProxy,
-    defaultWorkdir: get('TL_DEFAULT_WORKDIR', process.cwd()),
+    defaultWorkdir,
+    defaultWorkdirSource,
+    defaultWorkdirDiagnostics,
     defaultModel: get('TL_DEFAULT_MODEL'),
     coreUrl: get('TL_CORE_URL', `http://localhost:${port}`),
     telegram: {

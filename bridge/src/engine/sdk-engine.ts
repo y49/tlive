@@ -15,6 +15,7 @@ import { downgradeHeadings } from '../markdown/feishu.js';
 import { chunkByParagraph } from '../delivery/delivery.js';
 import type { FeishuStreamingSession } from '../channels/feishu-streaming.js';
 import { getBridgeContext } from '../context.js';
+import { resolveWorkingDirectory } from './working-directory.js';
 
 /** Managed session — wraps a LiveSession with per-chat metadata */
 interface ManagedSession {
@@ -97,7 +98,10 @@ export class SDKEngine {
   ): ManagedSession | null {
     const key = this.sessionKey(channelType, chatId, workdir);
     const existing = this.registry.get(key);
-    if (existing?.session.isAlive) return existing;
+    if (existing?.session.isAlive) {
+      console.log(`[tlive:engine] Reusing LiveSession: registryKey=${key} workdir=${JSON.stringify(workdir)} sdkSessionId=${sdkSessionId ?? 'new'} existingAlive=${existing.session.isAlive}`);
+      return existing;
+    }
 
     // Clean up dead session
     if (existing) this.registry.delete(key);
@@ -109,7 +113,7 @@ export class SDKEngine {
       const session = provider.createSession({ workingDirectory: workdir, sessionId: sdkSessionId, effort: opts?.effort, model: opts?.model });
       const managed: ManagedSession = { session, workdir, costTracker: new CostTracker(), lastActiveAt: Date.now() };
       this.registry.set(key, managed);
-      console.log(`[tlive:engine] Created LiveSession for ${key}`);
+      console.log(`[tlive:engine] Created LiveSession: registryKey=${key} workdir=${JSON.stringify(workdir)} resumedSdkSessionId=${sdkSessionId ?? 'new'}`);
       return managed;
     } catch (err) {
       console.error(`[tlive:engine] Failed to create LiveSession for ${key}:`, err);
@@ -356,7 +360,29 @@ export class SDKEngine {
     // Resolve working directory
     const { store, defaultWorkdir } = getBridgeContext();
     const session = await store.getSession(binding.sessionId);
-    const workdir = session?.workingDirectory ?? defaultWorkdir;
+    const cwdResolution = resolveWorkingDirectory({
+      sessionWorkdir: session?.workingDirectory,
+      defaultWorkdir,
+    });
+    const workdir = cwdResolution.effectiveWorkdir;
+    console.log(
+      `[tlive:engine] Live turn cwd selection: channelType=${msg.channelType} chatId=${msg.chatId} ` +
+      `sessionId=${binding.sessionId} sessionExists=${session ? 'yes' : 'no'} ` +
+      `stored=${JSON.stringify(session?.workingDirectory)} defaultWorkdir=${JSON.stringify(defaultWorkdir)} ` +
+      `effective=${JSON.stringify(workdir)} source=${cwdResolution.source} ` +
+      `healed=${cwdResolution.healingOccurred} reason=${cwdResolution.reason}`
+    );
+    if (cwdResolution.healingOccurred) {
+      console.warn(`[tlive:engine] Healed live session working directory for ${binding.sessionId} (${msg.channelType}:${msg.chatId}): stored=${JSON.stringify(session?.workingDirectory)} effective=${JSON.stringify(workdir)} source=${cwdResolution.source} reason=${cwdResolution.reason}`);
+      await store.saveSession({
+        id: binding.sessionId,
+        workingDirectory: workdir,
+        createdAt: session?.createdAt ?? binding.createdAt,
+        sdkSessionId: session?.sdkSessionId,
+        model: session?.model,
+        mode: session?.mode,
+      });
+    }
 
     // Resolve threadId
     let threadId = msg.threadId;

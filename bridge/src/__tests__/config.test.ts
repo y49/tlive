@@ -85,9 +85,23 @@ describe('loadConfig', () => {
     expect(config.feishu.allowedUsers).toEqual(['fsu1']);
   });
 
-  it('overrides core URL with TL_CORE_URL', () => {
-    process.env.TL_CORE_URL = 'http://core:9999';
+  it('uses TL_DEFAULT_WORKDIR from env', () => {
+    process.env.TL_DEFAULT_WORKDIR = '/tmp/tlive-project';
     const config = loadConfig();
-    expect(config.coreUrl).toBe('http://core:9999');
+    expect(config.defaultWorkdir).toBe('/tmp/tlive-project');
+    expect(config.defaultWorkdirSource).toBe('env');
+    expect(config.defaultWorkdirDiagnostics.path).toBe('/tmp/tlive-project');
+    expect(config.defaultWorkdirDiagnostics.source).toBe('env');
+    expect(config.defaultWorkdirDiagnostics.envValueProvided).toBe(true);
   });
+
+  it('falls back to process.cwd() when TL_DEFAULT_WORKDIR is not set', () => {
+    const config = loadConfig();
+    expect(config.defaultWorkdir).toBe(process.cwd());
+    expect(config.defaultWorkdirSource).toBe('process.cwd');
+    expect(config.defaultWorkdirDiagnostics.path).toBe(process.cwd());
+    expect(config.defaultWorkdirDiagnostics.processCwd).toBe(process.cwd());
+    expect(config.defaultWorkdirDiagnostics.envValueProvided).toBe(false);
+  });
+
 });

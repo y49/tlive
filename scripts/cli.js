@@ -108,7 +108,7 @@ function daemonStart() {
     ...process.env,
     ...config,
     TL_RUNTIME: runtime,
-    TL_DEFAULT_WORKDIR: process.env.TL_DEFAULT_WORKDIR || process.cwd(),
+    TL_DEFAULT_WORKDIR: process.env.TL_DEFAULT_WORKDIR || config.TL_DEFAULT_WORKDIR || process.cwd(),
   };
 
   const child = spawn(process.execPath, [BRIDGE_ENTRY], {
@@ -222,7 +222,7 @@ function ensureBridgeRunning() {
     ...process.env,
     ...config,
     TL_RUNTIME: runtime,
-    TL_DEFAULT_WORKDIR: process.env.TL_DEFAULT_WORKDIR || process.cwd(),
+    TL_DEFAULT_WORKDIR: process.env.TL_DEFAULT_WORKDIR || config.TL_DEFAULT_WORKDIR || process.cwd(),
   };
 
   try {

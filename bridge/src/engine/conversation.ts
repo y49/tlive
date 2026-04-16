@@ -2,6 +2,7 @@ import { getBridgeContext } from '../context.js';
 import type { CanonicalEvent } from '../messages/schema.js';
 import type { LLMProvider, FileAttachment, PermissionRequestHandler, QueryControls, StreamChatResult } from '../providers/base.js';
 import type { AskUserQuestionHandler } from '../messages/types.js';
+import { resolveWorkingDirectory } from './working-directory.js';
 
 const TEXT_MIME_PREFIXES = ['text/', 'application/json', 'application/xml', 'application/javascript', 'application/typescript', 'application/x-yaml', 'application/toml'];
 
@@ -91,7 +92,22 @@ export class ConversationEngine {
       // 4. Get session info — use config's defaultWorkdir instead of process.cwd()
       //    (bridge daemon CWD may differ from user's project directory)
       const session = await store.getSession(params.sessionId);
-      const workDir = session?.workingDirectory ?? defaultWorkdir;
+      const cwdResolution = resolveWorkingDirectory({
+        sessionWorkdir: session?.workingDirectory,
+        defaultWorkdir,
+      });
+      const workDir = cwdResolution.effectiveWorkdir;
+      if (cwdResolution.healingOccurred) {
+        console.warn(`[tlive:engine] Healed session working directory for ${params.sessionId}: stored=${JSON.stringify(session?.workingDirectory)} effective=${JSON.stringify(workDir)} source=${cwdResolution.source} reason=${cwdResolution.reason}`);
+        await store.saveSession({
+          id: params.sessionId,
+          workingDirectory: workDir,
+          createdAt: session?.createdAt ?? new Date().toISOString(),
+          sdkSessionId: session?.sdkSessionId,
+          model: session?.model,
+          mode: session?.mode,
+        });
+      }
 
       // 5. Stream LLM response — use pre-built stream from LiveSession or call streamChat
       const result = params.streamResult ?? llm.streamChat({
@@ -136,9 +152,11 @@ export class ConversationEngine {
               const existing = await store.getSession(params.sessionId);
               await store.saveSession({
                 id: params.sessionId,
-                workingDirectory: existing?.workingDirectory ?? defaultWorkdir,
+                workingDirectory: existing?.workingDirectory ?? workDir,
                 createdAt: existing?.createdAt ?? new Date().toISOString(),
                 sdkSessionId: value.sessionId,
+                model: existing?.model,
+                mode: existing?.mode,
               });
             }
             params.onQueryResult?.(value);

@@ -139,6 +139,18 @@ async function main() {
 
   logger.info('TLive Bridge starting...');
   logger.info(`Enabled channels: ${config.enabledChannels.join(', ') || 'none'}`);
+  logger.info(`Bridge startup context: defaultWorkdir=${JSON.stringify(config.defaultWorkdir)} source=${config.defaultWorkdirSource} processCwd=${JSON.stringify(config.defaultWorkdirDiagnostics.processCwd)}`);
+  if (config.defaultWorkdirDiagnostics.isRootPath || !config.defaultWorkdirDiagnostics.isAbsolute || !config.defaultWorkdirDiagnostics.exists || !config.defaultWorkdirDiagnostics.isDirectory) {
+    logger.warn(
+      `Suspicious defaultWorkdir detected: path=${JSON.stringify(config.defaultWorkdirDiagnostics.path)} ` +
+      `source=${config.defaultWorkdirDiagnostics.source} ` +
+      `processCwd=${JSON.stringify(config.defaultWorkdirDiagnostics.processCwd)} ` +
+      `isAbsolute=${config.defaultWorkdirDiagnostics.isAbsolute} ` +
+      `exists=${config.defaultWorkdirDiagnostics.exists} ` +
+      `isDirectory=${config.defaultWorkdirDiagnostics.isDirectory} ` +
+      `isRootPath=${config.defaultWorkdirDiagnostics.isRootPath}`
+    );
+  }
 
   // Write startup status
   writeStatusFile(tliveHome, {

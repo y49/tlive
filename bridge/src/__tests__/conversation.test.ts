@@ -1,12 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ConversationEngine } from '../engine/conversation.js';
 import { initBridgeContext } from '../context.js';
 import type { CanonicalEvent } from '../messages/schema.js';
 
 // Mock store
-function createMockStore() {
+function createMockStore(session: { id: string; workingDirectory: string; createdAt: string } | null = { id: 's1', workingDirectory: '/tmp', createdAt: '' }) {
   return {
-    getSession: vi.fn().mockResolvedValue({ id: 's1', workingDirectory: '/tmp', createdAt: '' }),
+    getSession: vi.fn().mockResolvedValue(session),
     saveMessage: vi.fn().mockResolvedValue(undefined),
     getMessages: vi.fn().mockResolvedValue([]),
     acquireLock: vi.fn().mockResolvedValue(true),
@@ -22,7 +25,7 @@ function createMockStore() {
 // Mock LLM that emits controlled CanonicalEvent objects
 function createMockLLM(events: CanonicalEvent[]) {
   return {
-    streamChat: () => ({
+    streamChat: vi.fn(() => ({
       stream: new ReadableStream<CanonicalEvent>({
         start(controller) {
           for (const event of events) {
@@ -32,24 +35,30 @@ function createMockLLM(events: CanonicalEvent[]) {
         }
       }),
       controls: undefined,
-    })
+    }))
   };
 }
 
 describe('ConversationEngine', () => {
   let engine: ConversationEngine;
   let mockStore: ReturnType<typeof createMockStore>;
+  let mockLLM: ReturnType<typeof createMockLLM>;
+  let tempRoot: string;
+  let defaultWorkdir: string;
 
   beforeEach(() => {
-    mockStore = createMockStore();
-    const mockLLM = createMockLLM([
+    tempRoot = mkdtempSync(join(tmpdir(), 'tlive-conversation-'));
+    defaultWorkdir = join(tempRoot, 'project');
+    mkdirSync(defaultWorkdir, { recursive: true });
+    mockStore = createMockStore({ id: 's1', workingDirectory: defaultWorkdir, createdAt: '' });
+    mockLLM = createMockLLM([
       { kind: 'text_delta', text: 'Hello ' },
       { kind: 'text_delta', text: 'world' },
       { kind: 'query_result', sessionId: 's1', isError: false, usage: { inputTokens: 10, outputTokens: 5 } },
     ]);
 
     initBridgeContext({
-      defaultWorkdir: '/tmp',
+      defaultWorkdir,
       store: mockStore as any,
       llm: mockLLM as any,
       permissions: {} as any,
@@ -57,6 +66,10 @@ describe('ConversationEngine', () => {
     });
 
     engine = new ConversationEngine();
+  });
+
+  afterEach(() => {
+    rmSync(tempRoot, { recursive: true, force: true });
   });
 
   it('processes message and returns full response', async () => {
@@ -100,6 +113,41 @@ describe('ConversationEngine', () => {
       onQueryResult: (r) => { resultData = r; },
     });
     expect(resultData.usage.inputTokens).toBe(10);
+  });
+
+  it('uses the default workdir when the session has not been seeded yet', async () => {
+    mockStore = createMockStore(null);
+    mockLLM = createMockLLM([
+      { kind: 'query_result', sessionId: 'sdk-1', isError: false, usage: { inputTokens: 1, outputTokens: 1 } },
+    ]);
+    initBridgeContext({ defaultWorkdir, store: mockStore as any, llm: mockLLM as any, permissions: {} as any, core: {} as any });
+    engine = new ConversationEngine();
+
+    await engine.processMessage({ sessionId: 's1', text: 'hi' });
+
+    expect(mockLLM.streamChat).toHaveBeenCalledWith(expect.objectContaining({ workingDirectory: defaultWorkdir }));
+    expect(mockStore.saveSession).toHaveBeenCalledWith(expect.objectContaining({
+      id: 's1',
+      workingDirectory: defaultWorkdir,
+      sdkSessionId: 'sdk-1',
+    }));
+  });
+
+  it('heals root working directory to defaultWorkdir before execution', async () => {
+    mockStore = createMockStore({ id: 's1', workingDirectory: '/', createdAt: '' });
+    mockLLM = createMockLLM([
+      { kind: 'query_result', sessionId: 'sdk-1', isError: false, usage: { inputTokens: 1, outputTokens: 1 } },
+    ]);
+    initBridgeContext({ defaultWorkdir, store: mockStore as any, llm: mockLLM as any, permissions: {} as any, core: {} as any });
+    engine = new ConversationEngine();
+
+    await engine.processMessage({ sessionId: 's1', text: 'hi' });
+
+    expect(mockLLM.streamChat).toHaveBeenCalledWith(expect.objectContaining({ workingDirectory: defaultWorkdir }));
+    expect(mockStore.saveSession).toHaveBeenCalledWith(expect.objectContaining({
+      id: 's1',
+      workingDirectory: defaultWorkdir,
+    }));
   });
 
   it('releases lock even on error', async () => {

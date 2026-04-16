@@ -75,6 +75,7 @@ export class PermissionCoordinator {
 
   /** Parse text as a permission decision */
   parsePermissionText(text: string): string | null {
+    if (typeof text !== 'string') return null;
     const t = text.trim().toLowerCase();
     if (['allow', 'a', 'yes', 'y', '允许', '通过'].includes(t)) return 'allow';
     if (['deny', 'd', 'no', 'n', '拒绝', '否'].includes(t)) return 'deny';
