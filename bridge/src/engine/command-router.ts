@@ -128,6 +128,7 @@ export class CommandRouter {
         return true;
       }
       case '/verbose': {
+        const labels = ['🤫 quiet — alerts only', '📝 normal — summaries + files', '🔊 full — all events'];
         const level = parseInt(parts[1], 10) as VerboseLevel;
         if ([0, 1, 2].includes(level)) {
           // Workspace-scoped: prefer workspace preference, fall back to per-chat state
@@ -142,12 +143,13 @@ export class CommandRouter {
           } else {
             this.state.setVerboseLevel(msg.channelType, msg.chatId, level);
           }
-          const labels = ['🤫 quiet — alerts only', '📝 normal — summaries + files', '🔊 full — all events'];
           const text = `Verbose: ${labels[level]}${CommandRouter.MENU_HINT}`;
           await adapter.send(msg.chatId, r.renderSimpleText(text));
         } else {
-          const usage = 'Usage: `/verbose 0|1|2`\n0=quiet (alerts only) · 1=normal (summaries+files) · 2=full (all events)';
-          await adapter.send(msg.chatId, r.renderSimpleText(usage));
+          const wsForVerbose = this.workspaceManager?.findByThread(msg.chatId);
+          const current = wsForVerbose?.verbose ?? this.state.getVerboseLevel(msg.channelType, msg.chatId);
+          const text = `Verbose: **${labels[current]}**\nUsage: \`/verbose 0|1|2\`\n0=quiet (alerts only) · 1=normal (summaries+files) · 2=full (all events)`;
+          await adapter.send(msg.chatId, r.renderSimpleText(text));
         }
         return true;
       }

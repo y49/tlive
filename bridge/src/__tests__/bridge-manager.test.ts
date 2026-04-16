@@ -156,6 +156,26 @@ describe('BridgeManager', () => {
     );
   });
 
+  it('handles /verbose with no arg — shows current value', async () => {
+    const adapter = mockAdapter();
+    manager.registerAdapter(adapter);
+
+    // First set a value via /verbose 1 (lazy-binds workspace, stores pref)
+    await manager.handleInboundMessage(adapter, {
+      channelType: 'telegram', chatId: 'c1', userId: 'u1', text: '/verbose 1', messageId: 'm1',
+    });
+
+    // Then /verbose with no arg — should show "normal" as current value
+    await manager.handleInboundMessage(adapter, {
+      channelType: 'telegram', chatId: 'c1', userId: 'u1', text: '/verbose', messageId: 'm2',
+    });
+
+    const lastCall = (adapter.send as any).mock.calls.at(-1);
+    expect(lastCall[1].html).toContain('Verbose:');
+    expect(lastCall[1].html).toContain('normal');
+    expect(lastCall[1].html).toContain('Usage');
+  });
+
   it('handles /new command with rebind', async () => {
     const adapter = mockAdapter();
     manager.registerAdapter(adapter);
