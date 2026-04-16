@@ -378,17 +378,16 @@ export class BridgeManager {
     if (result.action === 'handled') return true;
     if (result.action === 'unauthorized') return false;
 
-    // Lazy-bind the default workspace to this chat on the first authorized message.
-    // No-op if already bound (default ws has a chatId) or if there is no default to bind.
-    if (!msg.callbackData) {
-      const bound = this.workspaceManager.lazyBindDefault(msg.chatId, msg.threadId);
-      if (bound) this.workspaceManager.persist();
-    }
-
-    // Callback data — delegate to CallbackRouter
+    // Callback data — delegate to CallbackRouter (buttons do not represent chat engagement,
+    // so they return here and skip the lazy-bind below)
     if (msg.callbackData) {
       return this.callbackRouter.handle(adapter, msg);
     }
+
+    // Lazy-bind the default workspace to this chat on the first authorized message.
+    // No-op if already bound (default ws has a chatId) or if there is no default to bind.
+    const bound = this.workspaceManager.lazyBindDefault(msg.chatId, msg.threadId);
+    if (bound) this.workspaceManager.persist();
 
     // Bridge commands — only intercept known commands, pass others to Claude Code
     if (msg.text?.startsWith('/')) {
