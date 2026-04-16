@@ -8,6 +8,14 @@ import type {
 } from './types.js';
 
 const SEPARATOR = '───────────────';
+const TG_LIMIT = 4096;
+
+/** Truncate text to fit within remaining character budget */
+function fitText(text: string, budget: number): string {
+  if (text.length <= budget) return text;
+  if (budget <= 20) return '';
+  return text.slice(0, budget - 15) + '\n\n<i>(truncated)</i>';
+}
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -226,16 +234,12 @@ export class TelegramRenderer implements NotificationRenderer<TelegramOutbound> 
   // ─── Progress phase handlers ────────────────────
 
   private renderExecutingPhase(snapshot: ProgressSnapshot): TelegramOutbound {
-    const lines: string[] = [];
-
-    if (snapshot.responseText.trim()) {
-      lines.push(markdownToTelegram(redactSensitiveContent(snapshot.responseText.trim())));
-      lines.push('');
-    }
+    // Build non-text parts first to calculate budget for responseText
+    const tail: string[] = [];
 
     if (snapshot.todoItems.length > 0) {
-      lines.push(renderTodoChecklist(snapshot.todoItems));
-      lines.push('');
+      tail.push(renderTodoChecklist(snapshot.todoItems));
+      tail.push('');
     }
 
     if (snapshot.totalTools > 0) {
@@ -245,8 +249,20 @@ export class TelegramRenderer implements NotificationRenderer<TelegramOutbound> 
       }
       const toolSummary = toolParts.join(' \u00B7 ');
       const elapsed = `${snapshot.elapsedSeconds}s`;
-      lines.push(`\u23F3 ${toolSummary} (${snapshot.totalTools} tools \u00B7 ${elapsed})`);
+      tail.push(`\u23F3 ${toolSummary} (${snapshot.totalTools} tools \u00B7 ${elapsed})`);
     }
+
+    const tailStr = tail.join('\n');
+    const lines: string[] = [];
+
+    if (snapshot.responseText.trim()) {
+      const budget = TG_LIMIT - tailStr.length - 50; // 50 chars margin for separators/newlines
+      const rendered = markdownToTelegram(redactSensitiveContent(snapshot.responseText.trim()));
+      lines.push(fitText(rendered, budget));
+      lines.push('');
+    }
+
+    if (tailStr) lines.push(tailStr);
 
     return { html: lines.join('\n') };
   }
@@ -281,29 +297,37 @@ export class TelegramRenderer implements NotificationRenderer<TelegramOutbound> 
   }
 
   private renderDonePhase(snapshot: ProgressSnapshot): TelegramOutbound {
-    const lines: string[] = [];
-
-    if (snapshot.responseText.trim()) {
-      lines.push(markdownToTelegram(redactSensitiveContent(snapshot.responseText.trimEnd())));
-      lines.push(SEPARATOR);
-    }
+    // Build non-text parts first to calculate budget for responseText
+    const tail: string[] = [];
 
     if (snapshot.todoItems.length > 0) {
-      lines.push(renderTodoChecklist(snapshot.todoItems));
-      lines.push('');
+      tail.push(renderTodoChecklist(snapshot.todoItems));
+      tail.push('');
     }
 
     if (snapshot.totalTools > 0) {
-      lines.push(renderToolSummary(snapshot.toolCounts, snapshot.totalTools));
+      tail.push(renderToolSummary(snapshot.toolCounts, snapshot.totalTools));
     }
 
     if (snapshot.costLine) {
-      lines.push(formatCostLine(snapshot.costLine));
+      tail.push(formatCostLine(snapshot.costLine));
     }
 
     if (snapshot.errorMessage) {
-      lines.push(`\u26A0\uFE0F ${escapeHtml(snapshot.errorMessage)}`);
+      tail.push(`\u26A0\uFE0F ${escapeHtml(snapshot.errorMessage)}`);
     }
+
+    const tailStr = tail.join('\n');
+    const lines: string[] = [];
+
+    if (snapshot.responseText.trim()) {
+      const budget = TG_LIMIT - tailStr.length - SEPARATOR.length - 50;
+      const rendered = markdownToTelegram(redactSensitiveContent(snapshot.responseText.trimEnd()));
+      lines.push(fitText(rendered, budget));
+      lines.push(SEPARATOR);
+    }
+
+    if (tailStr) lines.push(tailStr);
 
     return { html: lines.join('\n') };
   }
