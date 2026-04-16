@@ -34,3 +34,8 @@ export interface Button {
   /** Row index for layout grouping. Buttons with same row are on one line. */
   row?: number;
 }
+
+export interface SendTarget {
+  chatId: string;
+  threadId?: string;  // Telegram messageThreadId / Discord threadId
+}
