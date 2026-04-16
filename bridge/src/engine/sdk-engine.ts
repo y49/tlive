@@ -428,9 +428,6 @@ export class SDKEngine {
     // Renderer
     let feishuSession: FeishuStreamingSession | null = null;
     const platformLimits: Record<string, number> = { telegram: 4096, discord: 2000, feishu: 30000 };
-    let permissionReminderMsgId: string | undefined;
-    let permissionReminderTool: string | undefined;
-    let permissionReminderInput: string | undefined;
     // ── 2-Track: conversation card + separate todo panel ──
     // Main card: edit-in-place progress card (text + tools + cost) — original MessageRenderer
     // Todo panel: standalone edit-in-place message (only when TodoWrite used)
@@ -456,22 +453,6 @@ export class SDKEngine {
     const renderer = new MessageRenderer({
       platformLimit: platformLimits[adapter.channelType] ?? 4096,
       throttleMs: 300,
-      onPermissionTimeout: async (toolName, input, _buttons) => {
-        permissionReminderTool = toolName;
-        permissionReminderInput = input;
-        const r = this.renderers.get(adapter.channelType)!;
-        // Nudge only — the original permission card above still has the buttons
-        const rendered = r.renderCommandResponse({
-          title: '⚠️ Still waiting for permission',
-          body: `${toolName}: ${input}\n\nUse buttons on the card above to respond.`,
-          color: 'warning',
-        });
-        const targetChatId = getSendTarget();
-        try {
-          const result = await adapter.send(targetChatId, rendered);
-          permissionReminderMsgId = result.messageId;
-        } catch { /* non-fatal */ }
-      },
       flushCallback: async (snapshot: ProgressSnapshot, isEdit: boolean) => {
         const r = this.renderers.get(adapter.channelType)!;
         const rendered = r.renderProgress(snapshot);
@@ -546,14 +527,6 @@ export class SDKEngine {
           renderer.onPermissionNeeded(toolName, inputStr, permId, buttons);
           const result = await this.permissions.getGateway().waitFor(permId);
           renderer.onPermissionResolved(permId);
-          if (permissionReminderMsgId) {
-            const icon = result.behavior === 'deny' ? '❌' : '✅';
-            const r = this.renderers.get(adapter.channelType)!;
-            adapter.editMessage(msg.chatId, permissionReminderMsgId,
-              r.renderSimpleText(`${permissionReminderTool}: ${permissionReminderInput} ${icon}`)
-            ).catch(() => {});
-            permissionReminderMsgId = undefined;
-          }
           this.permissions.clearPendingSdkPerm(chatKey);
           console.log(`[tlive:engine] Permission resolved: ${toolName} (${permId}) → ${result.behavior}`);
           return result.behavior as 'allow' | 'allow_always' | 'deny';
