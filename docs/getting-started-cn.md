@@ -170,6 +170,50 @@ tlive doctor
 tlive logs 50
 ```
 
+### IM Bridge 工作目录异常（cwd 变成 `/`）
+
+如果 IM Bridge 回答它当前位于 `/`，或无法安全读取项目文件，请按下面顺序检查日志：
+
+1. 启动时的 `defaultWorkdir`
+   - 确认 bridge 启动日志包含：
+     - 解析后的 `defaultWorkdir`
+     - 当前 `process.cwd()`
+     - 来源：`TL_DEFAULT_WORKDIR` 或回退到 `process.cwd()`
+   - 如果 `defaultWorkdir` 是 `/`、不是绝对路径、不存在，或不是目录，先修正启动配置。
+
+2. Router 的 session 建立过程
+   - 对 fresh chat 或执行 `/new` 之后，确认 router 日志包含：
+     - binding 是新建还是复用
+     - session row 是否被 seed
+     - session 的 `workingDirectory`
+   - 这能确认新 IM 会话是否真的绑定到了预期 cwd 的 bridge session。
+
+3. SDKEngine 的最终 cwd 选择
+   - 在执行前，确认 engine 日志包含：
+     - session 中原本存的 cwd
+     - `defaultWorkdir`
+     - 最终生效的 cwd
+     - cwd 来源
+     - 是否发生 heal
+   - 这是每一轮消息执行前最权威的 cwd 判定点。
+
+**建议手动重现步骤：**
+
+1. 重启 bridge
+2. 在 Telegram 中执行 `/new`
+3. 发送：`請讀取 README.md 第一行，不要修改任何檔案。`
+4. 确认回覆内容与仓库中的文件一致
+5. 如有需要，查看日志：
+
+```bash
+tlive logs 100
+```
+
+如果系统仍然报告 `/`，这些日志应能帮助你判断问题来自：
+- 启动配置
+- session 持久化
+- 执行阶段的 fallback / healing
+
 **常见问题：**
 
 - **"Go Core not found"** — 二进制文件下载不完整，重新运行 `npm install -g tlive` 即可。

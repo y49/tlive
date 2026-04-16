@@ -49,9 +49,30 @@
 2. For Feishu: verify `editMessage` card patching works (check logs for API errors)
 3. Check delivery rate limiting — rapid edits may be throttled
 
-## High memory usage
+## Wrong working directory in IM Bridge
 
-**Symptoms**: Bridge process consumes increasing memory over time.
+**Symptoms**: The IM Bridge says it is in `/`, cannot safely read repository files, or fails to resolve relative project paths after `/new`.
+
+**Steps**:
+1. Check startup `defaultWorkdir` logs
+   - Confirm startup logs show the resolved `defaultWorkdir`, current `process.cwd()`, and whether the source was `TL_DEFAULT_WORKDIR` or fallback `process.cwd()`.
+   - If `defaultWorkdir` is `/`, non-absolute, missing, or not a directory, fix startup configuration first.
+2. Check router session bootstrap logs
+   - For a fresh chat or after `/new`, confirm logs show binding creation or reuse, session seeding, and the stored session `workingDirectory`.
+   - This verifies the IM chat was attached to the expected bridge session.
+3. Check SDKEngine cwd-selection logs
+   - Confirm the engine logs show stored session cwd, `defaultWorkdir`, final effective cwd, source of selection, and whether healing occurred.
+   - This is the authoritative per-message cwd decision.
+4. Reproduce with a safe read-only prompt
+   - Restart the bridge.
+   - In Telegram, run `/new`.
+   - Send: `請讀取 README.md 第一行，不要修改任何檔案。`
+   - Confirm the reply matches the repository file content.
+5. Inspect logs if the issue persists
+   - Run: `tlive logs 100`
+   - Determine whether `/` came from startup configuration, session persistence, or execution-time fallback/healing.
+
+## High memory usage
 
 **Steps**:
 1. Check status: `/tlive status`

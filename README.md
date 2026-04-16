@@ -244,6 +244,49 @@ To access the web terminal from outside your LAN (e.g. via frpc, Cloudflare Tunn
 - IM user whitelists are configured (`TL_TG_ALLOWED_USERS`, `TL_DC_ALLOWED_USERS`, etc.)
 - Use HTTPS on the tunnel side (frps/Cloudflare handle this automatically)
 
+## Troubleshooting: wrong working directory in IM Bridge
+
+If the IM Bridge replies that it is in `/` or cannot safely read project files, check the bridge logs in this order:
+
+1. Startup `defaultWorkdir`
+   - Confirm the bridge startup log shows:
+     - resolved `defaultWorkdir`
+     - current `process.cwd()`
+     - source: `TL_DEFAULT_WORKDIR` or fallback `process.cwd()`
+   - If `defaultWorkdir` is `/`, non-absolute, missing, or not a directory, fix startup configuration first.
+
+2. Router session bootstrap
+   - For a fresh chat or after `/new`, confirm router logs show:
+     - binding creation or reuse
+     - seeded session row
+     - session `workingDirectory`
+   - This verifies a new IM chat was bound to a session with the expected cwd.
+
+3. SDKEngine effective cwd
+   - Before execution, confirm engine logs show:
+     - stored session cwd
+     - `defaultWorkdir`
+     - final effective cwd
+     - source of the selected cwd
+     - whether healing occurred
+   - This is the authoritative per-turn cwd decision.
+
+Recommended manual repro:
+
+1. Restart the bridge
+2. Run `/new` in Telegram
+3. Send: `請讀取 README.md 第一行，不要修改任何檔案。`
+4. Confirm the reply matches the repository file content
+5. If needed, inspect logs with:
+   ```bash
+   tlive logs 100
+   ```
+
+If the assistant still reports `/`, the logs should show whether the bad cwd came from:
+- startup configuration
+- session persistence
+- execution-time fallback or healing
+
 ## Architecture
 
 ```
