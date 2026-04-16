@@ -159,6 +159,10 @@ export class ClaudeAdapter {
         const name = b.name as string;
         const id = b.id as string;
 
+        // Any tool use (hidden or not) resets the streamed flag —
+        // text in the next turn is new and should be emitted
+        this.hasStreamedText = false;
+
         if (HIDDEN_TOOLS.has(name)) {
           this.hiddenToolUseIds.add(id);
 
@@ -181,9 +185,6 @@ export class ClaudeAdapter {
 
           continue;
         }
-
-        // Tool use resets the streamed flag — any text after tools is new
-        this.hasStreamedText = false;
 
         const ev: CanonicalEvent = {
           kind: 'tool_start',
