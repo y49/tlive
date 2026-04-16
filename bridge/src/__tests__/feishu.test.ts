@@ -147,6 +147,50 @@ describe('FeishuAdapter', () => {
         'Feishu client not started',
       );
     });
+
+    it('prefixes card title with workspace name when threadId is provided', async () => {
+      await adapter.start();
+      const cardJson = JSON.stringify({
+        schema: '2.0',
+        header: { title: { content: 'My Title', tag: 'plain_text' }, template: 'blue' },
+        body: { elements: [] },
+      });
+
+      await adapter.send({ chatId: 'oc_chat123', threadId: 'myws' }, { card: cardJson });
+
+      const call = mockMessageCreate.mock.calls[0][0];
+      const sentCard = JSON.parse(call.data.content);
+      expect(sentCard.header.title.content).toBe('[myws] My Title');
+      await adapter.stop();
+    });
+
+    it('does not modify card when no threadId is provided via object target', async () => {
+      await adapter.start();
+      const cardJson = JSON.stringify({
+        schema: '2.0',
+        header: { title: { content: 'My Title', tag: 'plain_text' }, template: 'blue' },
+        body: { elements: [] },
+      });
+
+      await adapter.send({ chatId: 'oc_chat123' }, { card: cardJson });
+
+      const call = mockMessageCreate.mock.calls[0][0];
+      const sentCard = JSON.parse(call.data.content);
+      expect(sentCard.header.title.content).toBe('My Title');
+      await adapter.stop();
+    });
+
+    it('returns original card JSON on parse error in tagCardWithWorkspace', async () => {
+      await adapter.start();
+      const badJson = 'not-json';
+
+      const result = await adapter.send({ chatId: 'oc_chat123', threadId: 'ws' }, { card: badJson });
+
+      const call = mockMessageCreate.mock.calls[0][0];
+      expect(call.data.content).toBe('not-json');
+      expect(result.success).toBe(true);
+      await adapter.stop();
+    });
   });
 
   describe('start() / stop()', () => {

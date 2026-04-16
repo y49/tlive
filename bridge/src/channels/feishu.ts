@@ -271,8 +271,14 @@ export class FeishuAdapter extends BaseChannelAdapter<FeishuOutbound> {
     return 'user_id';
   }
 
-  async send(chatId: string, message: FeishuOutbound): Promise<SendResult> {
+  async send(chatId: string, message: FeishuOutbound): Promise<SendResult>;
+  async send(target: { chatId: string; threadId?: string }, message: FeishuOutbound): Promise<SendResult>;
+  async send(target: string | { chatId: string; threadId?: string }, message: FeishuOutbound): Promise<SendResult> {
     if (!this.client) throw new Error('Feishu client not started');
+
+    const chatId = typeof target === 'string' ? target : target.chatId;
+    const workspaceName = typeof target === 'string' ? undefined : target.threadId;
+    const card = workspaceName ? this.tagCardWithWorkspace(message.card, workspaceName) : message.card;
 
     const idType = this.detectReceiveIdType(chatId);
     try {
@@ -281,7 +287,7 @@ export class FeishuAdapter extends BaseChannelAdapter<FeishuOutbound> {
         data: {
           receive_id: chatId,
           msg_type: 'interactive',
-          content: message.card,
+          content: card,
         },
       }) as FeishuCreateMessageResult;
 
@@ -289,6 +295,18 @@ export class FeishuAdapter extends BaseChannelAdapter<FeishuOutbound> {
       return { messageId: String(messageId), success: true };
     } catch (err) {
       throw classifyError('feishu', err);
+    }
+  }
+
+  private tagCardWithWorkspace(cardJson: string, workspace: string): string {
+    try {
+      const card = JSON.parse(cardJson);
+      if (card.header && typeof card.header.title?.content === 'string') {
+        card.header.title.content = `[${workspace}] ${card.header.title.content}`;
+      }
+      return JSON.stringify(card);
+    } catch {
+      return cardJson;
     }
   }
 
