@@ -6,7 +6,8 @@ import { PendingPermissions } from '../permissions/gateway.js';
 import { getBridgeContext } from '../context.js';
 import { resolveProvider } from '../providers/index.js';
 import type { LLMProvider } from '../providers/base.js';
-import { loadConfig } from '../config.js';
+import { loadConfig, parseWorkspacesEnv, parseWorkspacesAllowedEnv } from '../config.js';
+import { WorkspaceManager } from './workspace-manager.js';
 import { SessionStateManager } from './session-state.js';
 import { PermissionCoordinator } from './permission-coordinator.js';
 import { CommandRouter } from './command-router.js';
@@ -14,14 +15,15 @@ import { CallbackRouter } from './callback-router.js';
 import { SDKEngine } from './sdk-engine.js';
 import { MessageRouter } from './message-router.js';
 import { ControlPanel } from './control-panel.js';
-import { networkInterfaces } from 'node:os';
+import { networkInterfaces, homedir } from 'node:os';
+import { join } from 'node:path';
 import type { NotificationRenderer } from '../renderers/types.js';
 import { TelegramRenderer } from '../renderers/telegram.js';
 import { DiscordRenderer } from '../renderers/discord.js';
 import { FeishuRenderer } from '../renderers/feishu.js';
 
 /** Bridge commands handled synchronously (don't block adapter loop) */
-const QUICK_COMMANDS = new Set(['/menu', '/new', '/status', '/verbose', '/hooks', '/sessions', '/session', '/help', '/perm', '/effort', '/stop', '/approve', '/pairings', '/runtime', '/settings', '/model']);
+const QUICK_COMMANDS = new Set(['/menu', '/new', '/status', '/verbose', '/hooks', '/sessions', '/session', '/help', '/perm', '/effort', '/stop', '/approve', '/pairings', '/runtime', '/settings', '/model', '/workspaces', '/open']);
 
 function isPrivateIPv4(ip: string): boolean {
   const parts = ip.split('.').map(Number);
@@ -106,6 +108,20 @@ export class BridgeManager {
     );
     this.commands.setControlPanel(controlPanel);
     this.callbackRouter.setControlPanel(controlPanel);
+
+    // Wire workspace manager
+    const persistPath = join(homedir(), '.tlive', 'workspaces.json');
+    const workdirWhitelist = parseWorkspacesAllowedEnv(config.workspacesAllowedEnv);
+    const workspaceManager = new WorkspaceManager({ persistPath, workdirWhitelist });
+    workspaceManager.load();
+    const preConfigured = parseWorkspacesEnv(config.workspacesEnv);
+    for (const ws of preConfigured) {
+      workspaceManager.register({ name: ws.name, workdir: ws.workdir, runtime: config.runtime === 'codex' ? 'codex' : 'claude' });
+    }
+    if (preConfigured.length > 0) {
+      console.log(`[bridge] Workspaces registered: ${preConfigured.length} (${preConfigured.map(w => w.name).join(', ')})`);
+    }
+    this.commands.setWorkspaceManager(workspaceManager);
 
     // Wire terminal permission callback through to IPC
     this.callbackRouter.onTerminalPermissionCallback = (action, toolUseId, sessionId) => {
