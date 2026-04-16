@@ -101,7 +101,7 @@ export class CommandRouter {
         // End current session entirely and prepare for a new one
         // Workspace-aware: clear activeSessionId, abort session
         if (this.workspaceManager) {
-          const ws = this.workspaceManager.findByThread(msg.chatId);
+          const ws = this.workspaceManager.findByThread(msg.chatId, msg.threadId);
           if (ws?.activeSessionId) {
             const sessionId = ws.activeSessionId;
             this.workspaceManager.update(ws.name, {
@@ -133,7 +133,7 @@ export class CommandRouter {
         if ([0, 1, 2].includes(level)) {
           // Workspace-scoped: prefer workspace preference, fall back to per-chat state
           if (this.workspaceManager) {
-            const ws = this.workspaceManager.findByThread(msg.chatId);
+            const ws = this.workspaceManager.findByThread(msg.chatId, msg.threadId);
             if (ws) {
               this.workspaceManager.update(ws.name, { verbose: level });
               this.workspaceManager.persist();
@@ -146,7 +146,7 @@ export class CommandRouter {
           const text = `Verbose: ${labels[level]}${CommandRouter.MENU_HINT}`;
           await adapter.send(msg.chatId, r.renderSimpleText(text));
         } else {
-          const wsForVerbose = this.workspaceManager?.findByThread(msg.chatId);
+          const wsForVerbose = this.workspaceManager?.findByThread(msg.chatId, msg.threadId);
           const current = wsForVerbose?.verbose ?? this.state.getVerboseLevel(msg.channelType, msg.chatId);
           const text = `Verbose: **${labels[current]}**\nUsage: \`/verbose 0|1|2\`\n0=quiet (alerts only) · 1=normal (summaries+files) · 2=full (all events)`;
           await adapter.send(msg.chatId, r.renderSimpleText(text));
@@ -155,7 +155,7 @@ export class CommandRouter {
       }
       case '/mode': {
         // Codex permission mode preset (bundles approvalPolicy + sandbox)
-        const ws = this.workspaceManager?.findByThread(msg.chatId);
+        const ws = this.workspaceManager?.findByThread(msg.chatId, msg.threadId);
         if (ws && ws.runtime !== 'codex') {
           await adapter.send(msg.chatId, r.renderSimpleText(
             '⚠️ Mode presets are Codex-only. For Claude use `/perm on|off`.',
@@ -200,7 +200,7 @@ export class CommandRouter {
       }
       case '/perm': {
         const sub = parts[1]?.toLowerCase();
-        const wsForPerm = this.workspaceManager?.findByThread(msg.chatId);
+        const wsForPerm = this.workspaceManager?.findByThread(msg.chatId, msg.threadId);
         if (sub === 'on' || sub === 'off') {
           if (wsForPerm) {
             this.workspaceManager!.update(wsForPerm.name, { perm: sub });
@@ -235,7 +235,7 @@ export class CommandRouter {
       case '/effort': {
         const LEVELS = ['low', 'medium', 'high', 'max'] as const;
         const level = parts[1]?.toLowerCase();
-        const wsForEffort = this.workspaceManager?.findByThread(msg.chatId);
+        const wsForEffort = this.workspaceManager?.findByThread(msg.chatId, msg.threadId);
         if (level && LEVELS.includes(level as typeof LEVELS[number])) {
           if (wsForEffort) {
             this.workspaceManager!.update(wsForEffort.name, { effort: level as typeof LEVELS[number] });
@@ -371,7 +371,7 @@ export class CommandRouter {
       }
       case '/model': {
         const model = parts.slice(1).join(' ').trim();
-        const wsForModel = this.workspaceManager?.findByThread(msg.chatId);
+        const wsForModel = this.workspaceManager?.findByThread(msg.chatId, msg.threadId);
         if (model) {
           if (model === 'reset' || model === 'default') {
             if (wsForModel) {
@@ -401,7 +401,7 @@ export class CommandRouter {
         const llm = getBridgeContext().llm;
         const arg = parts[1]?.toLowerCase();
         const runtime = this.state.getRuntime(msg.channelType, msg.chatId) || 'claude';
-        const wsForSettings = this.workspaceManager?.findByThread(msg.chatId);
+        const wsForSettings = this.workspaceManager?.findByThread(msg.chatId, msg.threadId);
 
         if (runtime === 'codex' || !(llm instanceof ClaudeSDKProvider)) {
           // Codex runtime — show Codex-specific info (workspace values take precedence)

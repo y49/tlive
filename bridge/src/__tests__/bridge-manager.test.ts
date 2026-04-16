@@ -482,4 +482,37 @@ describe('BridgeManager', () => {
     expect(ws.list()).toHaveLength(1);
     expect(ws.list()[0].chatId).toBe('c1');
   });
+
+  it('routes per-workspace commands using (chatId, threadId) — forum topic case', async () => {
+    const adapter = mockAdapter();
+    manager.registerAdapter(adapter);
+
+    // First message from inside a forum topic — lazy-bind captures threadId
+    await manager.handleInboundMessage(adapter, {
+      channelType: 'telegram', chatId: 'c1', userId: 'u1', text: '/perm on',
+      messageId: 'm1', threadId: 'topic-42',
+    });
+
+    const ws = (manager as any).workspaceManager;
+    const defaultWs = ws.list()[0];
+    expect(defaultWs.chatId).toBe('c1');
+    expect(defaultWs.threadId).toBe('topic-42');
+    // The /perm on command must route to the workspace (not per-chat state)
+    expect(defaultWs.perm).toBe('on');
+
+    // Subsequent command from same topic should also route to this workspace
+    await manager.handleInboundMessage(adapter, {
+      channelType: 'telegram', chatId: 'c1', userId: 'u1', text: '/perm off',
+      messageId: 'm2', threadId: 'topic-42',
+    });
+    expect(ws.list()[0].perm).toBe('off');
+
+    // A command from the SAME chat but DIFFERENT topic should NOT find this workspace
+    // (falls back to per-chat state — workspace pref unchanged)
+    await manager.handleInboundMessage(adapter, {
+      channelType: 'telegram', chatId: 'c1', userId: 'u1', text: '/perm on',
+      messageId: 'm3', threadId: 'topic-99',
+    });
+    expect(ws.list()[0].perm).toBe('off'); // unchanged — different topic
+  });
 });
