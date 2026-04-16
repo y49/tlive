@@ -15,7 +15,8 @@ import { CallbackRouter } from './callback-router.js';
 import { SDKEngine } from './sdk-engine.js';
 import { MessageRouter } from './message-router.js';
 import { ControlPanel } from './control-panel.js';
-import { networkInterfaces } from 'node:os';
+import { networkInterfaces, homedir } from 'node:os';
+import { join } from 'node:path';
 import type { NotificationRenderer } from '../renderers/types.js';
 import { TelegramRenderer } from '../renderers/telegram.js';
 import { DiscordRenderer } from '../renderers/discord.js';
@@ -64,7 +65,7 @@ export class BridgeManager {
   private providerCache = new Map<string, LLMProvider>();
   private workspaceManager!: WorkspaceManager;
 
-  constructor() {
+  constructor(overrides?: { workspacesPersistPath?: string | null }) {
     const config = loadConfig();
     const effectivePublicUrl = config.publicUrl || `http://${getLocalIP()}:${config.port || 4590}`;
     const gateway = new PendingPermissions();
@@ -110,7 +111,9 @@ export class BridgeManager {
     this.callbackRouter.setControlPanel(controlPanel);
 
     // Wire workspace manager
-    const persistPath = config.workspacesPersistPath;
+    const persistPath = overrides?.workspacesPersistPath !== undefined
+      ? overrides.workspacesPersistPath
+      : join(homedir(), '.tlive', 'workspaces.json');
     const workdirWhitelist = parseWorkspacesAllowedEnv(config.workspacesAllowedEnv);
     this.workspaceManager = new WorkspaceManager({ persistPath, workdirWhitelist });
     this.workspaceManager.load();

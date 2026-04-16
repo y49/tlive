@@ -28,7 +28,6 @@ describe('BridgeManager', () => {
     // Set required env vars for loadConfig validation
     process.env.TL_TOKEN = 'test-token';
     process.env.TL_DEFAULT_WORKDIR = '/tmp';
-    process.env.TL_WORKSPACES_PERSIST_PATH = '';
     initBridgeContext({
       defaultWorkdir: '/tmp',
       store: {
@@ -54,12 +53,11 @@ describe('BridgeManager', () => {
       permissions: { resolvePendingPermission: vi.fn() } as any,
       lifecycle: undefined,
     });
-    manager = new BridgeManager();
+    manager = new BridgeManager({ workspacesPersistPath: null });
   });
 
   afterEach(() => {
     delete process.env.TL_DEFAULT_WORKDIR;
-    delete process.env.TL_WORKSPACES_PERSIST_PATH;
   });
 
   it('starts adapters', async () => {

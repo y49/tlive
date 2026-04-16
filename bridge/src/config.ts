@@ -21,8 +21,6 @@ export interface Config {
   workspacesEnv?: string;
   /** Raw TL_WORKSPACES_ALLOWED value, parsed later into prefix whitelist */
   workspacesAllowedEnv?: string;
-  /** Override path for workspaces.json; null means no persistence (useful in tests) */
-  workspacesPersistPath: string | null;
   /** Claude Code settings sources to load (default: ['user']) */
   claudeSettingSources: ClaudeSettingSource[];
   /** Global proxy URL (e.g., http://127.0.0.1:7890, socks5://127.0.0.1:1080) */
@@ -148,10 +146,6 @@ export function loadConfig(): Config {
     defaultModel: get('TL_DEFAULT_MODEL'),
     workspacesEnv: get('TL_WORKSPACES') || undefined,
     workspacesAllowedEnv: get('TL_WORKSPACES_ALLOWED') || undefined,
-    workspacesPersistPath: (() => {
-      const v = get('TL_WORKSPACES_PERSIST_PATH', join(homedir(), '.tlive', 'workspaces.json'));
-      return v === '' ? null : v;
-    })(),
     telegram: {
       botToken: get('TL_TG_BOT_TOKEN'),
       chatId: get('TL_TG_CHAT_ID'),
