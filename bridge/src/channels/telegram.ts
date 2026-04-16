@@ -76,17 +76,16 @@ export class TelegramAdapter extends BaseChannelAdapter<TelegramOutbound> {
       // Register native commands to BotFather menu
       await this.bot.api.setMyCommands([
         { command: 'menu', description: '⚙️ Control Panel' },
-        { command: 'new', description: 'New conversation' },
-        { command: 'sessions', description: 'List recent sessions' },
-        { command: 'session', description: 'Switch to session #n' },
+        { command: 'workspaces', description: 'List all workspaces' },
+        { command: 'open', description: 'Open workspace (name or path)' },
+        { command: 'stop', description: 'Stop current session' },
         { command: 'model', description: 'Switch model' },
         { command: 'runtime', description: 'Switch provider (claude/codex)' },
-        { command: 'settings', description: 'Settings scope (user/full/isolated)' },
+        { command: 'verbose', description: 'Verbose level (0/1/2)' },
+        { command: 'settings', description: 'Show workspace settings' },
         { command: 'perm', description: 'Permission prompts (on/off)' },
         { command: 'effort', description: 'Thinking depth (low/high/max)' },
-        { command: 'stop', description: 'Interrupt execution' },
         { command: 'status', description: 'Bridge status' },
-        { command: 'hooks', description: 'Pause/resume IM approval' },
         { command: 'help', description: 'Show all commands' },
       ]);
       console.log('[telegram] Registered bot commands to menu');

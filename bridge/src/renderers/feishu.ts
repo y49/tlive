@@ -260,7 +260,7 @@ export class FeishuRenderer implements NotificationRenderer<FeishuOutbound> {
       };
     }
     return {
-      card: buildCard('green', '\u2705 Done thinking', [
+      card: buildCard('green', '\uD83D\uDC4C Done thinking', [
         { tag: 'markdown', content: '*Done thinking*' },
       ]),
     };
@@ -372,6 +372,13 @@ export class FeishuRenderer implements NotificationRenderer<FeishuOutbound> {
         content: downgradeHeadings(redactSensitiveContent(snapshot.responseText.trimEnd())),
       });
       elements.push({ tag: 'hr' });
+    }
+
+    if (snapshot.todoItems.length > 0) {
+      elements.push({
+        tag: 'markdown',
+        content: renderTodoChecklist(snapshot.todoItems),
+      });
     }
 
     if (snapshot.totalTools > 0) {

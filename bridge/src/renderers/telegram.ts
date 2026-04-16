@@ -200,7 +200,7 @@ export class TelegramRenderer implements NotificationRenderer<TelegramOutbound> 
     if (event.active) {
       return { html: '\uD83E\uDDE0 <i>Thinking...</i>' };
     }
-    return { html: '\u2705 <i>Done thinking</i>' };
+    return { html: '\uD83D\uDC4C <i>Done thinking</i>' };
   }
 
   private renderReasoningSummary(event: Extract<NotificationEvent, { kind: 'reasoning_summary' }>): TelegramOutbound {
@@ -286,6 +286,11 @@ export class TelegramRenderer implements NotificationRenderer<TelegramOutbound> 
     if (snapshot.responseText.trim()) {
       lines.push(markdownToTelegram(redactSensitiveContent(snapshot.responseText.trimEnd())));
       lines.push(SEPARATOR);
+    }
+
+    if (snapshot.todoItems.length > 0) {
+      lines.push(renderTodoChecklist(snapshot.todoItems));
+      lines.push('');
     }
 
     if (snapshot.totalTools > 0) {

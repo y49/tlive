@@ -240,7 +240,7 @@ export class DiscordRenderer implements NotificationRenderer<DiscordOutbound> {
     if (event.active) {
       return embed({ color: COLOR_GRAY, description: '\uD83E\uDDE0 Thinking...' });
     }
-    return embed({ color: COLOR_GREEN, description: '\u2705 Done thinking' });
+    return embed({ color: COLOR_GREEN, description: '\uD83D\uDC4C Done thinking' });
   }
 
   private renderReasoningSummary(event: Extract<NotificationEvent, { kind: 'reasoning_summary' }>): DiscordOutbound {
@@ -337,6 +337,10 @@ export class DiscordRenderer implements NotificationRenderer<DiscordOutbound> {
 
     if (snapshot.responseText.trim()) {
       parts.push(redactSensitiveContent(snapshot.responseText.trimEnd()));
+    }
+
+    if (snapshot.todoItems.length > 0) {
+      parts.push(renderTodoChecklist(snapshot.todoItems));
     }
 
     let footer: string | undefined;
