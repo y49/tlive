@@ -27,6 +27,8 @@ describe('BridgeManager', () => {
   beforeEach(() => {
     // Set required env vars for loadConfig validation
     process.env.TL_TOKEN = 'test-token';
+    process.env.TL_DEFAULT_WORKDIR = '/tmp';
+    process.env.TL_WORKSPACES_PERSIST_PATH = '';
     initBridgeContext({
       defaultWorkdir: '/tmp',
       store: {
@@ -53,6 +55,11 @@ describe('BridgeManager', () => {
       lifecycle: undefined,
     });
     manager = new BridgeManager();
+  });
+
+  afterEach(() => {
+    delete process.env.TL_DEFAULT_WORKDIR;
+    delete process.env.TL_WORKSPACES_PERSIST_PATH;
   });
 
   it('starts adapters', async () => {
@@ -367,7 +374,16 @@ describe('BridgeManager', () => {
     const adapter = mockAdapter();
     manager.registerAdapter(adapter);
 
-    // /workspaces should list the auto-registered default (basename of /tmp = "tmp")
+    // The workspace manager should have exactly one workspace after bootstrap,
+    // matching defaultWorkdir with source='auto'
+    const workspaces = (manager as any).workspaceManager.list();
+    expect(workspaces).toHaveLength(1);
+    expect(workspaces[0].workdir).toBe('/tmp');
+    expect(workspaces[0].name).toBe('tmp');
+    expect(workspaces[0].source).toBe('auto');
+    expect(workspaces[0].chatId).toBeUndefined();
+
+    // And /workspaces renders it
     await manager.handleInboundMessage(adapter, {
       channelType: 'telegram', chatId: 'c1', userId: 'u1', text: '/workspaces', messageId: 'm1',
     });
