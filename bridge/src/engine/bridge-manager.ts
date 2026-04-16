@@ -378,6 +378,13 @@ export class BridgeManager {
     if (result.action === 'handled') return true;
     if (result.action === 'unauthorized') return false;
 
+    // Lazy-bind the default workspace to this chat on the first authorized message.
+    // No-op if already bound (default ws has a chatId) or if there is no default to bind.
+    if (!msg.callbackData) {
+      const bound = this.workspaceManager.lazyBindDefault(msg.chatId, msg.threadId);
+      if (bound) this.workspaceManager.persist();
+    }
+
     // Callback data — delegate to CallbackRouter
     if (msg.callbackData) {
       return this.callbackRouter.handle(adapter, msg);

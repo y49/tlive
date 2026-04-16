@@ -391,4 +391,75 @@ describe('BridgeManager', () => {
       expect.objectContaining({ html: expect.stringContaining('tmp') })
     );
   });
+
+  it('lazy-binds default workspace to the first authorized chat', async () => {
+    const adapter = mockAdapter();
+    manager.registerAdapter(adapter);
+
+    // Before any message: default ws exists, unbound
+    const ws = (manager as any).workspaceManager;
+    const defaultBefore = ws.getDefault();
+    expect(defaultBefore).toBeDefined();
+    expect(defaultBefore.chatId).toBeUndefined();
+
+    // First real authorized message in chat c1
+    await manager.handleInboundMessage(adapter, {
+      channelType: 'telegram', chatId: 'c1', userId: 'u1', text: '/verbose 1', messageId: 'm1',
+    });
+
+    // Default ws is now bound to c1
+    const defaultAfter = ws.findByName(defaultBefore.name);
+    expect(defaultAfter.chatId).toBe('c1');
+    expect(ws.getDefault()).toBeUndefined(); // one-shot
+  });
+
+  it('does not lazy-bind on unauthorized messages', async () => {
+    const adapter = mockAdapter();
+    (adapter.isAuthorized as any).mockReturnValue(false);
+    manager.registerAdapter(adapter);
+
+    await manager.handleInboundMessage(adapter, {
+      channelType: 'telegram', chatId: 'c1', userId: 'u1', text: 'hello', messageId: 'm1',
+    });
+
+    // Default ws still unbound — auth gate fired before lazy-bind
+    const ws = (manager as any).workspaceManager;
+    expect(ws.getDefault()).toBeDefined();
+    expect(ws.getDefault().chatId).toBeUndefined();
+  });
+
+  it('does not lazy-bind on callback data (button presses)', async () => {
+    const adapter = mockAdapter();
+    manager.registerAdapter(adapter);
+
+    await manager.handleInboundMessage(adapter, {
+      channelType: 'telegram', chatId: 'c-cb', userId: 'u1', text: '',
+      callbackData: 'perm:allow:p1', messageId: 'm1',
+    });
+
+    // Callback path skips lazy-bind
+    const ws = (manager as any).workspaceManager;
+    expect(ws.getDefault()).toBeDefined();
+    expect(ws.getDefault().chatId).toBeUndefined();
+  });
+
+  it('second chat after lazy-bind gets no auto-workspace (one-shot)', async () => {
+    const adapter = mockAdapter();
+    manager.registerAdapter(adapter);
+
+    // Chat 1 binds the default
+    await manager.handleInboundMessage(adapter, {
+      channelType: 'telegram', chatId: 'c1', userId: 'u1', text: 'first', messageId: 'm1',
+    });
+
+    // Chat 2 — no more default to grab
+    await manager.handleInboundMessage(adapter, {
+      channelType: 'telegram', chatId: 'c2', userId: 'u2', text: 'second', messageId: 'm2',
+    });
+
+    const ws = (manager as any).workspaceManager;
+    // Only the c1-bound default exists
+    expect(ws.list()).toHaveLength(1);
+    expect(ws.list()[0].chatId).toBe('c1');
+  });
 });
