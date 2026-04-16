@@ -147,6 +147,11 @@ export class BridgeManager {
     return this.renderers;
   }
 
+  /** Whether any SDK-managed session is currently active */
+  hasActiveSessions(): boolean {
+    return this.sdkEngine.hasActiveSessions();
+  }
+
   /** Get the last active chatId for a given channel type (for hook routing) */
   getLastChatId(channelType: string): string {
     return this.messageRouter.getLastChatId(channelType);

@@ -245,6 +245,11 @@ export class SDKEngine {
     };
   }
 
+  /** Whether any SDK-managed session is active (suppresses discovery scanner) */
+  hasActiveSessions(): boolean {
+    return this.registry.size > 0;
+  }
+
   /** Expose active controls for /stop command */
   getActiveControls(): Map<string, QueryControls> {
     return this.activeControls;

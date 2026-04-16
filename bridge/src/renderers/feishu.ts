@@ -128,9 +128,19 @@ export class FeishuRenderer implements NotificationRenderer<FeishuOutbound> {
       elements.push({ tag: 'markdown', content: ' ' });
     }
 
+    // Embed buttons as Feishu card action elements (Feishu send() ignores outbound.buttons)
+    if (data.buttons?.length) {
+      const actionButtons = data.buttons.map(b => ({
+        tag: 'button' as const,
+        text: { tag: 'plain_text' as const, content: b.label },
+        type: (b.style === 'danger' ? 'danger' : 'primary') as 'danger' | 'primary',
+        value: { action: b.callbackData },
+      }));
+      elements.push({ tag: 'action', actions: actionButtons } as unknown as CardElement);
+    }
+
     return {
       card: buildCard(template, data.title, elements),
-      buttons: data.buttons,
     };
   }
 

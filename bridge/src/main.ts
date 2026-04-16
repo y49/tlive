@@ -99,8 +99,8 @@ async function main() {
       // Only notify for sessions that are waiting for user input
       if (!session.isWaiting) continue;
 
-      // Don't notify for sessions managed via IPC (tlive claude sessions)
-      if (relay.hasActiveClient()) continue;
+      // Don't notify for sessions managed via IPC (tlive claude) or SDK (bridge-initiated)
+      if (relay.hasActiveClient() || manager.hasActiveSessions()) continue;
 
       // Notify IM
       const renderers = manager.getRenderers();
