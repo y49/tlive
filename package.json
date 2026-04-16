@@ -1,6 +1,6 @@
 {
   "name": "tlive",
-  "version": "0.8.0",
+  "version": "1.0.0",
   "description": "Terminal live monitoring + IM bridge for AI coding tools",
   "type": "module",
   "bin": {
