@@ -619,6 +619,7 @@ export class SDKEngine {
         onAgentComplete: (_data) => {},
         onToolProgress: (_data) => {},
         onTodoUpdate: caps.todoTracking ? (todos) => {
+          void flushTextBuffer(); // flush any buffered text before todo update
           void flushTodoCard(todos);
           renderer.onTodoUpdate(todos); // feed renderer for context
         } : undefined,
