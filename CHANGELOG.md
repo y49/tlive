@@ -2,6 +2,56 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.0](https://github.com/y49/tlive/compare/v0.8.0...v1.0.0) (2026-04-16)
+
+First stable release. Pure-Node architecture, Codex dual-path, workspace-first IM.
+
+### Breaking Changes
+
+- **Removed `tlive-core` Go binary.** Bridge daemon runs entirely in Node now (`tlive start`).
+- **Removed Docker images.** Local daemon mode is the supported deployment.
+- **Removed Claude Code hook installation.** Hooks no longer wired up; runtime adapter pattern replaces them.
+- **Workspace-first IM model.** `/new`, `/sessions`, `/session <n>`, and `/cd` removed. Replaced by `/workspaces`, `/open <name|path>`, `/stop`. Per-chat state migrates to per-workspace state automatically on first `/open`.
+
+### New Features
+
+- **Workspace concept.** First-class IM entity with its own topic/thread/tag, preferences, and session lifecycle. Persisted to `~/.tlive/workspaces.json`.
+- **Pre-configured workspaces.** `TL_WORKSPACES=name:path,name:path` in config for common projects.
+- **Workdir whitelist.** `TL_WORKSPACES_ALLOWED` prefix check; optional safety.
+- **Telegram forum topics / Discord threads / Feishu card tags.** Multi-workspace visual separation.
+- **Status line.** Edit-in-place session HUD: thinking → reading → editing → awaiting approval → done.
+- **Turn summary card.** Consolidates reasoning + tools + agent reply after each turn.
+- **Permission context.** Approval prompts include the agent's reasoning and recent tool calls.
+- **Stop session button.** Fourth button on every permission prompt for instant session termination.
+- **Codex dual-path.** SDK path surfaces reasoning content, file change lists, and todos to IM. Scanner path works for local-PTY users (within OpenAI's .jsonl encryption limits).
+- **Verbose 0/1/2.** Redesigned: Quiet (permissions + results), Normal (adds content summaries), Full (every tool call). Default: 0.
+- **Per-workspace preferences.** Model, effort, perm, approval, sandbox, verbose all workspace-scoped.
+- **`/approval` / `/sandbox` commands.** Codex-specific approval policy and sandbox mode, per workspace.
+- **Long content splitting.** Auto-chunks messages exceeding platform limits with "full in web terminal" link.
+- **Tool-use aggregation.** Consecutive `activity_tool` events in a 3-second window collapse into one summary.
+
+### Improvements
+
+- `ProviderAdapter` interface added methods: `normalizeSessionEvent`, `findLastSession`, `extractThinkingEvents`, optional `capabilities`.
+- `BaseSessionScanner` abstraction lets Claude and Codex share scan/watch/dedup plumbing.
+- Flavor registry (`bridge/src/flavors.ts`) is the single source of truth for runtime metadata.
+- `SessionManager` accepts an optional `scannerFactory` for flavor injection.
+
+### Known Limitations
+
+- `.jsonl` scanner path cannot see reasoning content or structured file diffs (OpenAI's on-disk encryption).
+- Codex `app-server` mode (full unified-diff + streamed reasoning delta) is not implemented. Planned for 1.1.
+- Telegram multi-workspace requires forum-enabled supergroups; non-forum falls back to tag-mode.
+- Long-lived bridges accumulate `processedKeys` / `cursors` in session scanners. Planned for 1.x cleanup.
+
+### Migration from 0.x
+
+- Config in `~/.tlive/config.env` is backward compatible.
+- If you scripted around `tlive-core` binary → switch to `tlive start` + `tlive claude` / `tlive codex`.
+- If you used Docker → run local daemon via `tlive start`.
+- First `/open` after upgrade auto-creates a workspace from your current chat's state.
+- See `docs/smoke-test.md` for post-upgrade verification.
+
 ## [0.8.0](https://github.com/y49/tlive/compare/v0.7.4...v0.8.0) (2026-04-06)
 
 
