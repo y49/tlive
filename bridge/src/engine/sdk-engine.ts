@@ -456,14 +456,14 @@ export class SDKEngine {
     const renderer = new MessageRenderer({
       platformLimit: platformLimits[adapter.channelType] ?? 4096,
       throttleMs: 300,
-      onPermissionTimeout: async (toolName, input, buttons) => {
+      onPermissionTimeout: async (toolName, input, _buttons) => {
         permissionReminderTool = toolName;
         permissionReminderInput = input;
         const r = this.renderers.get(adapter.channelType)!;
+        // Nudge only — the original permission card above still has the buttons
         const rendered = r.renderCommandResponse({
-          title: '⚠️ Permission Pending',
-          body: `${toolName}: ${input}`,
-          buttons: buttons.map(b => ({ ...b, style: b.style as 'primary' | 'danger' | 'default' })),
+          title: '⚠️ Still waiting for permission',
+          body: `${toolName}: ${input}\n\nUse buttons on the card above to respond.`,
           color: 'warning',
         });
         const targetChatId = getSendTarget();
@@ -542,7 +542,6 @@ export class SDKEngine {
           const buttons: Array<{ label: string; callbackData: string; style: string }> = [
             { label: '✅ Allow', callbackData: `perm:allow:${permId}`, style: 'primary' },
             { label: '❌ Deny', callbackData: `perm:deny:${permId}`, style: 'danger' },
-            { label: '🛑 Stop session', callbackData: `perm:stop:${permId}`, style: 'danger' },
           ];
           renderer.onPermissionNeeded(toolName, inputStr, permId, buttons);
           const result = await this.permissions.getGateway().waitFor(permId);

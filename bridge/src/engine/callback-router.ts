@@ -78,20 +78,22 @@ export class CallbackRouter {
     }
 
     // v1.0 terminal permission callbacks (perm:allow:<toolUseId>, perm:deny:<id>, perm:takeover:<id>)
+    // SDK sessions use permId format "sdk-<ts>-<rand>" and resolve via the gateway below.
+    // Terminal sessions use tool_use_ids and route via IPC.
     if (msg.callbackData.startsWith('perm:allow:') || msg.callbackData.startsWith('perm:deny:') || msg.callbackData.startsWith('perm:takeover:')) {
       const parts = msg.callbackData.split(':');
       if (parts.length === 3) {
-        const [, action, toolUseId] = parts;
-        // Forward to tlive claude process via IPC
-        if (this.onTerminalPermissionCallback) {
-          this.onTerminalPermissionCallback(action, toolUseId, '');
-          // Update the message to show the action was taken
+        const [, action, permId] = parts;
+        // If this is an SDK-managed permission, let the broker handle it below
+        const isSdkPerm = permId.startsWith('sdk-') || this.permissions.getGateway().isPending(permId);
+        if (!isSdkPerm && this.onTerminalPermissionCallback) {
+          this.onTerminalPermissionCallback(action, permId, '');
           const label = action === 'allow' ? '✅ Allowed' : action === 'deny' ? '❌ Denied' : '🖥 Takeover';
           const renderer = this.renderers.get(adapter.channelType)!;
           await adapter.editMessage(msg.chatId, msg.messageId, renderer.renderSimpleText(label)).catch(() => {});
           return true;
         }
-        // Fall through to existing perm: handling if no IPC callback
+        // Fall through to broker handling for SDK sessions
       }
     }
 
