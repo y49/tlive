@@ -82,6 +82,12 @@ async function main() {
   // Session discovery — detect non-tlive Claude sessions and notify IM
   const knownSessions = new Set<string>();
   const DISCOVERY_INTERVAL = 30_000;
+  const bootTime = Date.now();
+
+  // Pre-populate known sessions so we don't spam on first boot
+  for (const s of discoverActiveSessions(5 * 60 * 1000)) {
+    knownSessions.add(s.sessionId);
+  }
 
   const discoveryTimer = setInterval(() => {
     const sessions = discoverActiveSessions(5 * 60 * 1000); // active in last 5 min
