@@ -16499,6 +16499,11 @@ var WorkspaceManager = class {
       return null;
     }
     const resolved = v.resolved;
+    for (const [name2, ws2] of this.byName) {
+      if (ws2.source === "auto" && ws2.chatId === void 0 && ws2.workdir !== resolved) {
+        this.byName.delete(name2);
+      }
+    }
     const existing = this.findByWorkdir(resolved);
     if (existing) return existing;
     const inferred = basename(resolved) || "workspace";
