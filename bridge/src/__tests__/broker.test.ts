@@ -43,9 +43,10 @@ describe('PermissionBroker', () => {
     expect(adapter.send).toHaveBeenCalledOnce();
     const [chatId, rendered] = (adapter.send as any).mock.calls[0];
     expect(chatId).toBe('chat123');
-    expect(rendered.buttons).toHaveLength(2); // Yes, No
+    expect(rendered.buttons).toHaveLength(3); // Yes, No, Stop session
     expect(rendered.buttons[0].callbackData).toBe('perm:allow:perm1');
     expect(rendered.buttons[1].callbackData).toBe('perm:deny:perm1');
+    expect(rendered.buttons[2].callbackData).toBe('perm:stop:perm1');
     // Should include HTML content (rendered by TelegramRenderer)
     expect(rendered.html).toContain('Permission Required');
   });

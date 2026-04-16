@@ -26,6 +26,8 @@ export class CallbackRouter {
   onTerminalQuestionCallback?: (callbackData: string) => void;
   /** Callback for resuming a discovered Claude session from IM */
   onResumeSession?: (adapter: BaseChannelAdapter, chatId: string, sessionId: string, workdir: string) => void;
+  /** Callback for stopping the active session from a permission prompt */
+  onStopSession?: (adapter: BaseChannelAdapter, chatId: string) => Promise<void> | void;
 
   constructor(
     private permissions: PermissionCoordinator,
@@ -208,6 +210,21 @@ export class CallbackRouter {
         adapter.editMessage(msg.chatId, msg.messageId, renderer.renderSimpleText('⏭ Skipped')).catch(() => {});
         return true;
       }
+    }
+
+    // Stop session from permission prompt (perm:stop:permId)
+    if (msg.callbackData.startsWith('perm:stop:')) {
+      const permId = msg.callbackData.slice('perm:stop:'.length);
+      // Deny the pending permission so the SDK unblocks
+      this.permissions.getGateway().resolve(permId, 'deny');
+      this.permissions.handleBrokerCallback(`perm:deny:${permId}`);
+      // Fire the stop-session callback (e.g., abort the active SDK session)
+      if (this.onStopSession) {
+        await this.onStopSession(adapter, msg.chatId);
+      }
+      const renderer = this.renderers.get(adapter.channelType)!;
+      await adapter.editMessage(msg.chatId, msg.messageId, renderer.renderSimpleText('🛑 Session stopped')).catch(() => {});
+      return true;
     }
 
     // Regular permission broker callbacks (perm:allow:ID, perm:deny:ID)

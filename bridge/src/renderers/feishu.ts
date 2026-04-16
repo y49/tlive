@@ -159,6 +159,7 @@ export class FeishuRenderer implements NotificationRenderer<FeishuOutbound> {
     const buttons = [
       { label: '\u2705 Allow', callbackData: `perm:allow:${event.permissionId}`, style: 'primary' as const },
       { label: '\u274C Deny', callbackData: `perm:deny:${event.permissionId}`, style: 'danger' as const },
+      { label: '\uD83D\uDED1 Stop session', callbackData: `perm:stop:${event.permissionId}`, style: 'danger' as const },
     ];
 
     return {

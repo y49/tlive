@@ -40,11 +40,13 @@ describe('TelegramRenderer', () => {
           permissionId: 'perm-abc',
         };
         const result = renderer.renderNotification(event);
-        expect(result.buttons).toHaveLength(2);
+        expect(result.buttons).toHaveLength(3);
         expect(result.buttons![0].callbackData).toBe('perm:allow:perm-abc');
         expect(result.buttons![0].style).toBe('primary');
         expect(result.buttons![1].callbackData).toBe('perm:deny:perm-abc');
         expect(result.buttons![1].style).toBe('danger');
+        expect(result.buttons![2].callbackData).toBe('perm:stop:perm-abc');
+        expect(result.buttons![2].style).toBe('danger');
       });
 
       it('truncates toolInput to 300 chars', () => {

@@ -523,6 +523,7 @@ export class SDKEngine {
           const buttons: Array<{ label: string; callbackData: string; style: string }> = [
             { label: '✅ Allow', callbackData: `perm:allow:${permId}`, style: 'primary' },
             { label: '❌ Deny', callbackData: `perm:deny:${permId}`, style: 'danger' },
+            { label: '🛑 Stop session', callbackData: `perm:stop:${permId}`, style: 'danger' },
           ];
           renderer.onPermissionNeeded(toolName, inputStr, permId, buttons);
           const result = await this.permissions.getGateway().waitFor(permId);

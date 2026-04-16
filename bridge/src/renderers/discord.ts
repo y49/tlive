@@ -139,6 +139,7 @@ export class DiscordRenderer implements NotificationRenderer<DiscordOutbound> {
     const buttons = [
       { label: '\u2705 Yes', callbackData: `perm:allow:${safeId}`, style: 'primary' as const },
       { label: '\u274C No', callbackData: `perm:deny:${safeId}`, style: 'danger' as const },
+      { label: '\uD83D\uDED1 Stop session', callbackData: `perm:stop:${safeId}`, style: 'danger' as const },
     ];
 
     return {
