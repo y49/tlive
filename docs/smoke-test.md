@@ -19,13 +19,15 @@ tlive start
 tlive status
 ```
 
-Expected: Bridge is running. Logs mention `workspaces registered: 2 (smoke1, smoke2)`.
+Expected: Bridge is running. Logs mention `Workspaces registered: N (smoke1, smoke2, <cwd-basename>)` — the list includes the two pre-configured entries plus one auto-registered default (named after `basename(cwd)`, e.g. `tlive` if bridge was started in the tlive repo).
 
-### 2. `/workspaces` lists pre-configured entries
+### 2. `/workspaces` lists pre-configured entries + the auto-registered default
 
 In IM (any configured platform), send `/workspaces`.
 
-Expected: both `smoke1` and `smoke2` appear, both idle. No `●` marker (no active workspace yet in this chat).
+Expected: at least three entries — `smoke1`, `smoke2`, and one auto-registered default. All idle at this point.
+
+If the bridge's cwd matches a pre-configured `TL_WORKSPACES` entry (e.g. `smoke1:/tmp/smoke1` and you ran `cd /tmp/smoke1 && tlive start`), the default is deduped by path and only the pre-configured entries appear.
 
 ### 3. `/open smoke1` creates a topic/thread
 
