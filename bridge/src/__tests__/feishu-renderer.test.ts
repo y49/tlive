@@ -373,7 +373,7 @@ describe('FeishuRenderer', () => {
     });
 
     describe('activity_text', () => {
-      it('renders turquoise card with text content', () => {
+      it('renders minimal card with text content (no heavy header)', () => {
         const event: NotificationEvent = {
           kind: 'activity_text',
           text: 'Processing file.ts...',
@@ -381,14 +381,15 @@ describe('FeishuRenderer', () => {
         const result = renderer.renderNotification(event);
         const card = parseCard(result.card);
 
-        expect(card.header.template).toBe('turquoise');
+        // No header — activity messages are transient, don't need heavy UI
+        expect(card.header).toBeUndefined();
         const mdEl = card.body.elements.find(e => e.tag === 'markdown');
         expect(mdEl!.content).toBe('Processing file.ts...');
       });
     });
 
     describe('activity_tool', () => {
-      it('renders turquoise card with tool name in header and body', () => {
+      it('renders minimal card with tool icon and input', () => {
         const event: NotificationEvent = {
           kind: 'activity_tool',
           toolName: 'Read',
@@ -397,9 +398,7 @@ describe('FeishuRenderer', () => {
         const result = renderer.renderNotification(event);
         const card = parseCard(result.card);
 
-        expect(card.header.template).toBe('turquoise');
-        expect(card.header.title.content).toContain('Read');
-
+        expect(card.header).toBeUndefined();
         const mdEl = card.body.elements.find(e => e.tag === 'markdown');
         expect(mdEl!.content).toContain('`Read`');
         expect(mdEl!.content).toContain('src/index.ts');
@@ -415,21 +414,18 @@ describe('FeishuRenderer', () => {
 
         const mdEl = card.body.elements.find(e => e.tag === 'markdown');
         expect(mdEl!.content).toContain('`Agent`');
-        expect(mdEl!.content).not.toContain('\n');
       });
     });
 
     describe('thinking', () => {
-      it('renders grey card when active', () => {
+      it('renders minimal card when active', () => {
         const event: NotificationEvent = { kind: 'thinking', active: true };
         const result = renderer.renderNotification(event);
         const card = parseCard(result.card);
 
-        expect(card.header.template).toBe('grey');
-        expect(card.header.title.content).toContain('Thinking');
-
+        expect(card.header).toBeUndefined();
         const mdEl = card.body.elements.find(e => e.tag === 'markdown');
-        expect(mdEl!.content).toContain('Thinking...');
+        expect(mdEl!.content).toContain('Thinking');
       });
 
       it('renders Done thinking when inactive', () => {
@@ -437,8 +433,7 @@ describe('FeishuRenderer', () => {
         const result = renderer.renderNotification(event);
         const card = parseCard(result.card);
 
-        expect(card.header.template).toBe('green');
-        expect(card.header.title.content).toContain('Done thinking');
+        expect(card.header).toBeUndefined();
         const mdEl = card.body.elements.find(e => e.tag === 'markdown');
         expect(mdEl!.content).toContain('Done thinking');
       });

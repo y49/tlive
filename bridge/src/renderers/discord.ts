@@ -24,6 +24,18 @@ const HINT_COLOR_MAP: Record<string, number> = {
 
 // ─── Helpers ───────────────────────────────────
 
+/**
+ * Escape Discord markdown special characters so user/model text doesn't
+ * break formatting. Escapes: * _ ~ ` | \ > [
+ *
+ * Use for text that will be wrapped in spoiler `||...||`, code span `` `...` ``,
+ * or rendered raw. Intentionally does NOT escape newlines — callers still want
+ * line breaks to work.
+ */
+function escapeDiscordMarkdown(s: string): string {
+  return s.replace(/[\\*_~`|>\[]/g, '\\$&');
+}
+
 function truncateInput(input: string, max = 300): string {
   return input.length > max ? input.slice(0, max - 3) + '...' : input;
 }
@@ -246,16 +258,19 @@ export class DiscordRenderer implements NotificationRenderer<DiscordOutbound> {
   private renderReasoningSummary(event: Extract<NotificationEvent, { kind: 'reasoning_summary' }>): DiscordOutbound {
     const duration = event.durationMs ? ` (${Math.round(event.durationMs / 1000)}s)` : '';
     const truncatedNote = event.truncated ? '\n_(truncated — full in web terminal)_' : '';
+    // Escape model text so stray `||` / `*` don't break spoiler / bold
+    const safeText = escapeDiscordMarkdown(event.text);
     return embed({
       color: COLOR_GRAY,
-      description: `💭 **Reasoning**${duration}\n||${event.text}||${truncatedNote}`,
+      description: `💭 **Reasoning**${duration}\n||${safeText}||${truncatedNote}`,
     });
   }
 
   private renderFileChangeList(event: Extract<NotificationEvent, { kind: 'file_change_list' }>): DiscordOutbound {
     const iconFor = (kind: 'add' | 'delete' | 'update') =>
       kind === 'add' ? '➕' : kind === 'delete' ? '➖' : '✏️';
-    const lines = event.changes.map((c) => `${iconFor(c.kind)} \`${c.path}\``);
+    // Escape path so stray backticks don't break the code span wrapping
+    const lines = event.changes.map((c) => `${iconFor(c.kind)} \`${escapeDiscordMarkdown(c.path)}\``);
     const header = event.status === 'failed' ? '❌ **File changes (failed)**' : '📝 **File changes**';
     const color = event.status === 'failed' ? COLOR_DARK_RED : COLOR_GRAY;
     return embed({ color, description: `${header}\n${lines.join('\n')}` });

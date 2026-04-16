@@ -55,6 +55,15 @@ function buildCard(
   });
 }
 
+/** Minimal card without header — for short/ephemeral messages */
+function buildPlainCard(elements: CardElement[]): string {
+  return JSON.stringify({
+    schema: '2.0',
+    config: { wide_screen_mode: true },
+    body: { elements },
+  });
+}
+
 const COLOR_MAP: Record<string, FeishuHeaderTemplate> = {
   success: 'green',
   warning: 'orange',
@@ -258,19 +267,18 @@ export class FeishuRenderer implements NotificationRenderer<FeishuOutbound> {
   }
 
   private renderActivityText(event: Extract<NotificationEvent, { kind: 'activity_text' }>): FeishuOutbound {
+    // Minimal card — no header (activity messages are transient and noisy otherwise)
     return {
-      card: buildCard('turquoise', '\uD83D\uDCDD Activity', [
-        { tag: 'markdown', content: event.text },
-      ]),
+      card: buildPlainCard([{ tag: 'markdown', content: event.text }]),
     };
   }
 
   private renderActivityTool(event: Extract<NotificationEvent, { kind: 'activity_tool' }>): FeishuOutbound {
     const icon = getToolIcon(event.toolName);
-    const inputLine = event.toolInput ? `\n${event.toolInput}` : '';
+    const inputLine = event.toolInput ? ` ${event.toolInput}` : '';
     return {
-      card: buildCard('turquoise', `${icon} ${event.toolName}`, [
-        { tag: 'markdown', content: `\u25B8 \`${event.toolName}\`${inputLine}` },
+      card: buildPlainCard([
+        { tag: 'markdown', content: `${icon} \`${event.toolName}\`${inputLine}` },
       ]),
     };
   }
@@ -278,15 +286,11 @@ export class FeishuRenderer implements NotificationRenderer<FeishuOutbound> {
   private renderThinking(event: Extract<NotificationEvent, { kind: 'thinking' }>): FeishuOutbound {
     if (event.active) {
       return {
-        card: buildCard('grey', '\uD83E\uDDE0 Thinking', [
-          { tag: 'markdown', content: '*Thinking...*' },
-        ]),
+        card: buildPlainCard([{ tag: 'markdown', content: '🧠 *Thinking...*' }]),
       };
     }
     return {
-      card: buildCard('green', '\uD83D\uDC4C Done thinking', [
-        { tag: 'markdown', content: '*Done thinking*' },
-      ]),
+      card: buildPlainCard([{ tag: 'markdown', content: '👌 *Done thinking*' }]),
     };
   }
 
