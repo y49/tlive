@@ -106,3 +106,69 @@ describe('WorkspaceManager persistence', () => {
     expect(mgr.list()).toHaveLength(0);
   });
 });
+
+describe('WorkspaceManager.ensureDefault', () => {
+  let dir1: string;
+  let dir2: string;
+  let mgr: WorkspaceManager;
+
+  beforeEach(() => {
+    dir1 = mkdtempSync(join(tmpdir(), 'ensure1-'));
+    dir2 = mkdtempSync(join(tmpdir(), 'ensure2-'));
+    mgr = new WorkspaceManager({ persistPath: null, workdirWhitelist: undefined });
+  });
+
+  it('creates a default workspace from basename when manager is empty', () => {
+    const ws = mgr.ensureDefault({ workdir: dir1, runtime: 'claude' });
+    expect(ws).not.toBeNull();
+    expect(ws!.workdir).toBe(dir1);
+    expect(ws!.name).toBe(dir1.split('/').pop());
+    expect(ws!.runtime).toBe('claude');
+    expect(ws!.chatId).toBeUndefined();
+    expect(mgr.list()).toHaveLength(1);
+  });
+
+  it('is idempotent on repeated calls', () => {
+    const a = mgr.ensureDefault({ workdir: dir1, runtime: 'claude' });
+    const b = mgr.ensureDefault({ workdir: dir1, runtime: 'claude' });
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(a!.name).toBe(b!.name);
+    expect(mgr.list()).toHaveLength(1);
+  });
+
+  it('dedups by resolved path — returns existing entry if a TL_WORKSPACES entry matches', () => {
+    mgr.register({ name: 'project-x', workdir: dir1, runtime: 'claude' });
+    const ws = mgr.ensureDefault({ workdir: dir1, runtime: 'claude' });
+    expect(ws).not.toBeNull();
+    expect(ws!.name).toBe('project-x'); // user-provided name wins
+    expect(mgr.list()).toHaveLength(1);
+  });
+
+  it('appends -2 when basename collides with existing workspace of different path', () => {
+    const sameBasenameDir = mkdtempSync(join(tmpdir(), 'name-clash-'));
+    const collidingName = sameBasenameDir.split('/').pop()!;
+    mgr.register({ name: collidingName, workdir: dir1, runtime: 'claude' });
+    const ws = mgr.ensureDefault({ workdir: sameBasenameDir, runtime: 'claude' });
+    expect(ws).not.toBeNull();
+    expect(ws!.name).toBe(`${collidingName}-2`);
+    expect(ws!.workdir).toBe(sameBasenameDir);
+    expect(mgr.list()).toHaveLength(2);
+  });
+
+  it('returns null and does not register when validateWorkdir fails (not a directory)', () => {
+    const ws = mgr.ensureDefault({ workdir: '/totally/not/a/real/path', runtime: 'claude' });
+    expect(ws).toBeNull();
+    expect(mgr.list()).toHaveLength(0);
+  });
+
+  it('respects workdirWhitelist — skips when path is outside whitelist', () => {
+    const restricted = new WorkspaceManager({
+      persistPath: null,
+      workdirWhitelist: ['/opt/allowed'],
+    });
+    const ws = restricted.ensureDefault({ workdir: dir2, runtime: 'claude' });
+    expect(ws).toBeNull();
+    expect(restricted.list()).toHaveLength(0);
+  });
+});

@@ -58,6 +58,31 @@ export class WorkspaceManager {
     });
   }
 
+  /** Auto-register a default workspace for the bridge's cwd / TL_DEFAULT_WORKDIR.
+   *  Dedups by resolved path: if an existing workspace already points here, returns it.
+   *  Returns null if the path fails validation (not a dir / outside whitelist). */
+  ensureDefault(input: { workdir: string; runtime: Runtime }): Workspace | null {
+    const v = validateWorkdir(input.workdir, this.opts.workdirWhitelist);
+    if (!v.ok) {
+      console.warn(`[WorkspaceManager] ensureDefault skipped: ${v.error}`);
+      return null;
+    }
+    const resolved = v.resolved;
+
+    const existing = this.findByWorkdir(resolved);
+    if (existing) return existing;
+
+    const inferred = basename(resolved) || 'workspace';
+    const name = this.makeUniqueName(inferred);
+    const ws: Workspace = {
+      name,
+      workdir: resolved,
+      runtime: input.runtime,
+    };
+    this.byName.set(name, ws);
+    return ws;
+  }
+
   /** Open workspace by name — attaches chatId if provided. */
   openByName(name: string, ctx: { chatId?: string }): OpenResult {
     const ws = this.byName.get(name);
