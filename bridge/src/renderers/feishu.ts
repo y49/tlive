@@ -128,15 +128,25 @@ export class FeishuRenderer implements NotificationRenderer<FeishuOutbound> {
       elements.push({ tag: 'markdown', content: ' ' });
     }
 
-    // Embed buttons as Feishu card action elements (Feishu send() ignores outbound.buttons)
+    // Embed buttons as Feishu V2 card elements (V2 doesn't support tag:'action' wrapper)
     if (data.buttons?.length) {
-      const actionButtons = data.buttons.map(b => ({
-        tag: 'button' as const,
-        text: { tag: 'plain_text' as const, content: b.label },
-        type: (b.style === 'danger' ? 'danger' : 'primary') as 'danger' | 'primary',
-        value: { action: b.callbackData },
+      const columns = data.buttons.map(b => ({
+        tag: 'column',
+        width: 'auto',
+        vertical_align: 'center',
+        elements: [{
+          tag: 'button',
+          text: { tag: 'plain_text', content: b.label },
+          type: b.style === 'danger' ? 'danger' : 'primary',
+          value: { action: b.callbackData },
+        }],
       }));
-      elements.push({ tag: 'action', actions: actionButtons } as unknown as CardElement);
+      elements.push({
+        tag: 'column_set',
+        flex_mode: 'none',
+        background_style: 'default',
+        columns,
+      } as unknown as CardElement);
     }
 
     return {
@@ -361,17 +371,24 @@ export class FeishuRenderer implements NotificationRenderer<FeishuOutbound> {
       });
     }
 
-    // Embed buttons as Feishu card action elements
-    const actionButtons = p.buttons.map(b => ({
-      tag: 'button' as const,
-      text: { tag: 'plain_text' as const, content: b.label },
-      type: b.style === 'danger' ? 'danger' as const : 'primary' as const,
-      value: { action: b.callbackData },
-    }));
-    if (actionButtons.length > 0) {
+    // Embed buttons as Feishu V2 card elements (V2 doesn't support tag:'action' wrapper)
+    if (p.buttons.length > 0) {
+      const columns = p.buttons.map(b => ({
+        tag: 'column',
+        width: 'auto',
+        vertical_align: 'center',
+        elements: [{
+          tag: 'button',
+          text: { tag: 'plain_text', content: b.label },
+          type: b.style === 'danger' ? 'danger' : 'primary',
+          value: { action: b.callbackData },
+        }],
+      }));
       elements.push({
-        tag: 'action',
-        actions: actionButtons,
+        tag: 'column_set',
+        flex_mode: 'none',
+        background_style: 'default',
+        columns,
       } as unknown as CardElement);
     }
 
