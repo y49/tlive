@@ -33,6 +33,7 @@ const FLAVOR_CAPS: Record<Flavor, ReadonlySet<Capability>> = {
     Capabilities.ModelChange,
     Capabilities.Effort,
     Capabilities.SessionResume,
+    Capabilities.SlashCommands,
   ]),
 };
 

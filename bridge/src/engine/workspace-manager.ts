@@ -22,6 +22,8 @@ export interface Workspace {
   approval?: ApprovalPolicy;
   sandbox?: SandboxMode;
   verbose?: VerboseLevel;
+  /** Codex-only: permission mode preset that bundles approval + sandbox */
+  permissionMode?: 'default' | 'read-only' | 'safe-yolo' | 'yolo';
 
   // Session state (internal; not exposed to IM users)
   activeSessionId?: string;

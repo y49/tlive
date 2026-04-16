@@ -23,7 +23,7 @@ import { DiscordRenderer } from '../renderers/discord.js';
 import { FeishuRenderer } from '../renderers/feishu.js';
 
 /** Bridge commands handled synchronously (don't block adapter loop) */
-const QUICK_COMMANDS = new Set(['/menu', '/new', '/status', '/verbose', '/hooks', '/sessions', '/session', '/help', '/perm', '/effort', '/stop', '/approve', '/pairings', '/runtime', '/settings', '/model', '/workspaces', '/open']);
+const QUICK_COMMANDS = new Set(['/menu', '/new', '/status', '/verbose', '/hooks', '/sessions', '/session', '/help', '/perm', '/effort', '/stop', '/approve', '/pairings', '/runtime', '/settings', '/model', '/workspaces', '/open', '/mode']);
 
 function isPrivateIPv4(ip: string): boolean {
   const parts = ip.split('.').map(Number);

@@ -7,6 +7,12 @@ import type { VerboseLevel } from './session-state.js';
 import type { ControlPanel } from './control-panel.js';
 import type { NotificationRenderer } from '../renderers/types.js';
 import type { WorkspaceManager } from './workspace-manager.js';
+import {
+  CODEX_PERMISSION_MODES,
+  describeCodexPermissionMode,
+  isCodexPermissionMode,
+  resolveCodexPermissionMode,
+} from './codex-permission-mode.js';
 
 import { getBridgeContext } from '../context.js';
 import { ClaudeSDKProvider } from '../providers/claude-sdk.js';
@@ -142,6 +148,51 @@ export class CommandRouter {
         } else {
           const usage = 'Usage: `/verbose 0|1|2`\n0=quiet (alerts only) · 1=normal (summaries+files) · 2=full (all events)';
           await adapter.send(msg.chatId, r.renderSimpleText(usage));
+        }
+        return true;
+      }
+      case '/mode': {
+        // Codex permission mode preset (bundles approvalPolicy + sandbox)
+        const ws = this.workspaceManager?.findByThread(msg.chatId);
+        if (ws && ws.runtime !== 'codex') {
+          await adapter.send(msg.chatId, r.renderSimpleText(
+            '⚠️ Mode presets are Codex-only. For Claude use `/perm on|off`.',
+          ));
+          return true;
+        }
+        const arg = parts[1]?.toLowerCase();
+        if (!arg) {
+          const current = ws?.permissionMode ?? 'default';
+          const lines = [
+            `🔧 Current mode: **${current}**`,
+            '',
+            'Available modes:',
+            ...CODEX_PERMISSION_MODES.map(m => `• ${describeCodexPermissionMode(m)}`),
+            '',
+            'Usage: `/mode <default|read-only|safe-yolo|yolo>`',
+          ];
+          await adapter.send(msg.chatId, r.renderSimpleText(lines.join('\n')));
+          return true;
+        }
+        if (!isCodexPermissionMode(arg)) {
+          await adapter.send(msg.chatId, r.renderSimpleText(
+            `⚠️ Unknown mode: ${arg}\nValid: ${CODEX_PERMISSION_MODES.join(', ')}`,
+          ));
+          return true;
+        }
+        if (ws && this.workspaceManager) {
+          const cfg = resolveCodexPermissionMode(arg);
+          this.workspaceManager.update(ws.name, {
+            permissionMode: arg,
+            approval: cfg.approvalPolicy,
+            sandbox: cfg.sandbox,
+          });
+          this.workspaceManager.persist();
+          await adapter.send(msg.chatId, r.renderSimpleText(
+            `🔧 Mode: **${arg}**\n${describeCodexPermissionMode(arg)}`,
+          ));
+        } else {
+          await adapter.send(msg.chatId, r.renderSimpleText('⚠️ Open a workspace first with `/open <name|path>`'));
         }
         return true;
       }
