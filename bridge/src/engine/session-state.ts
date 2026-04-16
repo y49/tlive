@@ -1,6 +1,6 @@
 import type { SessionMode } from '../messages/types.js';
 
-export type VerboseLevel = 0 | 1;
+export type VerboseLevel = 0 | 1 | 2;
 
 /**
  * Manages per-chat session state: verbose levels, permission modes, effort,

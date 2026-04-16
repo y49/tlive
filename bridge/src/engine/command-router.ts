@@ -109,13 +109,24 @@ export class CommandRouter {
       }
       case '/verbose': {
         const level = parseInt(parts[1], 10) as VerboseLevel;
-        if ([0, 1].includes(level)) {
-          this.state.setVerboseLevel(msg.channelType, msg.chatId, level);
-          const labels = ['🤫 quiet', '📝 terminal card'];
+        if ([0, 1, 2].includes(level)) {
+          // Workspace-scoped: prefer workspace preference, fall back to per-chat state
+          if (this.workspaceManager) {
+            const ws = this.workspaceManager.findByThread(msg.chatId);
+            if (ws) {
+              this.workspaceManager.update(ws.name, { verbose: level });
+              this.workspaceManager.persist();
+            } else {
+              this.state.setVerboseLevel(msg.channelType, msg.chatId, level);
+            }
+          } else {
+            this.state.setVerboseLevel(msg.channelType, msg.chatId, level);
+          }
+          const labels = ['🤫 quiet — alerts only', '📝 normal — summaries + files', '🔊 full — all events'];
           const text = `Verbose: ${labels[level]}${CommandRouter.MENU_HINT}`;
           await adapter.send(msg.chatId, r.renderSimpleText(text));
         } else {
-          const usage = 'Usage: `/verbose 0|1`\n0=quiet, 1=terminal card';
+          const usage = 'Usage: `/verbose 0|1|2`\n0=quiet (alerts only) · 1=normal (summaries+files) · 2=full (all events)';
           await adapter.send(msg.chatId, r.renderSimpleText(usage));
         }
         return true;

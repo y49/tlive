@@ -133,7 +133,7 @@ describe('BridgeManager', () => {
 
     expect(adapter.send).toHaveBeenCalledWith(
       'c1',
-      expect.objectContaining({ html: expect.stringContaining('terminal card') })
+      expect.objectContaining({ html: expect.stringContaining('normal') })
     );
   });
 
