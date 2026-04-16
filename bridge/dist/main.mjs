@@ -17004,6 +17004,7 @@ var CommandRouter = class _CommandRouter {
         return true;
       }
       case "/verbose": {
+        const labels = ["\u{1F92B} quiet \u2014 alerts only", "\u{1F4DD} normal \u2014 summaries + files", "\u{1F50A} full \u2014 all events"];
         const level = parseInt(parts[1], 10);
         if ([0, 1, 2].includes(level)) {
           if (this.workspaceManager) {
@@ -17017,12 +17018,15 @@ var CommandRouter = class _CommandRouter {
           } else {
             this.state.setVerboseLevel(msg.channelType, msg.chatId, level);
           }
-          const labels = ["\u{1F92B} quiet \u2014 alerts only", "\u{1F4DD} normal \u2014 summaries + files", "\u{1F50A} full \u2014 all events"];
           const text2 = `Verbose: ${labels[level]}${_CommandRouter.MENU_HINT}`;
           await adapter.send(msg.chatId, r.renderSimpleText(text2));
         } else {
-          const usage = "Usage: `/verbose 0|1|2`\n0=quiet (alerts only) \xB7 1=normal (summaries+files) \xB7 2=full (all events)";
-          await adapter.send(msg.chatId, r.renderSimpleText(usage));
+          const wsForVerbose = this.workspaceManager?.findByThread(msg.chatId);
+          const current = wsForVerbose?.verbose ?? this.state.getVerboseLevel(msg.channelType, msg.chatId);
+          const text2 = `Verbose: **${labels[current]}**
+Usage: \`/verbose 0|1|2\`
+0=quiet (alerts only) \xB7 1=normal (summaries+files) \xB7 2=full (all events)`;
+          await adapter.send(msg.chatId, r.renderSimpleText(text2));
         }
         return true;
       }
