@@ -83,6 +83,25 @@ export class WorkspaceManager {
     return ws;
   }
 
+  /** Returns the auto-registered default workspace (chatId === undefined) if one exists
+   *  and has not yet been bound to a chat. After lazyBindDefault, this returns undefined. */
+  getDefault(): Workspace | undefined {
+    for (const ws of this.byName.values()) {
+      if (ws.chatId === undefined) return ws;
+    }
+    return undefined;
+  }
+
+  /** One-shot bind: if there is an unbound default workspace, attach this chat's
+   *  (chatId, threadId) to it. Subsequent calls return undefined (default already bound). */
+  lazyBindDefault(chatId: string, threadId: string | undefined): Workspace | undefined {
+    const d = this.getDefault();
+    if (!d) return undefined;
+    d.chatId = chatId;
+    d.threadId = threadId;
+    return d;
+  }
+
   /** Open workspace by name — attaches chatId if provided. */
   openByName(name: string, ctx: { chatId?: string }): OpenResult {
     const ws = this.byName.get(name);

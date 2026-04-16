@@ -172,3 +172,68 @@ describe('WorkspaceManager.ensureDefault', () => {
     expect(restricted.list()).toHaveLength(0);
   });
 });
+
+describe('WorkspaceManager.getDefault / lazyBindDefault', () => {
+  let dir1: string;
+  let mgr: WorkspaceManager;
+
+  beforeEach(() => {
+    dir1 = mkdtempSync(join(tmpdir(), 'bind-'));
+    mgr = new WorkspaceManager({ persistPath: null, workdirWhitelist: undefined });
+  });
+
+  it('getDefault returns the auto-registered workspace while chatId is undefined', () => {
+    mgr.ensureDefault({ workdir: dir1, runtime: 'claude' });
+    const d = mgr.getDefault();
+    expect(d).toBeDefined();
+    expect(d!.workdir).toBe(dir1);
+    expect(d!.chatId).toBeUndefined();
+  });
+
+  it('getDefault returns undefined when no unbound workspace exists', () => {
+    expect(mgr.getDefault()).toBeUndefined();
+    mgr.register({ name: 'a', workdir: dir1, runtime: 'claude' });
+    mgr.openByName('a', { chatId: 'c1' }); // now bound
+    expect(mgr.getDefault()).toBeUndefined();
+  });
+
+  it('getDefault prefers an unbound workspace over bound ones', () => {
+    const dir2 = mkdtempSync(join(tmpdir(), 'bind2-'));
+    mgr.register({ name: 'alpha', workdir: dir1, runtime: 'claude' });
+    mgr.openByName('alpha', { chatId: 'c1' });
+    mgr.ensureDefault({ workdir: dir2, runtime: 'claude' });
+    const d = mgr.getDefault();
+    expect(d).toBeDefined();
+    expect(d!.workdir).toBe(dir2);
+  });
+
+  it('lazyBindDefault binds chatId + threadId to the unbound default', () => {
+    mgr.ensureDefault({ workdir: dir1, runtime: 'claude' });
+    const ws = mgr.lazyBindDefault('chat-abc', 'topic-42');
+    expect(ws).toBeDefined();
+    expect(ws!.chatId).toBe('chat-abc');
+    expect(ws!.threadId).toBe('topic-42');
+  });
+
+  it('lazyBindDefault is a no-op on subsequent calls (one-shot)', () => {
+    mgr.ensureDefault({ workdir: dir1, runtime: 'claude' });
+    mgr.lazyBindDefault('chat-1', undefined);
+    const second = mgr.lazyBindDefault('chat-2', undefined);
+    expect(second).toBeUndefined();
+    // First binding is preserved
+    expect(mgr.findByThread('chat-1', undefined)).toBeDefined();
+    expect(mgr.findByThread('chat-2', undefined)).toBeUndefined();
+  });
+
+  it('lazyBindDefault returns undefined when there is no default to bind', () => {
+    expect(mgr.lazyBindDefault('chat-1', undefined)).toBeUndefined();
+  });
+
+  it('lazyBindDefault preserves undefined threadId (non-forum chat)', () => {
+    mgr.ensureDefault({ workdir: dir1, runtime: 'claude' });
+    const ws = mgr.lazyBindDefault('chat-xyz', undefined);
+    expect(ws).toBeDefined();
+    expect(ws!.chatId).toBe('chat-xyz');
+    expect(ws!.threadId).toBeUndefined();
+  });
+});
