@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { CommandRouter } from '../engine/command-router.js';
+import type { SessionController } from '../engine/command-router.js';
 import { WorkspaceManager } from '../engine/workspace-manager.js';
 import type { BaseChannelAdapter } from '../channels/base.js';
 import type { SessionStateManager } from '../engine/session-state.js';
@@ -268,5 +269,89 @@ describe('/open', () => {
     const [, outbound] = (adapter.send as ReturnType<typeof vi.fn>).mock.calls[0];
     const text = outbound.html ?? outbound.text ?? outbound.content ?? JSON.stringify(outbound);
     expect(text).toContain('not configured');
+  });
+});
+
+describe('/stop', () => {
+  let router: CommandRouter;
+  let adapter: ReturnType<typeof mockAdapter>;
+  let state: ReturnType<typeof mockState>;
+  let activeControls: Map<string, any>;
+
+  beforeEach(() => {
+    state = mockState();
+    const channelRouter = mockRouter();
+    activeControls = new Map();
+    const permissions = { clearSessionWhitelist: vi.fn() };
+    const renderers = createRenderers();
+
+    router = new CommandRouter(
+      state as any,
+      () => new Map(),
+      channelRouter as any,
+      activeControls,
+      permissions,
+      undefined,
+      renderers,
+    );
+
+    adapter = mockAdapter('telegram');
+  });
+
+  it('clears activeSessionId but keeps workspace', async () => {
+    const tmpDir = mkdtempSync(`${tmpdir()}/stop-test-`);
+    const mgr = new WorkspaceManager({ persistPath: null, workdirWhitelist: undefined });
+    mgr.register({ name: 'my-ws', workdir: tmpDir, runtime: 'codex' });
+    // Simulate workspace linked to the chat with an active session
+    mgr.update('my-ws', { chatId: 'chat1', activeSessionId: 'sess-abc' });
+    router.setWorkspaceManager(mgr);
+
+    const abortFn = vi.fn().mockResolvedValue(undefined);
+    const ctrl: SessionController = { abort: abortFn };
+    router.setSessionController(ctrl);
+
+    const result = await router.handle(adapter as any, makeMsg('/stop', 'chat1'));
+    expect(result).toBe(true);
+
+    // Session was cleared
+    const ws = mgr.findByName('my-ws');
+    expect(ws).toBeDefined();
+    expect(ws!.activeSessionId).toBeUndefined();
+    expect(ws!.lastSessionId).toBe('sess-abc');
+
+    // workspace itself still exists
+    expect(mgr.list().length).toBe(1);
+
+    // abort was called with the session id
+    expect(abortFn).toHaveBeenCalledWith('sess-abc');
+
+    // confirmation message sent
+    const [, outbound] = (adapter.send as ReturnType<typeof vi.fn>).mock.calls[0];
+    const text = outbound.html ?? outbound.text ?? outbound.content ?? JSON.stringify(outbound);
+    expect(text).toContain('⏹');
+  });
+
+  it('reports no active execution when no controls and no workspace session', async () => {
+    const result = await router.handle(adapter as any, makeMsg('/stop', 'chat1'));
+    expect(result).toBe(true);
+
+    const [, outbound] = (adapter.send as ReturnType<typeof vi.fn>).mock.calls[0];
+    const text = outbound.html ?? outbound.text ?? outbound.content ?? JSON.stringify(outbound);
+    expect(text).toContain('No active execution');
+  });
+
+  it('interrupts active QueryControls when present', async () => {
+    // stateKey returns "telegram:chat1"
+    const interruptFn = vi.fn().mockResolvedValue(undefined);
+    const stopTaskFn = vi.fn().mockResolvedValue(undefined);
+    activeControls.set('telegram:chat1', { interrupt: interruptFn, stopTask: stopTaskFn });
+
+    const result = await router.handle(adapter as any, makeMsg('/stop', 'chat1'));
+    expect(result).toBe(true);
+    expect(interruptFn).toHaveBeenCalled();
+
+    const [, outbound] = (adapter.send as ReturnType<typeof vi.fn>).mock.calls[0];
+    const text = outbound.html ?? outbound.text ?? outbound.content ?? JSON.stringify(outbound);
+    expect(text).toContain('⏹');
   });
 });

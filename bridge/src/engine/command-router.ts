@@ -17,6 +17,11 @@ import { existsSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 
+/** Minimal interface for aborting a running session by ID. */
+export interface SessionController {
+  abort(sessionId: string): Promise<void> | void;
+}
+
 function formatSince(ts: number): string {
   const diffMs = Date.now() - ts;
   const min = Math.round(diffMs / 60000);
@@ -30,6 +35,7 @@ function formatSince(ts: number): string {
 export class CommandRouter {
   private controlPanel?: ControlPanel;
   private workspaceManager?: WorkspaceManager;
+  private sessionController?: SessionController;
 
   constructor(
     private state: SessionStateManager,
@@ -51,6 +57,11 @@ export class CommandRouter {
   /** Inject WorkspaceManager after construction (avoids circular deps) */
   setWorkspaceManager(mgr: WorkspaceManager): void {
     this.workspaceManager = mgr;
+  }
+
+  /** Inject SessionController after construction (avoids circular deps) */
+  setSessionController(ctrl: SessionController): void {
+    this.sessionController = ctrl;
   }
 
   async handle(adapter: BaseChannelAdapter, msg: InboundMessage): Promise<boolean> {
@@ -127,9 +138,31 @@ export class CommandRouter {
       case '/stop': {
         const chatKey = this.state.stateKey(msg.channelType, msg.chatId);
         const ctrl = this.activeControls.get(chatKey);
+        let interrupted = false;
         if (ctrl) {
           this.activeControls.delete(chatKey);
           await ctrl.interrupt();
+          interrupted = true;
+        }
+
+        // Workspace-aware: clear activeSessionId and persist
+        if (this.workspaceManager) {
+          const ws = this.workspaceManager.findByThread(msg.chatId);
+          if (ws?.activeSessionId) {
+            const sessionId = ws.activeSessionId;
+            this.workspaceManager.update(ws.name, {
+              activeSessionId: undefined,
+              lastSessionId: sessionId,
+            });
+            if (this.sessionController) {
+              await this.sessionController.abort(sessionId);
+            }
+            this.workspaceManager.persist();
+            interrupted = true;
+          }
+        }
+
+        if (interrupted) {
           await adapter.send(msg.chatId, r.renderSimpleText('⏹ Interrupted current execution' + CommandRouter.MENU_HINT));
         } else {
           await adapter.send(msg.chatId, r.renderSimpleText('⚠️ No active execution to stop'));
