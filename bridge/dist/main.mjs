@@ -16978,7 +16978,7 @@ var CommandRouter = class _CommandRouter {
       }
       case "/new": {
         if (this.workspaceManager) {
-          const ws = this.workspaceManager.findByThread(msg.chatId);
+          const ws = this.workspaceManager.findByThread(msg.chatId, msg.threadId);
           if (ws?.activeSessionId) {
             const sessionId = ws.activeSessionId;
             this.workspaceManager.update(ws.name, {
@@ -17008,7 +17008,7 @@ var CommandRouter = class _CommandRouter {
         const level = parseInt(parts[1], 10);
         if ([0, 1, 2].includes(level)) {
           if (this.workspaceManager) {
-            const ws = this.workspaceManager.findByThread(msg.chatId);
+            const ws = this.workspaceManager.findByThread(msg.chatId, msg.threadId);
             if (ws) {
               this.workspaceManager.update(ws.name, { verbose: level });
               this.workspaceManager.persist();
@@ -17021,7 +17021,7 @@ var CommandRouter = class _CommandRouter {
           const text2 = `Verbose: ${labels[level]}${_CommandRouter.MENU_HINT}`;
           await adapter.send(msg.chatId, r.renderSimpleText(text2));
         } else {
-          const wsForVerbose = this.workspaceManager?.findByThread(msg.chatId);
+          const wsForVerbose = this.workspaceManager?.findByThread(msg.chatId, msg.threadId);
           const current = wsForVerbose?.verbose ?? this.state.getVerboseLevel(msg.channelType, msg.chatId);
           const text2 = `Verbose: **${labels[current]}**
 Usage: \`/verbose 0|1|2\`
@@ -17031,7 +17031,7 @@ Usage: \`/verbose 0|1|2\`
         return true;
       }
       case "/mode": {
-        const ws = this.workspaceManager?.findByThread(msg.chatId);
+        const ws = this.workspaceManager?.findByThread(msg.chatId, msg.threadId);
         if (ws && ws.runtime !== "codex") {
           await adapter.send(msg.chatId, r.renderSimpleText(
             "\u26A0\uFE0F Mode presets are Codex-only. For Claude use `/perm on|off`."
@@ -17078,7 +17078,7 @@ ${describeCodexPermissionMode(arg)}`
       }
       case "/perm": {
         const sub = parts[1]?.toLowerCase();
-        const wsForPerm = this.workspaceManager?.findByThread(msg.chatId);
+        const wsForPerm = this.workspaceManager?.findByThread(msg.chatId, msg.threadId);
         if (sub === "on" || sub === "off") {
           if (wsForPerm) {
             this.workspaceManager.update(wsForPerm.name, { perm: sub });
@@ -17113,7 +17113,7 @@ off = auto-allow all`;
       case "/effort": {
         const LEVELS = ["low", "medium", "high", "max"];
         const level = parts[1]?.toLowerCase();
-        const wsForEffort = this.workspaceManager?.findByThread(msg.chatId);
+        const wsForEffort = this.workspaceManager?.findByThread(msg.chatId, msg.threadId);
         if (level && LEVELS.includes(level)) {
           if (wsForEffort) {
             this.workspaceManager.update(wsForEffort.name, { effort: level });
@@ -17239,7 +17239,7 @@ claude: \u2705 \xB7 codex: ${codexStatus}`;
       }
       case "/model": {
         const model = parts.slice(1).join(" ").trim();
-        const wsForModel = this.workspaceManager?.findByThread(msg.chatId);
+        const wsForModel = this.workspaceManager?.findByThread(msg.chatId, msg.threadId);
         if (model) {
           if (model === "reset" || model === "default") {
             if (wsForModel) {
@@ -17271,7 +17271,7 @@ Examples: \`claude-sonnet-4-6\`, \`claude-opus-4-6\``;
         const llm = getBridgeContext().llm;
         const arg = parts[1]?.toLowerCase();
         const runtime = this.state.getRuntime(msg.channelType, msg.chatId) || "claude";
-        const wsForSettings = this.workspaceManager?.findByThread(msg.chatId);
+        const wsForSettings = this.workspaceManager?.findByThread(msg.chatId, msg.threadId);
         if (runtime === "codex" || !(llm instanceof ClaudeSDKProvider)) {
           const model = wsForSettings?.model ?? this.state.getModel(msg.channelType, msg.chatId) ?? "default";
           const effort = wsForSettings?.effort ?? this.state.getEffort(msg.channelType, msg.chatId) ?? "default";
