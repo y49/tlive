@@ -185,6 +185,46 @@ describe('WorkspaceManager.ensureDefault', () => {
     expect(ws!.name).toBe('preset');
     expect(ws!.source).toBeUndefined(); // register() did not tag it
   });
+
+  it('evicts stale unbound auto-defaults at different paths', () => {
+    // Simulate prior bridge runs that left stale auto entries
+    const stale1 = mkdtempSync(join(tmpdir(), 'stale1-'));
+    const stale2 = mkdtempSync(join(tmpdir(), 'stale2-'));
+    mgr.ensureDefault({ workdir: stale1, runtime: 'claude' });
+    mgr.ensureDefault({ workdir: stale2, runtime: 'claude' });
+    // Now call ensureDefault for the real current cwd
+    mgr.ensureDefault({ workdir: dir1, runtime: 'claude' });
+
+    // Only the dir1 entry should remain — stale1/stale2 evicted
+    const list = mgr.list();
+    expect(list).toHaveLength(1);
+    expect(list[0].workdir).toBe(dir1);
+    expect(list[0].source).toBe('auto');
+  });
+
+  it('does not evict bound auto-defaults (chatId set) at other paths', () => {
+    const dir2 = mkdtempSync(join(tmpdir(), 'bound-'));
+    mgr.ensureDefault({ workdir: dir2, runtime: 'claude' });
+    mgr.lazyBindDefault('chat-1', undefined); // bind the dir2 entry
+
+    // Now a new ensureDefault for dir1 should NOT evict the bound dir2 entry
+    mgr.ensureDefault({ workdir: dir1, runtime: 'claude' });
+
+    expect(mgr.list()).toHaveLength(2);
+    const dir2Entry = mgr.list().find(w => w.workdir === dir2);
+    expect(dir2Entry).toBeDefined();
+    expect(dir2Entry!.chatId).toBe('chat-1');
+  });
+
+  it('does not evict user TL_WORKSPACES entries (source undefined) at other paths', () => {
+    const userDir = mkdtempSync(join(tmpdir(), 'user-'));
+    mgr.register({ name: 'user-ws', workdir: userDir, runtime: 'claude' });
+
+    mgr.ensureDefault({ workdir: dir1, runtime: 'claude' });
+
+    expect(mgr.list()).toHaveLength(2);
+    expect(mgr.findByName('user-ws')).toBeDefined();
+  });
 });
 
 describe('WorkspaceManager.getDefault / lazyBindDefault', () => {

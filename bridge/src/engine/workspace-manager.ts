@@ -72,6 +72,15 @@ export class WorkspaceManager {
     }
     const resolved = v.resolved;
 
+    // Trim stale unbound auto-defaults at other paths (e.g. from previous cwds).
+    // Rationale: unbound auto-defaults carry no user prefs (prefs require a lazy-bind
+    // that sets chatId), so removing them is safe and prevents getDefault() ambiguity.
+    for (const [name, ws] of this.byName) {
+      if (ws.source === 'auto' && ws.chatId === undefined && ws.workdir !== resolved) {
+        this.byName.delete(name);
+      }
+    }
+
     const existing = this.findByWorkdir(resolved);
     if (existing) return existing;
 
