@@ -234,29 +234,26 @@ export class TelegramRenderer implements NotificationRenderer<TelegramOutbound> 
   // ─── Progress phase handlers ────────────────────
 
   private renderExecutingPhase(snapshot: ProgressSnapshot): TelegramOutbound {
-    // Build non-text parts first to calculate budget for responseText
+    // Build footer first to calculate budget for responseText
     const tail: string[] = [];
 
-    if (snapshot.todoItems.length > 0) {
-      tail.push(renderTodoChecklist(snapshot.todoItems));
-      tail.push('');
-    }
-
+    // Tool summary + elapsed (always show elapsed)
+    const elapsed = `${snapshot.elapsedSeconds}s`;
     if (snapshot.totalTools > 0) {
       const toolParts: string[] = [];
       for (const [name, count] of snapshot.toolCounts) {
         toolParts.push(`${getToolIcon(name)} ${escapeHtml(name)} \u00D7${count}`);
       }
-      const toolSummary = toolParts.join(' \u00B7 ');
-      const elapsed = `${snapshot.elapsedSeconds}s`;
-      tail.push(`\u23F3 ${toolSummary} (${snapshot.totalTools} tools \u00B7 ${elapsed})`);
+      tail.push(`\u23F3 ${toolParts.join(' \u00B7 ')} (${snapshot.totalTools} tools \u00B7 ${elapsed})`);
+    } else {
+      tail.push(`\u23F3 ${elapsed}`);
     }
 
     const tailStr = tail.join('\n');
     const lines: string[] = [];
 
     if (snapshot.responseText.trim()) {
-      const budget = TG_LIMIT - tailStr.length - 50; // 50 chars margin for separators/newlines
+      const budget = TG_LIMIT - tailStr.length - 50;
       const rendered = markdownToTelegram(redactSensitiveContent(snapshot.responseText.trim()));
       lines.push(fitText(rendered, budget));
       lines.push('');
@@ -297,13 +294,9 @@ export class TelegramRenderer implements NotificationRenderer<TelegramOutbound> 
   }
 
   private renderDonePhase(snapshot: ProgressSnapshot): TelegramOutbound {
-    // Build non-text parts first to calculate budget for responseText
+    // Build footer first to calculate budget for responseText
+    // Note: todoItems are shown in the separate todo panel, not here
     const tail: string[] = [];
-
-    if (snapshot.todoItems.length > 0) {
-      tail.push(renderTodoChecklist(snapshot.todoItems));
-      tail.push('');
-    }
 
     if (snapshot.totalTools > 0) {
       tail.push(renderToolSummary(snapshot.toolCounts, snapshot.totalTools));
