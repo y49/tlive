@@ -3,6 +3,15 @@ import { readFileSync, writeFileSync, appendFileSync, existsSync, unlinkSync, mk
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+function denyPermission() {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PermissionRequest',
+      decision: { behavior: 'deny' },
+    },
+  }));
+}
+
 // Read stdin
 let input = '';
 for await (const chunk of process.stdin) {
@@ -102,19 +111,24 @@ try {
     signal: AbortSignal.timeout(300_000),
   });
 } catch {
+  denyPermission();
   process.exit(0);
 }
 
-if (!response.ok) process.exit(0);
+if (!response.ok) {
+  denyPermission();
+  process.exit(0);
+}
 
 let body;
 try {
   body = await response.json();
 } catch {
+  denyPermission();
   process.exit(0);
 }
 
-const decision = body.decision || 'allow';
+const decision = body.decision || 'deny';
 const updatedInput = body.updated_input;
 
 // For AskUserQuestion: save the IM answer so PostToolUse can inject it as context.
@@ -159,11 +173,9 @@ switch (decision) {
     break;
   }
   case 'deny':
-    process.stdout.write(JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: 'PermissionRequest',
-        decision: { behavior: 'deny' },
-      },
-    }));
+    denyPermission();
+    break;
+  default:
+    denyPermission();
     break;
 }
