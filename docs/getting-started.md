@@ -179,8 +179,8 @@ tlive logs 50
 
 ## Next Steps
 
+- **Full commands reference:** [docs/commands.md](commands.md) — bridge commands vs CLI passthrough
 - **Adjust verbose level:** `/verbose 1` for terminal card with tool calls and results
-- **Pause hooks when at desk:** `tlive hooks pause` — auto-allows everything so you're not interrupted. `tlive hooks resume` to go back to IM approval.
 - **Access web terminal from phone:** scan the QR code or use the Network URL printed when you start a session
-- **Multiple sessions:** run several `tlive <cmd>` commands — they all show up in a single dashboard
-- Read the full [README](../README.md) for all commands and architecture details
+- **Multiple workspaces:** use `/open <path>` in IM to switch projects — each gets its own topic/thread
+- Read the full [README](../README.md) for architecture details

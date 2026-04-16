@@ -31,24 +31,28 @@ tlive codex
 
 Pair your phone via the URL in terminal output, or via the Telegram/Discord/Feishu bot.
 
-## Workspace Commands (in IM)
+## Commands (in IM)
 
 ```
 /workspaces              List all workspaces with status
 /open <name|path>        Enter a workspace (creates if path, reuses if exists)
-/stop                    Terminate current workspace's session (workspace stays)
+/stop                    Interrupt current turn (Ctrl+C); session stays
+/new                     End session; next message starts fresh
 
-/perm on|off
-/approval on-request|on-failure|never
-/sandbox read-only|workspace-write|danger-full-access
-/model <name>
+/model <name>            Workspace model (Claude/Codex)
 /effort low|medium|high|max
-/verbose 0|1|2
-/settings                Show current workspace config + session status
-/help
+/verbose 0|1|2           Notification level
+
+/perm on|off             Claude: permission prompts
+/mode default|read-only|safe-yolo|yolo   Codex: permission preset
+
+/settings, /status, /menu, /help
 ```
 
-Preferences are scoped per workspace — `/perm on` in workspace `tlive` doesn't affect `blog`.
+Any other `/command` (e.g. `/clear`, `/compact`) passes through to the active
+Claude Code / Codex session. Full reference: [docs/commands.md](docs/commands.md).
+
+Preferences are scoped per workspace — `/perm on` in `tlive` doesn't affect `blog`.
 
 ## Pre-configured Workspaces
 
