@@ -106,6 +106,92 @@ describe('CodexAppServerClient', () => {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('9999'));
     warnSpy.mockRestore();
   });
+
+  it('onCommandExecutionApproval handler receives params and sends response', async () => {
+    await initialize(client, transport);
+    client.onCommandExecutionApproval(async (params) => {
+      expect(params).toMatchObject({ threadId: 't1', command: 'ls' });
+      return { decision: 'accept' as const };
+    });
+    // Server sends request
+    const reqId = 42;
+    transport.receive({
+      id: reqId,
+      method: 'item/commandExecution/requestApproval',
+      params: { threadId: 't1', turnId: 'tr1', itemId: 'i1', command: 'ls', cwd: '/tmp' },
+    });
+    // Wait for handler to respond
+    await new Promise(r => setImmediate(r));
+    await new Promise(r => setImmediate(r));
+    const sent = transport.sent.find((s: any) => s.id === reqId);
+    expect(sent).toMatchObject({ id: 42, result: { decision: 'accept' } });
+  });
+
+  it('onFileChangeApproval handler wired correctly', async () => {
+    await initialize(client, transport);
+    client.onFileChangeApproval(async () => ({ decision: 'decline' as const }));
+    transport.receive({
+      id: 50,
+      method: 'item/fileChange/requestApproval',
+      params: { threadId: 't1', turnId: 'tr1', itemId: 'i2' },
+    });
+    await new Promise(r => setImmediate(r));
+    await new Promise(r => setImmediate(r));
+    expect(transport.sent.find((s: any) => s.id === 50)).toMatchObject({ id: 50, result: { decision: 'decline' } });
+  });
+
+  it('onMcpElicitation handler wired correctly', async () => {
+    await initialize(client, transport);
+    client.onMcpElicitation(async () => ({ action: 'decline' as const, content: null }));
+    transport.receive({
+      id: 51,
+      method: 'mcpServer/elicitation/request',
+      params: { threadId: 't1', serverName: 'test' },
+    });
+    await new Promise(r => setImmediate(r));
+    await new Promise(r => setImmediate(r));
+    expect(transport.sent.find((s: any) => s.id === 51)).toMatchObject({
+      id: 51,
+      result: { action: 'decline', content: null },
+    });
+  });
+
+  it('server request with no registered handler → method_not_found error', async () => {
+    await initialize(client, transport);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    transport.receive({
+      id: 77,
+      method: 'unknown/method',
+      params: {},
+    });
+    await new Promise(r => setImmediate(r));
+    const sent = transport.sent.find((s: any) => s.id === 77);
+    expect(sent).toMatchObject({ id: 77, error: { code: -32601 } });
+    warnSpy.mockRestore();
+  });
+
+  it('server request handler that throws → error response sent back', async () => {
+    await initialize(client, transport);
+    client.onCommandExecutionApproval(async () => { throw new Error('boom'); });
+    transport.receive({
+      id: 88,
+      method: 'item/commandExecution/requestApproval',
+      params: {},
+    });
+    await new Promise(r => setImmediate(r));
+    await new Promise(r => setImmediate(r));
+    const sent = transport.sent.find((s: any) => s.id === 88);
+    expect(sent).toMatchObject({ id: 88, error: { message: expect.stringContaining('boom') } });
+  });
+
+  it('close() rejects all pending requests', async () => {
+    await initialize(client, transport);
+    const p1 = client.request('m1', {});
+    const p2 = client.request('m2', {});
+    await client.close();
+    await expect(p1).rejects.toThrow(/closed/i);
+    await expect(p2).rejects.toThrow(/closed/i);
+  });
 });
 
 // Helper: complete initialize handshake
