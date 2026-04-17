@@ -109,8 +109,15 @@ export class CodexProvider implements LLMProvider {
               return;
             }
 
+            // Do NOT pass apiKey to the SDK constructor — that makes the SDK set
+            // CODEX_API_KEY in the subprocess env, which takes a different auth code
+            // path than reading ~/.codex/auth.json. Users with codex CLI already
+            // configured (including proxy base_url via config.toml) see auth failures
+            // when CODEX_API_KEY is set. Instead, let buildCodexEnv() pass process.env
+            // through and the subprocess uses its native auth resolution:
+            //   1. ~/.codex/auth.json (preferred, matches terminal CLI behavior)
+            //   2. OPENAI_API_KEY env var (fallback for fresh installs)
             const codex = new this.CodexCtor({
-              apiKey: process.env.OPENAI_API_KEY,
               env: buildCodexEnv(),
             });
 
