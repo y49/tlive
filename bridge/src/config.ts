@@ -36,6 +36,8 @@ export interface Config {
     webhookSecret: string;
     /** Webhook listen port (default: 8443) */
     webhookPort: number;
+    /** Long-poll timeout in seconds for getUpdates (default: 30) */
+    pollTimeout: number;
     /** Disable link previews in outbound messages (default: true) */
     disableLinkPreview: boolean;
     /** HTTP/SOCKS proxy URL — overrides global TL_PROXY */
@@ -171,6 +173,7 @@ export function loadConfig(): Config {
       webhookUrl: get('TL_TG_WEBHOOK_URL'),
       webhookSecret: get('TL_TG_WEBHOOK_SECRET'),
       webhookPort: parseInt(get('TL_TG_WEBHOOK_PORT', '8443'), 10),
+      pollTimeout: parseInt(get('TL_TG_POLL_TIMEOUT', '30'), 10),
       disableLinkPreview: get('TL_TG_DISABLE_LINK_PREVIEW', 'true') !== 'false',
       proxy: get('TL_TG_PROXY') || globalProxy,
     },

@@ -2,6 +2,7 @@ import { Bot, InputFile, type Api, type RawApi } from 'grammy';
 import { run, type RunnerHandle } from '@grammyjs/runner';
 import { apiThrottler } from '@grammyjs/transformer-throttler';
 import { createServer, type Server } from 'node:http';
+import { Agent as HttpsAgent } from 'node:https';
 import { BaseChannelAdapter, registerAdapterFactory } from './base.js';
 import type { InboundMessage, OutboundMessage, SendResult, FileAttachment } from './types.js';
 import { loadConfig } from '../config.js';
@@ -13,12 +14,14 @@ import { classifyError } from './errors.js';
 const TELEGRAM_MULTIPART_INTRO = 'Long reply — split into readable parts.';
 
 interface TelegramConfig {
+  botToken: string;
   chatId: string;
   allowedUsers: string[];
   requireMention: boolean;
   webhookUrl: string;
   webhookSecret: string;
   webhookPort: number;
+  pollTimeout: number;
   disableLinkPreview: boolean;
   proxy: string;
 }
@@ -55,10 +58,21 @@ export class TelegramAdapter extends BaseChannelAdapter {
   }
 
   async start(): Promise<void> {
-    const agent = createNodeAgent(this.config.proxy);
-    this.bot = new Bot(this.config.botToken, agent
-      ? { client: { baseFetchConfig: { agent, compress: true } } }
-      : {});
+    const proxyAgent = createNodeAgent(this.config.proxy);
+    const keepAliveAgent = new HttpsAgent({
+      keepAlive: true,
+      maxSockets: 32,
+      keepAliveMsecs: 30_000,
+    });
+    const agent = proxyAgent ?? keepAliveAgent;
+    this.bot = new Bot(this.config.botToken, {
+      client: {
+        baseFetchConfig: {
+          agent,
+          compress: true,
+        },
+      },
+    });
 
     if (this.config.proxy) {
       console.log(`[telegram] Using proxy: ${maskProxyUrl(this.config.proxy)}`);
@@ -234,7 +248,10 @@ export class TelegramAdapter extends BaseChannelAdapter {
       await this.bot.api.deleteWebhook();
       this.runnerHandle = run(this.bot, {
         runner: {
+          maxRetryTime: 24 * 60 * 60 * 1000,
+          retryInterval: 'quadratic',
           fetch: {
+            timeout: Math.max(1, this.config.pollTimeout || 30),
             allowed_updates: ['message', 'callback_query', 'message_reaction'],
           },
         },

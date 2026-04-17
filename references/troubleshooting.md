@@ -29,6 +29,19 @@
 5. For Feishu: confirm app is approved and event subscriptions are configured
 6. Check logs for incoming messages: `/tlive logs 200`
 
+## Telegram long-polling unstable (ECONNRESET / socket hang up)
+
+**Symptoms**: Bridge logs repeatedly show `getUpdates` errors such as `ECONNRESET` or `socket hang up`.
+
+**Steps**:
+1. Ensure only one bot instance is running
+   - Stop duplicate bridge sessions and restart once: `tlive stop && tlive start`
+2. Lower Telegram poll timeout
+   - In `~/.tlive/config.env`, set `TL_TG_POLL_TIMEOUT=10`
+   - Restart bridge: `tlive stop && tlive start`
+3. If your region/network needs a proxy, set `TL_TG_PROXY` (or global `TL_PROXY`)
+4. Re-check recent logs: `tlive logs 100`
+
 ## Hook approval not working
 
 **Symptoms**: Claude Code runs without sending permission requests to phone.

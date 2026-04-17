@@ -74,6 +74,7 @@ TL_ENABLED_CHANNELS=telegram
 # Telegram example
 TL_TG_BOT_TOKEN=7823456789:AAF-xxxxx
 TL_TG_CHAT_ID=123456789
+TL_TG_POLL_TIMEOUT=10             # optional: lower if long-poll gets ECONNRESET/socket hang up
 
 # Web terminal port and access token
 TL_PORT=4590

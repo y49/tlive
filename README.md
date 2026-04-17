@@ -207,6 +207,7 @@ TL_ENABLED_CHANNELS=telegram,discord
 TL_TG_BOT_TOKEN=...
 TL_TG_CHAT_ID=...
 TL_TG_REQUIRE_MENTION=true        # @bot required in groups
+TL_TG_POLL_TIMEOUT=10             # optional: lower if long-poll gets ECONNRESET/socket hang up
 TL_TG_DISABLE_LINK_PREVIEW=true   # cleaner messages
 
 # Discord
