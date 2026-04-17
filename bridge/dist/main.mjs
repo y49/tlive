@@ -16220,7 +16220,6 @@ var CodexProvider = class {
               return;
             }
             const codex = new this.CodexCtor({
-              apiKey: process.env.OPENAI_API_KEY,
               env: buildCodexEnv()
             });
             const approvalPolicy = params.onPermissionRequest ? "untrusted" : "on-failure";
