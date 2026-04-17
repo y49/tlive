@@ -1,6 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Mock } from 'vitest';
 import { CodexApprovalBridge } from '../approval-bridge.js';
 import { CodexEventAdapter } from '../event-adapter.js';
+
+type PermissionDecision = 'allow' | 'deny' | 'allow_always';
+type PermissionFn = (
+  toolName: string,
+  input: Record<string, unknown>,
+  reason: string,
+) => Promise<PermissionDecision>;
 
 function makeClient() {
   const handlers = new Map<string, (p: unknown) => Promise<unknown>>();
@@ -16,7 +24,7 @@ function makeClient() {
 describe('CodexApprovalBridge', () => {
   let client: ReturnType<typeof makeClient>;
   let eventAdapter: CodexEventAdapter;
-  let onPermissionRequest: ReturnType<typeof vi.fn>;
+  let onPermissionRequest: Mock<PermissionFn>;
 
   beforeEach(() => {
     client = makeClient();
@@ -24,7 +32,7 @@ describe('CodexApprovalBridge', () => {
     onPermissionRequest = vi.fn();
   });
 
-  function wire(handler: typeof onPermissionRequest | undefined) {
+  function wire(handler: PermissionFn | undefined) {
     const bridge = new CodexApprovalBridge(client as any, eventAdapter, handler);
     bridge.wireHandlers();
     return bridge;

@@ -9,6 +9,7 @@ interface ThreadItem {
 interface TokenUsageSummary {
   inputTokens: number;
   outputTokens: number;
+  [k: string]: unknown;
 }
 
 export class CodexEventAdapter {
