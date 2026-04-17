@@ -21,6 +21,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/termlive/termlive/core/internal/config"
 	"github.com/termlive/termlive/core/internal/daemon"
+	"github.com/termlive/termlive/core/internal/notify"
 	"github.com/termlive/termlive/core/internal/server"
 	"github.com/termlive/termlive/core/web"
 	"golang.org/x/term"
@@ -92,10 +93,14 @@ func runCommand(cmd *cobra.Command, args []string) error {
 func runHost(cfg *config.Config, args []string, rows, cols uint16, lockPath string) error {
 	// Create daemon
 	d := daemon.NewDaemon(daemon.DaemonConfig{
-		Port:  cfg.Daemon.Port,
-		Token: cfg.Daemon.Token,
-		Host:  cfg.Daemon.Host,
+		Port:          cfg.Daemon.Port,
+		Token:         cfg.Daemon.Token,
+		Host:          cfg.Daemon.Host,
+		WeChatWebhook: cfg.Daemon.WeChatWebhook,
 	})
+	if wechat := notify.NewWeChatNotifier(cfg.Daemon.WeChatWebhook); wechat != nil {
+		d.SetNotifiers(notify.NewMultiNotifier(wechat))
+	}
 	mgr := d.Manager()
 
 	// Start reaper to clean up orphaned client-mode sessions (e.g. killed by timeout)

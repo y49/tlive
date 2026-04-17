@@ -15,14 +15,17 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/termlive/termlive/core/internal/notify"
 )
 
 // DaemonConfig holds configuration for the daemon HTTP server.
 type DaemonConfig struct {
-	Port         int
-	Token        string
-	Host         string // default "0.0.0.0"
-	HistoryLimit int
+	Port          int
+	Token         string
+	Host          string // default "0.0.0.0"
+	HistoryLimit  int
+	WeChatWebhook string
 }
 
 // Daemon is the TermLive session hub. It manages PTY sessions and exposes
@@ -32,6 +35,7 @@ type Daemon struct {
 	mgr           *SessionManager
 	notifications *NotificationStore
 	hooks         *HookManager
+	notifier      *notify.MultiNotifier
 	token         string
 	host          string
 	startTime     time.Time
@@ -75,6 +79,11 @@ func (d *Daemon) Token() string { return d.token }
 
 // Notifications returns the notification store (for direct internal use).
 func (d *Daemon) Notifications() *NotificationStore { return d.notifications }
+
+// SetNotifiers configures external notification channels (WeChat, etc.).
+func (d *Daemon) SetNotifiers(n *notify.MultiNotifier) {
+	d.notifier = n
+}
 
 // SetExtraHandler sets an additional HTTP handler that serves routes
 // not handled by the daemon's own API (e.g., Web UI, WebSocket).
@@ -480,7 +489,110 @@ func (d *Daemon) handleHookNotify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	d.notifications.Add(NotifyProgress, string(rawBody), "")
+	if d.notifier != nil && d.notifier.Len() > 0 {
+		relayMsg := d.buildRelayNotifyMessage(hookData, rawBody)
+		if err := d.notifier.Send(relayMsg); err != nil {
+			log.Printf("notification relay error: %v", err)
+		}
+	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func (d *Daemon) buildRelayNotifyMessage(hookData map[string]interface{}, rawBody []byte) *notify.NotifyMessage {
+	msg := &notify.NotifyMessage{
+		Command:    string(NotifyProgress),
+		LastOutput: string(rawBody),
+	}
+	if len(hookData) == 0 {
+		return msg
+	}
+
+	if hookType, ok := hookData["tlive_hook_type"].(string); ok && strings.TrimSpace(hookType) != "" {
+		msg.Command = strings.TrimSpace(hookType)
+	}
+	if notificationType, ok := hookData["notification_type"].(string); ok {
+		msg.NotificationType = strings.TrimSpace(notificationType)
+	}
+	if sessionID, ok := hookData["tlive_session_id"].(string); ok {
+		msg.SessionID = strings.TrimSpace(sessionID)
+	}
+	if webURL, ok := hookData["web_url"].(string); ok {
+		msg.WebURL = strings.TrimSpace(webURL)
+	}
+	if toolName, ok := hookData["tool_name"].(string); ok {
+		msg.PermissionToolName = strings.TrimSpace(toolName)
+	}
+	if idleSeconds, ok := readIntField(hookData, "idle_seconds"); ok {
+		msg.IdleSeconds = idleSeconds
+	}
+	if output := pickRelayOutput(hookData); output != "" {
+		msg.LastOutput = output
+	}
+
+	if sid := msg.SessionID; sid != "" {
+		if msg.WebURL == "" {
+			msg.WebURL = d.sessionWebURL(sid)
+		}
+		if ms, found := d.mgr.GetSession(sid); found {
+			if msg.Pid == 0 {
+				msg.Pid = ms.Session.Pid
+			}
+			if msg.Duration == "" {
+				msg.Duration = ms.Session.Duration().Truncate(time.Second).String()
+			}
+			if msg.LastOutput == "" {
+				msg.LastOutput = stripANSI(string(ms.Session.LastOutput(500)))
+			}
+		}
+	}
+
+	return msg
+}
+
+func pickRelayOutput(hookData map[string]interface{}) string {
+	for _, key := range []string{"last_output", "message", "summary"} {
+		if value, ok := hookData[key].(string); ok {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	if text, ok := hookData["text"].(string); ok {
+		if trimmed := strings.TrimSpace(text); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func readIntField(data map[string]interface{}, key string) (int, bool) {
+	value, ok := data[key]
+	if !ok {
+		return 0, false
+	}
+	switch v := value.(type) {
+	case float64:
+		return int(v), true
+	case int:
+		return v, true
+	case int32:
+		return int(v), true
+	case int64:
+		return int(v), true
+	default:
+		return 0, false
+	}
+}
+
+func (d *Daemon) sessionWebURL(sessionID string) string {
+	if strings.TrimSpace(sessionID) == "" {
+		return ""
+	}
+	host := d.host
+	if host == "" || host == "0.0.0.0" {
+		host = "127.0.0.1"
+	}
+	return fmt.Sprintf("http://%s:%d/?token=%s&session=%s", host, d.cfg.Port, d.token, sessionID)
 }
 
 // handleHookNotifications handles GET /api/hooks/notifications — returns recent notifications for Bridge polling.

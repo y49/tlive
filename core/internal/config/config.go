@@ -15,9 +15,10 @@ type Config struct {
 
 // DaemonConfig holds settings for the background daemon process.
 type DaemonConfig struct {
-	Port  int
-	Token string
-	Host  string
+	Port           int
+	Token          string
+	Host           string
+	WeChatWebhook  string
 }
 
 // Default returns a Config with sensible defaults.
@@ -32,7 +33,7 @@ func Default() *Config {
 
 // LoadFromEnv reads ~/.tlive/config.env (KEY=VALUE format) and returns a Config.
 // Missing keys fall back to defaults. If the file does not exist, defaults are returned.
-// Supported keys: TL_PORT, TL_TOKEN, TL_HOST.
+// Supported keys: TL_PORT, TL_TOKEN, TL_HOST, TL_WECHAT_WEBHOOK.
 func LoadFromEnv() (*Config, error) {
 	cfg := Default()
 
@@ -76,6 +77,8 @@ func LoadFromEnv() (*Config, error) {
 			cfg.Daemon.Token = val
 		case "TL_HOST":
 			cfg.Daemon.Host = val
+		case "TL_WECHAT_WEBHOOK":
+			cfg.Daemon.WeChatWebhook = val
 		}
 	}
 	return cfg, scanner.Err()

@@ -40,7 +40,7 @@ func TestLoadFromEnv_Values(t *testing.T) {
 	if err := os.MkdirAll(cfgDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	content := "TL_PORT=9090\nTL_TOKEN=my-token\nTL_HOST=127.0.0.1\n"
+	content := "TL_PORT=9090\nTL_TOKEN=my-token\nTL_HOST=127.0.0.1\nTL_WECHAT_WEBHOOK=https://example.test/wechat\n"
 	if err := os.WriteFile(filepath.Join(cfgDir, "config.env"), []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -57,6 +57,9 @@ func TestLoadFromEnv_Values(t *testing.T) {
 	}
 	if cfg.Daemon.Host != "127.0.0.1" {
 		t.Errorf("expected host '127.0.0.1', got %q", cfg.Daemon.Host)
+	}
+	if cfg.Daemon.WeChatWebhook != "https://example.test/wechat" {
+		t.Errorf("expected WeChat webhook to load, got %q", cfg.Daemon.WeChatWebhook)
 	}
 }
 
