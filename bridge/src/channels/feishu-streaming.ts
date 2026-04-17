@@ -4,6 +4,8 @@
  * and closes streaming when complete.
  */
 
+import { normalizeForIM } from '../markdown/common.js';
+
 export interface FeishuStreamingOptions {
   client: any; // Lark SDK client
   chatId: string;
@@ -40,6 +42,7 @@ export class FeishuStreamingSession {
 
   /** Create card + send as message. Returns messageId. */
   async start(initialText = 'Thinking...'): Promise<string> {
+    const normalizedInitialText = normalizeForIM(initialText);
     // Step 1: Create card entity with streaming enabled
     const cardJson: Record<string, unknown> = {
       schema: '2.0',
@@ -53,7 +56,7 @@ export class FeishuStreamingSession {
       },
       body: {
         elements: [
-          { tag: 'markdown', content: initialText, element_id: 'content' },
+          { tag: 'markdown', content: normalizedInitialText, element_id: 'content' },
         ],
       },
     };
@@ -97,8 +100,9 @@ export class FeishuStreamingSession {
 
   /** Update the streaming card content (cumulative text). Throttled + serialized. */
   async update(fullText: string): Promise<void> {
-    if (!this.cardId || fullText === this.lastContent) return;
-    this.lastContent = fullText;
+    const normalizedText = normalizeForIM(fullText);
+    if (!this.cardId || normalizedText === this.lastContent) return;
+    this.lastContent = normalizedText;
 
     // Serialize updates to maintain sequence ordering
     this.updateQueue = this.updateQueue.then(async () => {
@@ -113,7 +117,7 @@ export class FeishuStreamingSession {
         await this.client.cardkit.v1.cardElement.content({
           path: { card_id: this.cardId!, element_id: 'content' },
           data: {
-            content: fullText,
+            content: normalizedText,
             sequence: this.sequence,
             uuid: `s_${this.cardId}_${this.sequence}`,
           },

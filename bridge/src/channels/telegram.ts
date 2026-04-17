@@ -6,11 +6,13 @@ import { BaseChannelAdapter, registerAdapterFactory } from './base.js';
 import type { InboundMessage, OutboundMessage, SendResult, FileAttachment } from './types.js';
 import { loadConfig } from '../config.js';
 import { createNodeAgent, maskProxyUrl } from '../proxy.js';
-import { chunkMarkdown } from '../delivery/delivery.js';
+import { prepareMultipartText } from '../delivery/delivery.js';
+import { normalizeForIM } from '../markdown/common.js';
 import { classifyError } from './errors.js';
 
+const TELEGRAM_MULTIPART_INTRO = 'Long reply — split into readable parts.';
+
 interface TelegramConfig {
-  botToken: string;
   chatId: string;
   allowedUsers: string[];
   requireMention: boolean;
@@ -305,8 +307,11 @@ export class TelegramAdapter extends BaseChannelAdapter {
       }
     }
 
-    const text = message.html ?? message.text ?? '';
-    const chunks = text.length > 4096 ? chunkMarkdown(text, 4096) : [text];
+    const rawText = message.html ?? message.text ?? '';
+    const normalizedText = normalizeForIM(rawText);
+    const chunks = prepareMultipartText(normalizedText, 4096, {
+      intro: TELEGRAM_MULTIPART_INTRO,
+    });
 
     let lastMessageId = '';
     try {
@@ -368,7 +373,8 @@ export class TelegramAdapter extends BaseChannelAdapter {
 
   async editMessage(chatId: string, messageId: string, message: OutboundMessage): Promise<void> {
     if (!this.bot) return;
-    const text = message.html ?? message.text ?? '';
+    const rawText = message.html ?? message.text ?? '';
+    const text = normalizeForIM(rawText);
     const opts: Record<string, unknown> = {
       parse_mode: message.html ? 'HTML' : undefined,
     };

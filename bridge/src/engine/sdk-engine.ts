@@ -10,9 +10,9 @@ import { MessageRenderer } from './message-renderer.js';
 import { CostTracker } from './cost-tracker.js';
 import type { UsageStats } from './cost-tracker.js';
 import { getToolCommand } from './tool-registry.js';
-import { markdownToTelegram } from '../markdown/index.js';
+import { markdownToTelegram, normalizeForIM } from '../markdown/index.js';
 import { downgradeHeadings } from '../markdown/feishu.js';
-import { chunkByParagraph } from '../delivery/delivery.js';
+import { chunkByParagraph, prepareMultipartText } from '../delivery/delivery.js';
 import type { FeishuStreamingSession } from '../channels/feishu-streaming.js';
 import { getBridgeContext } from '../context.js';
 import { resolveWorkingDirectory } from './working-directory.js';
@@ -394,6 +394,7 @@ export class SDKEngine {
     }
 
     const reactionChatId = msg.chatId;
+    const weakChannelMultipartIntro = 'Long reply — split into readable parts.';
 
     // Start typing heartbeat
     const typingTarget = threadId && adapter.channelType === 'discord' ? threadId : msg.chatId;
@@ -420,6 +421,7 @@ export class SDKEngine {
     const renderer = new MessageRenderer({
       platformLimit: platformLimits[adapter.channelType] ?? 4096,
       throttleMs: 300,
+      displayMode: adapter.channelType === 'feishu' ? 'verbose' : 'compact',
       onPermissionTimeout: async (toolName, input, buttons) => {
         permissionReminderTool = toolName;
         permissionReminderInput = input;
@@ -436,27 +438,28 @@ export class SDKEngine {
         } catch { /* non-fatal */ }
       },
       flushCallback: async (content, isEdit, buttons) => {
+        const normalizedContent = normalizeForIM(content);
         if (feishuSession && !buttons?.length) {
           if (!isEdit) {
             try {
-              const messageId = await feishuSession.start(downgradeHeadings(content));
+              const messageId = await feishuSession.start(downgradeHeadings(normalizedContent));
               clearInterval(typingInterval);
               return messageId;
             } catch {
               feishuSession = null;
             }
           } else {
-            feishuSession.update(downgradeHeadings(content)).catch(() => {});
+            feishuSession.update(downgradeHeadings(normalizedContent)).catch(() => {});
             return;
           }
         }
         let outMsg: OutboundMessage;
         if (adapter.channelType === 'telegram') {
-          outMsg = { chatId: msg.chatId, html: markdownToTelegram(content), threadId };
+          outMsg = { chatId: msg.chatId, html: markdownToTelegram(normalizedContent), threadId };
         } else if (adapter.channelType === 'discord') {
-          outMsg = { chatId: msg.chatId, text: content, threadId };
+          outMsg = { chatId: msg.chatId, text: normalizedContent, threadId };
         } else {
-          outMsg = { chatId: msg.chatId, text: content };
+          outMsg = { chatId: msg.chatId, text: normalizedContent };
         }
         if (buttons?.length) {
           outMsg.buttons = buttons.map(b => ({ ...b, style: b.style as 'primary' | 'danger' | 'default' }));
@@ -478,8 +481,10 @@ export class SDKEngine {
           return result.messageId;
         } else {
           const limit = platformLimits[adapter.channelType] ?? 4096;
-          if (content.length > limit) {
-            const chunks = chunkByParagraph(content, limit);
+          if (normalizedContent.length > limit) {
+            const chunks = adapter.channelType === 'telegram' || adapter.channelType === 'discord'
+              ? prepareMultipartText(normalizedContent, limit, { intro: weakChannelMultipartIntro })
+              : chunkByParagraph(normalizedContent, limit);
             const firstOutMsg: OutboundMessage = adapter.channelType === 'telegram'
               ? { chatId: msg.chatId, html: markdownToTelegram(chunks[0]), threadId }
               : adapter.channelType === 'discord'

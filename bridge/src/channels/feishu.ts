@@ -4,6 +4,7 @@ import type { InboundMessage, OutboundMessage, SendResult, FileAttachment } from
 import { loadConfig } from '../config.js';
 import { classifyError } from './errors.js';
 import { markdownToFeishu, downgradeHeadings } from '../markdown/feishu.js';
+import { normalizeForIM } from '../markdown/common.js';
 import { buildFeishuCard } from '../formatting/feishu-card.js';
 import { FeishuStreamingSession } from './feishu-streaming.js';
 import { Readable } from 'node:stream';
@@ -260,8 +261,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
   }
 
   private buildCard(text: string, buttons?: OutboundMessage['buttons'], header?: { template: string; title: string }): string {
+    const normalized = normalizeForIM(text);
     const elements: FeishuCardElement[] = [
-      { tag: 'markdown', content: downgradeHeadings(text) },
+      { tag: 'markdown', content: downgradeHeadings(normalized) },
     ];
 
     if (buttons?.length) {
@@ -390,7 +392,18 @@ export class FeishuAdapter extends BaseChannelAdapter {
       const idType = message.receiveIdType || 'chat_id';
       // If feishuElements provided, build card directly from structured elements
       const cardContent = message.feishuElements
-        ? buildFeishuCard({ header: message.feishuHeader as any, elements: message.feishuElements as any })
+        ? buildFeishuCard({
+          header: message.feishuHeader as any,
+          elements: (message.feishuElements as any[]).map((element) => {
+            if (element?.tag === 'markdown' && typeof element.content === 'string') {
+              return {
+                ...element,
+                content: downgradeHeadings(normalizeForIM(element.content)),
+              };
+            }
+            return element;
+          }),
+        })
         : this.buildCard(raw, message.buttons, message.feishuHeader);
       const data: Record<string, unknown> = {
         receive_id: message.chatId,

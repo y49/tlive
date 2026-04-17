@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { markdownToTelegram, markdownToDiscordChunks, markdownToFeishu, markdownToHtml, truncateLongCodeBlocks } from '../markdown/index.js';
+import { markdownToTelegram, markdownToDiscordChunks, markdownToFeishu, markdownToHtml, truncateLongCodeBlocks, normalizeForIM, normalizeSpacingForIM } from '../markdown/index.js';
 
 describe('Telegram rendering', () => {
+  it('normalizes IM headings and spacing', () => {
+    expect(normalizeForIM('Hello\n## Title\nBody')).toBe('Hello\n\n**Title**\n\nBody');
+    expect(normalizeSpacingForIM('Text\n- item')).toBe('Text\n\n- item');
+  });
+
   it('converts bold', () => {
     expect(markdownToTelegram('**hello**')).toContain('<b>hello</b>');
   });
@@ -71,6 +76,10 @@ describe('Feishu rendering', () => {
   it('passes through markdown unchanged', () => {
     const md = '**bold** and `code`';
     expect(markdownToFeishu(md)).toBe(md);
+  });
+
+  it('shares IM normalization for headings and spacing', () => {
+    expect(normalizeForIM('Intro\n## Title\nBody')).toBe('Intro\n\n**Title**\n\nBody');
   });
 });
 

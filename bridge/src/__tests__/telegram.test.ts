@@ -192,6 +192,15 @@ describe('TelegramAdapter', () => {
       await adapter.send({ chatId: '12345', text: longText });
       expect(mockSendMessage.mock.calls.length).toBeGreaterThan(1);
     });
+
+    it('adds multipart intro and labels to long messages', async () => {
+      await adapter.start();
+      const longText = ('## Heading\nBody line\n\n').repeat(400);
+      await adapter.send({ chatId: '12345', text: longText });
+      expect(mockSendMessage.mock.calls.length).toBeGreaterThan(1);
+      expect(mockSendMessage.mock.calls[0][1]).toContain('Long reply — split into readable parts.');
+      expect(mockSendMessage.mock.calls[0][1]).toContain('[1/');
+    });
   });
 
   describe('editMessage', () => {

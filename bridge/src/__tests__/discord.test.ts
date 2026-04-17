@@ -146,14 +146,14 @@ describe('DiscordAdapter', () => {
       expect(call.components).toHaveLength(1);
     });
 
-    it('chunks content exceeding 2000 chars into multiple messages', async () => {
+    it('chunks content exceeding 2000 chars into multiple labeled messages', async () => {
       await adapter.start();
-      const longText = 'a'.repeat(2500);
+      const longText = ('## Heading\nBody line\n\n').repeat(180);
       await adapter.send({ chatId: 'channel1', text: longText });
       expect(mockSend.mock.calls.length).toBeGreaterThan(1);
-      // All chunks combined should equal original content
-      const allContent = mockSend.mock.calls.map((c: any) => c[0].content).join('');
-      expect(allContent).toBe(longText);
+      expect(mockSend.mock.calls[0][0].content).toContain('Long reply — split into readable parts.');
+      expect(mockSend.mock.calls[0][0].content).toContain('[1/');
+      expect(mockSend.mock.calls[mockSend.mock.calls.length - 1][0].content).toContain(`[${mockSend.mock.calls.length}/`);
     });
 
     it('sends multiple messages for long content with newlines', async () => {
@@ -231,6 +231,12 @@ describe('DiscordAdapter', () => {
       expect(mockFetchChannel).toHaveBeenCalledWith('channel1');
       expect(mockFetchMessage).toHaveBeenCalledWith('msg-99');
       expect(mockEdit).toHaveBeenCalledWith(expect.objectContaining({ content: 'Updated!' }));
+    });
+
+    it('normalizes heading spacing in edited content', async () => {
+      await adapter.start();
+      await adapter.editMessage('channel1', 'msg-99', { chatId: 'channel1', text: 'Hello\n## Title\nBody' });
+      expect(mockEdit).toHaveBeenCalledWith(expect.objectContaining({ content: 'Hello\n\n**Title**\n\nBody' }));
     });
   });
 

@@ -13,8 +13,9 @@ import {
 import { BaseChannelAdapter, registerAdapterFactory } from './base.js';
 import type { InboundMessage, OutboundMessage, SendResult, FileAttachment } from './types.js';
 import { loadConfig } from '../config.js';
-import { chunkMarkdown } from '../delivery/delivery.js';
+import { prepareMultipartText } from '../delivery/delivery.js';
 import { classifyError } from './errors.js';
+import { normalizeForIM } from '../markdown/index.js';
 import { createUndiciAgent, maskProxyUrl } from '../proxy.js';
 
 interface DiscordConfig {
@@ -26,6 +27,7 @@ interface DiscordConfig {
 
 export class DiscordAdapter extends BaseChannelAdapter {
   readonly channelType = 'discord' as const;
+  private static readonly MULTIPART_INTRO = 'Long reply — split into readable parts.';
   private client: Client | null = null;
   private config: DiscordConfig;
   private messageQueue: InboundMessage[] = [];
@@ -239,8 +241,10 @@ export class DiscordAdapter extends BaseChannelAdapter {
       }
     }
 
-    const content = message.text ?? message.html ?? '';
-    const chunks = chunkMarkdown(content, 2000);
+    const content = normalizeForIM(message.text ?? message.html ?? '');
+    const chunks = prepareMultipartText(content, 2000, {
+      intro: DiscordAdapter.MULTIPART_INTRO,
+    });
 
     let lastSent: Message | undefined;
     try {
@@ -291,7 +295,7 @@ export class DiscordAdapter extends BaseChannelAdapter {
         return;
       }
 
-      const content = message.text ?? message.html ?? '';
+      const content = normalizeForIM(message.text ?? message.html ?? '');
       const truncated = content.length > 2000 ? content.slice(0, 2000) : content;
 
       const payload: Parameters<Message['edit']>[0] = { content: truncated };

@@ -128,6 +128,36 @@ describe('FeishuAdapter', () => {
       await adapter.stop();
     });
 
+    it('normalizes headings and spacing before building card markdown', async () => {
+      await adapter.start();
+      await adapter.send({
+        chatId: 'oc_chat123',
+        text: 'Hello\n## Title\nBody',
+      });
+
+      const call = mockMessageCreate.mock.calls[0][0];
+      const card = JSON.parse(call.data.content);
+      expect(card.body.elements[0].content).toBe('Hello\n\n**Title**\n\nBody');
+      await adapter.stop();
+    });
+
+    it('normalizes direct feishuElements markdown content before sending card', async () => {
+      await adapter.start();
+      await adapter.send({
+        chatId: 'oc_chat123',
+        feishuHeader: { template: 'blue', title: 'Test' },
+        feishuElements: [
+          { tag: 'markdown', content: 'Intro\n## Title\nBody' },
+          { tag: 'hr' },
+        ],
+      });
+
+      const call = mockMessageCreate.mock.calls[0][0];
+      const card = JSON.parse(call.data.content);
+      expect(card.body.elements[0].content).toBe('Intro\n\n**Title**\n\nBody');
+      expect(card.body.elements[1]).toEqual({ tag: 'hr' });
+      await adapter.stop();
+    });
     it('includes action buttons in card when provided', async () => {
       await adapter.start();
       await adapter.send({

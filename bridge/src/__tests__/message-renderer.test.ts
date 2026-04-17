@@ -17,10 +17,11 @@ describe('MessageRenderer', () => {
     vi.useRealTimers();
   });
 
-  function createRenderer(platformLimit = 4096, throttleMs = 300) {
+  function createRenderer(platformLimit = 4096, throttleMs = 300, displayMode: 'compact' | 'verbose' = 'verbose') {
     return new MessageRenderer({
       platformLimit,
       throttleMs,
+      displayMode,
       flushCallback: flushCallback as any,
     });
   }
@@ -61,6 +62,18 @@ describe('MessageRenderer', () => {
       expect(content).toContain('Bash');
       expect(content).toContain('×1');
       expect(content).toContain('1 tools');
+      r.dispose();
+    });
+
+    it('shows compact executing view for weak channels', async () => {
+      const r = createRenderer(4096, 300, 'compact');
+      r.onToolStart('Bash');
+      r.onToolStart('Read');
+      await advance(1300);
+      const content = flushCallback.mock.calls[flushCallback.mock.calls.length - 1][0] as string;
+      expect(content).toContain('⏳ Working… 2 tools · 1s');
+      expect(content).not.toContain('Bash ×1');
+      expect(content).not.toContain('Read ×1');
       r.dispose();
     });
 

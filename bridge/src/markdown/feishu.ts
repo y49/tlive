@@ -1,3 +1,5 @@
+import { normalizeHeadingsForIM, normalizeSpacingForIM } from './common.js';
+
 export function markdownToFeishu(text: string): string {
   let result = text;
   result = result.replace(/<b>(.*?)<\/b>/g, '**$1**');
@@ -16,9 +18,5 @@ export function markdownToFeishu(text: string): string {
  * Ensures a blank line before each heading for proper spacing.
  */
 export function downgradeHeadings(text: string): string {
-  // Ensure blank line before heading lines (unless already blank or start of text)
-  let result = text.replace(/([^\n])\n(#{1,6}\s)/g, '$1\n\n$2');
-  // Convert headings to bold
-  result = result.replace(/^#{1,6}\s+(.+)$/gm, '**$1**');
-  return result;
+  return normalizeHeadingsForIM(normalizeSpacingForIM(text));
 }

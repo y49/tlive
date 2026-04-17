@@ -5,6 +5,7 @@ import { getToolIcon } from './tool-registry.js';
 export interface MessageRendererOptions {
   platformLimit: number;
   throttleMs?: number;
+  displayMode?: 'compact' | 'verbose';
   flushCallback: (
     content: string,
     isEdit: boolean,
@@ -46,6 +47,7 @@ export class MessageRenderer {
   private elapsedSeconds = 0;
   private platformLimit: number;
   private throttleMs: number;
+  private displayMode: 'compact' | 'verbose';
   private flushCallback: MessageRendererOptions['flushCallback'];
   private onPermissionTimeout?: MessageRendererOptions['onPermissionTimeout'];
   private flushing = false;
@@ -62,6 +64,7 @@ export class MessageRenderer {
   constructor(options: MessageRendererOptions) {
     this.platformLimit = options.platformLimit;
     this.throttleMs = options.throttleMs ?? 300;
+    this.displayMode = options.displayMode ?? 'verbose';
     this.flushCallback = options.flushCallback;
     this.onPermissionTimeout = options.onPermissionTimeout;
   }
@@ -191,6 +194,32 @@ export class MessageRenderer {
   }
 
   private renderExecuting(): string {
+    return this.displayMode === 'compact'
+      ? this.renderExecutingCompact()
+      : this.renderExecutingVerbose();
+  }
+
+  private renderExecutingCompact(): string {
+    const responseText = this.getSafeResponseText();
+    if (this.totalTools === 0 && !responseText) {
+      return '⏳ Starting...';
+    }
+
+    const lines: string[] = [];
+    if (responseText.trim()) {
+      lines.push(responseText.trim());
+      lines.push('');
+    }
+
+    if (this.totalTools > 0) {
+      const toolNoun = this.totalTools === 1 ? 'tool' : 'tools';
+      lines.push(`⏳ Working… ${this.totalTools} ${toolNoun} · ${this.elapsedSeconds}s`);
+    }
+
+    return this.applyPlatformLimit(redactSensitiveContent(lines.join('\n')));
+  }
+
+  private renderExecutingVerbose(): string {
     const responseText = this.getSafeResponseText();
     if (this.totalTools === 0 && !responseText) {
       return '⏳ Starting...';
@@ -249,21 +278,28 @@ export class MessageRenderer {
         lines.push(responseText);
       }
       lines.push('⚠️ Stopped');
-      lines.push(SEPARATOR);
-      if (this.totalTools > 0) {
-        lines.push(this.renderToolSummary());
-      }
-      if (this.costLine) {
-        lines.push(this.costLine);
-      }
+      lines.push(...this.renderFooterLines());
       return this.applyPlatformLimit(redactSensitiveContent(lines.join('\n')));
     }
 
-    // Completed — no platform limit applied here; bridge-manager handles overflow chunking
+    lines.push(...this.renderAnswerLines());
+    lines.push(...this.renderFooterLines());
+    return redactSensitiveContent(lines.join('\n'));
+  }
+
+  private renderAnswerLines(): string[] {
+    const lines: string[] = [];
     const responseText = this.getSafeResponseText();
     if (responseText) {
-      // Ensure text ends cleanly before separator (strip trailing whitespace but keep content)
       lines.push(responseText.trimEnd());
+    }
+    return lines;
+  }
+
+  private renderFooterLines(): string[] {
+    const lines: string[] = [];
+    const hasAnswer = !!this.getSafeResponseText();
+    if (hasAnswer || this.errorMessage) {
       lines.push(SEPARATOR);
     }
     if (this.totalTools > 0) {
@@ -272,7 +308,7 @@ export class MessageRenderer {
     if (this.costLine) {
       lines.push(this.costLine);
     }
-    return redactSensitiveContent(lines.join('\n'));
+    return lines;
   }
 
   private applyPlatformLimit(content: string): string {

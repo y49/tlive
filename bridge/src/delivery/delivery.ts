@@ -11,6 +11,85 @@ interface DeliveryOptions {
   paragraphChunk?: boolean;
 }
 
+export interface MultipartTextOptions {
+  intro?: string;
+  labelParts?: boolean;
+}
+
+function isHeading(line: string): boolean {
+  return /^#{1,6}\s+/.test(line.trim());
+}
+
+function isListItem(line: string): boolean {
+  return /^(?:[-*+] |\d+\. )/.test(line.trim());
+}
+
+function splitSemanticBlocks(text: string): string[] {
+  const lines = text.split('\n');
+  const blocks: string[] = [];
+  let current: string[] = [];
+  let inFence = false;
+
+  const flush = () => {
+    if (current.length > 0) {
+      blocks.push(current.join('\n').trimEnd());
+      current = [];
+    }
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    const isFence = /^```/.test(trimmed);
+
+    if (isFence) {
+      current.push(line);
+      inFence = !inFence;
+      if (!inFence) flush();
+      continue;
+    }
+
+    if (inFence) {
+      current.push(line);
+      continue;
+    }
+
+    if (!trimmed) {
+      flush();
+      continue;
+    }
+
+    if (isHeading(trimmed)) {
+      flush();
+      const next = lines[i + 1];
+      if (next && next.trim() && !isHeading(next) && !isListItem(next) && !/^```/.test(next.trim())) {
+        blocks.push(`${line}\n\n${next}`);
+        i++;
+      } else {
+        blocks.push(line);
+      }
+      continue;
+    }
+
+    if (isListItem(trimmed)) {
+      if (current.length > 0 && !isListItem(current[current.length - 1].trim())) {
+        flush();
+      }
+      current.push(line);
+      const next = lines[i + 1];
+      if (!next || !next.trim() || !isListItem(next.trim())) {
+        flush();
+      }
+      continue;
+    }
+
+    current.push(line);
+  }
+
+  flush();
+  return blocks.filter(Boolean);
+}
+
 /**
  * Split text by paragraph boundaries (double newlines) first, then by length.
  * Keeps paragraphs together when possible for better readability.
@@ -18,7 +97,7 @@ interface DeliveryOptions {
 export function chunkByParagraph(text: string, limit: number): string[] {
   if (text.length <= limit) return [text];
 
-  const paragraphs = text.split(/\n{2,}/);
+  const paragraphs = splitSemanticBlocks(text);
   const chunks: string[] = [];
   let current = '';
 
@@ -142,6 +221,34 @@ export function chunkMarkdown(text: string, limit: number, maxLines?: number): s
     }
   }
   return result;
+}
+
+export function labelMultipartChunks(chunks: string[]): string[] {
+  if (chunks.length <= 1) return chunks;
+  return chunks.map((chunk, index) => `[${index + 1}/${chunks.length}]\n${chunk}`);
+}
+
+export function prependMultipartIntro(chunks: string[], intro = 'Long response — sending in parts.'): string[] {
+  if (chunks.length <= 1) return chunks;
+  return chunks.map((chunk, index) => index === 0 ? `${intro}\n\n${chunk}` : chunk);
+}
+
+export function prepareMultipartText(
+  text: string,
+  limit: number,
+  options: MultipartTextOptions = {}
+): string[] {
+  const chunks = chunkByParagraph(text, limit);
+  if (chunks.length <= 1) return chunks;
+
+  let prepared = chunks;
+  if (options.intro) {
+    prepared = prependMultipartIntro(prepared, options.intro);
+  }
+  if (options.labelParts !== false) {
+    prepared = labelMultipartChunks(prepared);
+  }
+  return prepared;
 }
 
 export class DeliveryLayer {

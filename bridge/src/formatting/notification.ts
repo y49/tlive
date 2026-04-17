@@ -2,6 +2,7 @@ import type { ChannelType, OutboundMessage } from '../channels/types.js';
 import type { NotificationData } from './types.js';
 import { markdownToTelegram } from '../markdown/telegram.js';
 import { downgradeHeadings } from '../markdown/feishu.js';
+import { normalizeForIM } from '../markdown/common.js';
 
 interface NotificationMessage {
   text?: string;
@@ -87,7 +88,7 @@ export function formatNotification(data: NotificationData, channelType: ChannelT
       const elements: Array<Record<string, unknown>> = [];
       if (summary) {
         // Downgrade ## headings to bold — Card renders headings too large
-        elements.push({ tag: 'markdown', content: downgradeHeadings(summary) });
+        elements.push({ tag: 'markdown', content: downgradeHeadings(normalizeForIM(summary)) });
       }
       if (data.terminalUrl) {
         elements.push({ tag: 'hr' });
