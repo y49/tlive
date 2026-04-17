@@ -103,3 +103,149 @@ describe('CodexEventAdapter — thread/turn lifecycle', () => {
 });
 
 import { vi } from 'vitest';
+
+describe('CodexEventAdapter — item mapping', () => {
+  let adapter: CodexEventAdapter;
+
+  beforeEach(() => {
+    adapter = new CodexEventAdapter();
+    adapter.handle('thread/started', { thread: { id: 'thread-1' } });
+  });
+
+  it('item/started caches item without emitting', () => {
+    const events = adapter.handle('item/started', {
+      threadId: 'thread-1', turnId: 'turn-1',
+      item: { id: 'item-1', type: 'commandExecution', command: 'ls' },
+    });
+    expect(events).toHaveLength(0);
+    expect(adapter.getItem('item-1')).toMatchObject({ id: 'item-1', type: 'commandExecution' });
+  });
+
+  it('item/completed agentMessage → text_delta', () => {
+    const events = adapter.handle('item/completed', {
+      item: { id: 'i1', type: 'agentMessage', text: 'Hello user' },
+    });
+    expect(events).toEqual([{ kind: 'text_delta', text: 'Hello user' }]);
+  });
+
+  it('item/completed reasoning → reasoning_complete joining summary + content', () => {
+    const events = adapter.handle('item/completed', {
+      item: {
+        id: 'i1', type: 'reasoning',
+        summary: ['Summary 1', 'Summary 2'],
+        content: ['Deep thought A', 'Deep thought B'],
+      },
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0].kind).toBe('reasoning_complete');
+    const text = (events[0] as any).text as string;
+    expect(text).toContain('Summary 1');
+    expect(text).toContain('Deep thought A');
+  });
+
+  it('item/completed commandExecution → tool_start + tool_result', () => {
+    const events = adapter.handle('item/completed', {
+      item: {
+        id: 'i1', type: 'commandExecution',
+        command: 'ls -la', cwd: '/tmp',
+        aggregatedOutput: 'file1\nfile2',
+        exitCode: 0,
+      },
+    });
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      kind: 'tool_start',
+      id: 'i1',
+      name: 'Bash',
+      input: { command: 'ls -la', cwd: '/tmp' },
+    });
+    expect(events[1]).toMatchObject({
+      kind: 'tool_result',
+      toolUseId: 'i1',
+      content: 'file1\nfile2',
+      isError: false,
+    });
+  });
+
+  it('commandExecution with non-zero exitCode → tool_result isError=true', () => {
+    const events = adapter.handle('item/completed', {
+      item: { id: 'i1', type: 'commandExecution', command: 'false', cwd: '/', aggregatedOutput: '', exitCode: 1 },
+    });
+    expect(events[1]).toMatchObject({ isError: true });
+  });
+
+  it('item/completed fileChange → file_change_list with correct kind mapping', () => {
+    const events = adapter.handle('item/completed', {
+      item: {
+        id: 'i1', type: 'fileChange',
+        changes: [
+          { path: '/tmp/a.ts', kind: 'add' },
+          { path: '/tmp/b.ts', kind: 'update' },
+          { path: '/tmp/c.ts', kind: 'delete' },
+        ],
+        status: 'completed',
+      },
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: 'file_change_list',
+      changes: [
+        { path: '/tmp/a.ts', kind: 'add' },
+        { path: '/tmp/b.ts', kind: 'update' },
+        { path: '/tmp/c.ts', kind: 'delete' },
+      ],
+      status: 'completed',
+    });
+  });
+
+  it('item/completed plan → agent_progress', () => {
+    const events = adapter.handle('item/completed', {
+      item: { id: 'i1', type: 'plan', text: 'Step 1: do X\nStep 2: do Y' },
+    });
+    expect(events).toEqual([{ kind: 'agent_progress', description: 'Step 1: do X\nStep 2: do Y' }]);
+  });
+
+  it('item/completed mcpToolCall → tool_start + tool_result', () => {
+    const events = adapter.handle('item/completed', {
+      item: {
+        id: 'i1', type: 'mcpToolCall',
+        server: 'filesystem', tool: 'readFile',
+        arguments: { path: '/x' },
+        result: 'contents',
+        status: 'success',
+      },
+    });
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      kind: 'tool_start',
+      name: 'MCP:filesystem.readFile',
+      input: { path: '/x' },
+    });
+    expect(events[1]).toMatchObject({ kind: 'tool_result' });
+  });
+
+  it('item/completed webSearch → agent_progress', () => {
+    const events = adapter.handle('item/completed', {
+      item: { id: 'i1', type: 'webSearch', query: 'how to X' },
+    });
+    expect(events).toEqual([{ kind: 'agent_progress', description: 'Searched: how to X' }]);
+  });
+
+  it('item/completed with unknown type → fallback agent_progress', () => {
+    const events = adapter.handle('item/completed', {
+      item: { id: 'i1', type: 'futureType' },
+    });
+    expect(events).toEqual([{ kind: 'agent_progress', description: '[codex:futureType]' }]);
+  });
+
+  it('delta notifications do not emit events', () => {
+    expect(adapter.handle('item/agentMessage/delta', { itemId: 'i1', delta: 'Hello' })).toHaveLength(0);
+    expect(adapter.handle('item/reasoning/textDelta', { itemId: 'i1', delta: 'think' })).toHaveLength(0);
+    expect(adapter.handle('item/commandExecution/outputDelta', { itemId: 'i1', delta: 'out' })).toHaveLength(0);
+  });
+
+  it('turn/diff/updated and turn/plan/updated are ignored', () => {
+    expect(adapter.handle('turn/diff/updated', { diff: 'xxx' })).toHaveLength(0);
+    expect(adapter.handle('turn/plan/updated', { plan: 'xxx' })).toHaveLength(0);
+  });
+});
