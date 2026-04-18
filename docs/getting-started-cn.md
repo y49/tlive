@@ -74,6 +74,7 @@ TL_ENABLED_CHANNELS=telegram
 # Telegram 示例
 TL_TG_BOT_TOKEN=7823456789:AAF-xxxxx
 TL_TG_CHAT_ID=123456789
+TL_TG_POLL_TIMEOUT=10             # 可选：长轮询频繁 ECONNRESET/socket hang up 时可调低
 
 # Web 终端端口和访问令牌
 TL_PORT=4590

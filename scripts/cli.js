@@ -163,10 +163,10 @@ async function daemonStatus() {
     if (resp.ok) {
       console.log(`Web terminal: running at http://localhost:${port}`);
     } else {
-      console.log('Web terminal: not running (start with: tlive <cmd>)');
+      console.log('Web terminal: not running (IM-only mode). Start one with: tlive <cmd>');
     }
   } catch {
-    console.log('Web terminal: not running (start with: tlive <cmd>)');
+    console.log('Web terminal: not running (IM-only mode). Start one with: tlive <cmd>');
   }
 }
 
@@ -319,10 +319,10 @@ async function runDoctor() {
       console.log('API:');
       console.log(body);
     } else {
-      console.log(`API: unreachable (port ${port})`);
+      console.log(`API: unreachable (port ${port}) — likely IM-only mode. Start Web terminal with: tlive <cmd>`);
     }
   } catch {
-    console.log(`API: unreachable (port ${port})`);
+    console.log(`API: unreachable (port ${port}) — likely IM-only mode. Start Web terminal with: tlive <cmd>`);
   }
 
   console.log('');
