@@ -9,3 +9,4 @@
 {"uuid":"u8","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done."},{"type":"tool_use","id":"tool_06","name":"Grep","input":{"pattern":"foo"}}]}}
 {"uuid":"u9","type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"internal"},{"type":"text","text":"External reply"}]}}
 {"uuid":"u10_unknown","type":"system","message":{"role":"system","subtype":"init","content":"unused"}}
+{"uuid":"u11_askq_empty","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool_07","name":"AskUserQuestion","input":{"questions":[]}}]}}

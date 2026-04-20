@@ -30,6 +30,20 @@ function getContentBlocks(message: unknown): Array<Record<string, unknown>> {
   return [];
 }
 
+/**
+ * Parse AskUserQuestion option list into the shared NotificationEvent option shape.
+ * Returns [] when the input has no options array.
+ */
+function parseAskOptions(firstQ: Record<string, unknown>): Array<{ label: string; description?: string }> {
+  const rawOpts = Array.isArray(firstQ.options)
+    ? (firstQ.options as Array<Record<string, unknown>>)
+    : [];
+  return rawOpts.map((o) => ({
+    label: (o.label as string) ?? (o.description as string) ?? '?',
+    ...(o.description ? { description: o.description as string } : {}),
+  }));
+}
+
 export class ClaudeAdapter implements ProviderAdapter {
   name = 'claude' as const;
   capabilities: ProviderCapabilityFlags = { liveSession: true };
@@ -95,6 +109,11 @@ export class ClaudeAdapter implements ProviderAdapter {
     );
   }
 
+  /**
+   * Transform a raw Claude scanner event into zero or more NotificationEvents.
+   * Pure: no mutation, no I/O. Defensive: returns [] for unrecognized shapes.
+   * No display-concern leaks — the bridge decorator owns titles/URLs.
+   */
   toEvents(raw: Record<string, unknown>, _ctx: ScannerContextSnapshot): NotificationEvent[] {
     const type = raw.type;
     const blocks = getContentBlocks((raw as { message?: unknown }).message);
@@ -106,23 +125,16 @@ export class ClaudeAdapter implements ProviderAdapter {
         if (bt === 'text' && typeof block.text === 'string' && block.text.length > 0) {
           out.push({ kind: 'activity_text', text: block.text });
         } else if (bt === 'tool_use') {
-          const toolName = (block.name as string) ?? 'unknown';
-          const toolUseId = (block.id as string) ?? '';
+          const toolName = typeof block.name === 'string' ? block.name : 'unknown';
+          const toolUseId = typeof block.id === 'string' ? block.id : '';
           const input = block.input as Record<string, unknown> | undefined;
 
           if (toolName === 'AskUserQuestion') {
             const questions = Array.isArray(input?.questions)
               ? (input!.questions as Array<Record<string, unknown>>)
               : [];
-            const firstQ: Record<string, unknown> =
-              questions[0] ?? (input as Record<string, unknown> | undefined) ?? {};
-            const rawOpts = Array.isArray(firstQ.options)
-              ? (firstQ.options as Array<Record<string, unknown>>)
-              : [];
-            const options = rawOpts.map((o) => ({
-              label: (o.label as string) ?? (o.description as string) ?? '?',
-              ...(o.description ? { description: o.description as string } : {}),
-            }));
+            const firstQ: Record<string, unknown> = questions[0] ?? {};
+            const options = parseAskOptions(firstQ);
             out.push({
               kind: 'ask_user_question',
               question: (firstQ.question as string) ?? '',
@@ -154,6 +166,10 @@ export class ClaudeAdapter implements ProviderAdapter {
     return out;
   }
 
+  /**
+   * Build a NotificationEvent from a delayed permission_needed ToolUseEvent.
+   * Pure. AskUserQuestion tool → ask_user_question kind; all others → permission_request.
+   */
   toPermissionEvent(toolUse: ToolUseEvent, _ctx: ScannerContextSnapshot): NotificationEvent {
     if (toolUse.toolName === 'AskUserQuestion') {
       const rawInput = toolUse.input as Record<string, unknown> | undefined;
@@ -161,13 +177,7 @@ export class ClaudeAdapter implements ProviderAdapter {
         ? (rawInput!.questions as Array<Record<string, unknown>>)
         : [];
       const firstQ: Record<string, unknown> = questions[0] ?? {};
-      const rawOpts = Array.isArray(firstQ.options)
-        ? (firstQ.options as Array<Record<string, unknown>>)
-        : [];
-      const options = rawOpts.map((o) => ({
-        label: (o.label as string) ?? (o.description as string) ?? '?',
-        ...(o.description ? { description: o.description as string } : {}),
-      }));
+      const options = parseAskOptions(firstQ);
       return {
         kind: 'ask_user_question',
         question: toolUse.questionText ?? (firstQ.question as string) ?? 'Question from Claude',

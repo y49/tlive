@@ -37,5 +37,8 @@
   "u9": [
     { "kind": "activity_text", "text": "External reply" }
   ],
-  "u10_unknown": []
+  "u10_unknown": [],
+  "u11_askq_empty": [
+    { "kind": "ask_user_question", "question": "", "toolUseId": "tool_07" }
+  ]
 }
