@@ -1,78 +1,30 @@
-// tests/sdk/messageNormalizer.test.ts
 import { describe, it, expect } from 'vitest';
-import { normalizeSessionLine, formatForIM } from '../../src/sdk/messageNormalizer.js';
+import { formatToolArgsBrief, extractTodos } from '../../src/sdk/messageNormalizer.js';
 
-describe('normalizeSessionLine', () => {
-  // Real Claude .jsonl format: message is { role, content: [...] }
-  it('normalizes assistant text block (Claude format)', () => {
-    const msgs = normalizeSessionLine(
-      { uuid: 'u1', type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Hello world' }] } },
-      'claude', 'sid-1');
-    expect(msgs).toHaveLength(1);
-    expect(msgs[0]).toMatchObject({ kind: 'text', provider: 'claude', sessionId: 'sid-1', text: 'Hello world' });
-  });
-
-  it('normalizes assistant tool_use block (Claude format)', () => {
-    const msgs = normalizeSessionLine(
-      { uuid: 'u2', type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tu-1', name: 'Bash', input: { command: 'ls' } }] } },
-      'claude', 'sid-2');
-    expect(msgs).toHaveLength(1);
-    expect(msgs[0]).toMatchObject({ kind: 'tool_use', toolName: 'Bash', toolInput: { command: 'ls' } });
-  });
-
-  it('normalizes user tool_result block (Claude format)', () => {
-    const msgs = normalizeSessionLine(
-      { uuid: 'u3', type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu-1', content: 'file.txt' }] } },
-      'claude', 'sid-3');
-    expect(msgs).toHaveLength(1);
-    expect(msgs[0]).toMatchObject({ kind: 'tool_result', parentToolUseId: 'tu-1', text: 'file.txt' });
-  });
-
-  it('handles mixed assistant blocks', () => {
-    const msgs = normalizeSessionLine(
-      { uuid: 'u4', type: 'assistant', message: { role: 'assistant', content: [
-        { type: 'text', text: 'I will run a command' },
-        { type: 'tool_use', id: 'tu-2', name: 'Bash', input: { command: 'echo hi' } },
-      ]}}, 'claude', 'sid-4');
-    expect(msgs).toHaveLength(2);
-    expect(msgs[0].kind).toBe('text');
-    expect(msgs[1].kind).toBe('tool_use');
-  });
-
-  it('skips thinking blocks', () => {
-    const msgs = normalizeSessionLine(
-      { uuid: 'u5', type: 'assistant', message: { role: 'assistant', content: [
-        { type: 'thinking', thinking: 'hmm...' },
-        { type: 'text', text: 'Done' },
-      ]}}, 'claude', 'sid-5');
-    expect(msgs).toHaveLength(1);
-    expect(msgs[0]).toMatchObject({ kind: 'text', text: 'Done' });
-  });
-
-  it('also handles flat array format (backward compat)', () => {
-    const msgs = normalizeSessionLine(
-      { uuid: 'u6', type: 'assistant', message: [{ type: 'text', text: 'flat' }] },
-      'claude', 'sid-6');
-    expect(msgs).toHaveLength(1);
-    expect(msgs[0]).toMatchObject({ kind: 'text', text: 'flat' });
-  });
+describe('formatToolArgsBrief', () => {
+  it('Bash returns command', () => expect(formatToolArgsBrief('Bash', { command: 'ls' })).toBe('ls'));
+  it('Read returns file_path', () => expect(formatToolArgsBrief('Read', { file_path: '/x' })).toBe('/x'));
+  it('Edit returns file_path', () => expect(formatToolArgsBrief('Edit', { file_path: '/y' })).toBe('/y'));
+  it('Grep returns pattern', () => expect(formatToolArgsBrief('Grep', { pattern: 'foo' })).toBe('foo'));
+  it('Unknown tool returns first non-empty string value', () =>
+    expect(formatToolArgsBrief('Mystery', { a: '', b: 'hello' })).toBe('hello'));
+  it('Returns empty for no matching args', () => expect(formatToolArgsBrief('Xyz', {})).toBe(''));
+  it('Returns empty for undefined tool', () => expect(formatToolArgsBrief(undefined, { a: 'x' })).toBe(''));
 });
 
-describe('formatForIM', () => {
-  it('formats text message', () => {
-    expect(formatForIM({ kind: 'text', provider: 'claude', sessionId: 's', text: 'hi' })).toBe('hi');
+describe('extractTodos', () => {
+  it('maps todos array', () => {
+    const out = extractTodos({ todos: [{ content: 'a', status: 'completed' }] });
+    expect(out).toEqual([{ content: 'a', status: 'completed' }]);
   });
-
-  it('formats permission request with command', () => {
-    const out = formatForIM({
-      kind: 'permission_request', provider: 'claude', sessionId: 's',
-      toolName: 'Bash', toolInput: { command: 'rm -rf node_modules' },
-    });
-    expect(out).toContain('Permission: Bash');
-    expect(out).toContain('rm -rf node_modules');
+  it('accepts `subject` alias for content', () => {
+    const out = extractTodos({ todos: [{ subject: 'b', status: 'pending' }] });
+    expect(out?.[0].content).toBe('b');
   });
-
-  it('formats complete', () => {
-    expect(formatForIM({ kind: 'complete', provider: 'claude', sessionId: 's' })).toBe('✓ Done');
+  it('defaults status to pending when missing', () => {
+    const out = extractTodos({ todos: [{ content: 'c' }] });
+    expect(out?.[0].status).toBe('pending');
   });
+  it('returns null when input is not an object', () => expect(extractTodos('x')).toBeNull());
+  it('returns null when todos is not an array', () => expect(extractTodos({ todos: 'x' })).toBeNull());
 });

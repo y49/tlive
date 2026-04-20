@@ -94,13 +94,6 @@ export interface ProviderAdapter {
    */
   extractThinkingEvents?(event: unknown): ThinkingTriggerEvent[];
   /**
-   * Normalize a raw session event (provider-specific shape) into NormalizedMessage[].
-   * Returns [] if the event produces no user-visible content.
-   * Optional — adapters that don't implement this fall back to legacy normalizeSessionLine.
-   */
-  normalizeSessionEvent?(event: unknown, ctx?: { sessionId?: string }): NormalizedMessage[];
-
-  /**
    * Transform one raw scanner event into zero or more display events.
    * Single boundary for provider-specific shape knowledge.
    * Contract: pure (no mutation/IO). Returns [] for unrecognized events — never throws.

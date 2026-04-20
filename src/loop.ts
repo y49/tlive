@@ -5,16 +5,12 @@
 import { EventEmitter } from 'node:events';
 import { SessionManager, type SessionState, type ScannerFactory } from './core/sessionManager.js';
 import { ProjectRegistry } from './core/projectRegistry.js';
-import { NotificationHub, type NotificationEvent } from './im/notificationHub.js';
+import { NotificationHub, type NotificationEvent as HubNotificationEvent } from './im/notificationHub.js';
 import { SessionRouter } from './im/sessionRouter.js';
 import type { ProviderAdapter, NormalizedMessage } from './sdk/providerAdapter.js';
 import type { ToolUseEvent, SessionEvent } from './core/sessionScanner.js';
-import { normalizeSessionLine, formatForIM, toNotificationEvent, formatToolArgsBrief, extractTodos, formatTodos } from './sdk/messageNormalizer.js';
-import type { StructuredNotificationEvent } from './sdk/messageNormalizer.js';
 import type { TLiveConfig } from './config.js';
-import type { NotificationKind } from './im/notificationRules.js';
 import { CostTracker } from './core/costTracker.js';
-import { LABEL } from './im/icons.js';
 import { ScannerContext, type ScannerContextSnapshot } from './core/scannerContext.js';
 import type { NotificationEvent as BridgeNotificationEvent } from './sdk/sharedEvents.js';
 
@@ -33,8 +29,8 @@ export interface IMSendFn {
   (
     chatId: string,
     text: string,
-    buttons?: NotificationEvent['buttons'],
-    event?: BridgeNotificationEvent | StructuredNotificationEvent,
+    buttons?: HubNotificationEvent['buttons'],
+    event?: BridgeNotificationEvent,
     sessionCtx?: ScannerContextSnapshot,
   ): Promise<string | undefined>;
 }
@@ -111,7 +107,7 @@ export class TLiveLoop extends EventEmitter {
     this.session.on('usage', (usage: Record<string, unknown>) => this.costTracker.addUsage(usage));
     this.session.on('model', (model: string) => this.costTracker.setModel(model));
     this.session.on('sessionComplete', () => this.handleSessionComplete());
-    this.notifications.on('notify', (events: NotificationEvent[]) => this.dispatchToIM(events));
+    this.notifications.on('notify', (events: HubNotificationEvent[]) => this.dispatchToIM(events));
   }
 
   // ---------------------------------------------------------------------------
@@ -122,99 +118,87 @@ export class TLiveLoop extends EventEmitter {
     const raw = event.raw as Record<string, unknown>;
     if (raw.isMeta) return;
 
-    // Provider-specific normalizer (preferred — handles codex 0.121's
-    // session_meta/event_msg/response_item shape that the legacy free
-    // function doesn't recognize). Fall back to the legacy claude-only
-    // normalizer if an adapter doesn't implement it.
-    const normalized = this.adapter.normalizeSessionEvent
-      ? this.adapter.normalizeSessionEvent(raw, { sessionId: this.session.info.sessionId })
-      : normalizeSessionLine(
-          { uuid: event.uuid, type: event.type, message: event.message },
-          this.adapter.name as 'claude' | 'codex',
-          this.session.info.sessionId,
-        );
+    // Provider-agnostic boundary: adapter owns the shape → NotificationEvent mapping.
+    const events = this.adapter.toEvents?.(raw, this.ctx.snapshot) ?? [];
 
-    for (const msg of normalized) {
-      if (msg.kind !== 'tool_use') {
-        // Text activity → push with reply hint
-        const text = formatForIM(msg);
-        if (!text) continue;
-        const body = text.length > MAX_IM_TEXT_LEN ? text.slice(0, MAX_IM_TEXT_LEN) + '...' : text;
-        const structEvent = toNotificationEvent(msg);
-        const enrichedEvent = structEvent;
-        this.notifications.push({
+    // Codex emits token_count as event_msg → feed to CostTracker.
+    const usage = this.adapter.extractUsage?.(raw);
+    if (usage) this.costTracker.addUsage(usage);
+
+    for (const bridgeEvent of events) {
+      const dedupeKey = `activity:${event.uuid}:${bridgeEvent.kind}`;
+      const hubEvent = this.toHubEvent(bridgeEvent, dedupeKey);
+      if (hubEvent) this.notifications.push(hubEvent);
+    }
+  }
+
+  /**
+   * Wrap a bridge NotificationEvent in the hub envelope (dedupeKey + fallback text).
+   * title/body on the envelope are only used for plain-text fallback when a channel
+   * lacks a renderer; the real rendering happens on the bridge side via the decorator
+   * + platform-specific renderer.
+   */
+  private toHubEvent(e: BridgeNotificationEvent, dedupeKey: string): HubNotificationEvent | null {
+    switch (e.kind) {
+      case 'activity_text':
+        return {
           kind: 'activity_text',
-          dedupeKey: `activity:${event.uuid}:${msg.kind}`,
-          sessionId: this.session.info.sessionId,
-          title: `${LABEL.terminal} · ${this.sessionTag()} · local`,
-          body,
-          event: enrichedEvent ?? undefined,
-        });
-        continue;
-      }
-
-      // --- tool_use handling: route by tool name ---
-
-      // AskUserQuestion → immediate notification with option buttons
-      // Real Claude format: { questions: [{ question, header, options: [{label, description}], multiSelect }] }
-      if (msg.toolName === 'AskUserQuestion') {
-        const input = msg.toolInput as Record<string, unknown> | undefined;
-        const questions = input?.questions as Array<Record<string, unknown>> | undefined;
-        const firstQ = Array.isArray(questions) ? questions[0] : input;
-        const questionText = (firstQ?.question as string) ?? '';
-        const rawOptions = Array.isArray(firstQ?.options) ? firstQ.options as Array<Record<string, unknown>> : [];
-        const options = rawOptions.map(o => (o.label ?? o.description ?? '?') as string);
-
-        // Use tool_use block ID for dedup — must match handlePermissionNeeded's key
-        const blockId = msg.toolUseId || event.uuid;
+          dedupeKey,
+          sessionId: this.ctx.snapshot.sessionId,
+          title: '',
+          body: e.text.slice(0, MAX_IM_TEXT_LEN),
+          event: e,
+        };
+      case 'activity_tool':
+        return {
+          kind: 'activity_tool',
+          dedupeKey,
+          sessionId: this.ctx.snapshot.sessionId,
+          title: '',
+          body: `${e.toolName}${e.toolInput ? `: ${e.toolInput}` : ''}`,
+          event: e,
+        };
+      case 'ask_user_question': {
         const buttons: Array<{ label: string; callbackData: string; style?: 'primary' | 'danger' }> = [];
-        for (let i = 0; i < options.length; i++) {
-          buttons.push({ label: options[i], callbackData: `askq:${blockId}:${i}` });
+        if (e.options) {
+          for (let i = 0; i < e.options.length; i++) {
+            buttons.push({ label: e.options[i].label, callbackData: `askq:${e.toolUseId}:${i}` });
+          }
+          buttons.push({ label: 'Skip', callbackData: `askq:${e.toolUseId}:skip`, style: 'danger' });
         }
-        if (buttons.length > 0) {
-          buttons.push({ label: 'Skip', callbackData: `askq:${blockId}:skip`, style: 'danger' });
-        }
-        const askEvent = toNotificationEvent(msg);
-        this.notifications.push({
+        return {
           kind: 'ask_user_question',
-          dedupeKey: `askq:${blockId}`,
-          sessionId: this.session.info.sessionId,
-          title: `${LABEL.question} · ${this.sessionTag()}`,
-          body: questionText || 'Question from Claude',
+          dedupeKey: `askq:${e.toolUseId}`,
+          sessionId: this.ctx.snapshot.sessionId,
+          title: '',
+          body: e.question,
           buttons: buttons.length > 0 ? buttons : undefined,
-          event: askEvent ?? undefined,
-        });
-        continue;
+          event: e,
+        };
       }
-
-      // TodoWrite → structured task list
-      if (msg.toolName === 'TodoWrite') {
-        const todos = extractTodos(msg.toolInput);
-        if (todos) {
-          this.notifications.push({
-            kind: 'todo_update',
-            dedupeKey: `todo:${event.uuid}`,
-            sessionId: this.session.info.sessionId,
-            title: `${LABEL.tasks} · ${this.sessionTag()}`,
-            body: formatTodos(todos),
-            event: { kind: 'todo_update', items: todos },
-          });
-          continue;
-        }
-      }
-
-      // Other tools → activity notification
-      const text = formatForIM(msg);
-      if (!text) continue;
-      const toolEvent = toNotificationEvent(msg);
-      this.notifications.push({
-        kind: 'activity_tool',
-        dedupeKey: `activity:${event.uuid}:tool`,
-        sessionId: this.session.info.sessionId,
-        title: `${LABEL.terminal} · ${this.sessionTag()}`,
-        body: text,
-        event: toolEvent ?? undefined,
-      });
+      case 'todo_update':
+        return {
+          kind: 'todo_update',
+          dedupeKey: `todo:${dedupeKey}`,
+          sessionId: this.ctx.snapshot.sessionId,
+          title: '',
+          body: '',
+          event: e,
+        };
+      case 'error':
+        return {
+          kind: 'error',
+          dedupeKey,
+          sessionId: this.ctx.snapshot.sessionId,
+          title: '',
+          body: e.message,
+          event: e,
+        };
+      default:
+        // permission_request, thinking, reasoning_summary, file_change_list, session_complete,
+        // activity_tool (covered above) — not emitted via toEvents directly. session_complete
+        // is pushed from handleSessionComplete; permission_request from handlePermissionNeeded.
+        return null;
     }
   }
 
@@ -223,78 +207,61 @@ export class TLiveLoop extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   private handlePermissionNeeded(toolUse: ToolUseEvent): void {
-    if (toolUse.toolName === 'AskUserQuestion') {
-      // Build option buttons if question has options
+    let e: BridgeNotificationEvent;
+    try {
+      e = this.adapter.toPermissionEvent!(toolUse, this.ctx.snapshot);
+    } catch {
+      // Provider without a scanner-path permission broker (codex): nothing to do.
+      return;
+    }
+
+    if (e.kind === 'ask_user_question') {
       const buttons: Array<{ label: string; callbackData: string; style?: 'primary' | 'danger' }> = [];
-      if (toolUse.questionOptions) {
-        for (let i = 0; i < toolUse.questionOptions.length; i++) {
-          buttons.push({
-            label: toolUse.questionOptions[i],
-            callbackData: `askq:${toolUse.toolUseId}:${i}`,
-          });
+      if (e.options) {
+        for (let i = 0; i < e.options.length; i++) {
+          buttons.push({ label: e.options[i].label, callbackData: `askq:${e.toolUseId}:${i}` });
         }
       }
-      buttons.push({
-        label: 'Skip',
-        callbackData: `askq:${toolUse.toolUseId}:skip`,
-        style: 'danger',
-      });
-
+      buttons.push({ label: 'Skip', callbackData: `askq:${e.toolUseId}:skip`, style: 'danger' });
       this.notifications.push({
         kind: 'ask_user_question',
-        dedupeKey: `askq:${toolUse.toolUseId}`,
-        sessionId: this.session.info.sessionId,
-        title: `${LABEL.question} · ${this.sessionTag()}`,
-        body: toolUse.questionText ?? 'Question from Claude',
+        dedupeKey: `askq:${e.toolUseId}`,
+        sessionId: this.ctx.snapshot.sessionId,
+        title: '',
+        body: e.question,
         buttons,
-        event: {
-          kind: 'ask_user_question',
-          question: toolUse.questionText ?? 'Question from Claude',
-          toolUseId: toolUse.toolUseId,
-        },
+        event: e,
       });
       return;
     }
 
-    // Regular permission request
-    this.notifications.push({
-      kind: 'permission_request',
-      dedupeKey: `perm:${toolUse.toolUseId}`,
-      sessionId: this.session.info.sessionId,
-      title: `${LABEL.permission} · ${this.sessionTag()}`,
-      body: formatForIM({
-        kind: 'permission_request', provider: this.adapter.name as 'claude' | 'codex',
-        sessionId: this.session.info.sessionId,
-        toolName: toolUse.toolName, toolInput: toolUse.input,
-      }),
-      buttons: [
-        { label: 'Allow', callbackData: `perm:allow:${toolUse.toolUseId}` },
-        { label: 'Deny', callbackData: `perm:deny:${toolUse.toolUseId}`, style: 'danger' as const },
-        { label: 'Takeover', callbackData: `perm:takeover:${toolUse.toolUseId}` },
-      ],
-      event: {
+    if (e.kind === 'permission_request') {
+      this.notifications.push({
         kind: 'permission_request',
-        toolName: toolUse.toolName,
-        toolInput: formatToolArgsBrief(toolUse.toolName, toolUse.input),
-        permissionId: toolUse.toolUseId,
-      },
-    });
+        dedupeKey: `perm:${e.permissionId}`,
+        sessionId: this.ctx.snapshot.sessionId,
+        title: '',
+        body: `${e.toolName}: ${e.toolInput}`,
+        buttons: [
+          { label: 'Allow', callbackData: `perm:allow:${e.permissionId}` },
+          { label: 'Deny', callbackData: `perm:deny:${e.permissionId}`, style: 'danger' as const },
+          { label: 'Takeover', callbackData: `perm:takeover:${e.permissionId}` },
+        ],
+        event: e,
+      });
+    }
   }
 
   private handleSessionComplete(): void {
     const summary = this.costTracker.formatSummary();
-    const resumeHint = `Reply here to continue in IM, or run \`${this.adapter.name} resume ${this.session.info.sessionId}\` in a terminal.`;
     this.notifications.push({
       kind: 'session_complete',
-      dedupeKey: `complete:${this.session.info.sessionId}`,
-      sessionId: this.session.info.sessionId,
-      title: `${LABEL.done} · ${this.sessionTag()}`,
+      dedupeKey: `complete:${this.ctx.snapshot.sessionId}`,
+      sessionId: this.ctx.snapshot.sessionId,
+      title: '',
       body: summary,
-      event: {
-        kind: 'session_complete',
-        summary,
-        resumeHint,
-      },
+      // Decorator injects terminalUrl + resumeHint on the bridge side.
+      event: { kind: 'session_complete', summary },
     });
   }
 
@@ -302,7 +269,7 @@ export class TLiveLoop extends EventEmitter {
   // Notification dispatch → IM
   // ---------------------------------------------------------------------------
 
-  private async dispatchToIM(events: NotificationEvent[]): Promise<void> {
+  private async dispatchToIM(events: HubNotificationEvent[]): Promise<void> {
     if (!this.imSend || !this.imChatId) return;
     for (const event of events) {
       const text = event.body ? `${event.title}\n${event.body}` : event.title;
@@ -339,25 +306,11 @@ export class TLiveLoop extends EventEmitter {
   private async handleTakeover(_toolUseId: string): Promise<void> {
     await this.session.handoffToSDK({
       onPermissionRequest: (id, toolName, input) => {
-        this.notifications.push({
-          kind: 'permission_request', dedupeKey: `perm:${id}`,
-          sessionId: this.session.info.sessionId,
-          title: `${LABEL.permission}: ${toolName}`,
-          body: formatForIM({
-            kind: 'permission_request', provider: this.adapter.name as 'claude' | 'codex',
-            sessionId: this.session.info.sessionId,
-            toolName, toolInput: input,
-          }),
-          buttons: [
-            { label: 'Allow', callbackData: `perm:allow:${id}` },
-            { label: 'Deny', callbackData: `perm:deny:${id}`, style: 'danger' as const },
-          ],
-          event: {
-            kind: 'permission_request',
-            toolName,
-            toolInput: formatToolArgsBrief(toolName, input),
-            permissionId: id,
-          },
+        this.handlePermissionNeeded({
+          toolUseId: id,
+          toolName,
+          input,
+          timestamp: Date.now(),
         });
       },
     });

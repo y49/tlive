@@ -137,30 +137,4 @@ describe('ClaudeAdapter', () => {
     });
   });
 
-  describe('normalizeSessionEvent', () => {
-    const adapter = new ClaudeAdapter();
-
-    it('produces NormalizedMessage for an assistant text event', () => {
-      const event = {
-        uuid: 'u1',
-        type: 'assistant',
-        message: { content: [{ type: 'text', text: 'Hello' }] },
-      };
-      const out = adapter.normalizeSessionEvent!(event, { sessionId: 'sess-1' });
-      expect(out.length).toBeGreaterThan(0);
-      expect(out[0]).toMatchObject({ kind: 'text', text: 'Hello', provider: 'claude', sessionId: 'sess-1' });
-    });
-
-    it('produces [] for an event with no content', () => {
-      const event = { uuid: 'u2', type: 'assistant', message: { content: [] } };
-      const out = adapter.normalizeSessionEvent!(event, { sessionId: 'sess-2' });
-      expect(out).toEqual([]);
-    });
-
-    it('produces [] for an event missing required fields', () => {
-      const event = { type: 'assistant' };  // missing uuid
-      const out = adapter.normalizeSessionEvent!(event);
-      expect(out).toEqual([]);
-    });
-  });
 });

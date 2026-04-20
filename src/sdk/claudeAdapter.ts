@@ -12,7 +12,7 @@ import type {
   ThinkingTriggerEvent,
 } from './providerAdapter.js';
 import { findLastSession } from '../core/sessionDiscovery.js';
-import { normalizeSessionLine, formatToolArgsBrief, extractTodos } from './messageNormalizer.js';
+import { formatToolArgsBrief, extractTodos } from './messageNormalizer.js';
 import type { NotificationEvent } from './sharedEvents.js';
 import type { ScannerContextSnapshot } from '../core/scannerContext.js';
 import type { ToolUseEvent } from '../core/sessionScanner.js';
@@ -97,16 +97,6 @@ export class ClaudeAdapter implements ProviderAdapter {
 
   findLastSession(workdir: string): string | null {
     return findLastSession(workdir);
-  }
-
-  normalizeSessionEvent(event: unknown, ctx?: { sessionId?: string }): NormalizedMessage[] {
-    const e = event as { uuid?: string; type?: string; message?: unknown };
-    if (!e.uuid || !e.type) return [];
-    return normalizeSessionLine(
-      { uuid: e.uuid, type: e.type, message: e.message },
-      'claude',
-      ctx?.sessionId ?? '',
-    );
   }
 
   /**

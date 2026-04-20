@@ -182,8 +182,7 @@ export async function runFlavor(opts: RunFlavorOptions): Promise<void> {
       event: {
         kind: 'activity_text',
         text: `\`${workdir}\``,
-        title: `🏠 tlive ${adapter.name} · ${sessionTag} · local`,
-        terminalUrl: ctx.snapshot.terminalUrl,
+        // title + terminalUrl come from TerminalContextDecorator on the bridge side.
       },
       sessionCtx: ctx.snapshot,
     });
