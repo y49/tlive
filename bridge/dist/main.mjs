@@ -15979,19 +15979,22 @@ var CodexAppServerProvider = class {
             const resumeResult = await client.request("thread/resume", {
               threadId: params.sessionId,
               cwd: params.workingDirectory,
-              model: params.model
+              model: params.model,
+              persistExtendedHistory: false
             });
             activeThreadId = resumeResult.thread.id;
           } else {
             const startResult = await client.request("thread/start", {
               cwd: params.workingDirectory,
-              model: params.model
+              model: params.model,
+              experimentalRawEvents: false,
+              persistExtendedHistory: false
             });
             activeThreadId = startResult.thread.id;
           }
           const turnResult = await client.request("turn/start", {
             threadId: activeThreadId,
-            input: [{ type: "text", text: params.prompt }],
+            input: [{ type: "text", text: params.prompt, text_elements: [] }],
             effort: params.effort,
             model: params.model
           });

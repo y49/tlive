@@ -139,31 +139,34 @@ export class CodexAppServerProvider implements LLMProvider {
 
           if (params.sessionId) {
             const resumeResult = await client.request<
-              { threadId: string; cwd?: string; model?: string },
+              { threadId: string; cwd?: string; model?: string; persistExtendedHistory: boolean },
               { thread: { id: string } }
             >('thread/resume', {
               threadId: params.sessionId,
               cwd: params.workingDirectory,
               model: params.model,
+              persistExtendedHistory: false,
             });
             activeThreadId = resumeResult.thread.id;
           } else {
             const startResult = await client.request<
-              { cwd?: string; model?: string },
+              { cwd?: string; model?: string; experimentalRawEvents: boolean; persistExtendedHistory: boolean },
               { thread: { id: string } }
             >('thread/start', {
               cwd: params.workingDirectory,
               model: params.model,
+              experimentalRawEvents: false,
+              persistExtendedHistory: false,
             });
             activeThreadId = startResult.thread.id;
           }
 
           const turnResult = await client.request<
-            { threadId: string; input: Array<{ type: 'text'; text: string }>; effort?: string; model?: string },
+            { threadId: string; input: Array<{ type: 'text'; text: string; text_elements: Array<unknown> }>; effort?: string; model?: string },
             { turn: { id: string } }
           >('turn/start', {
             threadId: activeThreadId,
-            input: [{ type: 'text', text: params.prompt }],
+            input: [{ type: 'text', text: params.prompt, text_elements: [] }],
             effort: params.effort,
             model: params.model,
           });
