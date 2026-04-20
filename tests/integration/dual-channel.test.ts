@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest';
 import { mkdirSync } from 'node:fs';
 import { TLiveLoop } from '../../src/loop.js';
+import { ScannerContext } from '../../src/core/scannerContext.js';
 import type { ProviderAdapter, NormalizedMessage, RemoteOptions } from '../../src/sdk/providerAdapter.js';
 import type { TLiveConfig } from '../../src/config.js';
 
@@ -42,7 +43,7 @@ describe('Dual-channel integration', () => {
       getSessionDir: vi.fn(() => '/tmp/sessions'),
     };
 
-    loop = new TLiveLoop({ workdir: '/tmp/integration-test', adapter, config: mockConfig() });
+    loop = new TLiveLoop({ workdir: '/tmp/integration-test', adapter, config: mockConfig(), ctx: ScannerContext.fromWorkdir({ sessionId: 'int-sid', workdir: '/tmp/integration-test', provider: 'claude', terminalUrl: 'http://test/?token=t' }) });
     const output: string[] = [];
     loop.on('ptyData', (d: string) => output.push(d));
 
@@ -71,7 +72,7 @@ describe('Dual-channel integration', () => {
       getSessionDir: vi.fn(() => '/tmp/sessions'),
     };
 
-    loop = new TLiveLoop({ workdir: '/tmp/im-test', adapter, config: mockConfig() });
+    loop = new TLiveLoop({ workdir: '/tmp/im-test', adapter, config: mockConfig(), ctx: ScannerContext.fromWorkdir({ sessionId: 'im-sid', workdir: '/tmp/im-test', provider: 'claude', terminalUrl: 'http://test/?token=t' }) });
     const sent: Array<{ text: string }> = [];
     loop.setIMTarget('chat-1', vi.fn(async (_chatId: string, text: string) => {
       sent.push({ text });

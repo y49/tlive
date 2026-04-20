@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { TLiveLoop } from '../src/loop.js';
+import { ScannerContext } from '../src/core/scannerContext.js';
 import type { ProviderAdapter, NormalizedMessage } from '../src/sdk/providerAdapter.js';
 import type { TLiveConfig } from '../src/config.js';
 
@@ -19,7 +20,17 @@ function mockAdapter(): ProviderAdapter {
       yield { kind: 'complete', provider: 'claude', sessionId: 'test' };
     }),
     getSessionDir: vi.fn(() => '/tmp/sessions'),
+    toEvents: vi.fn(() => []),
+    toPermissionEvent: vi.fn(() => ({
+      kind: 'permission_request', toolName: 'x', toolInput: '', permissionId: 'p',
+    })),
   };
+}
+
+function mockCtx(sessionId = 'loop-sid', workdir = '/tmp/test-project'): ScannerContext {
+  return ScannerContext.fromWorkdir({
+    sessionId, workdir, provider: 'claude', terminalUrl: 'http://test/?token=t',
+  });
 }
 
 function mockConfig(): TLiveConfig {
@@ -32,7 +43,7 @@ function mockConfig(): TLiveConfig {
 
 describe('TLiveLoop', () => {
   it('creates and starts a session', async () => {
-    const loop = new TLiveLoop({ workdir: '/tmp/test-project', adapter: mockAdapter(), config: mockConfig(), sessionId: 'loop-sid' });
+    const loop = new TLiveLoop({ workdir: '/tmp/test-project', adapter: mockAdapter(), config: mockConfig(), sessionId: 'loop-sid', ctx: mockCtx('loop-sid', '/tmp/test-project') });
     expect(loop.sessionState).toBe('idle');
     expect(loop.sessionInfo.sessionId).toBe('loop-sid');
 
@@ -47,7 +58,7 @@ describe('TLiveLoop', () => {
   });
 
   it('forwards PTY data via event', async () => {
-    const loop = new TLiveLoop({ workdir: '/tmp', adapter: mockAdapter(), config: mockConfig() });
+    const loop = new TLiveLoop({ workdir: '/tmp', adapter: mockAdapter(), config: mockConfig(), ctx: mockCtx('loop-sid', '/tmp') });
     const data: string[] = [];
     loop.on('ptyData', (d: string) => data.push(d));
     await loop.start();
@@ -57,7 +68,7 @@ describe('TLiveLoop', () => {
   });
 
   it('sets IM target for notifications', () => {
-    const loop = new TLiveLoop({ workdir: '/tmp', adapter: mockAdapter(), config: mockConfig() });
+    const loop = new TLiveLoop({ workdir: '/tmp', adapter: mockAdapter(), config: mockConfig(), ctx: mockCtx('loop-sid', '/tmp') });
     const sendFn = vi.fn().mockResolvedValue('msg-1');
     loop.setIMTarget('chat-123', sendFn);
     // No throw = success

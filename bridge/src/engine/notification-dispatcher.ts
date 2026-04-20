@@ -12,6 +12,19 @@ import { TargetResolver } from './target-resolver.js';
 // Types
 // ---------------------------------------------------------------------------
 
+// Local duplicate of src/core/scannerContext.ts's ScannerContextSnapshot.
+// Intentional — the two projects compile under different rootDirs so cross-project
+// type import is blocked. Structural typing means src objects still satisfy this
+// shape at runtime. Task 5 imports this symbol from here for the decorator.
+export interface ScannerContextSnapshot {
+  sessionId: string;
+  workdir: string;
+  workspaceName: string;
+  provider: 'claude' | 'codex';
+  terminalUrl: string;
+  isLocal: true;
+}
+
 export interface NotificationPayload {
   text: string;
   buttons?: Array<{ label: string; callbackData: string; style?: string }>;
@@ -19,6 +32,7 @@ export interface NotificationPayload {
   workdir?: string;
   /** Structured notification event from terminal (v1.0 IPC upgrade). */
   event?: Record<string, unknown>;
+  sessionCtx?: ScannerContextSnapshot;
 }
 
 export interface DispatchResult {

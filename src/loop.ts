@@ -15,6 +15,9 @@ import type { TLiveConfig } from './config.js';
 import type { NotificationKind } from './im/notificationRules.js';
 import { CostTracker } from './core/costTracker.js';
 import { LABEL } from './im/icons.js';
+import { ScannerContext } from './core/scannerContext.js';
+import type { NotificationEvent as BridgeNotificationEvent } from './sdk/sharedEvents.js';
+import type { ScannerContextSnapshot } from './core/scannerContext.js';
 
 const MAX_IM_TEXT_LEN = 300;
 
@@ -22,12 +25,19 @@ export interface LoopOptions {
   workdir: string;
   adapter: ProviderAdapter;
   config: TLiveConfig;
+  ctx: ScannerContext;
   sessionId?: string;
   scannerFactory?: ScannerFactory;
 }
 
 export interface IMSendFn {
-  (chatId: string, text: string, buttons?: NotificationEvent['buttons'], event?: StructuredNotificationEvent): Promise<string | undefined>;
+  (
+    chatId: string,
+    text: string,
+    buttons?: NotificationEvent['buttons'],
+    event?: BridgeNotificationEvent | StructuredNotificationEvent,
+    sessionCtx?: ScannerContextSnapshot,
+  ): Promise<string | undefined>;
 }
 
 export class TLiveLoop extends EventEmitter {
@@ -40,13 +50,14 @@ export class TLiveLoop extends EventEmitter {
   private costTracker: CostTracker;
   private imSend?: IMSendFn;
   private imChatId?: string;
-  private webUrl?: string;
+  private readonly ctx: ScannerContext;
   private lastTerminalInputAt = Date.now();
 
   constructor(opts: LoopOptions) {
     super();
     this.config = opts.config;
     this.adapter = opts.adapter;
+    this.ctx = opts.ctx;
     this.costTracker = new CostTracker();
     this.registry = new ProjectRegistry();
     this.notifications = new NotificationHub({
@@ -69,11 +80,6 @@ export class TLiveLoop extends EventEmitter {
   setIMTarget(chatId: string, sendFn: IMSendFn): void {
     this.imChatId = chatId;
     this.imSend = sendFn;
-  }
-
-  /** Attach a web-terminal URL so IM cards can render an "Open Terminal" link. */
-  setWebUrl(url: string): void {
-    this.webUrl = url;
   }
 
   private isUserActive(): boolean {
@@ -136,15 +142,7 @@ export class TLiveLoop extends EventEmitter {
         if (!text) continue;
         const body = text.length > MAX_IM_TEXT_LEN ? text.slice(0, MAX_IM_TEXT_LEN) + '...' : text;
         const structEvent = toNotificationEvent(msg);
-        // Enrich activity_text events with workspace tag header + Open
-        // Terminal link (when a web URL is available).
-        const enrichedEvent = structEvent && structEvent.kind === 'activity_text'
-          ? {
-              ...structEvent,
-              title: `${LABEL.terminal} · ${this.sessionTag()} · local`,
-              ...(this.webUrl ? { terminalUrl: this.webUrl } : {}),
-            }
-          : structEvent;
+        const enrichedEvent = structEvent;
         this.notifications.push({
           kind: 'activity_text',
           dedupeKey: `activity:${event.uuid}:${msg.kind}`,
@@ -297,7 +295,6 @@ export class TLiveLoop extends EventEmitter {
         kind: 'session_complete',
         summary,
         resumeHint,
-        ...(this.webUrl ? { terminalUrl: this.webUrl } : {}),
       },
     });
   }
@@ -310,7 +307,13 @@ export class TLiveLoop extends EventEmitter {
     if (!this.imSend || !this.imChatId) return;
     for (const event of events) {
       const text = event.body ? `${event.title}\n${event.body}` : event.title;
-      const messageId = await this.imSend(this.imChatId, text, event.buttons, event.event);
+      const messageId = await this.imSend(
+        this.imChatId,
+        text,
+        event.buttons,
+        event.event,
+        this.ctx.snapshot,
+      );
       if (messageId && (event.kind === 'permission_request' || event.kind === 'ask_user_question')) {
         this.router.registerTerminalNotification(
           messageId, this.session.info.sessionId, this.session.info.workdir,

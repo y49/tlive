@@ -4,10 +4,12 @@
 
 import { stdin, stdout, exit } from 'node:process';
 import { networkInterfaces } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { TLiveLoop } from '../loop.js';
 import { IPCClient } from '../ipc.js';
 import { loadConfig } from '../config.js';
 import { createWorktree } from '../core/worktreeManager.js';
+import { ScannerContext } from '../core/scannerContext.js';
 import type { ProviderAdapter } from '../sdk/providerAdapter.js';
 import type { ScannerFactory } from '../core/sessionManager.js';
 
@@ -74,14 +76,21 @@ export async function runFlavor(opts: RunFlavorOptions): Promise<void> {
       console.error(`  Resuming session ${sessionId.slice(0, 8)}...`);
     }
   }
+  // Fallback id so ctx, loop, and IPC all agree on the same value.
+  if (!sessionId) sessionId = randomUUID();
 
-  const loop = new TLiveLoop({ workdir, adapter, config, sessionId, scannerFactory });
-
-  // Compute the web-terminal URL up-front so IM cards can include an
-  // "Open Terminal" link for every notification, not just the final summary.
   const localIP = getLocalIP();
-  const webUrl = `http://${localIP}:${config.port}/?token=${config.token || loop.sessionInfo.sessionId.slice(0, 16)}`;
-  loop.setWebUrl(webUrl);
+  const terminalUrl = `http://${localIP}:${config.port}/?token=${config.token || sessionId.slice(0, 16)}`;
+  const ctx = ScannerContext.fromWorkdir({
+    sessionId,
+    workdir,
+    provider: adapter.name as 'claude' | 'codex',
+    terminalUrl,
+  });
+
+  const loop = new TLiveLoop({ workdir, adapter, config, sessionId, scannerFactory, ctx });
+  // webUrl kept as a local alias for any remaining code below that referenced it
+  const webUrl = terminalUrl;
 
   // Connect to bridge IPC (auto-retries while bridge starts up)
   const ipc = new IPCClient();
@@ -109,15 +118,13 @@ export async function runFlavor(opts: RunFlavorOptions): Promise<void> {
 
   if (ipcConnected) {
     // Wire IPC as the IM transport
-    loop.setIMTarget('ipc', async (_chatId, text, buttons, event) => {
+    loop.setIMTarget('ipc', async (_chatId, text, buttons, event, sessionCtx) => {
       ipc.send('notification', {
         text, buttons,
-        // Forward the structured event so the bridge renderer can produce
-        // a card with proper workspace tag header instead of falling back
-        // to plain-text rendering of merged title+body.
         event,
-        sessionId: loop.sessionInfo.sessionId,
+        sessionId: ctx.snapshot.sessionId,
         workdir,
+        sessionCtx,
       });
       return new Promise<string | undefined>((resolve) => {
         const timeout = setTimeout(() => resolve(undefined), 3000);
@@ -172,14 +179,15 @@ export async function runFlavor(opts: RunFlavorOptions): Promise<void> {
     const sessionTag = `${projectName} · #${loop.sessionInfo.sessionId.slice(0, 6)}`;
     ipc.send('notification', {
       text: `🏠 tlive ${adapter.name} (local terminal) started\n${sessionTag}`,
-      sessionId: loop.sessionInfo.sessionId,
+      sessionId: ctx.snapshot.sessionId,
       workdir,
       event: {
         kind: 'activity_text',
         text: `\`${workdir}\``,
         title: `🏠 tlive ${adapter.name} · ${sessionTag} · local`,
-        terminalUrl: webUrl,
+        terminalUrl: ctx.snapshot.terminalUrl,
       },
+      sessionCtx: ctx.snapshot,
     });
   } else {
     console.error(`  IM:       \x1b[33mnot connected\x1b[0m (bridge not running)`);
