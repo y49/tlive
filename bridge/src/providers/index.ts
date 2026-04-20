@@ -1,5 +1,5 @@
 import { ClaudeSDKProvider } from './claude-sdk.js';
-import { CodexProvider } from './codex-provider.js';
+import { CodexAppServerProvider } from './codex-app-server/index.js';
 import type { LLMProvider } from './base.js';
 import type { PendingPermissions } from '../permissions/gateway.js';
 import type { ClaudeSettingSource } from '../config.js';
@@ -11,7 +11,7 @@ export interface ProviderOptions {
 export function resolveProvider(runtime: string, permissions: PendingPermissions, options?: ProviderOptions): LLMProvider {
   switch (runtime) {
     case 'codex':
-      return new CodexProvider();
+      return new CodexAppServerProvider();
     case 'claude':
     case 'auto':
     default:
@@ -19,39 +19,22 @@ export function resolveProvider(runtime: string, permissions: PendingPermissions
   }
 }
 
-// Cached Codex availability check (resolved once on first call)
-let _codexAvailable: boolean | null = null;
-let _codexCheckPromise: Promise<boolean> | null = null;
+// Module-level provider instance for availability checks (reuses module-level cache in CodexAppServerProvider)
+const _codexProvider = new CodexAppServerProvider();
 
-/** Check if Codex SDK is installed. First call triggers async import, subsequent calls return cached result. */
+/** Async check: resolves true if the codex binary (>=0.121.0) is available. Result is cached for process lifetime. */
+export async function checkCodexAvailable(): Promise<boolean> {
+  return _codexProvider.isAvailable();
+}
+
+/** Sync shim: returns false until the first async check completes. Use checkCodexAvailable() for accurate result. */
 export function isCodexAvailable(): boolean {
-  if (_codexAvailable !== null) return _codexAvailable;
-  // Kick off check if not started yet
-  if (!_codexCheckPromise) {
-    _codexCheckPromise = import('@openai/codex-sdk')
-      .then((mod) => {
-        _codexAvailable = !!(mod.Codex || (mod as any).default?.Codex);
-        return _codexAvailable;
-      })
-      .catch(() => {
-        _codexAvailable = false;
-        return false;
-      });
-  }
-  // First sync call before promise resolves — assume unavailable
+  // Kick off the async check if not already started; return false synchronously
+  void _codexProvider.isAvailable();
   return false;
 }
 
-/** Async version: await this for accurate result */
-export async function checkCodexAvailable(): Promise<boolean> {
-  if (_codexAvailable !== null) return _codexAvailable;
-  if (!_codexCheckPromise) {
-    isCodexAvailable(); // triggers the check
-  }
-  return _codexCheckPromise!;
-}
-
 export { ClaudeSDKProvider } from './claude-sdk.js';
-export { CodexProvider } from './codex-provider.js';
+export { CodexAppServerProvider } from './codex-app-server/index.js';
 export type { PermissionTimeoutCallback } from './claude-sdk.js';
 export type { LLMProvider, StreamChatParams } from './base.js';
