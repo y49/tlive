@@ -77,6 +77,12 @@ export async function runFlavor(opts: RunFlavorOptions): Promise<void> {
 
   const loop = new TLiveLoop({ workdir, adapter, config, sessionId, scannerFactory });
 
+  // Compute the web-terminal URL up-front so IM cards can include an
+  // "Open Terminal" link for every notification, not just the final summary.
+  const localIP = getLocalIP();
+  const webUrl = `http://${localIP}:${config.port}/?token=${config.token || loop.sessionInfo.sessionId.slice(0, 16)}`;
+  loop.setWebUrl(webUrl);
+
   // Connect to bridge IPC (auto-retries while bridge starts up)
   const ipc = new IPCClient();
   const ipcConnected = await ipc.connect();
@@ -172,6 +178,7 @@ export async function runFlavor(opts: RunFlavorOptions): Promise<void> {
         kind: 'activity_text',
         text: `\`${workdir}\``,
         title: `🏠 tlive ${adapter.name} · ${sessionTag} · local`,
+        terminalUrl: webUrl,
       },
     });
   } else {
@@ -203,8 +210,6 @@ export async function runFlavor(opts: RunFlavorOptions): Promise<void> {
 
   // Show session info
   const info = loop.sessionInfo;
-  const localIP = getLocalIP();
-  const webUrl = `http://${localIP}:${config.port}/?token=${config.token || info.sessionId.slice(0, 16)}`;
   console.error('');
   console.error(`  \x1b[36m⚡ TLive v1.0 · ${runtimeLabel}\x1b[0m`);
   console.error(`  Session:  ${info.sessionId.slice(0, 8)}...`);

@@ -208,7 +208,17 @@ var CodexSessionScanner = class extends EventEmitter {
   base;
   constructor(opts) {
     super();
-    this.base = new InternalBase(opts, (evt) => this.emit("event", evt));
+    this.base = new InternalBase(opts, (evt) => {
+      this.emit("event", evt);
+      if (evt.type === "event_msg") {
+        const p = evt.payload ?? {};
+        if (p.type === "token_count") {
+          const info = p.info ?? null;
+          const total = info?.total_token_usage;
+          if (total) this.emit("usage", total);
+        }
+      }
+    });
   }
   start() {
     return this.base.start();
@@ -1229,6 +1239,7 @@ var TLiveLoop = class extends EventEmitter7 {
   costTracker;
   imSend;
   imChatId;
+  webUrl;
   lastTerminalInputAt = Date.now();
   constructor(opts) {
     super();
@@ -1260,6 +1271,10 @@ var TLiveLoop = class extends EventEmitter7 {
   setIMTarget(chatId, sendFn) {
     this.imChatId = chatId;
     this.imSend = sendFn;
+  }
+  /** Attach a web-terminal URL so IM cards can render an "Open Terminal" link. */
+  setWebUrl(url) {
+    this.webUrl = url;
   }
   isUserActive() {
     return Date.now() - this.lastTerminalInputAt < this.config.activeThreshold;
@@ -1308,7 +1323,11 @@ var TLiveLoop = class extends EventEmitter7 {
         if (!text2) continue;
         const body = text2.length > MAX_IM_TEXT_LEN ? text2.slice(0, MAX_IM_TEXT_LEN) + "..." : text2;
         const structEvent = toNotificationEvent(msg);
-        const enrichedEvent = structEvent && structEvent.kind === "activity_text" ? { ...structEvent, title: `${LABEL.terminal} \xB7 ${this.sessionTag()} \xB7 local` } : structEvent;
+        const enrichedEvent = structEvent && structEvent.kind === "activity_text" ? {
+          ...structEvent,
+          title: `${LABEL.terminal} \xB7 ${this.sessionTag()} \xB7 local`,
+          ...this.webUrl ? { terminalUrl: this.webUrl } : {}
+        } : structEvent;
         this.notifications.push({
           kind: "activity_text",
           dedupeKey: `activity:${event.uuid}:${msg.kind}`,
@@ -1434,13 +1453,19 @@ var TLiveLoop = class extends EventEmitter7 {
   }
   handleSessionComplete() {
     const summary = this.costTracker.formatSummary();
+    const resumeHint = `Reply here to continue in IM, or run \`${this.adapter.name} resume ${this.session.info.sessionId}\` in a terminal.`;
     this.notifications.push({
       kind: "session_complete",
       dedupeKey: `complete:${this.session.info.sessionId}`,
       sessionId: this.session.info.sessionId,
       title: `${LABEL.done} \xB7 ${this.sessionTag()}`,
       body: summary,
-      event: { kind: "session_complete", summary }
+      event: {
+        kind: "session_complete",
+        summary,
+        resumeHint,
+        ...this.webUrl ? { terminalUrl: this.webUrl } : {}
+      }
     });
   }
   // ---------------------------------------------------------------------------
@@ -1729,6 +1754,9 @@ async function runFlavor(opts) {
     }
   }
   const loop = new TLiveLoop({ workdir, adapter, config, sessionId, scannerFactory });
+  const localIP = getLocalIP();
+  const webUrl = `http://${localIP}:${config.port}/?token=${config.token || loop.sessionInfo.sessionId.slice(0, 16)}`;
+  loop.setWebUrl(webUrl);
   const ipc = new IPCClient();
   const ipcConnected = await ipc.connect();
   if (ipcConnected) {
@@ -1799,7 +1827,8 @@ ${sessionTag}`,
       event: {
         kind: "activity_text",
         text: `\`${workdir}\``,
-        title: `\u{1F3E0} tlive ${adapter.name} \xB7 ${sessionTag} \xB7 local`
+        title: `\u{1F3E0} tlive ${adapter.name} \xB7 ${sessionTag} \xB7 local`,
+        terminalUrl: webUrl
       }
     });
   } else {
@@ -1825,8 +1854,6 @@ ${sessionTag}`,
   process.on("SIGINT", cleanup);
   process.on("SIGTERM", cleanup);
   const info = loop.sessionInfo;
-  const localIP = getLocalIP();
-  const webUrl = `http://${localIP}:${config.port}/?token=${config.token || info.sessionId.slice(0, 16)}`;
   console.error("");
   console.error(`  \x1B[36m\u26A1 TLive v1.0 \xB7 ${runtimeLabel}\x1B[0m`);
   console.error(`  Session:  ${info.sessionId.slice(0, 8)}...`);

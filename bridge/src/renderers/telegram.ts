@@ -183,8 +183,15 @@ export class TelegramRenderer implements NotificationRenderer<TelegramOutbound> 
       lines.push('');
       lines.push(`${cost} \u00B7 ${tokens} \u00B7 ${duration}`);
     }
-
-    return { html: lines.join('\n') };
+    if (event.resumeHint) {
+      lines.push('');
+      lines.push(`<i>${escapeHtml(event.resumeHint)}</i>`);
+    }
+    const result: TelegramOutbound = { html: lines.join('\n') };
+    if (event.terminalUrl) {
+      result.buttons = [{ label: '🔗 Open Terminal', callbackData: '_', url: event.terminalUrl }];
+    }
+    return result;
   }
 
   private renderError(event: Extract<NotificationEvent, { kind: 'error' }>): TelegramOutbound {
@@ -200,7 +207,11 @@ export class TelegramRenderer implements NotificationRenderer<TelegramOutbound> 
     if (event.title) parts.push(`<b>${escapeHtml(event.title)}</b>`);
     parts.push(escapeHtml(event.text));
     if (event.footer) parts.push(`<i>${escapeHtml(event.footer)}</i>`);
-    return { html: parts.join('\n\n') };
+    const result: TelegramOutbound = { html: parts.join('\n\n') };
+    if (event.terminalUrl) {
+      result.buttons = [{ label: '🔗 Open Terminal', callbackData: '_', url: event.terminalUrl }];
+    }
+    return result;
   }
 
   private renderActivityTool(event: Extract<NotificationEvent, { kind: 'activity_tool' }>): TelegramOutbound {

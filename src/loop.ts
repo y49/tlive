@@ -40,6 +40,7 @@ export class TLiveLoop extends EventEmitter {
   private costTracker: CostTracker;
   private imSend?: IMSendFn;
   private imChatId?: string;
+  private webUrl?: string;
   private lastTerminalInputAt = Date.now();
 
   constructor(opts: LoopOptions) {
@@ -68,6 +69,11 @@ export class TLiveLoop extends EventEmitter {
   setIMTarget(chatId: string, sendFn: IMSendFn): void {
     this.imChatId = chatId;
     this.imSend = sendFn;
+  }
+
+  /** Attach a web-terminal URL so IM cards can render an "Open Terminal" link. */
+  setWebUrl(url: string): void {
+    this.webUrl = url;
   }
 
   private isUserActive(): boolean {
@@ -130,12 +136,14 @@ export class TLiveLoop extends EventEmitter {
         if (!text) continue;
         const body = text.length > MAX_IM_TEXT_LEN ? text.slice(0, MAX_IM_TEXT_LEN) + '...' : text;
         const structEvent = toNotificationEvent(msg);
-        // Enrich activity_text events with workspace tag header so the bridge
-        // renderer produces a card with header bar. No footer — the inline
-        // "reply here" hint renders inconsistently across IMs and IM users
-        // already know to reply natively to drive the terminal.
+        // Enrich activity_text events with workspace tag header + Open
+        // Terminal link (when a web URL is available).
         const enrichedEvent = structEvent && structEvent.kind === 'activity_text'
-          ? { ...structEvent, title: `${LABEL.terminal} · ${this.sessionTag()} · local` }
+          ? {
+              ...structEvent,
+              title: `${LABEL.terminal} · ${this.sessionTag()} · local`,
+              ...(this.webUrl ? { terminalUrl: this.webUrl } : {}),
+            }
           : structEvent;
         this.notifications.push({
           kind: 'activity_text',
@@ -278,13 +286,19 @@ export class TLiveLoop extends EventEmitter {
 
   private handleSessionComplete(): void {
     const summary = this.costTracker.formatSummary();
+    const resumeHint = `Reply here to continue in IM, or run \`${this.adapter.name} resume ${this.session.info.sessionId}\` in a terminal.`;
     this.notifications.push({
       kind: 'session_complete',
       dedupeKey: `complete:${this.session.info.sessionId}`,
       sessionId: this.session.info.sessionId,
       title: `${LABEL.done} · ${this.sessionTag()}`,
       body: summary,
-      event: { kind: 'session_complete', summary },
+      event: {
+        kind: 'session_complete',
+        summary,
+        resumeHint,
+        ...(this.webUrl ? { terminalUrl: this.webUrl } : {}),
+      },
     });
   }
 

@@ -198,9 +198,11 @@ export class DiscordRenderer implements NotificationRenderer<DiscordOutbound> {
   }
 
   private renderSessionComplete(event: Extract<NotificationEvent, { kind: 'session_complete' }>): DiscordOutbound {
-    const description = event.summary.length > 500
+    const parts: string[] = [event.summary.length > 500
       ? `\`\`\`\n${event.summary.slice(0, 497)}...\n\`\`\``
-      : event.summary;
+      : event.summary];
+    if (event.resumeHint) parts.push(`_${event.resumeHint}_`);
+    if (event.terminalUrl) parts.push(`🔗 [Open Terminal](${event.terminalUrl})`);
 
     let footer: string | undefined;
     if (event.cost) {
@@ -214,7 +216,7 @@ export class DiscordRenderer implements NotificationRenderer<DiscordOutbound> {
       embed: {
         title: '\u2705 Session Complete',
         color: COLOR_GREEN,
-        description,
+        description: parts.join('\n\n'),
         footer,
       },
     };
@@ -240,8 +242,10 @@ export class DiscordRenderer implements NotificationRenderer<DiscordOutbound> {
   }
 
   private renderActivityText(event: Extract<NotificationEvent, { kind: 'activity_text' }>): DiscordOutbound {
-    const description = event.footer ? `${event.text}\n\n_${event.footer}_` : event.text;
-    return embed({ color: COLOR_GRAY, title: event.title, description });
+    const parts: string[] = [event.text];
+    if (event.footer) parts.push(`_${event.footer}_`);
+    if (event.terminalUrl) parts.push(`🔗 [Open Terminal](${event.terminalUrl})`);
+    return embed({ color: COLOR_GRAY, title: event.title, description: parts.join('\n\n') });
   }
 
   private renderActivityTool(event: Extract<NotificationEvent, { kind: 'activity_tool' }>): DiscordOutbound {

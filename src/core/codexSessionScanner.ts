@@ -29,7 +29,20 @@ export class CodexSessionScanner extends EventEmitter {
 
   constructor(opts: CodexScannerOptions) {
     super();
-    this.base = new InternalBase(opts, (evt) => this.emit('event', evt));
+    this.base = new InternalBase(opts, (evt) => {
+      this.emit('event', evt);
+      // Codex 0.121 emits token usage in event_msg/token_count events; forward
+      // them as 'usage' so CostTracker (shared with Claude scanner path) can
+      // accumulate input/output/cached token counts for the session summary.
+      if (evt.type === 'event_msg') {
+        const p = (evt.payload ?? {}) as Record<string, unknown>;
+        if (p.type === 'token_count') {
+          const info = (p.info ?? null) as Record<string, unknown> | null;
+          const total = info?.total_token_usage as Record<string, unknown> | undefined;
+          if (total) this.emit('usage', total);
+        }
+      }
+    });
   }
 
   start(): Promise<void> {

@@ -24362,7 +24362,15 @@ var TelegramRenderer = class {
       lines.push("");
       lines.push(`${cost} \xB7 ${tokens} \xB7 ${duration3}`);
     }
-    return { html: lines.join("\n") };
+    if (event.resumeHint) {
+      lines.push("");
+      lines.push(`<i>${escapeHtml2(event.resumeHint)}</i>`);
+    }
+    const result = { html: lines.join("\n") };
+    if (event.terminalUrl) {
+      result.buttons = [{ label: "\u{1F517} Open Terminal", callbackData: "_", url: event.terminalUrl }];
+    }
+    return result;
   }
   renderError(event) {
     return { html: `\u274C <pre>${escapeHtml2(event.message)}</pre>` };
@@ -24375,7 +24383,11 @@ var TelegramRenderer = class {
     if (event.title) parts.push(`<b>${escapeHtml2(event.title)}</b>`);
     parts.push(escapeHtml2(event.text));
     if (event.footer) parts.push(`<i>${escapeHtml2(event.footer)}</i>`);
-    return { html: parts.join("\n\n") };
+    const result = { html: parts.join("\n\n") };
+    if (event.terminalUrl) {
+      result.buttons = [{ label: "\u{1F517} Open Terminal", callbackData: "_", url: event.terminalUrl }];
+    }
+    return result;
   }
   renderActivityTool(event) {
     const input = event.toolInput ? " " + escapeHtml2(event.toolInput) : "";
@@ -24638,9 +24650,11 @@ ${input}
     };
   }
   renderSessionComplete(event) {
-    const description = event.summary.length > 500 ? `\`\`\`
+    const parts = [event.summary.length > 500 ? `\`\`\`
 ${event.summary.slice(0, 497)}...
-\`\`\`` : event.summary;
+\`\`\`` : event.summary];
+    if (event.resumeHint) parts.push(`_${event.resumeHint}_`);
+    if (event.terminalUrl) parts.push(`\u{1F517} [Open Terminal](${event.terminalUrl})`);
     let footer;
     if (event.cost) {
       const tokens = formatTokenCount2(event.cost.inputTokens + event.cost.outputTokens);
@@ -24652,7 +24666,7 @@ ${event.summary.slice(0, 497)}...
       embed: {
         title: "\u2705 Session Complete",
         color: COLOR_GREEN,
-        description,
+        description: parts.join("\n\n"),
         footer
       }
     };
@@ -24677,10 +24691,10 @@ ${event.message}
     };
   }
   renderActivityText(event) {
-    const description = event.footer ? `${event.text}
-
-_${event.footer}_` : event.text;
-    return embed({ color: COLOR_GRAY, title: event.title, description });
+    const parts = [event.text];
+    if (event.footer) parts.push(`_${event.footer}_`);
+    if (event.terminalUrl) parts.push(`\u{1F517} [Open Terminal](${event.terminalUrl})`);
+    return embed({ color: COLOR_GRAY, title: event.title, description: parts.join("\n\n") });
   }
   renderActivityTool(event) {
     const input = event.toolInput ? " " + event.toolInput : "";
@@ -25021,6 +25035,14 @@ ${input}
         content: `${cost} \xB7 ${tokens} tokens \xB7 ${duration3}`
       });
     }
+    if (event.resumeHint) {
+      elements.push({ tag: "hr" });
+      elements.push({ tag: "markdown", content: event.resumeHint });
+    }
+    if (event.terminalUrl) {
+      elements.push({ tag: "hr" });
+      elements.push({ tag: "markdown", content: `\u{1F517} [Open Terminal](${event.terminalUrl})` });
+    }
     return {
       card: buildCard("green", "\u2705 Done", elements)
     };
@@ -25045,6 +25067,10 @@ ${event.message}
     const elements = [{ tag: "markdown", content: event.text }];
     if (event.footer) {
       elements.push({ tag: "markdown", content: event.footer });
+    }
+    if (event.terminalUrl) {
+      elements.push({ tag: "hr" });
+      elements.push({ tag: "markdown", content: `\u{1F517} [Open Terminal](${event.terminalUrl})` });
     }
     if (event.title) {
       return { card: buildCard("blue", event.title, elements) };
