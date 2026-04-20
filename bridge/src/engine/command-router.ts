@@ -343,7 +343,7 @@ export class CommandRouter {
       case '/runtime': {
         const runtime = parts[1]?.toLowerCase();
         if (isKnownFlavor(runtime)) {
-          // Pre-check: reject if Codex SDK not installed
+          // Pre-check: reject if codex binary missing or too old
           if (runtime === 'codex' && !await checkCodexAvailable()) {
             await adapter.send(msg.chatId, r.renderSimpleText(
               '❌ codex binary not installed (or version < 0.121.0).\n' +
