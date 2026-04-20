@@ -15718,8 +15718,21 @@ var CodexEventAdapter = class {
     if (item.id) this.recentItems.set(item.id, item);
     switch (item.type) {
       case "agentMessage": {
-        const text2 = item.text ?? "";
-        return [{ kind: "text_delta", text: text2 }];
+        const raw = item.text ?? "";
+        const events = [];
+        const thinkRegex = /<think>([\s\S]*?)<\/think>\s*/g;
+        let lastIndex = 0;
+        let match2;
+        while ((match2 = thinkRegex.exec(raw)) !== null) {
+          const before = raw.slice(lastIndex, match2.index);
+          if (before.trim().length > 0) events.push({ kind: "text_delta", text: before });
+          const reasoning = match2[1].trim();
+          if (reasoning.length > 0) events.push({ kind: "reasoning_complete", text: reasoning });
+          lastIndex = match2.index + match2[0].length;
+        }
+        const tail = raw.slice(lastIndex);
+        if (events.length === 0 || tail.trim().length > 0) events.push({ kind: "text_delta", text: tail });
+        return events;
       }
       case "reasoning": {
         const summary = Array.isArray(item.summary) ? item.summary.filter(Boolean) : [];
@@ -18340,6 +18353,7 @@ ${optionLines.join("\n")}`;
       { effort: this.state.getEffort(msg.channelType, msg.chatId), model: this.state.getModel(msg.channelType, msg.chatId) }
     );
     let streamResult;
+    const streamChatTracker = managed ? null : new CostTracker();
     if (managed) {
       managed.lastActiveAt = Date.now();
       managed.costTracker.start();
@@ -18350,6 +18364,8 @@ ${optionLines.join("\n")}`;
         model: this.state.getModel(msg.channelType, msg.chatId),
         attachments: msg.attachments
       });
+    } else {
+      streamChatTracker.start();
     }
     try {
       const result = await this.engine.processMessage({
@@ -18406,8 +18422,7 @@ ${optionLines.join("\n")}`;
           if (event.permissionDenials?.length) {
             console.warn(`[tlive:engine] Permission denials: ${event.permissionDenials.map((d) => d.toolName).join(", ")}`);
           }
-          const tracker = managed?.costTracker ?? new CostTracker();
-          if (!managed) tracker.start();
+          const tracker = managed?.costTracker ?? streamChatTracker;
           const usage = { input_tokens: event.usage.inputTokens, output_tokens: event.usage.outputTokens, cost_usd: event.usage.costUsd, model_usage: event.usage.modelUsage };
           completedStats = tracker.finish(usage);
           renderer.onComplete(completedStats);
