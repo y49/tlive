@@ -267,10 +267,16 @@ export class FeishuRenderer implements NotificationRenderer<FeishuOutbound> {
   }
 
   private renderActivityText(event: Extract<NotificationEvent, { kind: 'activity_text' }>): FeishuOutbound {
-    // Minimal card — no header (activity messages are transient and noisy otherwise)
-    return {
-      card: buildPlainCard([{ tag: 'markdown', content: event.text }]),
-    };
+    const elements: CardElement[] = [{ tag: 'markdown', content: event.text }];
+    if (event.footer) {
+      elements.push({ tag: 'markdown', content: event.footer });
+    }
+    // With a title we render a proper card-with-header so workspace context
+    // (e.g. "💻 Terminal · y · #abc") sits in its own bar above the body.
+    if (event.title) {
+      return { card: buildCard('blue', event.title, elements) };
+    }
+    return { card: buildPlainCard(elements) };
   }
 
   private renderActivityTool(event: Extract<NotificationEvent, { kind: 'activity_tool' }>): FeishuOutbound {

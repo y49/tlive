@@ -24,7 +24,7 @@ export type NotificationEvent =
   | { kind: 'session_complete'; summary: string; cost?: UsageStats }
   | { kind: 'error'; message: string }
   | { kind: 'todo_update'; items: TodoItem[] }
-  | { kind: 'activity_text'; text: string }
+  | { kind: 'activity_text'; text: string; title?: string; footer?: string }
   | { kind: 'activity_tool'; toolName: string; toolInput?: string }
   | { kind: 'thinking'; active: boolean }
   | { kind: 'reasoning_summary'; text: string; durationMs?: number; truncated?: boolean }

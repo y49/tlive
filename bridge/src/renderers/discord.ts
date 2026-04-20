@@ -240,7 +240,8 @@ export class DiscordRenderer implements NotificationRenderer<DiscordOutbound> {
   }
 
   private renderActivityText(event: Extract<NotificationEvent, { kind: 'activity_text' }>): DiscordOutbound {
-    return embed({ color: COLOR_GRAY, description: event.text });
+    const description = event.footer ? `${event.text}\n\n_${event.footer}_` : event.text;
+    return embed({ color: COLOR_GRAY, title: event.title, description });
   }
 
   private renderActivityTool(event: Extract<NotificationEvent, { kind: 'activity_tool' }>): DiscordOutbound {

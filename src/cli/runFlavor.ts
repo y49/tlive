@@ -156,6 +156,23 @@ export async function runFlavor(opts: RunFlavorOptions): Promise<void> {
     ipc.on('reconnected', () => console.error(`  IM:       \x1b[32mreconnected\x1b[0m`));
 
     console.error(`  IM:       \x1b[32mconnected\x1b[0m (bridge IPC)`);
+
+    // Notify IM that this terminal session is now live, so the user knows
+    // where to reply (matches the per-message "↩ Reply here to interact"
+    // hint but explicit at session start).
+    const projectName = workdir.split('/').filter(Boolean).pop() ?? 'unknown';
+    const sessionTag = `${projectName} · #${loop.sessionInfo.sessionId.slice(0, 6)}`;
+    ipc.send('notification', {
+      text: `🚀 tlive ${adapter.name} started\n${sessionTag}\n\n↩ Reply here to interact`,
+      sessionId: loop.sessionInfo.sessionId,
+      workdir,
+      event: {
+        kind: 'activity_text',
+        text: `\`${workdir}\``,
+        title: `🚀 tlive ${adapter.name} · ${sessionTag}`,
+        footer: '↩ Reply here to interact',
+      },
+    });
   } else {
     console.error(`  IM:       \x1b[33mnot connected\x1b[0m (bridge not running)`);
   }

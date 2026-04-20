@@ -1305,6 +1305,7 @@ var TLiveLoop = class extends EventEmitter7 {
         if (!text2) continue;
         const body = text2.length > MAX_IM_TEXT_LEN ? text2.slice(0, MAX_IM_TEXT_LEN) + "..." : text2;
         const structEvent = toNotificationEvent(msg);
+        const enrichedEvent = structEvent && structEvent.kind === "activity_text" ? { ...structEvent, title: `${LABEL.terminal} \xB7 ${this.sessionTag()}`, footer: LABEL.replyHint } : structEvent;
         this.notifications.push({
           kind: "activity_text",
           dedupeKey: `activity:${event.uuid}:${msg.kind}`,
@@ -1313,7 +1314,7 @@ var TLiveLoop = class extends EventEmitter7 {
           body: body + `
 
 ${LABEL.replyHint}`,
-          event: structEvent ?? void 0
+          event: enrichedEvent ?? void 0
         });
         continue;
       }
@@ -1787,6 +1788,22 @@ async function runFlavor(opts) {
     });
     ipc.on("reconnected", () => console.error(`  IM:       \x1B[32mreconnected\x1B[0m`));
     console.error(`  IM:       \x1B[32mconnected\x1B[0m (bridge IPC)`);
+    const projectName = workdir.split("/").filter(Boolean).pop() ?? "unknown";
+    const sessionTag = `${projectName} \xB7 #${loop.sessionInfo.sessionId.slice(0, 6)}`;
+    ipc.send("notification", {
+      text: `\u{1F680} tlive ${adapter.name} started
+${sessionTag}
+
+\u21A9 Reply here to interact`,
+      sessionId: loop.sessionInfo.sessionId,
+      workdir,
+      event: {
+        kind: "activity_text",
+        text: `\`${workdir}\``,
+        title: `\u{1F680} tlive ${adapter.name} \xB7 ${sessionTag}`,
+        footer: "\u21A9 Reply here to interact"
+      }
+    });
   } else {
     console.error(`  IM:       \x1B[33mnot connected\x1B[0m (bridge not running)`);
   }

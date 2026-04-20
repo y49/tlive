@@ -15720,19 +15720,19 @@ var CodexEventAdapter = class {
       case "agentMessage": {
         const raw = item.text ?? "";
         const events = [];
-        const thinkRegex = /<think>([\s\S]*?)<\/think>\s*/g;
-        let lastIndex = 0;
-        let match2;
-        while ((match2 = thinkRegex.exec(raw)) !== null) {
-          const before = raw.slice(lastIndex, match2.index);
-          if (before.trim().length > 0) events.push({ kind: "text_delta", text: before });
-          const reasoning = match2[1].trim();
+        const closeIdx = raw.indexOf("</think>");
+        if (closeIdx >= 0) {
+          let head = raw.slice(0, closeIdx);
+          const openMatch = head.match(/^\s*<think>/);
+          if (openMatch) head = head.slice(openMatch[0].length);
+          const reasoning = head.trim();
           if (reasoning.length > 0) events.push({ kind: "reasoning_complete", text: reasoning });
-          lastIndex = match2.index + match2[0].length;
+          const tail = raw.slice(closeIdx + "</think>".length).trim();
+          if (tail.length > 0) events.push({ kind: "text_delta", text: tail });
+          if (events.length === 0) events.push({ kind: "text_delta", text: "" });
+          return events;
         }
-        const tail = raw.slice(lastIndex);
-        if (events.length === 0 || tail.trim().length > 0) events.push({ kind: "text_delta", text: tail });
-        return events;
+        return [{ kind: "text_delta", text: raw }];
       }
       case "reasoning": {
         const summary = Array.isArray(item.summary) ? item.summary.filter(Boolean) : [];
@@ -24368,7 +24368,11 @@ var TelegramRenderer = class {
     return { html: renderTodoChecklist(event.items) };
   }
   renderActivityText(event) {
-    return { html: escapeHtml2(event.text) };
+    const parts = [];
+    if (event.title) parts.push(`<b>${escapeHtml2(event.title)}</b>`);
+    parts.push(escapeHtml2(event.text));
+    if (event.footer) parts.push(`<i>${escapeHtml2(event.footer)}</i>`);
+    return { html: parts.join("\n\n") };
   }
   renderActivityTool(event) {
     const input = event.toolInput ? " " + escapeHtml2(event.toolInput) : "";
@@ -24670,7 +24674,10 @@ ${event.message}
     };
   }
   renderActivityText(event) {
-    return embed({ color: COLOR_GRAY, description: event.text });
+    const description = event.footer ? `${event.text}
+
+_${event.footer}_` : event.text;
+    return embed({ color: COLOR_GRAY, title: event.title, description });
   }
   renderActivityTool(event) {
     const input = event.toolInput ? " " + event.toolInput : "";
@@ -25032,9 +25039,14 @@ ${event.message}
     };
   }
   renderActivityText(event) {
-    return {
-      card: buildPlainCard([{ tag: "markdown", content: event.text }])
-    };
+    const elements = [{ tag: "markdown", content: event.text }];
+    if (event.footer) {
+      elements.push({ tag: "markdown", content: event.footer });
+    }
+    if (event.title) {
+      return { card: buildCard("blue", event.title, elements) };
+    }
+    return { card: buildPlainCard(elements) };
   }
   renderActivityTool(event) {
     const icon = getToolIcon(event.toolName);

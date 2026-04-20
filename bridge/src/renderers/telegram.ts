@@ -196,7 +196,11 @@ export class TelegramRenderer implements NotificationRenderer<TelegramOutbound> 
   }
 
   private renderActivityText(event: Extract<NotificationEvent, { kind: 'activity_text' }>): TelegramOutbound {
-    return { html: escapeHtml(event.text) };
+    const parts: string[] = [];
+    if (event.title) parts.push(`<b>${escapeHtml(event.title)}</b>`);
+    parts.push(escapeHtml(event.text));
+    if (event.footer) parts.push(`<i>${escapeHtml(event.footer)}</i>`);
+    return { html: parts.join('\n\n') };
   }
 
   private renderActivityTool(event: Extract<NotificationEvent, { kind: 'activity_tool' }>): TelegramOutbound {
