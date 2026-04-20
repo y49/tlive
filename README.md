@@ -5,7 +5,7 @@ Terminal live monitoring + IM bridge for AI coding agents — wrap [Claude Code]
 ## Features
 
 - **Workspace-first IM interaction.** Open projects as workspaces; each gets its own Telegram topic / Discord thread / Feishu card tag. Switch between `~/tlive` and `~/blog` without mixing message streams.
-- **Dual-path Codex support.** Via `@openai/codex-sdk` for IM-initiated conversations (reasoning + file changes + todos), or via `.jsonl` scanner for local-PTY monitoring.
+- **Dual-path Codex support.** Via `codex app-server` (JSON-RPC subprocess) for IM-initiated conversations with bidirectional approval + accurate token usage + native `~/.codex/auth.json` auth, or via `.jsonl` scanner for local-PTY monitoring.
 - **Status line per session.** Edit-in-place progress message shows current phase (thinking / reading / editing / awaiting approval).
 - **Permission context.** Approval prompts include the agent's reasoning and recent tool calls so you can decide with confidence.
 - **Verbose levels.** Default Quiet = permissions + final results. Normal adds reasoning + file changes. Full = every tool call.
@@ -69,21 +69,20 @@ Pre-configured workspaces appear immediately in `/workspaces`. `TL_WORKSPACES_AL
 
 - `CODEX_HOME` — defaults to `~/.codex`. Session files are in `$CODEX_HOME/sessions/`.
 - `TLIVE_CODEX_EXECUTABLE` — path to `codex` binary if not on `PATH`.
-- `OPENAI_API_KEY` — required for bridge-initiated Codex sessions.
+- `OPENAI_API_KEY` — optional. Bridge-initiated Codex sessions use `~/.codex/auth.json` (run `codex login` once). `OPENAI_API_KEY` is only used as a fallback if no auth file exists.
 
 ## Architecture
 
 tlive has two routes to agent events:
 
-1. **Bridge SDK path (IM-initiated).** The bridge daemon uses `@openai/codex-sdk` (Codex) or `@anthropic-ai/claude-agent-sdk` (Claude) to start sessions on demand when you type in IM. Full reasoning + structured file changes.
+1. **Bridge path (IM-initiated).** The bridge daemon spawns `codex app-server` (Codex, requires codex >= 0.121.0) or uses `@anthropic-ai/claude-agent-sdk` (Claude) to start sessions on demand when you type in IM. Full reasoning + structured file changes + bidirectional approval.
 2. **Local scanner path.** You run `tlive codex` / `tlive claude` in a terminal; tlive scans the agent's session file (`.jsonl` under `~/.codex/sessions/` or `~/.claude/projects/`) and forwards notifications to IM. The PTY is yours to see; IM is a remote observer.
 
 See `docs/smoke-test.md` for a 13-step verification checklist run before each release.
 
 ## Limitations
 
-- `.jsonl` scanner mode cannot see Codex reasoning content (OpenAI encrypts it at rest) or structured file diffs. Use the SDK path for full fidelity.
-- Codex app-server mode (full unified-diff + streamed reasoning delta) is not yet supported; planned for 1.1.
+- `.jsonl` scanner mode cannot see Codex reasoning content (OpenAI encrypts it at rest) or structured file diffs. Use the bridge path for full fidelity.
 - Telegram multi-workspace separation requires the chat to be a forum-enabled supergroup. Non-forum chats fall back to tag-mode (workspace prefix in each message).
 
 ## Development
