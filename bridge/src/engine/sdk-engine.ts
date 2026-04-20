@@ -614,6 +614,10 @@ export class SDKEngine {
     );
 
     let streamResult;
+    // For streamChat-only providers (codex, anything without LiveSession),
+    // create a per-turn CostTracker started here so onQueryResult can compute
+    // a real duration. LiveSession path uses managed.costTracker instead.
+    const streamChatTracker = managed ? null : new CostTracker();
     if (managed) {
       // LiveSession mode — start a new turn
       managed.lastActiveAt = Date.now();
@@ -625,6 +629,8 @@ export class SDKEngine {
         model: this.state.getModel(msg.channelType, msg.chatId),
         attachments: msg.attachments,
       });
+    } else {
+      streamChatTracker!.start();
     }
     // else: streamResult is undefined → ConversationEngine falls back to streamChat()
 
@@ -679,8 +685,7 @@ export class SDKEngine {
           if (event.permissionDenials?.length) {
             console.warn(`[tlive:engine] Permission denials: ${event.permissionDenials.map(d => d.toolName).join(', ')}`);
           }
-          const tracker = managed?.costTracker ?? new CostTracker();
-          if (!managed) tracker.start();
+          const tracker = managed?.costTracker ?? streamChatTracker!;
           const usage = { input_tokens: event.usage.inputTokens, output_tokens: event.usage.outputTokens, cost_usd: event.usage.costUsd, model_usage: event.usage.modelUsage };
           completedStats = tracker.finish(usage);
           renderer.onComplete(completedStats);
