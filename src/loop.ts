@@ -111,11 +111,17 @@ export class TLiveLoop extends EventEmitter {
     const raw = event.raw as Record<string, unknown>;
     if (raw.isMeta) return;
 
-    const normalized = normalizeSessionLine(
-      { uuid: event.uuid, type: event.type, message: event.message },
-      this.adapter.name as 'claude' | 'codex',
-      this.session.info.sessionId,
-    );
+    // Provider-specific normalizer (preferred — handles codex 0.121's
+    // session_meta/event_msg/response_item shape that the legacy free
+    // function doesn't recognize). Fall back to the legacy claude-only
+    // normalizer if an adapter doesn't implement it.
+    const normalized = this.adapter.normalizeSessionEvent
+      ? this.adapter.normalizeSessionEvent(raw, { sessionId: this.session.info.sessionId })
+      : normalizeSessionLine(
+          { uuid: event.uuid, type: event.type, message: event.message },
+          this.adapter.name as 'claude' | 'codex',
+          this.session.info.sessionId,
+        );
 
     for (const msg of normalized) {
       if (msg.kind !== 'tool_use') {

@@ -1,55 +1,1001 @@
-// src/sdk/claudeAdapter.ts
+// src/sdk/codexAdapter.ts
 import { execSync } from "node:child_process";
-import { homedir as homedir2 } from "node:os";
-import { join as join2, resolve as resolve2 } from "node:path";
-
-// src/core/sessionDiscovery.ts
-import { readdirSync, statSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
 import { homedir } from "node:os";
-var UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-function getProjectPath(workingDirectory) {
-  const projectId = resolve(workingDirectory).replace(/[^a-zA-Z0-9-]/g, "-");
-  const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
-  return join(claudeConfigDir, "projects", projectId);
-}
-function isValidSession(projectDir, sessionId) {
-  try {
-    const filePath = join(projectDir, `${sessionId}.jsonl`);
-    const content = readFileSync(filePath, "utf-8");
-    const lines = content.split("\n");
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const msg = JSON.parse(line);
-        if (msg.uuid && (msg.type === "user" || msg.type === "assistant")) {
-          return true;
+import { join } from "node:path";
+var CodexAdapter = class {
+  name = "codex";
+  capabilities = { liveSession: false };
+  executablePath = null;
+  async resolveExecutable() {
+    if (this.executablePath) return this.executablePath;
+    if (process.env.TLIVE_CODEX_EXECUTABLE) {
+      this.executablePath = process.env.TLIVE_CODEX_EXECUTABLE;
+      return this.executablePath;
+    }
+    try {
+      this.executablePath = execSync("which codex", {
+        encoding: "utf-8"
+      }).trim();
+    } catch {
+      this.executablePath = "codex";
+    }
+    return this.executablePath;
+  }
+  getSessionIdArgs(_sessionId) {
+    return [];
+  }
+  getResumeArgs(sessionId) {
+    return ["--resume", sessionId];
+  }
+  spawnArgs(opts) {
+    return opts.args ? [...opts.args] : [];
+  }
+  async *startRemote(_opts) {
+    throw new Error("Codex remote SDK path not implemented in terminal mode");
+  }
+  getSessionDir(_workdir) {
+    const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
+    return join(codexHome, "sessions");
+  }
+  normalizeSessionEvent(event, ctx) {
+    const e = event;
+    const sessionId = ctx?.sessionId ?? "";
+    if (e.type === "session_meta" || e.type === "turn_context") return [];
+    if (e.type === "response_item") {
+      const p = e.payload ?? {};
+      const ptype = p.type;
+      if (ptype === "message" && p.role === "assistant") {
+        const content = Array.isArray(p.content) ? p.content : [];
+        const firstText = content.find((c) => c?.type === "output_text" || c?.type === "text")?.text;
+        if (typeof firstText === "string" && firstText.length > 0) {
+          return [{ kind: "text", text: firstText, provider: "codex", sessionId }];
         }
-      } catch {
-        continue;
+        return [];
+      }
+      if (ptype === "function_call") {
+        const toolName = typeof p.name === "string" ? p.name : "unknown";
+        const toolUseId = typeof p.call_id === "string" ? p.call_id : "";
+        let toolInput = p.arguments;
+        if (typeof toolInput === "string") {
+          try {
+            toolInput = JSON.parse(toolInput);
+          } catch {
+          }
+        }
+        return [{
+          kind: "tool_use",
+          toolName,
+          toolUseId,
+          toolInput,
+          provider: "codex",
+          sessionId
+        }];
+      }
+      if (ptype === "function_call_output") {
+        const toolUseId = typeof p.call_id === "string" ? p.call_id : "";
+        const output = typeof p.output === "string" ? p.output : JSON.stringify(p.output ?? "");
+        return [{
+          kind: "tool_result",
+          toolUseId,
+          text: output,
+          provider: "codex",
+          sessionId
+        }];
+      }
+      return [];
+    }
+    if (e.type === "event_msg") {
+      const p = e.payload ?? {};
+      const ptype = p.type;
+      if (ptype === "task_complete") {
+        return [{ kind: "complete", provider: "codex", sessionId }];
+      }
+      return [];
+    }
+    return [];
+  }
+  extractThinkingEvents(event) {
+    const e = event;
+    if (e.type === "event_msg") {
+      const p = e.payload ?? {};
+      if (p.type === "task_started") return [{ type: "tool_use", toolUseId: "__codex_task__" }];
+      if (p.type === "task_complete") return [{ type: "tool_result", toolUseId: "__codex_task__" }];
+    }
+    if (e.type === "response_item") {
+      const p = e.payload ?? {};
+      if (p.type === "reasoning") return [{ type: "tool_use", toolUseId: "__codex_reasoning__" }];
+    }
+    return [];
+  }
+};
+
+// src/core/codexSessionScanner.ts
+import { readdirSync, statSync, readFileSync } from "node:fs";
+import { join as join2 } from "node:path";
+import { EventEmitter } from "node:events";
+
+// src/core/baseSessionScanner.ts
+import { watch } from "node:fs";
+var BaseSessionScanner = class {
+  constructor(baseOpts = {}) {
+    this.baseOpts = baseOpts;
+  }
+  baseOpts;
+  stopped = false;
+  pollTimer = null;
+  watchers = /* @__PURE__ */ new Map();
+  cursors = /* @__PURE__ */ new Map();
+  /** Dedup keys across scans. Callers must ensure findSessionFiles() returns a bounded set — the base class never evicts keys. */
+  processedKeys = /* @__PURE__ */ new Set();
+  scanning = false;
+  pendingScan = false;
+  async start() {
+    await this.scan();
+    const interval = this.baseOpts.pollingInterval ?? 3e3;
+    this.pollTimer = setInterval(() => {
+      this.scan().catch((e) => this.handleError(e));
+    }, interval);
+  }
+  stop() {
+    this.stopped = true;
+    this.pendingScan = false;
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+    for (const w of this.watchers.values()) w.close();
+    this.watchers.clear();
+  }
+  /** For tests — run a single scan pass and await completion. */
+  async triggerScan() {
+    await this.scan();
+  }
+  async scan() {
+    if (this.stopped) return;
+    if (this.scanning) {
+      this.pendingScan = true;
+      return;
+    }
+    this.scanning = true;
+    try {
+      const files = await this.findSessionFiles();
+      for (const filePath of files) {
+        if (this.stopped) break;
+        this.ensureWatcher(filePath);
+        const cursor = this.cursors.get(filePath) ?? 0;
+        const { events, nextCursor } = await this.parseSessionFile(filePath, cursor);
+        this.cursors.set(filePath, nextCursor);
+        for (const entry of events) {
+          const key = this.generateEventKey(entry.event, { filePath, lineIndex: entry.lineIndex });
+          if (this.processedKeys.has(key)) continue;
+          this.processedKeys.add(key);
+          this.onEvent(entry.event, { filePath, lineIndex: entry.lineIndex });
+        }
+      }
+    } finally {
+      this.scanning = false;
+      if (this.pendingScan) {
+        this.pendingScan = false;
+        await this.scan();
       }
     }
-  } catch {
   }
-  return false;
-}
-function findLastSession(workingDirectory) {
-  try {
-    const projectDir = getProjectPath(workingDirectory);
-    const files = readdirSync(projectDir).filter((f) => f.endsWith(".jsonl")).map((f) => {
-      const sessionId = f.replace(".jsonl", "");
-      if (!UUID_PATTERN.test(sessionId)) return null;
-      if (!isValidSession(projectDir, sessionId)) return null;
-      return {
-        sessionId,
-        mtime: statSync(join(projectDir, f)).mtime.getTime()
-      };
-    }).filter((f) => f !== null).sort((a, b) => b.mtime - a.mtime);
-    return files.length > 0 ? files[0].sessionId : null;
-  } catch {
-    return null;
+  ensureWatcher(filePath) {
+    if (this.watchers.has(filePath)) return;
+    try {
+      const w = watch(filePath, () => {
+        this.scan().catch((e) => this.handleError(e));
+      });
+      this.watchers.set(filePath, { close: () => w.close() });
+    } catch {
+    }
+  }
+  handleError(err) {
+    const handler = this.baseOpts.onError;
+    if (handler) {
+      handler(err);
+      return;
+    }
+    console.warn("[BaseSessionScanner] scan error:", err);
+  }
+};
+
+// src/core/codexSessionScanner.ts
+var CodexSessionScanner = class extends EventEmitter {
+  base;
+  constructor(opts) {
+    super();
+    this.base = new InternalBase(opts, (evt) => this.emit("event", evt));
+  }
+  start() {
+    return this.base.start();
+  }
+  stop() {
+    this.base.stop();
+  }
+};
+var InternalBase = class extends BaseSessionScanner {
+  cutoffMs;
+  opts;
+  dispatch;
+  constructor(opts, dispatch) {
+    super({ pollingInterval: opts.pollingInterval });
+    this.opts = opts;
+    this.dispatch = dispatch;
+    this.cutoffMs = opts.startupTimestampMs ?? Date.now();
+  }
+  findSessionFiles() {
+    const out = [];
+    const walk = (dir, depth) => {
+      if (depth > 4) return;
+      let entries;
+      try {
+        entries = readdirSync(dir);
+      } catch {
+        return;
+      }
+      for (const name of entries) {
+        const full = join2(dir, name);
+        let st;
+        try {
+          st = statSync(full);
+        } catch {
+          continue;
+        }
+        if (st.isDirectory()) {
+          walk(full, depth + 1);
+        } else if (name.endsWith(".jsonl") && st.mtimeMs >= this.cutoffMs) {
+          out.push(full);
+        }
+      }
+    };
+    walk(this.opts.sessionDir, 0);
+    return out;
+  }
+  parseSessionFile(filePath, cursor) {
+    let content = "";
+    try {
+      content = readFileSync(filePath, "utf-8");
+    } catch {
+      return { events: [], nextCursor: cursor };
+    }
+    const bytes = Buffer.byteLength(content);
+    const tail = content.slice(cursor);
+    const lines = tail.split("\n").filter(Boolean);
+    const events = lines.flatMap((line, i) => {
+      try {
+        const raw = JSON.parse(line);
+        const evt = {
+          type: String(raw.type ?? "unknown"),
+          uuid: raw.id ?? raw.uuid,
+          payload: raw.payload,
+          raw
+        };
+        return [{ event: evt, lineIndex: cursor + i }];
+      } catch {
+        return [];
+      }
+    });
+    return { events, nextCursor: bytes };
+  }
+  generateEventKey(event, ctx) {
+    return event.uuid ? `${ctx.filePath}:${event.uuid}` : `${ctx.filePath}:${ctx.lineIndex}`;
+  }
+  onEvent(event) {
+    this.dispatch(event);
+  }
+};
+
+// src/cli/runFlavor.ts
+import { stdin, stdout, exit } from "node:process";
+import { networkInterfaces } from "node:os";
+
+// src/loop.ts
+import { EventEmitter as EventEmitter7 } from "node:events";
+
+// src/core/sessionManager.ts
+import { EventEmitter as EventEmitter5 } from "node:events";
+import { randomUUID } from "node:crypto";
+
+// src/core/ptyManager.ts
+import { spawn as ptySpawn } from "node-pty";
+import { EventEmitter as EventEmitter2 } from "node:events";
+var PTYManager = class extends EventEmitter2 {
+  pty = null;
+  _exitCode = null;
+  get isRunning() {
+    return this.pty !== null;
+  }
+  get exitCode() {
+    return this._exitCode;
+  }
+  get pid() {
+    return this.pty?.pid;
+  }
+  spawn(opts) {
+    if (this.pty) throw new Error("PTY already running");
+    const env = {
+      ...process.env,
+      ...opts.env,
+      TERM: process.env.TERM ?? "xterm-256color"
+    };
+    this.pty = ptySpawn(opts.command, opts.args, {
+      name: "xterm-256color",
+      cols: opts.cols ?? process.stdout.columns ?? 80,
+      rows: opts.rows ?? process.stdout.rows ?? 24,
+      cwd: opts.cwd,
+      env
+    });
+    this.pty.onData((data) => this.emit("data", data));
+    this.pty.onExit(({ exitCode, signal }) => {
+      this._exitCode = exitCode;
+      this.pty = null;
+      this.emit("exit", exitCode, signal);
+    });
+  }
+  write(data) {
+    this.pty?.write(data);
+  }
+  resize(cols, rows) {
+    this.pty?.resize(cols, rows);
+  }
+  async kill(signal = "SIGTERM") {
+    if (!this.pty) return;
+    this.pty.kill(signal);
+    if (this.pty) {
+      await new Promise((resolve2) => {
+        const onExit = () => {
+          this.removeListener("exit", onExit);
+          resolve2();
+        };
+        this.on("exit", onExit);
+      });
+    }
+  }
+};
+
+// src/core/sessionScanner.ts
+import { EventEmitter as EventEmitter3 } from "node:events";
+import { existsSync, readFileSync as readFileSync2 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { join as join3, resolve } from "node:path";
+var SessionScanner = class extends EventEmitter3 {
+  base;
+  jsonlPath;
+  opts;
+  seenUUIDs = /* @__PURE__ */ new Set();
+  pendingToolUse = /* @__PURE__ */ new Map();
+  constructor(opts) {
+    super();
+    this.opts = {
+      proactiveNotifyDelay: 6e4,
+      proactiveQuestionDelay: 5e3,
+      pollingInterval: 3e3,
+      ...opts
+    };
+    const sessionDir = opts.sessionDir ?? this.defaultClaudeSessionDir(opts.workdir);
+    this.jsonlPath = join3(sessionDir, `${opts.sessionId}.jsonl`);
+    this.base = new InternalBase2(
+      this.jsonlPath,
+      this.opts.pollingInterval,
+      (msg) => this.processMessage(msg)
+    );
+  }
+  get filePath() {
+    return this.jsonlPath;
+  }
+  /** Fire-and-forget — preserves existing non-async signature. */
+  start() {
+    void this.base.start();
+  }
+  stop() {
+    this.base.stop();
+    for (const pending of this.pendingToolUse.values()) {
+      clearTimeout(pending.timerId);
+    }
+    this.pendingToolUse.clear();
+  }
+  /** Claude default — used when no sessionDir provided via adapter */
+  defaultClaudeSessionDir(workdir) {
+    const projectDir = resolve(workdir).replace(/[^a-zA-Z0-9-]/g, "-");
+    const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || join3(homedir2(), ".claude");
+    return join3(claudeConfigDir, "projects", projectDir);
+  }
+  /**
+   * Extract content blocks from a message.
+   * Claude .jsonl format: { message: { role: "assistant", content: [...] } }
+   * We need the content array.
+   */
+  getContentBlocks(message) {
+    if (Array.isArray(message)) return message;
+    if (message && typeof message === "object") {
+      const content = message.content;
+      if (Array.isArray(content)) return content;
+    }
+    return [];
+  }
+  processMessage(msg) {
+    const uuid = msg.uuid;
+    if (!uuid || this.seenUUIDs.has(uuid)) return;
+    this.seenUUIDs.add(uuid);
+    const type = msg.type;
+    if (type === "system" || type === "summary") return;
+    if (type === "permission-mode" || type === "file-history-snapshot" || type === "change" || type === "queue-operation" || type === "attachment") return;
+    const event = { type, uuid, message: msg.message, raw: msg };
+    this.emit("event", event);
+    const blocks = this.getContentBlocks(msg.message);
+    if (type === "assistant") {
+      for (const block of blocks) {
+        if (block.type === "tool_use") this.trackToolUse(block);
+      }
+      const messageObj = msg.message;
+      if (messageObj && typeof messageObj === "object") {
+        const usage = messageObj.usage;
+        if (usage && typeof usage === "object") this.emit("usage", usage);
+        const model = messageObj.model;
+        if (typeof model === "string") this.emit("model", model);
+      }
+    }
+    if (type === "result" || type === "user") {
+      for (const block of blocks) {
+        if (block.type === "tool_result") this.resolveToolUse(block.tool_use_id);
+      }
+    }
+  }
+  trackToolUse(block) {
+    const toolUseId = block.id;
+    const toolName = block.name;
+    if (!toolUseId) return;
+    const isQuestion = toolName === "AskUserQuestion";
+    const delay = isQuestion ? this.opts.proactiveQuestionDelay : this.opts.proactiveNotifyDelay;
+    const toolUseEvent = { toolUseId, toolName, input: block.input, timestamp: Date.now() };
+    if (isQuestion) {
+      const inputObj = block.input;
+      const questions = inputObj?.questions;
+      const firstQ = Array.isArray(questions) ? questions[0] : inputObj;
+      toolUseEvent.questionText = firstQ?.question ?? "";
+      const rawOptions = firstQ?.options;
+      if (Array.isArray(rawOptions)) {
+        toolUseEvent.questionOptions = rawOptions.map((o) => o.label ?? o.description ?? String(o));
+      }
+    }
+    const timerId = setTimeout(() => {
+      const pending = this.pendingToolUse.get(toolUseId);
+      if (pending) {
+        this.pendingToolUse.delete(toolUseId);
+        this.emit("permission_needed", pending.toolUse);
+      }
+    }, delay);
+    this.pendingToolUse.set(toolUseId, {
+      toolUse: toolUseEvent,
+      timerId
+    });
+  }
+  resolveToolUse(toolUseId) {
+    const pending = this.pendingToolUse.get(toolUseId);
+    if (pending) {
+      clearTimeout(pending.timerId);
+      this.pendingToolUse.delete(toolUseId);
+      this.emit("permission_resolved", toolUseId);
+    }
+  }
+};
+var InternalBase2 = class extends BaseSessionScanner {
+  constructor(filePath, pollingInterval, dispatch) {
+    super({ pollingInterval });
+    this.filePath = filePath;
+    this.dispatch = dispatch;
+  }
+  filePath;
+  dispatch;
+  findSessionFiles() {
+    return [this.filePath];
+  }
+  parseSessionFile(filePath, cursor) {
+    if (!existsSync(filePath)) return { events: [], nextCursor: cursor };
+    const content = readFileSync2(filePath, "utf-8");
+    const bytes = Buffer.byteLength(content);
+    if (bytes <= cursor) return { events: [], nextCursor: bytes };
+    const tail = content.slice(cursor);
+    const lines = tail.split("\n").filter(Boolean);
+    const events = [];
+    let idx = cursor;
+    for (const line of lines) {
+      try {
+        const parsed = JSON.parse(line);
+        events.push({ event: parsed, lineIndex: idx++ });
+      } catch {
+        idx++;
+      }
+    }
+    return { events, nextCursor: bytes };
+  }
+  generateEventKey(_event, ctx) {
+    return `${ctx.filePath}:${ctx.lineIndex}`;
+  }
+  onEvent(event) {
+    this.dispatch(event);
+  }
+};
+
+// src/sdk/permissionPolicies.ts
+var SAFE_TOOLS = /* @__PURE__ */ new Set(["Read", "Glob", "Grep", "TodoRead", "WebSearch"]);
+var EDIT_TOOLS = /* @__PURE__ */ new Set([...SAFE_TOOLS, "Edit", "Write", "NotebookEdit"]);
+var DANGEROUS_PATTERNS = [/rm\s+-rf/, /git\s+push.*--force/, /DROP\s+TABLE/i];
+function isAllowed(mode, toolName, input) {
+  switch (mode) {
+    case "yolo":
+      return true;
+    case "auto-approve": {
+      if (toolName === "Bash") {
+        const cmd = input?.command ?? "";
+        return !DANGEROUS_PATTERNS.some((p) => p.test(cmd));
+      }
+      return true;
+    }
+    case "accept-edits":
+      return EDIT_TOOLS.has(toolName);
+    case "default":
+      return SAFE_TOOLS.has(toolName);
   }
 }
+
+// src/sdk/permissionHandler.ts
+var BasePermissionHandler = class {
+  pending = /* @__PURE__ */ new Map();
+  alwaysAllow = /* @__PURE__ */ new Set();
+  waitForApproval(id, toolName, input, opts) {
+    return new Promise((resolve2) => {
+      let timerId;
+      if (opts?.timeoutMs && opts.timeoutMs > 0) {
+        timerId = setTimeout(() => {
+          this.pending.delete(id);
+          resolve2({ behavior: "deny", message: "Permission timeout" });
+        }, opts.timeoutMs);
+      }
+      const entry = { id, toolName, input, resolve: resolve2, timerId };
+      this.pending.set(id, entry);
+      opts?.signal?.addEventListener("abort", () => {
+        this.pending.delete(id);
+        if (timerId) clearTimeout(timerId);
+        resolve2({ behavior: "deny", message: "Aborted" });
+      }, { once: true });
+    });
+  }
+  resolve(id, decision, updatedInput) {
+    const pending = this.pending.get(id);
+    if (!pending) return false;
+    if (pending.timerId) clearTimeout(pending.timerId);
+    this.pending.delete(id);
+    if (decision === "allow_always") this.alwaysAllow.add(pending.toolName);
+    pending.resolve({ behavior: decision === "deny" ? "deny" : "allow", updatedInput });
+    return true;
+  }
+  cancelAll() {
+    for (const [, entry] of this.pending) {
+      if (entry.timerId) clearTimeout(entry.timerId);
+      entry.resolve({ behavior: "deny", message: "Cancelled" });
+    }
+    this.pending.clear();
+  }
+  get pendingCount() {
+    return this.pending.size;
+  }
+};
+var INTERACTIVE_TOOLS = /* @__PURE__ */ new Set(["AskUserQuestion"]);
+var ClaudePermissionHandler = class extends BasePermissionHandler {
+  opts;
+  requestCounter = 0;
+  mode = "default";
+  constructor(opts = {}) {
+    super();
+    this.opts = opts;
+  }
+  setMode(mode) {
+    this.mode = mode;
+  }
+  async handleToolCall(toolName, input, callOpts) {
+    if (isAllowed(this.mode, toolName, input)) {
+      return { behavior: "allow", updatedInput: input };
+    }
+    if (this.alwaysAllow.has(toolName)) {
+      return { behavior: "allow", updatedInput: input };
+    }
+    const id = `perm-${++this.requestCounter}`;
+    const isInteractive = INTERACTIVE_TOOLS.has(toolName);
+    const timeoutMs = isInteractive ? 0 : this.opts.timeout ?? 0;
+    this.opts.onPermissionRequest?.(id, toolName, input);
+    return this.waitForApproval(id, toolName, input, { signal: callOpts?.signal, timeoutMs });
+  }
+};
+
+// src/core/thinkingTracker.ts
+import { EventEmitter as EventEmitter4 } from "node:events";
+var ThinkingTracker = class extends EventEmitter4 {
+  activeToolCalls = /* @__PURE__ */ new Set();
+  _isThinking = false;
+  debounceTimer = null;
+  DEBOUNCE_MS = 500;
+  get isThinking() {
+    return this._isThinking;
+  }
+  trackToolUse(toolUseId) {
+    this.activeToolCalls.add(toolUseId);
+    this.updateState(true);
+  }
+  trackToolResult(toolUseId) {
+    this.activeToolCalls.delete(toolUseId);
+    if (this.activeToolCalls.size === 0) {
+      if (this.debounceTimer) clearTimeout(this.debounceTimer);
+      this.debounceTimer = setTimeout(() => {
+        if (this.activeToolCalls.size === 0) this.updateState(false);
+      }, this.DEBOUNCE_MS);
+    }
+  }
+  trackAssistantMessage() {
+    this.activeToolCalls.clear();
+    this.updateState(false);
+  }
+  updateState(thinking) {
+    if (thinking === this._isThinking) return;
+    this._isThinking = thinking;
+    this.emit("change", thinking);
+  }
+  reset() {
+    this.activeToolCalls.clear();
+    if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    this._isThinking = false;
+  }
+};
+
+// src/core/sessionManager.ts
+var SessionManager = class extends EventEmitter5 {
+  _state = "idle";
+  sessionId;
+  workdir;
+  pty;
+  scanner;
+  adapter;
+  config;
+  permissionHandler = null;
+  sdkAbortController = null;
+  thinkingTracker;
+  _createdAt = Date.now();
+  _lastActivityAt = Date.now();
+  _messageCount = 0;
+  constructor(opts) {
+    super();
+    this.sessionId = opts.sessionId ?? randomUUID();
+    this.workdir = opts.workdir;
+    this.adapter = opts.adapter;
+    this.config = opts.config;
+    this.pty = new PTYManager();
+    this.thinkingTracker = new ThinkingTracker();
+    this.thinkingTracker.on("change", (thinking) => this.emit("thinking", thinking));
+    const sessionDir = opts.adapter.getSessionDir(opts.workdir);
+    this.scanner = opts.scannerFactory ? opts.scannerFactory({
+      sessionId: this.sessionId,
+      workdir: this.workdir,
+      sessionDir,
+      proactiveNotifyDelay: opts.config.proactiveNotifyDelay,
+      proactiveQuestionDelay: opts.config.proactiveQuestionDelay
+    }) : new SessionScanner({
+      sessionId: this.sessionId,
+      sessionDir,
+      workdir: this.workdir,
+      proactiveNotifyDelay: opts.config.proactiveNotifyDelay,
+      proactiveQuestionDelay: opts.config.proactiveQuestionDelay
+    });
+    this.setupListeners();
+  }
+  get state() {
+    return this._state;
+  }
+  get info() {
+    return {
+      sessionId: this.sessionId,
+      workdir: this.workdir,
+      state: this._state,
+      createdAt: this._createdAt,
+      lastActivityAt: this._lastActivityAt,
+      messageCount: this._messageCount
+    };
+  }
+  setState(state) {
+    this._state = state;
+    this.emit("stateChange", state, this.info);
+  }
+  setupListeners() {
+    this.pty.on("data", (data) => this.emit("ptyData", data));
+    this.pty.on("exit", () => {
+      if (this._state === "pty_active") {
+        this.setState("idle");
+        this.emit("sessionComplete", this.info);
+      }
+    });
+    this.scanner.on("event", (event) => {
+      this._lastActivityAt = Date.now();
+      this._messageCount++;
+      this.emit("scannerEvent", event);
+      const triggers = this.adapter.extractThinkingEvents?.(event) ?? [];
+      for (const t of triggers) {
+        if (t.type === "tool_use" && t.toolUseId) {
+          this.thinkingTracker.trackToolUse(t.toolUseId);
+        } else if (t.type === "text") {
+          this.thinkingTracker.trackAssistantMessage();
+        } else if (t.type === "tool_result" && t.toolUseId) {
+          this.thinkingTracker.trackToolResult(t.toolUseId);
+        }
+      }
+    });
+    this.scanner.on("permission_needed", (toolUse) => this.emit("permissionNeeded", toolUse));
+    this.scanner.on("permission_resolved", (toolUseId) => this.emit("permissionResolved", toolUseId));
+    this.scanner.on("usage", (usage) => this.emit("usage", usage));
+    this.scanner.on("model", (model) => this.emit("model", model));
+  }
+  async startPTY() {
+    if (this._state !== "idle") throw new Error(`Cannot start PTY from state: ${this._state}`);
+    const executable = await this.adapter.resolveExecutable();
+    const args = this.adapter.spawnArgs({ sessionId: this.sessionId, cwd: this.workdir });
+    this.pty.spawn({ command: executable, args, cwd: this.workdir });
+    this.scanner.start();
+    this.setState("pty_active");
+  }
+  async handoffToSDK(opts) {
+    if (this._state !== "pty_active") throw new Error(`Cannot handoff from state: ${this._state}`);
+    await this.pty.kill();
+    this.setState("sdk_active");
+    this.sdkAbortController = new AbortController();
+    this.permissionHandler = new ClaudePermissionHandler({
+      timeout: this.config.permissionTimeout,
+      onPermissionRequest: opts?.onPermissionRequest
+    });
+    try {
+      const stream = this.adapter.startRemote({
+        sessionId: this.sessionId,
+        cwd: this.workdir,
+        resume: true,
+        permissionHandler: this.permissionHandler,
+        signal: this.sdkAbortController.signal,
+        onAskUserQuestion: opts?.onAskUserQuestion
+      });
+      for await (const msg of stream) {
+        this.emit("sdkMessage", msg);
+        if (msg.kind === "complete") break;
+      }
+    } catch (err) {
+      if (err.name !== "AbortError") this.emit("error", err);
+    }
+    this.permissionHandler = null;
+    this.sdkAbortController = null;
+    if (this._state === "sdk_active") await this.restorePTY();
+  }
+  async restorePTY() {
+    const executable = await this.adapter.resolveExecutable();
+    const args = [...this.adapter.getResumeArgs(this.sessionId)];
+    this.pty.spawn({ command: executable, args, cwd: this.workdir });
+    this.setState("pty_active");
+  }
+  async takebackToTerminal() {
+    if (this._state !== "sdk_active") return;
+    this.sdkAbortController?.abort();
+    this.permissionHandler?.cancelAll();
+    await new Promise((resolve2) => setTimeout(resolve2, 100));
+    await this.restorePTY();
+  }
+  resolvePermission(id, decision) {
+    return this.permissionHandler?.resolve(id, decision) ?? false;
+  }
+  writeToPTY(data) {
+    this.pty.write(data);
+  }
+  resizePTY(cols, rows) {
+    this.pty.resize(cols, rows);
+  }
+  async stop() {
+    this.thinkingTracker.reset();
+    this.scanner.stop();
+    this.sdkAbortController?.abort();
+    this.permissionHandler?.cancelAll();
+    if (this.pty.isRunning) await this.pty.kill();
+    this.setState("idle");
+  }
+};
+
+// src/core/projectRegistry.ts
+import { readFileSync as readFileSync3, writeFileSync, existsSync as existsSync2, mkdirSync } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { join as join4 } from "node:path";
+var REGISTRY_PATH = join4(homedir3(), ".tlive", "projects.json");
+var ProjectRegistry = class {
+  projects = /* @__PURE__ */ new Map();
+  constructor() {
+    this.load();
+  }
+  load() {
+    if (!existsSync2(REGISTRY_PATH)) return;
+    try {
+      const data = JSON.parse(readFileSync3(REGISTRY_PATH, "utf-8"));
+      if (Array.isArray(data)) {
+        for (const entry of data) this.projects.set(entry.path, entry);
+      }
+    } catch {
+    }
+  }
+  save() {
+    const dir = join4(REGISTRY_PATH, "..");
+    mkdirSync(dir, { recursive: true });
+    const entries = [...this.projects.values()].sort((a, b) => b.lastUsed - a.lastUsed);
+    writeFileSync(REGISTRY_PATH, JSON.stringify(entries, null, 2));
+  }
+  register(path, name) {
+    const existing = this.projects.get(path);
+    this.projects.set(path, {
+      path,
+      name: name ?? existing?.name ?? path.split("/").pop() ?? path,
+      lastUsed: Date.now()
+    });
+    this.save();
+  }
+  touch(path) {
+    const entry = this.projects.get(path);
+    if (entry) {
+      entry.lastUsed = Date.now();
+      this.save();
+    }
+  }
+  list() {
+    return [...this.projects.values()].sort((a, b) => b.lastUsed - a.lastUsed);
+  }
+  getRecent() {
+    return this.list()[0];
+  }
+  resolve(query) {
+    if (this.projects.has(query)) return this.projects.get(query);
+    const lower = query.toLowerCase();
+    return this.list().find((p) => p.name.toLowerCase() === lower);
+  }
+  remove(path) {
+    const deleted = this.projects.delete(path);
+    if (deleted) this.save();
+    return deleted;
+  }
+};
+
+// src/im/notificationHub.ts
+import { EventEmitter as EventEmitter6 } from "node:events";
+
+// src/im/notificationRules.ts
+var RULES = {
+  permission_request: { alwaysPush: true, aggregate: false, maxTextLength: 500 },
+  ask_user_question: { alwaysPush: true, aggregate: false, maxTextLength: 500 },
+  error: { alwaysPush: true, aggregate: false, maxTextLength: 300 },
+  session_complete: { alwaysPush: true, aggregate: false, maxTextLength: 100 },
+  todo_update: { alwaysPush: true, aggregate: false, maxTextLength: 500 },
+  thinking: { alwaysPush: false, aggregate: true, maxTextLength: 50 },
+  activity_text: { alwaysPush: true, aggregate: false, maxTextLength: 300 },
+  activity_tool: { alwaysPush: false, aggregate: true, maxTextLength: 500 }
+};
+function shouldPush(kind, isUserActive) {
+  const rule = RULES[kind];
+  return rule.alwaysPush || !isUserActive;
+}
+function shouldAggregate(kind) {
+  return RULES[kind].aggregate;
+}
+
+// src/im/notificationHub.ts
+var NotificationHub = class extends EventEmitter6 {
+  seen = /* @__PURE__ */ new Map();
+  batch = [];
+  batchTimer = null;
+  batchDelay;
+  isUserActive;
+  TTL = 15 * 60 * 1e3;
+  constructor(opts = {}) {
+    super();
+    this.batchDelay = opts.batchDelay ?? 250;
+    this.isUserActive = opts.isUserActive;
+  }
+  push(event) {
+    if (this.seen.has(event.dedupeKey)) return;
+    this.seen.set(event.dedupeKey, Date.now());
+    const active = this.isUserActive?.() ?? false;
+    if (!shouldPush(event.kind, active)) return;
+    if (!shouldAggregate(event.kind)) {
+      this.flush();
+      this.emit("notify", [event]);
+      return;
+    }
+    this.batch.push(event);
+    if (!this.batchTimer) {
+      this.batchTimer = setTimeout(() => this.flush(), this.batchDelay);
+    }
+  }
+  cancel(dedupeKey) {
+    const idx = this.batch.findIndex((e) => e.dedupeKey === dedupeKey);
+    if (idx !== -1) {
+      this.batch.splice(idx, 1);
+      return true;
+    }
+    return false;
+  }
+  flush() {
+    if (this.batchTimer) {
+      clearTimeout(this.batchTimer);
+      this.batchTimer = null;
+    }
+    if (this.batch.length > 0) {
+      this.emit("notify", [...this.batch]);
+      this.batch = [];
+    }
+  }
+  prune() {
+    const now = Date.now();
+    for (const [key, ts] of this.seen) {
+      if (now - ts > this.TTL) this.seen.delete(key);
+    }
+  }
+  reset() {
+    this.seen.clear();
+    this.batch = [];
+    if (this.batchTimer) {
+      clearTimeout(this.batchTimer);
+      this.batchTimer = null;
+    }
+  }
+};
+
+// src/im/sessionRouter.ts
+var SessionRouter = class {
+  groupBindings = /* @__PURE__ */ new Map();
+  privateBindings = /* @__PURE__ */ new Map();
+  terminalNotifications = /* @__PURE__ */ new Map();
+  workdirMemory = /* @__PURE__ */ new Map();
+  bindGroup(chatId, sessionId, workdir) {
+    this.groupBindings.set(chatId, { sessionId, workdir });
+  }
+  unbindGroup(chatId) {
+    this.groupBindings.delete(chatId);
+  }
+  bindPrivate(chatId, sessionId, workdir) {
+    this.privateBindings.set(chatId, { sessionId, workdir });
+    this.workdirMemory.set(chatId, workdir);
+  }
+  unbindPrivate(chatId) {
+    this.privateBindings.delete(chatId);
+  }
+  registerTerminalNotification(messageId, sessionId, workdir) {
+    this.terminalNotifications.set(messageId, { messageId, sessionId, workdir });
+  }
+  getLastWorkdir(chatId) {
+    return this.workdirMemory.get(chatId);
+  }
+  route(opts) {
+    const { chatId, isGroup, callbackSessionId, replyToMessageId } = opts;
+    if (callbackSessionId) return { kind: "sdk_session", sessionId: callbackSessionId };
+    if (isGroup) {
+      const binding = this.groupBindings.get(chatId);
+      if (binding) return { kind: "sdk_session", sessionId: binding.sessionId, workdir: binding.workdir };
+      return { kind: "new_session" };
+    }
+    if (replyToMessageId) {
+      const notif = this.terminalNotifications.get(replyToMessageId);
+      if (notif) return { kind: "terminal_takeover", sessionId: notif.sessionId, workdir: notif.workdir };
+    }
+    const priv = this.privateBindings.get(chatId);
+    if (priv) return { kind: "sdk_session", sessionId: priv.sessionId, workdir: priv.workdir };
+    return { kind: "new_session", workdir: this.workdirMemory.get(chatId) };
+  }
+  pruneTerminalNotifications() {
+    if (this.terminalNotifications.size > 1e3) {
+      const entries = [...this.terminalNotifications.entries()];
+      for (const [key] of entries.slice(0, entries.length - 500)) {
+        this.terminalNotifications.delete(key);
+      }
+    }
+  }
+};
 
 // src/im/icons.ts
 var LABEL = {
@@ -224,892 +1170,6 @@ function formatTodos(todos) {
   return todos.map((t) => `${marks[t.status] ?? "[ ]"} ${t.content}`).join("\n");
 }
 
-// src/sdk/claudeAdapter.ts
-function getContentBlocks2(message) {
-  if (Array.isArray(message)) return message;
-  if (message && typeof message === "object") {
-    const content = message.content;
-    if (Array.isArray(content)) return content;
-  }
-  return [];
-}
-var ClaudeAdapter = class {
-  name = "claude";
-  capabilities = { liveSession: true };
-  executablePath = null;
-  async resolveExecutable() {
-    if (this.executablePath) return this.executablePath;
-    if (process.env.CTI_CLAUDE_CODE_EXECUTABLE) {
-      this.executablePath = process.env.CTI_CLAUDE_CODE_EXECUTABLE;
-      return this.executablePath;
-    }
-    try {
-      this.executablePath = execSync("which claude", {
-        encoding: "utf-8"
-      }).trim();
-    } catch {
-      this.executablePath = "claude";
-    }
-    return this.executablePath;
-  }
-  getSessionIdArgs(sessionId) {
-    return ["--session-id", sessionId];
-  }
-  getResumeArgs(sessionId) {
-    return ["--resume", "--session-id", sessionId];
-  }
-  spawnArgs(opts) {
-    const args = [...this.getSessionIdArgs(opts.sessionId)];
-    if (opts.args) args.push(...opts.args);
-    return args;
-  }
-  async *startRemote(_opts) {
-    throw new Error(
-      "startRemote requires Claude Agent SDK \u2014 wire in integration task"
-    );
-  }
-  getSessionDir(workdir) {
-    const projectDir = resolve2(workdir).replace(/[^a-zA-Z0-9-]/g, "-");
-    const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || join2(homedir2(), ".claude");
-    return join2(claudeConfigDir, "projects", projectDir);
-  }
-  findLastSession(workdir) {
-    return findLastSession(workdir);
-  }
-  normalizeSessionEvent(event, ctx) {
-    const e = event;
-    if (!e.uuid || !e.type) return [];
-    return normalizeSessionLine(
-      { uuid: e.uuid, type: e.type, message: e.message },
-      "claude",
-      ctx?.sessionId ?? ""
-    );
-  }
-  /**
-   * Map a Claude scanner event (`{ type, message, ... }`) into neutral
-   * thinking-tracker triggers. Behavior-equivalent to the former inline
-   * block-walking logic in SessionManager.
-   */
-  extractThinkingEvents(event) {
-    const e = event;
-    const blocks = getContentBlocks2(e.message);
-    const out = [];
-    if (e.type === "assistant") {
-      for (const block of blocks) {
-        if (block.type === "tool_use" && block.id) {
-          out.push({ type: "tool_use", toolUseId: block.id });
-        } else if (block.type === "text") {
-          out.push({ type: "text" });
-        }
-      }
-    } else if (e.type === "user") {
-      for (const block of blocks) {
-        if (block.type === "tool_result" && block.tool_use_id) {
-          out.push({ type: "tool_result", toolUseId: block.tool_use_id });
-        }
-      }
-    }
-    return out;
-  }
-};
-
-// src/core/baseSessionScanner.ts
-import { watch } from "node:fs";
-var BaseSessionScanner = class {
-  constructor(baseOpts = {}) {
-    this.baseOpts = baseOpts;
-  }
-  baseOpts;
-  stopped = false;
-  pollTimer = null;
-  watchers = /* @__PURE__ */ new Map();
-  cursors = /* @__PURE__ */ new Map();
-  /** Dedup keys across scans. Callers must ensure findSessionFiles() returns a bounded set — the base class never evicts keys. */
-  processedKeys = /* @__PURE__ */ new Set();
-  scanning = false;
-  pendingScan = false;
-  async start() {
-    await this.scan();
-    const interval = this.baseOpts.pollingInterval ?? 3e3;
-    this.pollTimer = setInterval(() => {
-      this.scan().catch((e) => this.handleError(e));
-    }, interval);
-  }
-  stop() {
-    this.stopped = true;
-    this.pendingScan = false;
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
-    }
-    for (const w of this.watchers.values()) w.close();
-    this.watchers.clear();
-  }
-  /** For tests — run a single scan pass and await completion. */
-  async triggerScan() {
-    await this.scan();
-  }
-  async scan() {
-    if (this.stopped) return;
-    if (this.scanning) {
-      this.pendingScan = true;
-      return;
-    }
-    this.scanning = true;
-    try {
-      const files = await this.findSessionFiles();
-      for (const filePath of files) {
-        if (this.stopped) break;
-        this.ensureWatcher(filePath);
-        const cursor = this.cursors.get(filePath) ?? 0;
-        const { events, nextCursor } = await this.parseSessionFile(filePath, cursor);
-        this.cursors.set(filePath, nextCursor);
-        for (const entry of events) {
-          const key = this.generateEventKey(entry.event, { filePath, lineIndex: entry.lineIndex });
-          if (this.processedKeys.has(key)) continue;
-          this.processedKeys.add(key);
-          this.onEvent(entry.event, { filePath, lineIndex: entry.lineIndex });
-        }
-      }
-    } finally {
-      this.scanning = false;
-      if (this.pendingScan) {
-        this.pendingScan = false;
-        await this.scan();
-      }
-    }
-  }
-  ensureWatcher(filePath) {
-    if (this.watchers.has(filePath)) return;
-    try {
-      const w = watch(filePath, () => {
-        this.scan().catch((e) => this.handleError(e));
-      });
-      this.watchers.set(filePath, { close: () => w.close() });
-    } catch {
-    }
-  }
-  handleError(err) {
-    const handler = this.baseOpts.onError;
-    if (handler) {
-      handler(err);
-      return;
-    }
-    console.warn("[BaseSessionScanner] scan error:", err);
-  }
-};
-
-// src/core/sessionScanner.ts
-import { EventEmitter } from "node:events";
-import { existsSync, readFileSync as readFileSync2 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { join as join3, resolve as resolve3 } from "node:path";
-var SessionScanner = class extends EventEmitter {
-  base;
-  jsonlPath;
-  opts;
-  seenUUIDs = /* @__PURE__ */ new Set();
-  pendingToolUse = /* @__PURE__ */ new Map();
-  constructor(opts) {
-    super();
-    this.opts = {
-      proactiveNotifyDelay: 6e4,
-      proactiveQuestionDelay: 5e3,
-      pollingInterval: 3e3,
-      ...opts
-    };
-    const sessionDir = opts.sessionDir ?? this.defaultClaudeSessionDir(opts.workdir);
-    this.jsonlPath = join3(sessionDir, `${opts.sessionId}.jsonl`);
-    this.base = new InternalBase(
-      this.jsonlPath,
-      this.opts.pollingInterval,
-      (msg) => this.processMessage(msg)
-    );
-  }
-  get filePath() {
-    return this.jsonlPath;
-  }
-  /** Fire-and-forget — preserves existing non-async signature. */
-  start() {
-    void this.base.start();
-  }
-  stop() {
-    this.base.stop();
-    for (const pending of this.pendingToolUse.values()) {
-      clearTimeout(pending.timerId);
-    }
-    this.pendingToolUse.clear();
-  }
-  /** Claude default — used when no sessionDir provided via adapter */
-  defaultClaudeSessionDir(workdir) {
-    const projectDir = resolve3(workdir).replace(/[^a-zA-Z0-9-]/g, "-");
-    const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || join3(homedir3(), ".claude");
-    return join3(claudeConfigDir, "projects", projectDir);
-  }
-  /**
-   * Extract content blocks from a message.
-   * Claude .jsonl format: { message: { role: "assistant", content: [...] } }
-   * We need the content array.
-   */
-  getContentBlocks(message) {
-    if (Array.isArray(message)) return message;
-    if (message && typeof message === "object") {
-      const content = message.content;
-      if (Array.isArray(content)) return content;
-    }
-    return [];
-  }
-  processMessage(msg) {
-    const uuid = msg.uuid;
-    if (!uuid || this.seenUUIDs.has(uuid)) return;
-    this.seenUUIDs.add(uuid);
-    const type = msg.type;
-    if (type === "system" || type === "summary") return;
-    if (type === "permission-mode" || type === "file-history-snapshot" || type === "change" || type === "queue-operation" || type === "attachment") return;
-    const event = { type, uuid, message: msg.message, raw: msg };
-    this.emit("event", event);
-    const blocks = this.getContentBlocks(msg.message);
-    if (type === "assistant") {
-      for (const block of blocks) {
-        if (block.type === "tool_use") this.trackToolUse(block);
-      }
-      const messageObj = msg.message;
-      if (messageObj && typeof messageObj === "object") {
-        const usage = messageObj.usage;
-        if (usage && typeof usage === "object") this.emit("usage", usage);
-        const model = messageObj.model;
-        if (typeof model === "string") this.emit("model", model);
-      }
-    }
-    if (type === "result" || type === "user") {
-      for (const block of blocks) {
-        if (block.type === "tool_result") this.resolveToolUse(block.tool_use_id);
-      }
-    }
-  }
-  trackToolUse(block) {
-    const toolUseId = block.id;
-    const toolName = block.name;
-    if (!toolUseId) return;
-    const isQuestion = toolName === "AskUserQuestion";
-    const delay = isQuestion ? this.opts.proactiveQuestionDelay : this.opts.proactiveNotifyDelay;
-    const toolUseEvent = { toolUseId, toolName, input: block.input, timestamp: Date.now() };
-    if (isQuestion) {
-      const inputObj = block.input;
-      const questions = inputObj?.questions;
-      const firstQ = Array.isArray(questions) ? questions[0] : inputObj;
-      toolUseEvent.questionText = firstQ?.question ?? "";
-      const rawOptions = firstQ?.options;
-      if (Array.isArray(rawOptions)) {
-        toolUseEvent.questionOptions = rawOptions.map((o) => o.label ?? o.description ?? String(o));
-      }
-    }
-    const timerId = setTimeout(() => {
-      const pending = this.pendingToolUse.get(toolUseId);
-      if (pending) {
-        this.pendingToolUse.delete(toolUseId);
-        this.emit("permission_needed", pending.toolUse);
-      }
-    }, delay);
-    this.pendingToolUse.set(toolUseId, {
-      toolUse: toolUseEvent,
-      timerId
-    });
-  }
-  resolveToolUse(toolUseId) {
-    const pending = this.pendingToolUse.get(toolUseId);
-    if (pending) {
-      clearTimeout(pending.timerId);
-      this.pendingToolUse.delete(toolUseId);
-      this.emit("permission_resolved", toolUseId);
-    }
-  }
-};
-var InternalBase = class extends BaseSessionScanner {
-  constructor(filePath, pollingInterval, dispatch) {
-    super({ pollingInterval });
-    this.filePath = filePath;
-    this.dispatch = dispatch;
-  }
-  filePath;
-  dispatch;
-  findSessionFiles() {
-    return [this.filePath];
-  }
-  parseSessionFile(filePath, cursor) {
-    if (!existsSync(filePath)) return { events: [], nextCursor: cursor };
-    const content = readFileSync2(filePath, "utf-8");
-    const bytes = Buffer.byteLength(content);
-    if (bytes <= cursor) return { events: [], nextCursor: bytes };
-    const tail = content.slice(cursor);
-    const lines = tail.split("\n").filter(Boolean);
-    const events = [];
-    let idx = cursor;
-    for (const line of lines) {
-      try {
-        const parsed = JSON.parse(line);
-        events.push({ event: parsed, lineIndex: idx++ });
-      } catch {
-        idx++;
-      }
-    }
-    return { events, nextCursor: bytes };
-  }
-  generateEventKey(_event, ctx) {
-    return `${ctx.filePath}:${ctx.lineIndex}`;
-  }
-  onEvent(event) {
-    this.dispatch(event);
-  }
-};
-
-// src/cli/runFlavor.ts
-import { stdin, stdout, exit } from "node:process";
-import { networkInterfaces } from "node:os";
-
-// src/loop.ts
-import { EventEmitter as EventEmitter6 } from "node:events";
-
-// src/core/sessionManager.ts
-import { EventEmitter as EventEmitter4 } from "node:events";
-import { randomUUID } from "node:crypto";
-
-// src/core/ptyManager.ts
-import { spawn as ptySpawn } from "node-pty";
-import { EventEmitter as EventEmitter2 } from "node:events";
-var PTYManager = class extends EventEmitter2 {
-  pty = null;
-  _exitCode = null;
-  get isRunning() {
-    return this.pty !== null;
-  }
-  get exitCode() {
-    return this._exitCode;
-  }
-  get pid() {
-    return this.pty?.pid;
-  }
-  spawn(opts) {
-    if (this.pty) throw new Error("PTY already running");
-    const env = {
-      ...process.env,
-      ...opts.env,
-      TERM: process.env.TERM ?? "xterm-256color"
-    };
-    this.pty = ptySpawn(opts.command, opts.args, {
-      name: "xterm-256color",
-      cols: opts.cols ?? process.stdout.columns ?? 80,
-      rows: opts.rows ?? process.stdout.rows ?? 24,
-      cwd: opts.cwd,
-      env
-    });
-    this.pty.onData((data) => this.emit("data", data));
-    this.pty.onExit(({ exitCode, signal }) => {
-      this._exitCode = exitCode;
-      this.pty = null;
-      this.emit("exit", exitCode, signal);
-    });
-  }
-  write(data) {
-    this.pty?.write(data);
-  }
-  resize(cols, rows) {
-    this.pty?.resize(cols, rows);
-  }
-  async kill(signal = "SIGTERM") {
-    if (!this.pty) return;
-    this.pty.kill(signal);
-    if (this.pty) {
-      await new Promise((resolve4) => {
-        const onExit = () => {
-          this.removeListener("exit", onExit);
-          resolve4();
-        };
-        this.on("exit", onExit);
-      });
-    }
-  }
-};
-
-// src/sdk/permissionPolicies.ts
-var SAFE_TOOLS = /* @__PURE__ */ new Set(["Read", "Glob", "Grep", "TodoRead", "WebSearch"]);
-var EDIT_TOOLS = /* @__PURE__ */ new Set([...SAFE_TOOLS, "Edit", "Write", "NotebookEdit"]);
-var DANGEROUS_PATTERNS = [/rm\s+-rf/, /git\s+push.*--force/, /DROP\s+TABLE/i];
-function isAllowed(mode, toolName, input) {
-  switch (mode) {
-    case "yolo":
-      return true;
-    case "auto-approve": {
-      if (toolName === "Bash") {
-        const cmd = input?.command ?? "";
-        return !DANGEROUS_PATTERNS.some((p) => p.test(cmd));
-      }
-      return true;
-    }
-    case "accept-edits":
-      return EDIT_TOOLS.has(toolName);
-    case "default":
-      return SAFE_TOOLS.has(toolName);
-  }
-}
-
-// src/sdk/permissionHandler.ts
-var BasePermissionHandler = class {
-  pending = /* @__PURE__ */ new Map();
-  alwaysAllow = /* @__PURE__ */ new Set();
-  waitForApproval(id, toolName, input, opts) {
-    return new Promise((resolve4) => {
-      let timerId;
-      if (opts?.timeoutMs && opts.timeoutMs > 0) {
-        timerId = setTimeout(() => {
-          this.pending.delete(id);
-          resolve4({ behavior: "deny", message: "Permission timeout" });
-        }, opts.timeoutMs);
-      }
-      const entry = { id, toolName, input, resolve: resolve4, timerId };
-      this.pending.set(id, entry);
-      opts?.signal?.addEventListener("abort", () => {
-        this.pending.delete(id);
-        if (timerId) clearTimeout(timerId);
-        resolve4({ behavior: "deny", message: "Aborted" });
-      }, { once: true });
-    });
-  }
-  resolve(id, decision, updatedInput) {
-    const pending = this.pending.get(id);
-    if (!pending) return false;
-    if (pending.timerId) clearTimeout(pending.timerId);
-    this.pending.delete(id);
-    if (decision === "allow_always") this.alwaysAllow.add(pending.toolName);
-    pending.resolve({ behavior: decision === "deny" ? "deny" : "allow", updatedInput });
-    return true;
-  }
-  cancelAll() {
-    for (const [, entry] of this.pending) {
-      if (entry.timerId) clearTimeout(entry.timerId);
-      entry.resolve({ behavior: "deny", message: "Cancelled" });
-    }
-    this.pending.clear();
-  }
-  get pendingCount() {
-    return this.pending.size;
-  }
-};
-var INTERACTIVE_TOOLS = /* @__PURE__ */ new Set(["AskUserQuestion"]);
-var ClaudePermissionHandler = class extends BasePermissionHandler {
-  opts;
-  requestCounter = 0;
-  mode = "default";
-  constructor(opts = {}) {
-    super();
-    this.opts = opts;
-  }
-  setMode(mode) {
-    this.mode = mode;
-  }
-  async handleToolCall(toolName, input, callOpts) {
-    if (isAllowed(this.mode, toolName, input)) {
-      return { behavior: "allow", updatedInput: input };
-    }
-    if (this.alwaysAllow.has(toolName)) {
-      return { behavior: "allow", updatedInput: input };
-    }
-    const id = `perm-${++this.requestCounter}`;
-    const isInteractive = INTERACTIVE_TOOLS.has(toolName);
-    const timeoutMs = isInteractive ? 0 : this.opts.timeout ?? 0;
-    this.opts.onPermissionRequest?.(id, toolName, input);
-    return this.waitForApproval(id, toolName, input, { signal: callOpts?.signal, timeoutMs });
-  }
-};
-
-// src/core/thinkingTracker.ts
-import { EventEmitter as EventEmitter3 } from "node:events";
-var ThinkingTracker = class extends EventEmitter3 {
-  activeToolCalls = /* @__PURE__ */ new Set();
-  _isThinking = false;
-  debounceTimer = null;
-  DEBOUNCE_MS = 500;
-  get isThinking() {
-    return this._isThinking;
-  }
-  trackToolUse(toolUseId) {
-    this.activeToolCalls.add(toolUseId);
-    this.updateState(true);
-  }
-  trackToolResult(toolUseId) {
-    this.activeToolCalls.delete(toolUseId);
-    if (this.activeToolCalls.size === 0) {
-      if (this.debounceTimer) clearTimeout(this.debounceTimer);
-      this.debounceTimer = setTimeout(() => {
-        if (this.activeToolCalls.size === 0) this.updateState(false);
-      }, this.DEBOUNCE_MS);
-    }
-  }
-  trackAssistantMessage() {
-    this.activeToolCalls.clear();
-    this.updateState(false);
-  }
-  updateState(thinking) {
-    if (thinking === this._isThinking) return;
-    this._isThinking = thinking;
-    this.emit("change", thinking);
-  }
-  reset() {
-    this.activeToolCalls.clear();
-    if (this.debounceTimer) clearTimeout(this.debounceTimer);
-    this._isThinking = false;
-  }
-};
-
-// src/core/sessionManager.ts
-var SessionManager = class extends EventEmitter4 {
-  _state = "idle";
-  sessionId;
-  workdir;
-  pty;
-  scanner;
-  adapter;
-  config;
-  permissionHandler = null;
-  sdkAbortController = null;
-  thinkingTracker;
-  _createdAt = Date.now();
-  _lastActivityAt = Date.now();
-  _messageCount = 0;
-  constructor(opts) {
-    super();
-    this.sessionId = opts.sessionId ?? randomUUID();
-    this.workdir = opts.workdir;
-    this.adapter = opts.adapter;
-    this.config = opts.config;
-    this.pty = new PTYManager();
-    this.thinkingTracker = new ThinkingTracker();
-    this.thinkingTracker.on("change", (thinking) => this.emit("thinking", thinking));
-    const sessionDir = opts.adapter.getSessionDir(opts.workdir);
-    this.scanner = opts.scannerFactory ? opts.scannerFactory({
-      sessionId: this.sessionId,
-      workdir: this.workdir,
-      sessionDir,
-      proactiveNotifyDelay: opts.config.proactiveNotifyDelay,
-      proactiveQuestionDelay: opts.config.proactiveQuestionDelay
-    }) : new SessionScanner({
-      sessionId: this.sessionId,
-      sessionDir,
-      workdir: this.workdir,
-      proactiveNotifyDelay: opts.config.proactiveNotifyDelay,
-      proactiveQuestionDelay: opts.config.proactiveQuestionDelay
-    });
-    this.setupListeners();
-  }
-  get state() {
-    return this._state;
-  }
-  get info() {
-    return {
-      sessionId: this.sessionId,
-      workdir: this.workdir,
-      state: this._state,
-      createdAt: this._createdAt,
-      lastActivityAt: this._lastActivityAt,
-      messageCount: this._messageCount
-    };
-  }
-  setState(state) {
-    this._state = state;
-    this.emit("stateChange", state, this.info);
-  }
-  setupListeners() {
-    this.pty.on("data", (data) => this.emit("ptyData", data));
-    this.pty.on("exit", () => {
-      if (this._state === "pty_active") {
-        this.setState("idle");
-        this.emit("sessionComplete", this.info);
-      }
-    });
-    this.scanner.on("event", (event) => {
-      this._lastActivityAt = Date.now();
-      this._messageCount++;
-      this.emit("scannerEvent", event);
-      const triggers = this.adapter.extractThinkingEvents?.(event) ?? [];
-      for (const t of triggers) {
-        if (t.type === "tool_use" && t.toolUseId) {
-          this.thinkingTracker.trackToolUse(t.toolUseId);
-        } else if (t.type === "text") {
-          this.thinkingTracker.trackAssistantMessage();
-        } else if (t.type === "tool_result" && t.toolUseId) {
-          this.thinkingTracker.trackToolResult(t.toolUseId);
-        }
-      }
-    });
-    this.scanner.on("permission_needed", (toolUse) => this.emit("permissionNeeded", toolUse));
-    this.scanner.on("permission_resolved", (toolUseId) => this.emit("permissionResolved", toolUseId));
-    this.scanner.on("usage", (usage) => this.emit("usage", usage));
-    this.scanner.on("model", (model) => this.emit("model", model));
-  }
-  async startPTY() {
-    if (this._state !== "idle") throw new Error(`Cannot start PTY from state: ${this._state}`);
-    const executable = await this.adapter.resolveExecutable();
-    const args = this.adapter.spawnArgs({ sessionId: this.sessionId, cwd: this.workdir });
-    this.pty.spawn({ command: executable, args, cwd: this.workdir });
-    this.scanner.start();
-    this.setState("pty_active");
-  }
-  async handoffToSDK(opts) {
-    if (this._state !== "pty_active") throw new Error(`Cannot handoff from state: ${this._state}`);
-    await this.pty.kill();
-    this.setState("sdk_active");
-    this.sdkAbortController = new AbortController();
-    this.permissionHandler = new ClaudePermissionHandler({
-      timeout: this.config.permissionTimeout,
-      onPermissionRequest: opts?.onPermissionRequest
-    });
-    try {
-      const stream = this.adapter.startRemote({
-        sessionId: this.sessionId,
-        cwd: this.workdir,
-        resume: true,
-        permissionHandler: this.permissionHandler,
-        signal: this.sdkAbortController.signal,
-        onAskUserQuestion: opts?.onAskUserQuestion
-      });
-      for await (const msg of stream) {
-        this.emit("sdkMessage", msg);
-        if (msg.kind === "complete") break;
-      }
-    } catch (err) {
-      if (err.name !== "AbortError") this.emit("error", err);
-    }
-    this.permissionHandler = null;
-    this.sdkAbortController = null;
-    if (this._state === "sdk_active") await this.restorePTY();
-  }
-  async restorePTY() {
-    const executable = await this.adapter.resolveExecutable();
-    const args = [...this.adapter.getResumeArgs(this.sessionId)];
-    this.pty.spawn({ command: executable, args, cwd: this.workdir });
-    this.setState("pty_active");
-  }
-  async takebackToTerminal() {
-    if (this._state !== "sdk_active") return;
-    this.sdkAbortController?.abort();
-    this.permissionHandler?.cancelAll();
-    await new Promise((resolve4) => setTimeout(resolve4, 100));
-    await this.restorePTY();
-  }
-  resolvePermission(id, decision) {
-    return this.permissionHandler?.resolve(id, decision) ?? false;
-  }
-  writeToPTY(data) {
-    this.pty.write(data);
-  }
-  resizePTY(cols, rows) {
-    this.pty.resize(cols, rows);
-  }
-  async stop() {
-    this.thinkingTracker.reset();
-    this.scanner.stop();
-    this.sdkAbortController?.abort();
-    this.permissionHandler?.cancelAll();
-    if (this.pty.isRunning) await this.pty.kill();
-    this.setState("idle");
-  }
-};
-
-// src/core/projectRegistry.ts
-import { readFileSync as readFileSync3, writeFileSync, existsSync as existsSync2, mkdirSync } from "node:fs";
-import { homedir as homedir4 } from "node:os";
-import { join as join4 } from "node:path";
-var REGISTRY_PATH = join4(homedir4(), ".tlive", "projects.json");
-var ProjectRegistry = class {
-  projects = /* @__PURE__ */ new Map();
-  constructor() {
-    this.load();
-  }
-  load() {
-    if (!existsSync2(REGISTRY_PATH)) return;
-    try {
-      const data = JSON.parse(readFileSync3(REGISTRY_PATH, "utf-8"));
-      if (Array.isArray(data)) {
-        for (const entry of data) this.projects.set(entry.path, entry);
-      }
-    } catch {
-    }
-  }
-  save() {
-    const dir = join4(REGISTRY_PATH, "..");
-    mkdirSync(dir, { recursive: true });
-    const entries = [...this.projects.values()].sort((a, b) => b.lastUsed - a.lastUsed);
-    writeFileSync(REGISTRY_PATH, JSON.stringify(entries, null, 2));
-  }
-  register(path, name) {
-    const existing = this.projects.get(path);
-    this.projects.set(path, {
-      path,
-      name: name ?? existing?.name ?? path.split("/").pop() ?? path,
-      lastUsed: Date.now()
-    });
-    this.save();
-  }
-  touch(path) {
-    const entry = this.projects.get(path);
-    if (entry) {
-      entry.lastUsed = Date.now();
-      this.save();
-    }
-  }
-  list() {
-    return [...this.projects.values()].sort((a, b) => b.lastUsed - a.lastUsed);
-  }
-  getRecent() {
-    return this.list()[0];
-  }
-  resolve(query) {
-    if (this.projects.has(query)) return this.projects.get(query);
-    const lower = query.toLowerCase();
-    return this.list().find((p) => p.name.toLowerCase() === lower);
-  }
-  remove(path) {
-    const deleted = this.projects.delete(path);
-    if (deleted) this.save();
-    return deleted;
-  }
-};
-
-// src/im/notificationHub.ts
-import { EventEmitter as EventEmitter5 } from "node:events";
-
-// src/im/notificationRules.ts
-var RULES = {
-  permission_request: { alwaysPush: true, aggregate: false, maxTextLength: 500 },
-  ask_user_question: { alwaysPush: true, aggregate: false, maxTextLength: 500 },
-  error: { alwaysPush: true, aggregate: false, maxTextLength: 300 },
-  session_complete: { alwaysPush: true, aggregate: false, maxTextLength: 100 },
-  todo_update: { alwaysPush: true, aggregate: false, maxTextLength: 500 },
-  thinking: { alwaysPush: false, aggregate: true, maxTextLength: 50 },
-  activity_text: { alwaysPush: true, aggregate: false, maxTextLength: 300 },
-  activity_tool: { alwaysPush: false, aggregate: true, maxTextLength: 500 }
-};
-function shouldPush(kind, isUserActive) {
-  const rule = RULES[kind];
-  return rule.alwaysPush || !isUserActive;
-}
-function shouldAggregate(kind) {
-  return RULES[kind].aggregate;
-}
-
-// src/im/notificationHub.ts
-var NotificationHub = class extends EventEmitter5 {
-  seen = /* @__PURE__ */ new Map();
-  batch = [];
-  batchTimer = null;
-  batchDelay;
-  isUserActive;
-  TTL = 15 * 60 * 1e3;
-  constructor(opts = {}) {
-    super();
-    this.batchDelay = opts.batchDelay ?? 250;
-    this.isUserActive = opts.isUserActive;
-  }
-  push(event) {
-    if (this.seen.has(event.dedupeKey)) return;
-    this.seen.set(event.dedupeKey, Date.now());
-    const active = this.isUserActive?.() ?? false;
-    if (!shouldPush(event.kind, active)) return;
-    if (!shouldAggregate(event.kind)) {
-      this.flush();
-      this.emit("notify", [event]);
-      return;
-    }
-    this.batch.push(event);
-    if (!this.batchTimer) {
-      this.batchTimer = setTimeout(() => this.flush(), this.batchDelay);
-    }
-  }
-  cancel(dedupeKey) {
-    const idx = this.batch.findIndex((e) => e.dedupeKey === dedupeKey);
-    if (idx !== -1) {
-      this.batch.splice(idx, 1);
-      return true;
-    }
-    return false;
-  }
-  flush() {
-    if (this.batchTimer) {
-      clearTimeout(this.batchTimer);
-      this.batchTimer = null;
-    }
-    if (this.batch.length > 0) {
-      this.emit("notify", [...this.batch]);
-      this.batch = [];
-    }
-  }
-  prune() {
-    const now = Date.now();
-    for (const [key, ts] of this.seen) {
-      if (now - ts > this.TTL) this.seen.delete(key);
-    }
-  }
-  reset() {
-    this.seen.clear();
-    this.batch = [];
-    if (this.batchTimer) {
-      clearTimeout(this.batchTimer);
-      this.batchTimer = null;
-    }
-  }
-};
-
-// src/im/sessionRouter.ts
-var SessionRouter = class {
-  groupBindings = /* @__PURE__ */ new Map();
-  privateBindings = /* @__PURE__ */ new Map();
-  terminalNotifications = /* @__PURE__ */ new Map();
-  workdirMemory = /* @__PURE__ */ new Map();
-  bindGroup(chatId, sessionId, workdir) {
-    this.groupBindings.set(chatId, { sessionId, workdir });
-  }
-  unbindGroup(chatId) {
-    this.groupBindings.delete(chatId);
-  }
-  bindPrivate(chatId, sessionId, workdir) {
-    this.privateBindings.set(chatId, { sessionId, workdir });
-    this.workdirMemory.set(chatId, workdir);
-  }
-  unbindPrivate(chatId) {
-    this.privateBindings.delete(chatId);
-  }
-  registerTerminalNotification(messageId, sessionId, workdir) {
-    this.terminalNotifications.set(messageId, { messageId, sessionId, workdir });
-  }
-  getLastWorkdir(chatId) {
-    return this.workdirMemory.get(chatId);
-  }
-  route(opts) {
-    const { chatId, isGroup, callbackSessionId, replyToMessageId } = opts;
-    if (callbackSessionId) return { kind: "sdk_session", sessionId: callbackSessionId };
-    if (isGroup) {
-      const binding = this.groupBindings.get(chatId);
-      if (binding) return { kind: "sdk_session", sessionId: binding.sessionId, workdir: binding.workdir };
-      return { kind: "new_session" };
-    }
-    if (replyToMessageId) {
-      const notif = this.terminalNotifications.get(replyToMessageId);
-      if (notif) return { kind: "terminal_takeover", sessionId: notif.sessionId, workdir: notif.workdir };
-    }
-    const priv = this.privateBindings.get(chatId);
-    if (priv) return { kind: "sdk_session", sessionId: priv.sessionId, workdir: priv.workdir };
-    return { kind: "new_session", workdir: this.workdirMemory.get(chatId) };
-  }
-  pruneTerminalNotifications() {
-    if (this.terminalNotifications.size > 1e3) {
-      const entries = [...this.terminalNotifications.entries()];
-      for (const [key] of entries.slice(0, entries.length - 500)) {
-        this.terminalNotifications.delete(key);
-      }
-    }
-  }
-};
-
 // src/core/costTracker.ts
 var PRICING = {
   "claude-sonnet-4-6": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
@@ -1156,7 +1216,7 @@ Cost: ~$${s.estimatedCostUsd.toFixed(2)}`;
 
 // src/loop.ts
 var MAX_IM_TEXT_LEN = 300;
-var TLiveLoop = class extends EventEmitter6 {
+var TLiveLoop = class extends EventEmitter7 {
   session;
   registry;
   notifications;
@@ -1482,10 +1542,10 @@ ${event.body}` : event.title;
 
 // src/ipc.ts
 import { createServer, connect } from "node:net";
-import { homedir as homedir5 } from "node:os";
+import { homedir as homedir4 } from "node:os";
 import { join as join5 } from "node:path";
-import { EventEmitter as EventEmitter7 } from "node:events";
-var IPC_PATH = join5(homedir5(), ".tlive", "ipc.sock");
+import { EventEmitter as EventEmitter8 } from "node:events";
+var IPC_PATH = join5(homedir4(), ".tlive", "ipc.sock");
 function attachLineParser(socket, onMessage) {
   let buffer = "";
   socket.on("data", (data) => {
@@ -1504,7 +1564,7 @@ function attachLineParser(socket, onMessage) {
 function sendMessage(socket, msg) {
   socket.write(JSON.stringify(msg) + "\n");
 }
-var IPCClient = class extends EventEmitter7 {
+var IPCClient = class extends EventEmitter8 {
   socket = null;
   _connected = false;
   opts;
@@ -1539,7 +1599,7 @@ var IPCClient = class extends EventEmitter7 {
     return false;
   }
   tryConnect() {
-    return new Promise((resolve4) => {
+    return new Promise((resolve2) => {
       const socket = connect(this.opts.path, () => {
         this.socket = socket;
         this._connected = true;
@@ -1551,9 +1611,9 @@ var IPCClient = class extends EventEmitter7 {
             setTimeout(() => this.connect(), this.opts.retryDelay);
           }
         });
-        resolve4(true);
+        resolve2(true);
       });
-      socket.on("error", () => resolve4(false));
+      socket.on("error", () => resolve2(false));
     });
   }
   /** Send a typed message to the bridge. */
@@ -1571,7 +1631,7 @@ var IPCClient = class extends EventEmitter7 {
 
 // src/config.ts
 import { readFileSync as readFileSync4, existsSync as existsSync3 } from "node:fs";
-import { homedir as homedir6 } from "node:os";
+import { homedir as homedir5 } from "node:os";
 import { join as join6 } from "node:path";
 var DEFAULTS = {
   port: 8849,
@@ -1585,7 +1645,7 @@ var DEFAULTS = {
   activeThreshold: 3e4
 };
 function loadConfig(envPath) {
-  const configPath = envPath ?? join6(homedir6(), ".tlive", "config.env");
+  const configPath = envPath ?? join6(homedir5(), ".tlive", "config.env");
   const env = { ...process.env };
   if (existsSync3(configPath)) {
     const lines = readFileSync4(configPath, "utf-8").split("\n");
@@ -1645,20 +1705,6 @@ function getLocalIP() {
   }
   return "127.0.0.1";
 }
-function setupQR(port, token) {
-  const localIP = getLocalIP();
-  const url = `http://${localIP}:${port}/?token=${token}`;
-  console.log("");
-  console.log("  \x1B[36m\u26A1 TLive Web Terminal\x1B[0m");
-  console.log("");
-  console.log(`  URL: \x1B[4m${url}\x1B[0m`);
-  console.log(`  Pair: \x1B[4mhttp://${localIP}:${port}/pair?token=${token}\x1B[0m`);
-  console.log("");
-  console.log("  Open this URL on your phone or another device.");
-  console.log("  For Telegram pairing, send this to your bot:");
-  console.log(`  /start pair_${token.slice(0, 16)}`);
-  console.log("");
-}
 async function runFlavor(opts) {
   const config = loadConfig();
   const { adapter, runtimeLabel, scannerFactory } = opts;
@@ -1707,12 +1753,12 @@ async function runFlavor(opts) {
         sessionId: loop.sessionInfo.sessionId,
         workdir
       });
-      return new Promise((resolve4) => {
-        const timeout = setTimeout(() => resolve4(void 0), 3e3);
+      return new Promise((resolve2) => {
+        const timeout = setTimeout(() => resolve2(void 0), 3e3);
         const handler = (payload) => {
           clearTimeout(timeout);
           ipc.removeListener("message_sent", handler);
-          resolve4(payload.messageId);
+          resolve2(payload.messageId);
         };
         ipc.on("message_sent", handler);
       });
@@ -1769,11 +1815,11 @@ async function runFlavor(opts) {
   console.error(`  Terminal: \x1B[4m${webUrl}\x1B[0m`);
   try {
     await loop.start();
-    await new Promise((resolve4) => {
+    await new Promise((resolve2) => {
       const check = setInterval(() => {
         if (loop.sessionState === "idle") {
           clearInterval(check);
-          resolve4();
+          resolve2();
         }
       }, 500);
     });
@@ -1782,16 +1828,15 @@ async function runFlavor(opts) {
   }
 }
 
-// src/cli/claude.ts
-async function claudeCommand(opts = {}) {
+// src/cli/codex.ts
+async function codexCommand(opts = {}) {
   await runFlavor({
-    adapter: new ClaudeAdapter(),
-    runtimeLabel: "Claude",
-    scannerFactory: ({ sessionId, workdir, sessionDir, proactiveNotifyDelay, proactiveQuestionDelay }) => new SessionScanner({ sessionId, workdir, sessionDir, proactiveNotifyDelay, proactiveQuestionDelay }),
+    adapter: new CodexAdapter(),
+    runtimeLabel: "Codex",
+    scannerFactory: ({ sessionDir }) => new CodexSessionScanner({ sessionDir }),
     ...opts
   });
 }
 export {
-  claudeCommand,
-  setupQR
+  codexCommand
 };
