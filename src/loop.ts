@@ -15,9 +15,8 @@ import type { TLiveConfig } from './config.js';
 import type { NotificationKind } from './im/notificationRules.js';
 import { CostTracker } from './core/costTracker.js';
 import { LABEL } from './im/icons.js';
-import { ScannerContext } from './core/scannerContext.js';
+import { ScannerContext, type ScannerContextSnapshot } from './core/scannerContext.js';
 import type { NotificationEvent as BridgeNotificationEvent } from './sdk/sharedEvents.js';
-import type { ScannerContextSnapshot } from './core/scannerContext.js';
 
 const MAX_IM_TEXT_LEN = 300;
 

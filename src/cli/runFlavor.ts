@@ -89,8 +89,6 @@ export async function runFlavor(opts: RunFlavorOptions): Promise<void> {
   });
 
   const loop = new TLiveLoop({ workdir, adapter, config, sessionId, scannerFactory, ctx });
-  // webUrl kept as a local alias for any remaining code below that referenced it
-  const webUrl = terminalUrl;
 
   // Connect to bridge IPC (auto-retries while bridge starts up)
   const ipc = new IPCClient();
@@ -222,7 +220,7 @@ export async function runFlavor(opts: RunFlavorOptions): Promise<void> {
   console.error(`  \x1b[36m⚡ TLive v1.0 · ${runtimeLabel}\x1b[0m`);
   console.error(`  Session:  ${info.sessionId.slice(0, 8)}...`);
   console.error(`  Workdir:  ${workdir}`);
-  console.error(`  Terminal: \x1b[4m${webUrl}\x1b[0m`);
+  console.error(`  Terminal: \x1b[4m${terminalUrl}\x1b[0m`);
 
   try {
     await loop.start();

@@ -19,6 +19,12 @@ function mockConfig(): TLiveConfig {
   };
 }
 
+function makeCtx(sessionId: string, workdir: string): ScannerContext {
+  return ScannerContext.fromWorkdir({
+    sessionId, workdir, provider: 'claude', terminalUrl: 'http://test/?token=t',
+  });
+}
+
 describe('Dual-channel integration', () => {
   let loop: TLiveLoop;
 
@@ -43,7 +49,7 @@ describe('Dual-channel integration', () => {
       getSessionDir: vi.fn(() => '/tmp/sessions'),
     };
 
-    loop = new TLiveLoop({ workdir: '/tmp/integration-test', adapter, config: mockConfig(), ctx: ScannerContext.fromWorkdir({ sessionId: 'int-sid', workdir: '/tmp/integration-test', provider: 'claude', terminalUrl: 'http://test/?token=t' }) });
+    loop = new TLiveLoop({ workdir: '/tmp/integration-test', adapter, config: mockConfig(), ctx: makeCtx('int-sid', '/tmp/integration-test') });
     const output: string[] = [];
     loop.on('ptyData', (d: string) => output.push(d));
 
@@ -72,7 +78,7 @@ describe('Dual-channel integration', () => {
       getSessionDir: vi.fn(() => '/tmp/sessions'),
     };
 
-    loop = new TLiveLoop({ workdir: '/tmp/im-test', adapter, config: mockConfig(), ctx: ScannerContext.fromWorkdir({ sessionId: 'im-sid', workdir: '/tmp/im-test', provider: 'claude', terminalUrl: 'http://test/?token=t' }) });
+    loop = new TLiveLoop({ workdir: '/tmp/im-test', adapter, config: mockConfig(), ctx: makeCtx('im-sid', '/tmp/im-test') });
     const sent: Array<{ text: string }> = [];
     loop.setIMTarget('chat-1', vi.fn(async (_chatId: string, text: string) => {
       sent.push({ text });

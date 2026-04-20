@@ -20,7 +20,15 @@ function mockAdapter(): ProviderAdapter {
       yield { kind: 'complete', provider: 'claude', sessionId: 'test' };
     }),
     getSessionDir: vi.fn(() => '/tmp/sessions'),
-    toEvents: vi.fn(() => []),
+    toEvents: vi.fn((raw: Record<string, unknown>) => {
+      // Minimal stub that emits one activity_text when raw looks like an assistant
+      // text event; returns [] otherwise. Ensures tests don't pass vacuously after
+      // loop.ts switches to adapter.toEvents delegation (Task 6).
+      if (raw?.type === 'assistant') {
+        return [{ kind: 'activity_text', text: 'stub' }];
+      }
+      return [];
+    }),
     toPermissionEvent: vi.fn(() => ({
       kind: 'permission_request', toolName: 'x', toolInput: '', permissionId: 'p',
     })),
