@@ -114,7 +114,10 @@ export class CodexAppServerProvider implements LLMProvider {
         approvalBridge.wireHandlers();
 
         try {
-          await client.initialize({ capabilities: {} });
+          await client.initialize({
+            clientInfo: { name: 'tlive', title: null, version: '1.0.0' },
+            capabilities: { experimentalApi: false },
+          });
 
           if (params.sessionId) {
             const resumeResult = await client.request<

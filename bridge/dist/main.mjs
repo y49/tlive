@@ -15946,7 +15946,10 @@ var CodexAppServerProvider = class {
         const approvalBridge = new CodexApprovalBridge(client, eventAdapter, params.onPermissionRequest);
         approvalBridge.wireHandlers();
         try {
-          await client.initialize({ capabilities: {} });
+          await client.initialize({
+            clientInfo: { name: "tlive", title: null, version: "1.0.0" },
+            capabilities: { experimentalApi: false }
+          });
           if (params.sessionId) {
             const resumeResult = await client.request("thread/resume", {
               threadId: params.sessionId,
