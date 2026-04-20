@@ -1,6 +1,9 @@
 // src/sdk/providerAdapter.ts
 
 import type { BasePermissionHandler } from './permissionHandler.js';
+import type { NotificationEvent } from './sharedEvents.js';
+import type { ScannerContextSnapshot } from '../core/scannerContext.js';
+import type { ToolUseEvent } from '../core/sessionScanner.js';
 export type { BasePermissionHandler };
 
 export interface NormalizedMessage {
@@ -96,4 +99,30 @@ export interface ProviderAdapter {
    * Optional — adapters that don't implement this fall back to legacy normalizeSessionLine.
    */
   normalizeSessionEvent?(event: unknown, ctx?: { sessionId?: string }): NormalizedMessage[];
+
+  /**
+   * Transform one raw scanner event into zero or more display events.
+   * Single boundary for provider-specific shape knowledge.
+   * Contract: pure (no mutation/IO). Returns [] for unrecognized events — never throws.
+   * No display-concern leaks (titles/URLs come from the bridge decorator).
+   */
+  toEvents?(
+    raw: Record<string, unknown>,
+    ctx: ScannerContextSnapshot,
+  ): NotificationEvent[];
+
+  /**
+   * Convert a delayed permission_needed scanner emission into a display event.
+   * Contract: pure. Providers without a scanner-path permission broker (codex) throw.
+   */
+  toPermissionEvent?(
+    toolUse: ToolUseEvent,
+    ctx: ScannerContextSnapshot,
+  ): NotificationEvent;
+
+  /**
+   * Extract usage tokens for CostTracker. Returns null if `raw` isn't a usage event.
+   * Contract: pure — does not mutate cost-tracker state.
+   */
+  extractUsage?(raw: Record<string, unknown>): Record<string, unknown> | null;
 }

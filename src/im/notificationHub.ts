@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events';
 import { type NotificationKind, shouldPush, shouldAggregate } from './notificationRules.js';
+import type { NotificationEvent as BridgeNotificationEvent } from '../sdk/sharedEvents.js';
 import type { StructuredNotificationEvent } from '../sdk/messageNormalizer.js';
+import type { ScannerContextSnapshot } from '../core/scannerContext.js';
 
 export interface NotificationEvent {
   kind: NotificationKind;
@@ -9,8 +11,10 @@ export interface NotificationEvent {
   title: string;
   body?: string;
   buttons?: Array<{ label: string; callbackData: string; style?: 'primary' | 'danger' }>;
-  /** Structured semantic payload for bridge-side rendering (added in v1.0 IPC upgrade). */
-  event?: StructuredNotificationEvent;
+  /** Structured semantic payload for bridge-side rendering. */
+  event?: BridgeNotificationEvent | StructuredNotificationEvent;
+  /** Session context for the bridge-side TerminalContextDecorator. */
+  sessionCtx?: ScannerContextSnapshot;
 }
 
 export interface NotificationHubOptions {

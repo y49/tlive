@@ -25,7 +25,7 @@ export type NotificationEvent =
   | { kind: 'error'; message: string }
   | { kind: 'todo_update'; items: TodoItem[] }
   | { kind: 'activity_text'; text: string; title?: string; footer?: string; terminalUrl?: string }
-  | { kind: 'activity_tool'; toolName: string; toolInput?: string }
+  | { kind: 'activity_tool'; toolName: string; toolInput?: string; terminalUrl?: string }
   | { kind: 'thinking'; active: boolean }
   | { kind: 'reasoning_summary'; text: string; durationMs?: number; truncated?: boolean }
   | { kind: 'file_change_list'; changes: Array<{ path: string; kind: 'add' | 'delete' | 'update' }>; status: 'completed' | 'failed' };
