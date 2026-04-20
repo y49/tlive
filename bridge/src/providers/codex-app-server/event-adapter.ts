@@ -103,8 +103,24 @@ export class CodexEventAdapter {
     if (item.id) this.recentItems.set(item.id, item);
     switch (item.type) {
       case 'agentMessage': {
-        const text = (item.text as string) ?? '';
-        return [{ kind: 'text_delta', text }];
+        const raw = (item.text as string) ?? '';
+        // gpt-oss-style models embed reasoning inside <think>...</think>
+        // markers in the agent message. Split it out so reasoning renders in
+        // its own block and the answer text isn't polluted with </think>.
+        const events: CanonicalEvent[] = [];
+        const thinkRegex = /<think>([\s\S]*?)<\/think>\s*/g;
+        let lastIndex = 0;
+        let match: RegExpExecArray | null;
+        while ((match = thinkRegex.exec(raw)) !== null) {
+          const before = raw.slice(lastIndex, match.index);
+          if (before.trim().length > 0) events.push({ kind: 'text_delta', text: before });
+          const reasoning = match[1].trim();
+          if (reasoning.length > 0) events.push({ kind: 'reasoning_complete', text: reasoning });
+          lastIndex = match.index + match[0].length;
+        }
+        const tail = raw.slice(lastIndex);
+        if (events.length === 0 || tail.trim().length > 0) events.push({ kind: 'text_delta', text: tail });
+        return events;
       }
       case 'reasoning': {
         const summary = Array.isArray(item.summary) ? (item.summary as string[]).filter(Boolean) : [];
