@@ -15908,6 +15908,11 @@ var CodexAppServerProvider = class {
         lastErrorMessage = msg;
       }
       controller.enqueue(event);
+      if (event.kind === "query_result") {
+        closeStream(controller);
+        transport?.close().catch(() => {
+        });
+      }
     };
     const stream = new ReadableStream({
       start: async (controller) => {

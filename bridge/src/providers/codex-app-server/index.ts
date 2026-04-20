@@ -73,6 +73,15 @@ export class CodexAppServerProvider implements LLMProvider {
         lastErrorMessage = msg;
       }
       controller.enqueue(event);
+      // query_result is the turn-ended sentinel. Close the stream so the
+      // consumer's reader.read() returns done; tear down the subprocess so
+      // the next user message starts a fresh streamChat (which thread/resumes
+      // via sessionId). Otherwise the engine keeps the turn in-flight and
+      // queues subsequent messages forever.
+      if (event.kind === 'query_result') {
+        closeStream(controller);
+        transport?.close().catch(() => {});
+      }
     };
 
     const stream = new ReadableStream<CanonicalEvent>({
