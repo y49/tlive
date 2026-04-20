@@ -10,9 +10,6 @@ var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require
   if (typeof require !== "undefined") return require.apply(this, arguments);
   throw Error('Dynamic require of "' + x + '" is not supported');
 });
-var __esm = (fn, res) => function __init() {
-  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
-};
 var __commonJS = (cb, mod) => function __require2() {
   return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
 };
@@ -36,473 +33,6 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
   mod
 ));
-
-// node_modules/@openai/codex-sdk/dist/index.js
-var dist_exports = {};
-__export(dist_exports, {
-  Codex: () => Codex,
-  Thread: () => Thread
-});
-import { promises as fs } from "fs";
-import os from "os";
-import path from "path";
-import { spawn } from "child_process";
-import path2 from "path";
-import readline from "readline";
-import { createRequire } from "module";
-async function createOutputSchemaFile(schema) {
-  if (schema === void 0) {
-    return { cleanup: async () => {
-    } };
-  }
-  if (!isJsonObject(schema)) {
-    throw new Error("outputSchema must be a plain JSON object");
-  }
-  const schemaDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-output-schema-"));
-  const schemaPath = path.join(schemaDir, "schema.json");
-  const cleanup = async () => {
-    try {
-      await fs.rm(schemaDir, { recursive: true, force: true });
-    } catch {
-    }
-  };
-  try {
-    await fs.writeFile(schemaPath, JSON.stringify(schema), "utf8");
-    return { schemaPath, cleanup };
-  } catch (error48) {
-    await cleanup();
-    throw error48;
-  }
-}
-function isJsonObject(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function normalizeInput(input) {
-  if (typeof input === "string") {
-    return { prompt: input, images: [] };
-  }
-  const promptParts = [];
-  const images = [];
-  for (const item of input) {
-    if (item.type === "text") {
-      promptParts.push(item.text);
-    } else if (item.type === "local_image") {
-      images.push(item.path);
-    }
-  }
-  return { prompt: promptParts.join("\n\n"), images };
-}
-function serializeConfigOverrides(configOverrides) {
-  const overrides = [];
-  flattenConfigOverrides(configOverrides, "", overrides);
-  return overrides;
-}
-function flattenConfigOverrides(value, prefix, overrides) {
-  if (!isPlainObject2(value)) {
-    if (prefix) {
-      overrides.push(`${prefix}=${toTomlValue(value, prefix)}`);
-      return;
-    } else {
-      throw new Error("Codex config overrides must be a plain object");
-    }
-  }
-  const entries = Object.entries(value);
-  if (!prefix && entries.length === 0) {
-    return;
-  }
-  if (prefix && entries.length === 0) {
-    overrides.push(`${prefix}={}`);
-    return;
-  }
-  for (const [key, child] of entries) {
-    if (!key) {
-      throw new Error("Codex config override keys must be non-empty strings");
-    }
-    if (child === void 0) {
-      continue;
-    }
-    const path3 = prefix ? `${prefix}.${key}` : key;
-    if (isPlainObject2(child)) {
-      flattenConfigOverrides(child, path3, overrides);
-    } else {
-      overrides.push(`${path3}=${toTomlValue(child, path3)}`);
-    }
-  }
-}
-function toTomlValue(value, path3) {
-  if (typeof value === "string") {
-    return JSON.stringify(value);
-  } else if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new Error(`Codex config override at ${path3} must be a finite number`);
-    }
-    return `${value}`;
-  } else if (typeof value === "boolean") {
-    return value ? "true" : "false";
-  } else if (Array.isArray(value)) {
-    const rendered = value.map((item, index) => toTomlValue(item, `${path3}[${index}]`));
-    return `[${rendered.join(", ")}]`;
-  } else if (isPlainObject2(value)) {
-    const parts = [];
-    for (const [key, child] of Object.entries(value)) {
-      if (!key) {
-        throw new Error("Codex config override keys must be non-empty strings");
-      }
-      if (child === void 0) {
-        continue;
-      }
-      parts.push(`${formatTomlKey(key)} = ${toTomlValue(child, `${path3}.${key}`)}`);
-    }
-    return `{${parts.join(", ")}}`;
-  } else if (value === null) {
-    throw new Error(`Codex config override at ${path3} cannot be null`);
-  } else {
-    const typeName = typeof value;
-    throw new Error(`Unsupported Codex config override value at ${path3}: ${typeName}`);
-  }
-}
-function formatTomlKey(key) {
-  return TOML_BARE_KEY.test(key) ? key : JSON.stringify(key);
-}
-function isPlainObject2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function findCodexPath() {
-  const { platform, arch } = process;
-  let targetTriple = null;
-  switch (platform) {
-    case "linux":
-    case "android":
-      switch (arch) {
-        case "x64":
-          targetTriple = "x86_64-unknown-linux-musl";
-          break;
-        case "arm64":
-          targetTriple = "aarch64-unknown-linux-musl";
-          break;
-        default:
-          break;
-      }
-      break;
-    case "darwin":
-      switch (arch) {
-        case "x64":
-          targetTriple = "x86_64-apple-darwin";
-          break;
-        case "arm64":
-          targetTriple = "aarch64-apple-darwin";
-          break;
-        default:
-          break;
-      }
-      break;
-    case "win32":
-      switch (arch) {
-        case "x64":
-          targetTriple = "x86_64-pc-windows-msvc";
-          break;
-        case "arm64":
-          targetTriple = "aarch64-pc-windows-msvc";
-          break;
-        default:
-          break;
-      }
-      break;
-    default:
-      break;
-  }
-  if (!targetTriple) {
-    throw new Error(`Unsupported platform: ${platform} (${arch})`);
-  }
-  const platformPackage = PLATFORM_PACKAGE_BY_TARGET[targetTriple];
-  if (!platformPackage) {
-    throw new Error(`Unsupported target triple: ${targetTriple}`);
-  }
-  let vendorRoot;
-  try {
-    const codexPackageJsonPath = moduleRequire.resolve(`${CODEX_NPM_NAME}/package.json`);
-    const codexRequire = createRequire(codexPackageJsonPath);
-    const platformPackageJsonPath = codexRequire.resolve(`${platformPackage}/package.json`);
-    vendorRoot = path2.join(path2.dirname(platformPackageJsonPath), "vendor");
-  } catch {
-    throw new Error(
-      `Unable to locate Codex CLI binaries. Ensure ${CODEX_NPM_NAME} is installed with optional dependencies.`
-    );
-  }
-  const archRoot = path2.join(vendorRoot, targetTriple);
-  const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
-  const binaryPath = path2.join(archRoot, "codex", codexBinaryName);
-  return binaryPath;
-}
-var Thread, INTERNAL_ORIGINATOR_ENV, TYPESCRIPT_SDK_ORIGINATOR, CODEX_NPM_NAME, PLATFORM_PACKAGE_BY_TARGET, moduleRequire, CodexExec, TOML_BARE_KEY, Codex;
-var init_dist = __esm({
-  "node_modules/@openai/codex-sdk/dist/index.js"() {
-    Thread = class {
-      _exec;
-      _options;
-      _id;
-      _threadOptions;
-      /** Returns the ID of the thread. Populated after the first turn starts. */
-      get id() {
-        return this._id;
-      }
-      /* @internal */
-      constructor(exec, options, threadOptions, id = null) {
-        this._exec = exec;
-        this._options = options;
-        this._id = id;
-        this._threadOptions = threadOptions;
-      }
-      /** Provides the input to the agent and streams events as they are produced during the turn. */
-      async runStreamed(input, turnOptions = {}) {
-        return { events: this.runStreamedInternal(input, turnOptions) };
-      }
-      async *runStreamedInternal(input, turnOptions = {}) {
-        const { schemaPath, cleanup } = await createOutputSchemaFile(turnOptions.outputSchema);
-        const options = this._threadOptions;
-        const { prompt, images } = normalizeInput(input);
-        const generator = this._exec.run({
-          input: prompt,
-          baseUrl: this._options.baseUrl,
-          apiKey: this._options.apiKey,
-          threadId: this._id,
-          images,
-          model: options?.model,
-          sandboxMode: options?.sandboxMode,
-          workingDirectory: options?.workingDirectory,
-          skipGitRepoCheck: options?.skipGitRepoCheck,
-          outputSchemaFile: schemaPath,
-          modelReasoningEffort: options?.modelReasoningEffort,
-          signal: turnOptions.signal,
-          networkAccessEnabled: options?.networkAccessEnabled,
-          webSearchMode: options?.webSearchMode,
-          webSearchEnabled: options?.webSearchEnabled,
-          approvalPolicy: options?.approvalPolicy,
-          additionalDirectories: options?.additionalDirectories
-        });
-        try {
-          for await (const item of generator) {
-            let parsed;
-            try {
-              parsed = JSON.parse(item);
-            } catch (error48) {
-              throw new Error(`Failed to parse item: ${item}`, { cause: error48 });
-            }
-            if (parsed.type === "thread.started") {
-              this._id = parsed.thread_id;
-            }
-            yield parsed;
-          }
-        } finally {
-          await cleanup();
-        }
-      }
-      /** Provides the input to the agent and returns the completed turn. */
-      async run(input, turnOptions = {}) {
-        const generator = this.runStreamedInternal(input, turnOptions);
-        const items = [];
-        let finalResponse = "";
-        let usage = null;
-        let turnFailure = null;
-        for await (const event of generator) {
-          if (event.type === "item.completed") {
-            if (event.item.type === "agent_message") {
-              finalResponse = event.item.text;
-            }
-            items.push(event.item);
-          } else if (event.type === "turn.completed") {
-            usage = event.usage;
-          } else if (event.type === "turn.failed") {
-            turnFailure = event.error;
-            break;
-          }
-        }
-        if (turnFailure) {
-          throw new Error(turnFailure.message);
-        }
-        return { items, finalResponse, usage };
-      }
-    };
-    INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
-    TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
-    CODEX_NPM_NAME = "@openai/codex";
-    PLATFORM_PACKAGE_BY_TARGET = {
-      "x86_64-unknown-linux-musl": "@openai/codex-linux-x64",
-      "aarch64-unknown-linux-musl": "@openai/codex-linux-arm64",
-      "x86_64-apple-darwin": "@openai/codex-darwin-x64",
-      "aarch64-apple-darwin": "@openai/codex-darwin-arm64",
-      "x86_64-pc-windows-msvc": "@openai/codex-win32-x64",
-      "aarch64-pc-windows-msvc": "@openai/codex-win32-arm64"
-    };
-    moduleRequire = createRequire(import.meta.url);
-    CodexExec = class {
-      executablePath;
-      envOverride;
-      configOverrides;
-      constructor(executablePath = null, env, configOverrides) {
-        this.executablePath = executablePath || findCodexPath();
-        this.envOverride = env;
-        this.configOverrides = configOverrides;
-      }
-      async *run(args) {
-        const commandArgs = ["exec", "--experimental-json"];
-        if (this.configOverrides) {
-          for (const override of serializeConfigOverrides(this.configOverrides)) {
-            commandArgs.push("--config", override);
-          }
-        }
-        if (args.baseUrl) {
-          commandArgs.push(
-            "--config",
-            `openai_base_url=${toTomlValue(args.baseUrl, "openai_base_url")}`
-          );
-        }
-        if (args.model) {
-          commandArgs.push("--model", args.model);
-        }
-        if (args.sandboxMode) {
-          commandArgs.push("--sandbox", args.sandboxMode);
-        }
-        if (args.workingDirectory) {
-          commandArgs.push("--cd", args.workingDirectory);
-        }
-        if (args.additionalDirectories?.length) {
-          for (const dir of args.additionalDirectories) {
-            commandArgs.push("--add-dir", dir);
-          }
-        }
-        if (args.skipGitRepoCheck) {
-          commandArgs.push("--skip-git-repo-check");
-        }
-        if (args.outputSchemaFile) {
-          commandArgs.push("--output-schema", args.outputSchemaFile);
-        }
-        if (args.modelReasoningEffort) {
-          commandArgs.push("--config", `model_reasoning_effort="${args.modelReasoningEffort}"`);
-        }
-        if (args.networkAccessEnabled !== void 0) {
-          commandArgs.push(
-            "--config",
-            `sandbox_workspace_write.network_access=${args.networkAccessEnabled}`
-          );
-        }
-        if (args.webSearchMode) {
-          commandArgs.push("--config", `web_search="${args.webSearchMode}"`);
-        } else if (args.webSearchEnabled === true) {
-          commandArgs.push("--config", `web_search="live"`);
-        } else if (args.webSearchEnabled === false) {
-          commandArgs.push("--config", `web_search="disabled"`);
-        }
-        if (args.approvalPolicy) {
-          commandArgs.push("--config", `approval_policy="${args.approvalPolicy}"`);
-        }
-        if (args.threadId) {
-          commandArgs.push("resume", args.threadId);
-        }
-        if (args.images?.length) {
-          for (const image2 of args.images) {
-            commandArgs.push("--image", image2);
-          }
-        }
-        const env = {};
-        if (this.envOverride) {
-          Object.assign(env, this.envOverride);
-        } else {
-          for (const [key, value] of Object.entries(process.env)) {
-            if (value !== void 0) {
-              env[key] = value;
-            }
-          }
-        }
-        if (!env[INTERNAL_ORIGINATOR_ENV]) {
-          env[INTERNAL_ORIGINATOR_ENV] = TYPESCRIPT_SDK_ORIGINATOR;
-        }
-        if (args.apiKey) {
-          env.CODEX_API_KEY = args.apiKey;
-        }
-        const child = spawn(this.executablePath, commandArgs, {
-          env,
-          signal: args.signal
-        });
-        let spawnError = null;
-        child.once("error", (err) => spawnError = err);
-        if (!child.stdin) {
-          child.kill();
-          throw new Error("Child process has no stdin");
-        }
-        child.stdin.write(args.input);
-        child.stdin.end();
-        if (!child.stdout) {
-          child.kill();
-          throw new Error("Child process has no stdout");
-        }
-        const stderrChunks = [];
-        if (child.stderr) {
-          child.stderr.on("data", (data) => {
-            stderrChunks.push(data);
-          });
-        }
-        const exitPromise = new Promise(
-          (resolve2) => {
-            child.once("exit", (code2, signal) => {
-              resolve2({ code: code2, signal });
-            });
-          }
-        );
-        const rl = readline.createInterface({
-          input: child.stdout,
-          crlfDelay: Infinity
-        });
-        try {
-          for await (const line of rl) {
-            yield line;
-          }
-          if (spawnError) throw spawnError;
-          const { code: code2, signal } = await exitPromise;
-          if (code2 !== 0 || signal) {
-            const stderrBuffer = Buffer.concat(stderrChunks);
-            const detail = signal ? `signal ${signal}` : `code ${code2 ?? 1}`;
-            throw new Error(`Codex Exec exited with ${detail}: ${stderrBuffer.toString("utf8")}`);
-          }
-        } finally {
-          rl.close();
-          child.removeAllListeners();
-          try {
-            if (!child.killed) child.kill();
-          } catch {
-          }
-        }
-      }
-    };
-    TOML_BARE_KEY = /^[A-Za-z0-9_-]+$/;
-    Codex = class {
-      exec;
-      options;
-      constructor(options = {}) {
-        const { codexPathOverride, env, config: config3 } = options;
-        this.exec = new CodexExec(codexPathOverride, env, config3);
-        this.options = options;
-      }
-      /**
-       * Starts a new conversation with an agent.
-       * @returns A new thread instance.
-       */
-      startThread(options = {}) {
-        return new Thread(this.exec, this.options, options);
-      }
-      /**
-       * Resumes a conversation with an agent based on the thread id.
-       * Threads are persisted in ~/.codex/sessions.
-       *
-       * @param id The id of the thread to resume.
-       * @returns A new thread instance.
-       */
-      resumeThread(id, options = {}) {
-        return new Thread(this.exec, this.options, options, id);
-      }
-    };
-  }
-});
 
 // node_modules/punycode.js/punycode.js
 var require_punycode = __commonJS({
@@ -766,9 +296,9 @@ function parseWorkspacesAllowedEnv(raw) {
   if (!raw || !raw.trim()) return void 0;
   return raw.split(",").map((p) => p.trim()).filter((p) => p.length > 0);
 }
-function loadEnvFile(path3) {
+function loadEnvFile(path) {
   try {
-    const content = readFileSync(path3, "utf-8");
+    const content = readFileSync(path, "utf-8");
     const env = {};
     for (const line of content.split("\n")) {
       const trimmed = line.trim();
@@ -1020,8 +550,8 @@ var JsonFileStore = class {
   }
   async deleteSession(id) {
     this.sessions.delete(id);
-    const path3 = this.sessionPath(id);
-    if (existsSync(path3)) unlinkSync(path3);
+    const path = this.sessionPath(id);
+    if (existsSync(path)) unlinkSync(path);
     this.persistSessionsIndex();
   }
   // ---- Messages ----
@@ -1863,10 +1393,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path3) {
-  if (!path3)
+function getElementAtPath(obj, path) {
+  if (!path)
     return obj;
-  return path3.reduce((acc, key) => acc?.[key], obj);
+  return path.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -2249,11 +1779,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path3, issues) {
+function prefixIssues(path, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path3);
+    iss.path.unshift(path);
     return iss;
   });
 }
@@ -2436,7 +1966,7 @@ function formatError(error48, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error48, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error49, path3 = []) => {
+  const processError = (error49, path = []) => {
     var _a3, _b;
     for (const issue2 of error49.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
@@ -2446,7 +1976,7 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
       } else if (issue2.code === "invalid_element") {
         processError({ issues: issue2.issues }, issue2.path);
       } else {
-        const fullpath = [...path3, ...issue2.path];
+        const fullpath = [...path, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -2478,8 +2008,8 @@ function treeifyError(error48, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path3 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path3) {
+  const path = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -14456,13 +13986,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path3 = ref.slice(1).split("/").filter(Boolean);
-  if (path3.length === 0) {
+  const path = ref.slice(1).split("/").filter(Boolean);
+  if (path.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path3[0] === defsKey) {
-    const key = path3[1];
+  if (path[0] === defsKey) {
+    const key = path[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -15898,436 +15428,625 @@ var ClaudeSDKProvider = class {
   }
 };
 
-// src/messages/codex-adapter.ts
-var HIDDEN_TOOLS2 = /* @__PURE__ */ new Set([
-  "ToolSearch",
-  "TodoRead",
-  "TodoWrite",
-  "TaskCreate",
-  "TaskUpdate",
-  "TaskList",
-  "TaskGet",
-  "TaskStop",
-  "TaskOutput"
-]);
-var CodexAdapter = class {
-  lastAgentText = "";
-  itemIdToToolId = /* @__PURE__ */ new Map();
-  hiddenItemIds = /* @__PURE__ */ new Set();
-  toolIdCounter = 0;
-  threadId = "";
-  reasoningStartedAt = /* @__PURE__ */ new Map();
-  adapt(event) {
-    switch (event.type) {
-      case "thread.started":
-        return this.adaptThreadStarted(event);
-      case "turn.started":
-        return [];
-      case "item.started":
-        return this.adaptItemStarted(event);
-      case "item.updated":
-        return this.adaptItemUpdated(event);
-      case "item.completed":
-        return this.adaptItemCompleted(event);
-      case "turn.completed":
-        return this.adaptTurnCompleted(event);
-      case "turn.failed":
-        return this.adaptTurnFailed(event);
-      case "error":
-        return [this.validate({ kind: "error", message: event.message || "Unknown Codex error" })];
-      default:
-        return [];
+// src/providers/codex-app-server/index.ts
+import { spawn, execFile as nodeExecFile } from "node:child_process";
+import { promisify } from "node:util";
+
+// src/providers/codex-app-server/transport.ts
+var StdioJsonlTransport = class {
+  constructor(child) {
+    this.child = child;
+    if (!child.stdout || !child.stdin) {
+      throw new Error("StdioJsonlTransport: child process must have stdout + stdin");
     }
+    child.stdout.on("data", (chunk) => this.onData(chunk));
+    child.stdout.on("error", (err) => this.errorHandlers.forEach((h) => h(err)));
+    child.on("exit", (code2, signal) => {
+      this.exitHandlers.forEach((h) => h({ code: code2, signal }));
+    });
   }
-  validate(event) {
-    return canonicalEventSchema.parse(event);
+  buffer = "";
+  decoder = new TextDecoder("utf-8", { fatal: false });
+  messageHandlers = [];
+  errorHandlers = [];
+  exitHandlers = [];
+  closed = false;
+  onMessage(cb) {
+    this.messageHandlers.push(cb);
   }
-  nextToolId() {
-    return `codex-tool-${++this.toolIdCounter}`;
+  onError(cb) {
+    this.errorHandlers.push(cb);
   }
-  adaptThreadStarted(event) {
-    this.threadId = event.thread_id || "";
-    return [this.validate({
-      kind: "status",
-      sessionId: this.threadId,
-      model: "codex"
-    })];
+  onExit(cb) {
+    this.exitHandlers.push(cb);
   }
-  adaptItemStarted(event) {
-    const item = event.item;
-    if (!item) return [];
-    switch (item.type) {
-      case "agent_message": {
-        this.lastAgentText = "";
-        return [];
+  sendMessage(msg) {
+    if (this.closed) return;
+    this.child.stdin.write(JSON.stringify(msg) + "\n");
+  }
+  async close(timeoutMs = 5e3) {
+    this.closed = true;
+    return new Promise((resolve2) => {
+      let resolved = false;
+      const done = (e) => {
+        if (resolved) return;
+        resolved = true;
+        resolve2(e);
+      };
+      this.onExit(done);
+      try {
+        this.child.stdin?.end();
+      } catch {
       }
-      case "command_execution": {
-        const toolId = this.nextToolId();
-        if (item.id) this.itemIdToToolId.set(item.id, toolId);
-        const command = item.command || "";
-        return [this.validate({
-          kind: "tool_start",
-          id: toolId,
-          name: "Bash",
-          input: { command }
-        })];
-      }
-      case "file_change": {
-        const toolId = this.nextToolId();
-        if (item.id) this.itemIdToToolId.set(item.id, toolId);
-        const changes = item.changes || [];
-        const firstChange = changes[0];
-        const toolName = firstChange?.kind === "add" ? "Write" : "Edit";
-        const filePath = firstChange?.path || "";
-        return [this.validate({
-          kind: "tool_start",
-          id: toolId,
-          name: toolName,
-          input: { file_path: filePath }
-        })];
-      }
-      case "reasoning":
-        if (item.id) this.reasoningStartedAt.set(item.id, Date.now());
-        return [];
-      case "mcp_tool_call": {
-        const mcp = item;
-        if (HIDDEN_TOOLS2.has(mcp.tool)) {
-          if (item.id) this.hiddenItemIds.add(item.id);
-          return [];
+      const termTimer = setTimeout(() => {
+        if (resolved) return;
+        try {
+          this.child.kill("SIGTERM");
+        } catch {
         }
-        const toolId = this.nextToolId();
-        if (item.id) this.itemIdToToolId.set(item.id, toolId);
-        return [this.validate({
-          kind: "tool_start",
-          id: toolId,
-          name: mcp.tool || "MCP",
-          input: mcp.arguments || {}
-        })];
-      }
-      case "web_search": {
-        const toolId = this.nextToolId();
-        if (item.id) this.itemIdToToolId.set(item.id, toolId);
-        return [this.validate({
-          kind: "tool_start",
-          id: toolId,
-          name: "WebSearch",
-          input: { query: item.query || "" }
-        })];
-      }
-      case "todo_list": {
-        const todo = item;
-        return [this.validate({
-          kind: "todo_list_update",
-          items: todo.items.map((t) => ({ text: t.text, completed: t.completed }))
-        })];
-      }
-      case "error":
-        return [this.validate({ kind: "error", message: item.message || "Codex item error" })];
-      default:
-        return [];
-    }
+      }, timeoutMs);
+      const killTimer = setTimeout(() => {
+        if (resolved) return;
+        try {
+          this.child.kill("SIGKILL");
+        } catch {
+        }
+      }, timeoutMs + 1e3);
+      this.onExit(() => {
+        clearTimeout(termTimer);
+        clearTimeout(killTimer);
+      });
+    });
   }
-  adaptItemUpdated(event) {
-    const item = event.item;
-    if (!item) return [];
-    if (item.id && this.hiddenItemIds.has(item.id)) return [];
-    if (item.type === "agent_message") {
-      const fullText = item.text || "";
-      const delta = fullText.slice(this.lastAgentText.length);
-      this.lastAgentText = fullText;
-      if (delta) {
-        return [this.validate({ kind: "text_delta", text: delta })];
+  onData(chunk) {
+    this.buffer += this.decoder.decode(chunk, { stream: true });
+    let idx;
+    while ((idx = this.buffer.indexOf("\n")) >= 0) {
+      const line = this.buffer.slice(0, idx);
+      this.buffer = this.buffer.slice(idx + 1);
+      if (line.length === 0) continue;
+      try {
+        const msg = JSON.parse(line);
+        this.messageHandlers.forEach((h) => h(msg));
+      } catch (err) {
+        this.errorHandlers.forEach((h) => h(err));
       }
     }
-    if (item.type === "reasoning") {
-      const text2 = item.text || "";
-      if (text2) {
-        return [this.validate({ kind: "thinking_delta", text: text2 })];
-      }
-    }
-    if (item.type === "todo_list") {
-      const todo = item;
-      return [this.validate({
-        kind: "todo_list_update",
-        items: todo.items.map((t) => ({ text: t.text, completed: t.completed }))
-      })];
-    }
-    return [];
-  }
-  adaptItemCompleted(event) {
-    const item = event.item;
-    if (!item) return [];
-    if (item.id && this.hiddenItemIds.has(item.id)) return [];
-    if (item.type === "command_execution") {
-      const cmd = item;
-      const toolId = this.itemIdToToolId.get(item.id) || item.id || "";
-      return [this.validate({
-        kind: "tool_result",
-        toolUseId: toolId,
-        content: cmd.aggregated_output || "",
-        isError: cmd.exit_code !== void 0 && cmd.exit_code !== 0 || cmd.status === "failed"
-      })];
-    }
-    if (item.type === "file_change") {
-      const fc = item;
-      return [this.validate({
-        kind: "file_change_list",
-        changes: fc.changes.map((c) => ({
-          path: c.path,
-          kind: c.kind === "delete" ? "delete" : c.kind === "add" ? "add" : "update"
-        })),
-        status: fc.status
-      })];
-    }
-    if (item.type === "mcp_tool_call") {
-      const mcp = item;
-      const toolId = this.itemIdToToolId.get(item.id) || item.id || "";
-      const content = mcp.error ? mcp.error.message : mcp.result ? JSON.stringify(mcp.result) : "";
-      return [this.validate({
-        kind: "tool_result",
-        toolUseId: toolId,
-        content,
-        isError: mcp.status === "failed"
-      })];
-    }
-    if (item.type === "web_search") {
-      const toolId = this.itemIdToToolId.get(item.id) || item.id || "";
-      return [this.validate({
-        kind: "tool_result",
-        toolUseId: toolId,
-        content: "Search completed",
-        isError: false
-      })];
-    }
-    if (item.type === "agent_message") {
-      const text2 = item.text || "";
-      if (text2 && !this.lastAgentText) {
-        return [this.validate({ kind: "text_delta", text: text2 })];
-      }
-    }
-    if (item.type === "reasoning") {
-      const text2 = item.text || "";
-      if (!text2) {
-        if (item.id) this.reasoningStartedAt.delete(item.id);
-        return [];
-      }
-      const startedAt = item.id ? this.reasoningStartedAt.get(item.id) : void 0;
-      const durationMs = startedAt !== void 0 ? Date.now() - startedAt : void 0;
-      if (item.id) this.reasoningStartedAt.delete(item.id);
-      return [this.validate({ kind: "reasoning_complete", text: text2, durationMs })];
-    }
-    if (item.type === "todo_list") {
-      const todo = item;
-      return [this.validate({
-        kind: "todo_list_update",
-        items: todo.items.map((t) => ({ text: t.text, completed: t.completed }))
-      })];
-    }
-    return [];
-  }
-  adaptTurnCompleted(event) {
-    const usage = event.usage;
-    if (usage) {
-      console.log(`[codex-adapter] turn.completed usage: in=${usage.input_tokens} cached=${usage.cached_input_tokens} out=${usage.output_tokens}`);
-    }
-    return [this.validate({
-      kind: "query_result",
-      sessionId: this.threadId,
-      isError: false,
-      usage: {
-        inputTokens: usage?.input_tokens ?? 0,
-        outputTokens: usage?.output_tokens ?? 0
-      }
-    })];
-  }
-  adaptTurnFailed(event) {
-    const error48 = event.error;
-    return [this.validate({
-      kind: "error",
-      message: error48?.message || "Codex turn failed"
-    })];
   }
 };
 
-// src/providers/codex-provider.ts
-var EFFORT_MAP = {
-  low: "low",
-  medium: "medium",
-  high: "high",
-  max: "xhigh"
-};
-var AUTH_PATTERNS = [/invalid.*api.?key/i, /unauthorized/i, /401\b/, /OPENAI_API_KEY/i, /authentication/i];
-function isAuthError(text2) {
-  return AUTH_PATTERNS.some((re) => re.test(text2));
-}
-function buildCodexEnv() {
-  const out = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (v === void 0) continue;
-    out[k] = v;
+// src/providers/codex-app-server/client.ts
+var METHOD_COMMAND_EXEC_APPROVAL = "item/commandExecution/requestApproval";
+var METHOD_FILE_CHANGE_APPROVAL = "item/fileChange/requestApproval";
+var METHOD_PERMISSIONS_APPROVAL = "item/permissions/requestApproval";
+var METHOD_MCP_ELICITATION = "mcpServer/elicitation/request";
+var CodexAppServerClient = class {
+  constructor(transport) {
+    this.transport = transport;
+    this.transport.onMessage((m) => this.onMessage(m));
   }
-  return out;
-}
-var CodexProvider = class {
-  CodexCtor;
-  _available = false;
-  _initPromise;
-  constructor() {
-    this._initPromise = Promise.resolve().then(() => (init_dist(), dist_exports)).then((mod) => {
-      this.CodexCtor = mod.Codex || mod.default?.Codex;
-      this._available = !!this.CodexCtor;
-      if (this._available) {
-        console.log("[tlive:codex] Codex SDK available");
-      }
-    }).catch(() => {
-      console.warn("[tlive:codex] @openai/codex-sdk not installed \u2014 Codex provider unavailable");
+  initialized = false;
+  nextId = 1;
+  pending = /* @__PURE__ */ new Map();
+  notificationHandlers = /* @__PURE__ */ new Map();
+  serverRequestHandlers = /* @__PURE__ */ new Map();
+  async initialize(params) {
+    const result = await this.requestRaw("initialize", params, 1e4);
+    this.initialized = true;
+    return result;
+  }
+  async request(method, params, timeoutMs = 3e4) {
+    if (!this.initialized) {
+      throw new Error(`CodexAppServerClient: must call initialize() before request("${method}")`);
+    }
+    return this.requestRaw(method, params, timeoutMs);
+  }
+  notify(method, params) {
+    this.transport.sendMessage({ method, params });
+  }
+  onNotification(method, handler) {
+    const existing = this.notificationHandlers.get(method) ?? [];
+    existing.push(handler);
+    this.notificationHandlers.set(method, existing);
+  }
+  onCommandExecutionApproval(handler) {
+    this.serverRequestHandlers.set(METHOD_COMMAND_EXEC_APPROVAL, handler);
+  }
+  onFileChangeApproval(handler) {
+    this.serverRequestHandlers.set(METHOD_FILE_CHANGE_APPROVAL, handler);
+  }
+  onPermissionsApproval(handler) {
+    this.serverRequestHandlers.set(METHOD_PERMISSIONS_APPROVAL, handler);
+  }
+  onMcpElicitation(handler) {
+    this.serverRequestHandlers.set(METHOD_MCP_ELICITATION, handler);
+  }
+  async close() {
+    for (const [, p] of this.pending) {
+      clearTimeout(p.timer);
+      p.reject(new Error("Client closed"));
+    }
+    this.pending.clear();
+    await this.transport.close();
+  }
+  async requestRaw(method, params, timeoutMs) {
+    const id = this.nextId++;
+    return new Promise((resolve2, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Request timeout after ${timeoutMs}ms (method: ${method})`));
+      }, timeoutMs);
+      this.pending.set(id, { resolve: resolve2, reject, timer });
+      this.transport.sendMessage({ id, method, params });
     });
   }
-  isAvailable() {
-    return this._available;
+  onMessage(msg) {
+    if (typeof msg !== "object" || msg === null) return;
+    const m = msg;
+    if ("id" in m && ("result" in m || "error" in m)) {
+      const id = m.id;
+      const p = this.pending.get(id);
+      if (!p) {
+        console.warn(`[codex-client] Received response for unknown id ${id}, dropping`);
+        return;
+      }
+      this.pending.delete(id);
+      clearTimeout(p.timer);
+      if ("error" in m) {
+        const err = m.error;
+        p.reject(new Error(err.message ?? `JSON-RPC error (code ${err.code})`));
+      } else {
+        p.resolve(m.result);
+      }
+      return;
+    }
+    if ("id" in m && "method" in m) {
+      this.handleServerRequest(m.id, m.method, m.params);
+      return;
+    }
+    if ("method" in m && !("id" in m)) {
+      const method = m.method;
+      const handlers = this.notificationHandlers.get(method) ?? [];
+      handlers.forEach((h) => h(m.params));
+      return;
+    }
   }
-  /** Wait for async SDK import to complete */
-  async ensureInit() {
-    await this._initPromise;
-    return this._available;
+  async handleServerRequest(id, method, params) {
+    const handler = this.serverRequestHandlers.get(method);
+    if (!handler) {
+      console.warn(`[codex-client] Unhandled server request: ${method}`);
+      this.transport.sendMessage({
+        id,
+        error: { code: -32601, message: `Method not handled by client: ${method}` }
+      });
+      return;
+    }
+    try {
+      const result = await handler(params);
+      this.transport.sendMessage({ id, result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.transport.sendMessage({
+        id,
+        error: { code: -32e3, message }
+      });
+    }
+  }
+};
+
+// src/providers/codex-app-server/event-adapter.ts
+var CodexEventAdapter = class {
+  threadId = null;
+  recentItems = /* @__PURE__ */ new Map();
+  pendingAgentText = /* @__PURE__ */ new Map();
+  tokenUsage = null;
+  handle(method, params) {
+    const p = params ?? {};
+    switch (method) {
+      case "thread/started":
+        this.threadId = p.thread?.id ?? null;
+        return [];
+      case "thread/tokenUsage/updated":
+        this.tokenUsage = this.extractUsage(p.tokenUsage);
+        return [];
+      case "turn/started":
+        return [{ kind: "status", sessionId: this.threadId ?? "", model: "" }];
+      case "turn/completed":
+        return this.handleTurnCompleted(p);
+      case "item/started":
+        return this.handleItemStarted(p);
+      case "item/completed":
+        return this.handleItemCompleted(p);
+      case "error":
+        return [{ kind: "error", message: String(p.message ?? "Unknown error") }];
+      // Deltas + turn-wide aggregates intentionally suppressed (minimal mapping)
+      case "item/agentMessage/delta":
+      case "item/reasoning/textDelta":
+      case "item/reasoning/summaryTextDelta":
+      case "item/reasoning/summaryPartAdded":
+      case "item/commandExecution/outputDelta":
+      case "item/fileChange/outputDelta":
+      case "item/mcpToolCall/progress":
+      case "item/plan/delta":
+      case "item/commandExecution/terminalInteraction":
+      case "turn/diff/updated":
+      case "turn/plan/updated":
+      case "thread/status/changed":
+      case "thread/closed":
+      case "serverRequest/resolved":
+        return [];
+      default:
+        return [];
+    }
+  }
+  getItem(itemId) {
+    return this.recentItems.get(itemId);
+  }
+  reset() {
+    this.threadId = null;
+    this.recentItems.clear();
+    this.pendingAgentText.clear();
+    this.tokenUsage = null;
+  }
+  handleTurnCompleted(p) {
+    const turn = p.turn;
+    const status = turn?.status ?? "completed";
+    const sessionId = this.threadId ?? "";
+    const usage = this.tokenUsage ?? (() => {
+      console.warn(`[codex-event-adapter] turn/completed without prior tokenUsage (thread: ${sessionId})`);
+      return { inputTokens: 0, outputTokens: 0 };
+    })();
+    this.recentItems.clear();
+    this.pendingAgentText.clear();
+    this.tokenUsage = null;
+    if (status === "failed") {
+      return [
+        { kind: "query_result", sessionId, isError: true, usage },
+        { kind: "error", message: turn?.error?.message ?? "Codex turn failed" }
+      ];
+    }
+    return [{ kind: "query_result", sessionId, isError: false, usage }];
+  }
+  handleItemStarted(p) {
+    const item = p.item;
+    if (item && item.id) this.recentItems.set(item.id, item);
+    return [];
+  }
+  handleItemCompleted(p) {
+    const item = p.item;
+    if (!item) return [];
+    if (item.id) this.recentItems.set(item.id, item);
+    switch (item.type) {
+      case "agentMessage": {
+        const text2 = item.text ?? "";
+        return [{ kind: "text_delta", text: text2 }];
+      }
+      case "reasoning": {
+        const summary = Array.isArray(item.summary) ? item.summary.filter(Boolean) : [];
+        const content = Array.isArray(item.content) ? item.content.filter(Boolean) : [];
+        const text2 = [...summary, ...content].join("\n\n");
+        return [{ kind: "reasoning_complete", text: text2 }];
+      }
+      case "commandExecution": {
+        const input = { command: item.command ?? "", cwd: item.cwd ?? "" };
+        const exitCode = item.exitCode;
+        const output = item.aggregatedOutput ?? "";
+        return [
+          { kind: "tool_start", id: String(item.id), name: "Bash", input },
+          {
+            kind: "tool_result",
+            toolUseId: String(item.id),
+            content: output,
+            isError: typeof exitCode === "number" && exitCode !== 0
+          }
+        ];
+      }
+      case "fileChange": {
+        const changes = Array.isArray(item.changes) ? item.changes : [];
+        const mapped = changes.map((c) => ({
+          path: c.path,
+          kind: c.kind === "add" || c.kind === "delete" || c.kind === "update" ? c.kind : "update"
+        }));
+        const status = item.status === "failed" ? "failed" : "completed";
+        return [{ kind: "file_change_list", changes: mapped, status }];
+      }
+      case "plan": {
+        const description = item.text ?? "";
+        return [{ kind: "agent_progress", description }];
+      }
+      case "mcpToolCall": {
+        const server = item.server ?? "?";
+        const tool = item.tool ?? "?";
+        const args = item.arguments ?? {};
+        const result = item.result ?? "";
+        const errorMsg = item.error;
+        return [
+          { kind: "tool_start", id: String(item.id), name: `MCP:${server}.${tool}`, input: args },
+          {
+            kind: "tool_result",
+            toolUseId: String(item.id),
+            content: errorMsg ?? result,
+            isError: !!errorMsg
+          }
+        ];
+      }
+      case "webSearch": {
+        const query3 = item.query ?? "";
+        return [{ kind: "agent_progress", description: `Searched: ${query3}` }];
+      }
+      default: {
+        return [{ kind: "agent_progress", description: `[codex:${String(item.type)}]` }];
+      }
+    }
+  }
+  extractUsage(raw) {
+    const r = raw;
+    return {
+      inputTokens: r?.last?.inputTokens ?? 0,
+      outputTokens: r?.last?.outputTokens ?? 0
+    };
+  }
+};
+
+// src/providers/codex-app-server/approval-bridge.ts
+var CLAUDE_TO_EXEC_FILE = {
+  allow: "accept",
+  allow_always: "acceptForSession",
+  deny: "decline"
+};
+var CodexApprovalBridge = class {
+  constructor(client, eventAdapter, onPermissionRequest) {
+    this.client = client;
+    this.eventAdapter = eventAdapter;
+    this.onPermissionRequest = onPermissionRequest;
+  }
+  wireHandlers() {
+    this.client.onCommandExecutionApproval((p) => this.handleCommandExec(p));
+    this.client.onFileChangeApproval((p) => this.handleFileChange(p));
+    this.client.onPermissionsApproval((p) => this.handlePermissions(p));
+    this.client.onMcpElicitation((p) => this.handleMcpElicitation(p));
+  }
+  async handleCommandExec(params) {
+    const p = params ?? {};
+    if (!this.onPermissionRequest) return { decision: "accept" };
+    const input = { command: p.command ?? "", cwd: p.cwd ?? "" };
+    const reason = p.reason ?? p.command ?? "Codex command execution";
+    try {
+      const decision = await this.onPermissionRequest("Bash", input, reason);
+      return { decision: CLAUDE_TO_EXEC_FILE[decision] };
+    } catch (err) {
+      console.warn(`[codex-approval-bridge] commandExecution broker error, declining: ${err.message}`);
+      return { decision: "decline" };
+    }
+  }
+  async handleFileChange(params) {
+    const p = params ?? {};
+    if (!this.onPermissionRequest) return { decision: "accept" };
+    const itemId = p.itemId;
+    const cached2 = itemId ? this.eventAdapter.getItem(itemId) : void 0;
+    const changes = cached2?.changes ?? [];
+    const input = { changes };
+    const reason = p.reason ?? "Codex file change";
+    try {
+      const decision = await this.onPermissionRequest("Edit", input, reason);
+      return { decision: CLAUDE_TO_EXEC_FILE[decision] };
+    } catch (err) {
+      console.warn(`[codex-approval-bridge] fileChange broker error, declining: ${err.message}`);
+      return { decision: "decline" };
+    }
+  }
+  async handlePermissions(params) {
+    const p = params ?? {};
+    const permissionsReq = p.permissions ?? {};
+    if (!this.onPermissionRequest) {
+      return { permissions: permissionsReq, scope: "turn" };
+    }
+    const reason = p.reason ?? "Codex requests additional permissions";
+    try {
+      const decision = await this.onPermissionRequest(
+        "Permissions",
+        permissionsReq,
+        reason
+      );
+      if (decision === "deny") {
+        return { permissions: {}, scope: "turn" };
+      }
+      return {
+        permissions: permissionsReq,
+        scope: decision === "allow_always" ? "session" : "turn"
+      };
+    } catch (err) {
+      console.warn(`[codex-approval-bridge] permissions broker error, declining: ${err.message}`);
+      return { permissions: {}, scope: "turn" };
+    }
+  }
+  async handleMcpElicitation(_params) {
+    console.warn("[codex-approval-bridge] MCP elicitation received \u2014 auto-declining (not supported in v1.1)");
+    return { action: "decline", content: null };
+  }
+};
+
+// src/providers/codex-app-server/index.ts
+var execFileAsync = promisify(nodeExecFile);
+var MIN_CODEX_VERSION = "0.121.0";
+var _availabilityCache = null;
+var CodexAppServerProvider = class {
+  execFile;
+  spawnSubprocess;
+  constructor(deps = {}) {
+    this.execFile = deps.execFile ?? execFileAsync;
+    this.spawnSubprocess = deps.spawnSubprocess ?? spawnCodexAppServer;
+  }
+  async isAvailable() {
+    if (_availabilityCache) return _availabilityCache;
+    _availabilityCache = this.detectCodexBinary();
+    return _availabilityCache;
   }
   capabilities() {
     return flavorCapabilities("codex");
   }
   streamChat(params) {
-    if (!this._available) {
-      const stream2 = new ReadableStream({
-        start(controller) {
-          controller.enqueue({
-            kind: "error",
-            message: "Codex SDK not installed. Run: npm install @openai/codex-sdk"
-          });
-          controller.close();
-        }
-      });
-      return { stream: stream2 };
-    }
-    const adapter = new CodexAdapter();
-    let abortController;
+    const eventAdapter = new CodexEventAdapter();
+    let abortCtrl = new AbortController();
+    let activeThreadId = null;
+    let activeTurnId = null;
+    let client = null;
+    let transport = null;
+    let streamClosed = false;
+    const closeStream = (controller) => {
+      if (!streamClosed) {
+        streamClosed = true;
+        controller.close();
+      }
+    };
+    const enqueue = (controller, event) => {
+      if (!streamClosed) controller.enqueue(event);
+    };
     const stream = new ReadableStream({
-      start: (controller) => {
-        (async () => {
-          try {
-            await this._initPromise;
-            if (!this._available) {
-              controller.enqueue({ kind: "error", message: "Codex SDK not installed. Run: npm install @openai/codex-sdk" });
-              controller.close();
-              return;
-            }
-            const codex = new this.CodexCtor({
-              env: buildCodexEnv()
+      start: async (controller) => {
+        const child = this.spawnSubprocess();
+        transport = new StdioJsonlTransport(child);
+        client = new CodexAppServerClient(transport);
+        const forward = (method) => {
+          client.onNotification(method, (p) => {
+            const events = eventAdapter.handle(method, p);
+            events.forEach((e) => enqueue(controller, e));
+          });
+        };
+        [
+          "thread/started",
+          "thread/tokenUsage/updated",
+          "thread/status/changed",
+          "thread/closed",
+          "turn/started",
+          "turn/completed",
+          "item/started",
+          "item/completed",
+          "item/agentMessage/delta",
+          "item/reasoning/textDelta",
+          "item/reasoning/summaryTextDelta",
+          "item/commandExecution/outputDelta",
+          "item/fileChange/outputDelta",
+          "item/mcpToolCall/progress",
+          "item/plan/delta",
+          "turn/diff/updated",
+          "turn/plan/updated",
+          "error",
+          "serverRequest/resolved"
+        ].forEach(forward);
+        transport.onExit(({ code: code2 }) => {
+          if (code2 !== 0) {
+            enqueue(controller, {
+              kind: "error",
+              message: `Codex app-server exited unexpectedly (code ${code2})`
             });
-            const approvalPolicy = params.onPermissionRequest ? "untrusted" : "on-failure";
-            const threadOptions = {
-              model: params.model || process.env.CODEX_MODEL || void 0,
-              workingDirectory: params.workingDirectory,
-              approvalPolicy,
-              sandboxMode: "workspace-write",
-              // Map effort: low/medium/high/max → Codex's minimal/low/medium/high/xhigh
-              ...params.effort ? { modelReasoningEffort: EFFORT_MAP[params.effort] || params.effort } : {}
-            };
-            let thread;
-            let resumed = false;
-            if (params.sessionId) {
-              thread = codex.resumeThread(params.sessionId, threadOptions);
-              resumed = true;
-            } else {
-              thread = codex.startThread(threadOptions);
-            }
-            abortController = new AbortController();
-            let streamResult;
-            try {
-              streamResult = await thread.runStreamed(params.prompt, {
-                signal: abortController.signal
-              });
-            } catch (resumeErr) {
-              if (resumed) {
-                console.warn(`[tlive:codex] Resume failed (${resumeErr instanceof Error ? resumeErr.message : resumeErr}), starting new thread`);
-                thread = codex.startThread(threadOptions);
-                streamResult = await thread.runStreamed(params.prompt, {
-                  signal: abortController.signal
-                });
-              } else {
-                throw resumeErr;
-              }
-            }
-            const { events } = streamResult;
-            for await (const event of events) {
-              const itemType = "item" in event ? `.${event.item?.type}` : "";
-              console.log(`[tlive:codex] event: ${event.type}${itemType}`);
-              const canonicalEvents = adapter.adapt(event);
-              for (const ce of canonicalEvents) {
-                controller.enqueue(ce);
-              }
-            }
-            controller.close();
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            if (isAuthError(message)) {
-              console.error("[tlive:codex] Auth error: invalid API key or unauthorized.");
-              controller.enqueue({
-                kind: "error",
-                message: "Invalid OpenAI API key. Check OPENAI_API_KEY in ~/.tlive/config.env or environment."
-              });
-              controller.close();
-              return;
-            }
-            console.error(`[tlive:codex] Error: ${message}`);
-            controller.enqueue({ kind: "error", message });
-            controller.close();
           }
-        })();
+          closeStream(controller);
+        });
+        const approvalBridge = new CodexApprovalBridge(client, eventAdapter, params.onPermissionRequest);
+        approvalBridge.wireHandlers();
+        try {
+          await client.initialize({ capabilities: {} });
+          if (params.sessionId) {
+            const resumeResult = await client.request("thread/resume", {
+              threadId: params.sessionId,
+              cwd: params.workingDirectory,
+              model: params.model
+            });
+            activeThreadId = resumeResult.thread.id;
+          } else {
+            const startResult = await client.request("thread/start", {
+              cwd: params.workingDirectory,
+              model: params.model
+            });
+            activeThreadId = startResult.thread.id;
+          }
+          const turnResult = await client.request("turn/start", {
+            threadId: activeThreadId,
+            input: [{ type: "text", text: params.prompt }],
+            effort: params.effort,
+            model: params.model
+          });
+          activeTurnId = turnResult.turn.id;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          enqueue(controller, { kind: "error", message });
+          closeStream(controller);
+        }
+      },
+      cancel: () => {
+        if (client && activeThreadId && activeTurnId) {
+          client.request("turn/interrupt", { threadId: activeThreadId, turnId: activeTurnId }).catch(() => {
+          });
+        }
+        transport?.close().catch(() => {
+        });
       }
     });
     const controls = {
       interrupt: async () => {
-        abortController?.abort();
+        if (client && activeThreadId && activeTurnId) {
+          client.request("turn/interrupt", { threadId: activeThreadId, turnId: activeTurnId }).catch(() => {
+          });
+        }
+        transport?.close().catch(() => {
+        });
+        abortCtrl?.abort();
       },
-      stopTask: async () => {
-        abortController?.abort();
+      stopTask: async (_taskId) => {
+        if (client && activeThreadId && activeTurnId) {
+          client.request("turn/interrupt", { threadId: activeThreadId, turnId: activeTurnId }).catch(() => {
+          });
+        }
+        transport?.close().catch(() => {
+        });
+        abortCtrl?.abort();
       }
     };
     return { stream, controls };
   }
+  async detectCodexBinary() {
+    try {
+      const { stdout } = await this.execFile("codex", ["--version"]);
+      const match2 = stdout.match(/codex-cli\s+(\d+\.\d+\.\d+)/);
+      if (!match2) return false;
+      return compareVersions(match2[1], MIN_CODEX_VERSION) >= 0;
+    } catch {
+      return false;
+    }
+  }
 };
+function compareVersions(a, b) {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x > y) return 1;
+    if (x < y) return -1;
+  }
+  return 0;
+}
+function spawnCodexAppServer() {
+  return spawn("codex", ["app-server"], {
+    stdio: ["pipe", "pipe", "inherit"]
+  });
+}
 
 // src/providers/index.ts
 function resolveProvider(runtime, permissions, options) {
   switch (runtime) {
     case "codex":
-      return new CodexProvider();
+      return new CodexAppServerProvider();
     case "claude":
     case "auto":
     default:
       return new ClaudeSDKProvider(permissions, options?.claudeSettingSources);
   }
 }
-var _codexAvailable = null;
-var _codexCheckPromise = null;
-function isCodexAvailable() {
-  if (_codexAvailable !== null) return _codexAvailable;
-  if (!_codexCheckPromise) {
-    _codexCheckPromise = Promise.resolve().then(() => (init_dist(), dist_exports)).then((mod) => {
-      _codexAvailable = !!(mod.Codex || mod.default?.Codex);
-      return _codexAvailable;
-    }).catch(() => {
-      _codexAvailable = false;
-      return false;
-    });
-  }
-  return false;
-}
+var _codexProvider = new CodexAppServerProvider();
 async function checkCodexAvailable() {
-  if (_codexAvailable !== null) return _codexAvailable;
-  if (!_codexCheckPromise) {
-    isCodexAvailable();
-  }
-  return _codexCheckPromise;
+  return _codexProvider.isAvailable();
 }
 
 // src/permissions/gateway.ts
@@ -16447,8 +16166,8 @@ import { readFileSync as readFileSync3, writeFileSync as writeFileSync3, existsS
 // src/engine/workdir-validator.ts
 import { existsSync as existsSync4, statSync } from "node:fs";
 import { resolve } from "node:path";
-function validateWorkdir(path3, whitelist) {
-  const absolute = resolve(path3);
+function validateWorkdir(path, whitelist) {
+  const absolute = resolve(path);
   if (!existsSync4(absolute)) {
     return { ok: false, error: `Path not found: ${absolute}` };
   }
@@ -16546,8 +16265,8 @@ var WorkspaceManager = class {
     return { ok: true, workspace: ws, created: false };
   }
   /** Open workspace by path — creates new if no match, otherwise reuses. */
-  openByPath(path3, ctx) {
-    const v = validateWorkdir(path3, this.opts.workdirWhitelist);
+  openByPath(path, ctx) {
+    const v = validateWorkdir(path, this.opts.workdirWhitelist);
     if (!v.ok) return { ok: false, error: v.error };
     const resolved = v.resolved;
     const existing = this.findByWorkdir(resolved);
@@ -17212,7 +16931,7 @@ ${hasContext}`
         if (isKnownFlavor(runtime)) {
           if (runtime === "codex" && !await checkCodexAvailable()) {
             await adapter.send(msg.chatId, r.renderSimpleText(
-              "\u274C Codex SDK not installed.\nRun: `npm install @openai/codex-sdk` in the bridge directory."
+              "\u274C codex binary not installed (or version < 0.121.0).\nRun: `npm i -g @openai/codex@latest` to install."
             ));
             return true;
           }
@@ -17823,7 +17542,7 @@ var CostTracker = class {
 };
 
 // src/engine/message-renderer.ts
-var HIDDEN_TOOLS3 = /* @__PURE__ */ new Set([
+var HIDDEN_TOOLS2 = /* @__PURE__ */ new Set([
   "TodoWrite",
   "TaskCreate",
   "TaskUpdate",
@@ -17864,7 +17583,7 @@ var MessageRenderer = class {
     this.onPermissionTimeout = options.onPermissionTimeout;
   }
   onToolStart(name) {
-    if (HIDDEN_TOOLS3.has(name)) return;
+    if (HIDDEN_TOOLS2.has(name)) return;
     const current = this.toolCounts.get(name) ?? 0;
     this.toolCounts.set(name, current + 1);
     this.totalTools++;
