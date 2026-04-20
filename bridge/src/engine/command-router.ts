@@ -355,9 +355,21 @@ export class CommandRouter {
           this.state.setRuntime(msg.channelType, msg.chatId, runtime);
           // Switching provider → old session ID is invalid for the new provider
           if (prevRuntime !== runtime) {
+            // Close any live LiveSession for this chat — getOrCreateSession's cache
+            // key is channelType:chatId:workdir (no runtime), so without this the
+            // existing session would be reused under the new provider name.
+            this.onNewSession?.(msg.channelType, msg.chatId);
             const newSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
             await this.router.rebind(msg.channelType, msg.chatId, newSessionId);
             this.state.clearLastActive(msg.channelType, msg.chatId);
+            // Sync workspace.runtime so /workspaces + persistence reflect the choice
+            if (this.workspaceManager) {
+              const ws = this.workspaceManager.findByThread(msg.chatId, msg.threadId);
+              if (ws && ws.runtime !== runtime) {
+                this.workspaceManager.update(ws.name, { runtime });
+                this.workspaceManager.persist();
+              }
+            }
           }
           const icons: Record<string, string> = { claude: '🟣', codex: '🟢' };
           const text = `${icons[runtime] || '🔄'} Runtime: **${runtime}**`;

@@ -16948,9 +16948,17 @@ ${hasContext}`
           const prevRuntime = this.state.getRuntime(msg.channelType, msg.chatId) || "claude";
           this.state.setRuntime(msg.channelType, msg.chatId, runtime);
           if (prevRuntime !== runtime) {
+            this.onNewSession?.(msg.channelType, msg.chatId);
             const newSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
             await this.router.rebind(msg.channelType, msg.chatId, newSessionId);
             this.state.clearLastActive(msg.channelType, msg.chatId);
+            if (this.workspaceManager) {
+              const ws = this.workspaceManager.findByThread(msg.chatId, msg.threadId);
+              if (ws && ws.runtime !== runtime) {
+                this.workspaceManager.update(ws.name, { runtime });
+                this.workspaceManager.persist();
+              }
+            }
           }
           const icons = { claude: "\u{1F7E3}", codex: "\u{1F7E2}" };
           const text2 = `${icons[runtime] || "\u{1F504}"} Runtime: **${runtime}**`;
