@@ -17,6 +17,10 @@ import type { ScannerContextSnapshot, NotificationPayload } from './notification
 export function isScannerPathNotification(
   n: NotificationPayload,
 ): n is NotificationPayload & { sessionCtx: ScannerContextSnapshot } {
+  // Shape-check is shallow: we trust the IPC boundary to validate the full
+  // ScannerContextSnapshot. A malformed partial sessionCtx would pass this
+  // guard and then throw inside decorateEvent — acceptable because the
+  // IPC protocol (runFlavor → bridge) guarantees the shape.
   return n.sessionCtx !== undefined && n.sessionCtx.isLocal === true;
 }
 
@@ -24,6 +28,11 @@ export function isScannerPathNotification(
  * Pure. Enrich an event with workspace tag, terminalUrl, and resumeHint derived
  * from the scanner session context. Preserves any fields already set on the event
  * (decorator never overwrites an explicit value).
+ *
+ * Preserve semantics: uses `??` — only `null`/`undefined` fields get the default.
+ * A caller passing `title: ''` or `resumeHint: ''` signals "I explicitly want
+ * this blank", and the decorator respects that. If callers should never emit
+ * empty-string display fields, they must filter before calling the decorator.
  *
  * Per-kind behavior:
  *  - activity_text: default title = "Terminal · <workspace> · #<6char> · local"; default terminalUrl = ctx.terminalUrl.
@@ -50,6 +59,8 @@ export function decorateEvent(
     case 'session_complete':
       return {
         ...event,
+        // Assumes ctx.sessionId contains no backtick/backslash/markdown-metachar.
+        // Currently always true (UUID-shaped). Revisit if the id format changes.
         resumeHint: event.resumeHint
           ?? `Reply here to continue in IM, or run \`${ctx.provider} resume ${ctx.sessionId}\` in a terminal.`,
         terminalUrl: event.terminalUrl ?? ctx.terminalUrl,
@@ -62,5 +73,12 @@ export function decorateEvent(
     case 'file_change_list':
     case 'error':
       return event;
+    default: {
+      // Exhaustiveness check: if NotificationEvent gains a new variant,
+      // TS will refuse to assign it to `never` and compilation fails —
+      // forcing a decision about how to decorate it.
+      const _exhaustive: never = event;
+      return _exhaustive;
+    }
   }
 }

@@ -73,7 +73,8 @@ export class NotificationDispatcher {
       try {
         let result;
         if (notification.event && renderer) {
-          // Structured event → decorate if scanner-path → Renderer
+          // Structured event → decorate if scanner-path → Renderer.
+          // Cast safe: shape guaranteed by IPC protocol — see bridge/src/renderers/types.ts.
           const baseEvent = notification.event as RendererNotificationEvent;
           const decorated = isScannerPathNotification(notification)
             ? decorateEvent(baseEvent, notification.sessionCtx)

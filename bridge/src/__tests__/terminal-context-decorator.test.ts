@@ -30,6 +30,12 @@ describe('decorateEvent', () => {
     expect(out).toMatchObject({ title: 'Preset', terminalUrl: 'http://other/' });
   });
 
+  it('activity_text: preserves empty-string title (explicit blank intent)', () => {
+    const e: NotificationEvent = { kind: 'activity_text', text: 'hi', title: '' };
+    const out = decorateEvent(e, ctx);
+    expect(out).toMatchObject({ title: '' });
+  });
+
   it('activity_tool: injects terminalUrl when missing', () => {
     const e: NotificationEvent = { kind: 'activity_tool', toolName: 'Bash', toolInput: 'ls' };
     const out = decorateEvent(e, ctx);
