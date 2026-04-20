@@ -54,6 +54,7 @@ export class CodexAppServerProvider implements LLMProvider {
     let client: CodexAppServerClient | null = null;
     let transport: StdioJsonlTransport | null = null;
     let streamClosed = false;
+    let lastErrorMessage: string | null = null;
 
     const closeStream = (controller: ReadableStreamDefaultController<CanonicalEvent>) => {
       if (!streamClosed) {
@@ -63,7 +64,15 @@ export class CodexAppServerProvider implements LLMProvider {
     };
 
     const enqueue = (controller: ReadableStreamDefaultController<CanonicalEvent>, event: CanonicalEvent) => {
-      if (!streamClosed) controller.enqueue(event);
+      if (streamClosed) return;
+      // Codex app-server may surface the same protocol error via both an `error`
+      // notification AND a JSON-RPC error response — drop consecutive duplicates.
+      if (event.kind === 'error') {
+        const msg = (event as { message: string }).message;
+        if (msg === lastErrorMessage) return;
+        lastErrorMessage = msg;
+      }
+      controller.enqueue(event);
     };
 
     const stream = new ReadableStream<CanonicalEvent>({

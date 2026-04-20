@@ -15893,6 +15893,7 @@ var CodexAppServerProvider = class {
     let client = null;
     let transport = null;
     let streamClosed = false;
+    let lastErrorMessage = null;
     const closeStream = (controller) => {
       if (!streamClosed) {
         streamClosed = true;
@@ -15900,7 +15901,13 @@ var CodexAppServerProvider = class {
       }
     };
     const enqueue = (controller, event) => {
-      if (!streamClosed) controller.enqueue(event);
+      if (streamClosed) return;
+      if (event.kind === "error") {
+        const msg = event.message;
+        if (msg === lastErrorMessage) return;
+        lastErrorMessage = msg;
+      }
+      controller.enqueue(event);
     };
     const stream = new ReadableStream({
       start: async (controller) => {
