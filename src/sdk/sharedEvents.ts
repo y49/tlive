@@ -1,6 +1,15 @@
 // src/sdk/sharedEvents.ts
-// Shared IPC event types mirroring bridge/src/renderers/types.ts.
-// Kept in sync manually; Task 6 will consolidate.
+//
+// SOURCE OF TRUTH: bridge/src/renderers/types.ts → `NotificationEvent` union.
+// This file is a TEMPORARY type mirror because `tsconfig.src.json` has
+// `rootDir: src`, which blocks the simpler re-export
+// (`export type { NotificationEvent } from '../../bridge/src/renderers/types.js'`
+// would fail with TS6059).
+//
+// Drift risk: any addition/removal of variants or fields in the source MUST
+// be mirrored here. Task 6 (loop.ts consolidation) is the checkpoint to revisit
+// this — likely by moving the shared type to a neutral location both projects
+// can import.
 
 export interface AskOption {
   label: string;

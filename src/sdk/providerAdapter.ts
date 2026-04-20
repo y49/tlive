@@ -113,7 +113,18 @@ export interface ProviderAdapter {
 
   /**
    * Convert a delayed permission_needed scanner emission into a display event.
-   * Contract: pure. Providers without a scanner-path permission broker (codex) throw.
+   *
+   * Contract: pure. Providers that lack a scanner-path permission broker (i.e.
+   * codex) throw `new Error('codex scanner path has no permission broker')`.
+   *
+   * Caller contract: do NOT call unconditionally without a guard. Callers MUST
+   * either (a) wrap in try/catch and drop on error, or (b) pre-check
+   * `capabilities.liveSession` — adapters that set `liveSession: false`
+   * (codex) do not implement this path, so the call will throw. Guard example:
+   *
+   *   if (adapter.capabilities?.liveSession) {
+   *     const evt = adapter.toPermissionEvent?.(toolUse, ctx);
+   *   }
    */
   toPermissionEvent?(
     toolUse: ToolUseEvent,

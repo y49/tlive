@@ -29,4 +29,11 @@ describe('ScannerContext', () => {
     expect(ctx.snapshot.workdir).toBe('/a');
     expect(ctx.snapshot.terminalUrl).toBe('http://x/?token=q');
   });
+
+  it('strips a trailing slash when deriving workspaceName', () => {
+    const ctx = ScannerContext.fromWorkdir({
+      sessionId: 'sid', workdir: '/home/alice/projects/foo/', provider: 'claude', terminalUrl: 'http://x/',
+    });
+    expect(ctx.snapshot.workspaceName).toBe('foo');
+  });
 });

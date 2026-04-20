@@ -11,6 +11,8 @@ export type { ProviderAdapter };
 
 export type ProviderName = 'claude' | 'codex';
 
+// NOTE: Tasks 3+ are the first real callers of this factory. Do not remove as
+// dead code — it is intentionally exported ahead of its consumers.
 export function createProviderAdapter(name: ProviderName): ProviderAdapter {
   switch (name) {
     case 'claude': return new ClaudeAdapter();
