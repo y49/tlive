@@ -80,6 +80,9 @@ export class TerminalRelay {
   interceptReply(msg: { text: string; replyToMessageId?: string }): boolean {
     return this.replyInterceptor.interceptReply(msg);
   }
+  isReplyToTracked(replyToMessageId: string | undefined): boolean {
+    return this.replyInterceptor.isReplyToTracked(replyToMessageId);
+  }
   handleAskCallback(callbackData: string): boolean {
     return this.replyInterceptor.handleAskCallback(callbackData);
   }

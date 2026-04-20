@@ -198,6 +198,11 @@ export class BridgeManager {
   /** Intercept inbound messages — return true to consume (don't route to SDK) */
   onInboundMessage?: (channelType: string, msg: { text: string; replyToMessageId?: string }) => boolean;
 
+  /** Pure pre-check: is this a reply to a tracked terminal-relay notification?
+   *  Used to bypass the SDK queue/processing gate so terminal replies always
+   *  reach the PTY even when bridge-initiated turns are in flight. */
+  isTerminalReply?: (replyToMessageId: string | undefined) => boolean;
+
   /** Resume a discovered Claude session — store session data and start an SDK turn */
   private async resumeSession(adapter: BaseChannelAdapter, chatId: string, sessionId: string, workdir: string): Promise<void> {
     try {
@@ -323,7 +328,11 @@ export class BridgeManager {
       // Regular messages (Claude queries) are fire-and-forget so they don't
       // block the loop while waiting for LLM responses or permission approvals.
       const hasPendingQuestion = this.sdkEngine.findPendingQuestion(adapter.channelType, msg.chatId) !== null;
-      const isQuickMessage = !!msg.callbackData
+      // Terminal-relay replies must bypass the queue/processing gate — otherwise
+      // a reply meant for the PTY gets stuck behind any in-flight bridge turn.
+      const isTerminalRelayReply = this.isTerminalReply?.(msg.replyToMessageId) === true;
+      const isQuickMessage = isTerminalRelayReply
+        || !!msg.callbackData
         || (msg.text && QUICK_COMMANDS.has(msg.text.split(' ')[0].toLowerCase()))
         || this.permissions.parsePermissionText(msg.text || '') !== null
         || hasPendingQuestion;

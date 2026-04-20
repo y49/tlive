@@ -25356,6 +25356,10 @@ var BridgeManager = class _BridgeManager {
   onConfigUpdate;
   /** Intercept inbound messages — return true to consume (don't route to SDK) */
   onInboundMessage;
+  /** Pure pre-check: is this a reply to a tracked terminal-relay notification?
+   *  Used to bypass the SDK queue/processing gate so terminal replies always
+   *  reach the PTY even when bridge-initiated turns are in flight. */
+  isTerminalReply;
   /** Resume a discovered Claude session — store session data and start an SDK turn */
   async resumeSession(adapter, chatId, sessionId, workdir) {
     try {
@@ -25459,7 +25463,8 @@ var BridgeManager = class _BridgeManager {
       }
       console.log(`[${adapter.channelType}] Message from ${msg.userId}: ${msg.text || "(callback)"}`);
       const hasPendingQuestion = this.sdkEngine.findPendingQuestion(adapter.channelType, msg.chatId) !== null;
-      const isQuickMessage = !!msg.callbackData || msg.text && QUICK_COMMANDS.has(msg.text.split(" ")[0].toLowerCase()) || this.permissions.parsePermissionText(msg.text || "") !== null || hasPendingQuestion;
+      const isTerminalRelayReply = this.isTerminalReply?.(msg.replyToMessageId) === true;
+      const isQuickMessage = isTerminalRelayReply || !!msg.callbackData || msg.text && QUICK_COMMANDS.has(msg.text.split(" ")[0].toLowerCase()) || this.permissions.parsePermissionText(msg.text || "") !== null || hasPendingQuestion;
       if (isQuickMessage) {
         try {
           await this.handleInboundMessage(adapter, msg);
@@ -25772,6 +25777,10 @@ var ReplyInterceptor = class {
     this.trackedMsgIds.add(messageId);
     this.log(`Tracked notification: ${messageId}`);
   }
+  /** Pure check: would interceptReply consume this message? Side-effect free. */
+  isReplyToTracked(replyToMessageId) {
+    return !!replyToMessageId && this.trackedMsgIds.has(replyToMessageId);
+  }
   /**
    * Check if an inbound IM message is a reply to a tracked notification.
    * Returns true if consumed (forwarded to terminal via onForward callback).
@@ -25944,6 +25953,9 @@ var TerminalRelay = class {
   // ---- Public API (delegated) ----
   interceptReply(msg) {
     return this.replyInterceptor.interceptReply(msg);
+  }
+  isReplyToTracked(replyToMessageId) {
+    return this.replyInterceptor.isReplyToTracked(replyToMessageId);
   }
   handleAskCallback(callbackData) {
     return this.replyInterceptor.handleAskCallback(callbackData);
@@ -27409,6 +27421,7 @@ Claude is waiting for input`,
     }
   }, DISCOVERY_INTERVAL);
   manager.onInboundMessage = (_ch, msg) => relay.interceptReply(msg);
+  manager.isTerminalReply = (replyToMessageId) => relay.isReplyToTracked(replyToMessageId);
   manager.onTerminalPermissionCallback = (action, id, sid) => relay.forwardPermissionAction(action, id, sid);
   manager.onTerminalQuestionCallback = (data) => relay.handleAskCallback(data);
   manager.onConfigUpdate = (update) => relay.forwardConfigUpdate(update);

@@ -26,6 +26,11 @@ export class ReplyInterceptor {
     this.log(`Tracked notification: ${messageId}`);
   }
 
+  /** Pure check: would interceptReply consume this message? Side-effect free. */
+  isReplyToTracked(replyToMessageId: string | undefined): boolean {
+    return !!replyToMessageId && this.trackedMsgIds.has(replyToMessageId);
+  }
+
   /**
    * Check if an inbound IM message is a reply to a tracked notification.
    * Returns true if consumed (forwarded to terminal via onForward callback).

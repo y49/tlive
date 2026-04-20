@@ -124,6 +124,7 @@ async function main() {
 
   // Wire IM → terminal: reply interception + permission/question callbacks
   manager.onInboundMessage = (_ch, msg) => relay.interceptReply(msg);
+  manager.isTerminalReply = (replyToMessageId) => relay.isReplyToTracked(replyToMessageId);
   manager.onTerminalPermissionCallback = (action, id, sid) => relay.forwardPermissionAction(action, id, sid);
   manager.onTerminalQuestionCallback = (data) => relay.handleAskCallback(data);
   manager.onConfigUpdate = (update) => relay.forwardConfigUpdate(update);

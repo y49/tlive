@@ -103,9 +103,13 @@ export async function runFlavor(opts: RunFlavorOptions): Promise<void> {
 
   if (ipcConnected) {
     // Wire IPC as the IM transport
-    loop.setIMTarget('ipc', async (_chatId, text, buttons) => {
+    loop.setIMTarget('ipc', async (_chatId, text, buttons, event) => {
       ipc.send('notification', {
         text, buttons,
+        // Forward the structured event so the bridge renderer can produce
+        // a card with proper workspace tag header instead of falling back
+        // to plain-text rendering of merged title+body.
+        event,
         sessionId: loop.sessionInfo.sessionId,
         workdir,
       });
