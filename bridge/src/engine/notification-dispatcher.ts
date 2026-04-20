@@ -7,6 +7,7 @@ import type { BaseChannelAdapter } from '../channels/base.js';
 import type { ChannelType } from '../channels/types.js';
 import type { NotificationRenderer, NotificationEvent as RendererNotificationEvent } from '../renderers/types.js';
 import { TargetResolver } from './target-resolver.js';
+import { decorateEvent, isScannerPathNotification } from './terminal-context-decorator.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -72,8 +73,12 @@ export class NotificationDispatcher {
       try {
         let result;
         if (notification.event && renderer) {
-          // Structured event → Renderer
-          const rendered = renderer.renderNotification(notification.event as RendererNotificationEvent);
+          // Structured event → decorate if scanner-path → Renderer
+          const baseEvent = notification.event as RendererNotificationEvent;
+          const decorated = isScannerPathNotification(notification)
+            ? decorateEvent(baseEvent, notification.sessionCtx)
+            : baseEvent;
+          const rendered = renderer.renderNotification(decorated);
           result = await adapter.send(target.chatId, rendered);
         } else if (renderer) {
           // Fallback: plain text via renderer
