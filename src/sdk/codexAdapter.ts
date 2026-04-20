@@ -154,6 +154,7 @@ export class CodexAdapter implements ProviderAdapter {
    * Pure: no mutation, no I/O. Defensive: returns [] for unrecognized shapes.
    * Handles </think> split for gpt-oss / minimax-m2.5 style models where the
    * assistant message bundles reasoning prefix + answer in one output_text.
+   * No display-concern leaks — bridge decorator owns titles and terminal URLs.
    */
   toEvents(raw: Record<string, unknown>, _ctx: ScannerContextSnapshot): NotificationEvent[] {
     const t = raw.type;
@@ -180,6 +181,9 @@ export class CodexAdapter implements ProviderAdapter {
       if (pt === 'function_call') {
         const toolName = typeof p.name === 'string' ? p.name : 'unknown';
         const rawArgs = p.arguments;
+        // raw JSON string passed through as-is — ProviderAdapter contract keeps
+        // toEvents pure and shape-level. normalizeSessionEvent (deleted in Task 6)
+        // used to JSON.parse here; bridge decorator / renderers handle display.
         const toolInput = typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs ?? '');
         return [{ kind: 'activity_tool', toolName, toolInput }];
       }
@@ -196,6 +200,8 @@ export class CodexAdapter implements ProviderAdapter {
   /**
    * Pure. Returns token usage object when `raw` is a token_count event; else null.
    * Always returns all three numeric fields (zero-filled) when usage is present.
+   * Zero-fill is a contractual guarantee, not a workaround — callers can assume the
+   * shape is stable across codex versions even if a field is absent upstream.
    */
   extractUsage(raw: Record<string, unknown>): Record<string, unknown> | null {
     if (raw.type !== 'event_msg') return null;

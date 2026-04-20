@@ -9,3 +9,5 @@
 {"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1200,"output_tokens":350,"cached_input_tokens":800}}}}
 {"type":"event_msg","payload":{"type":"task_complete"}}
 {"type":"unknown_top_level","payload":{"foo":"bar"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"output_text","text":"prompt"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[]}}
