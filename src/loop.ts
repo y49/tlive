@@ -130,18 +130,19 @@ export class TLiveLoop extends EventEmitter {
         if (!text) continue;
         const body = text.length > MAX_IM_TEXT_LEN ? text.slice(0, MAX_IM_TEXT_LEN) + '...' : text;
         const structEvent = toNotificationEvent(msg);
-        // Enrich activity_text events with workspace tag header + reply hint
-        // so the bridge renderer produces a card with header bar + footer
-        // instead of a bare body block.
+        // Enrich activity_text events with workspace tag header so the bridge
+        // renderer produces a card with header bar. No footer — the inline
+        // "reply here" hint renders inconsistently across IMs and IM users
+        // already know to reply natively to drive the terminal.
         const enrichedEvent = structEvent && structEvent.kind === 'activity_text'
-          ? { ...structEvent, title: `${LABEL.terminal} · ${this.sessionTag()}`, footer: LABEL.replyHint }
+          ? { ...structEvent, title: `${LABEL.terminal} · ${this.sessionTag()} · local` }
           : structEvent;
         this.notifications.push({
           kind: 'activity_text',
           dedupeKey: `activity:${event.uuid}:${msg.kind}`,
           sessionId: this.session.info.sessionId,
-          title: `${LABEL.terminal} · ${this.sessionTag()}`,
-          body: body + `\n\n${LABEL.replyHint}`,
+          title: `${LABEL.terminal} · ${this.sessionTag()} · local`,
+          body,
           event: enrichedEvent ?? undefined,
         });
         continue;

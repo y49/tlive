@@ -48,7 +48,10 @@ var CodexAdapter = class {
         const content = Array.isArray(p.content) ? p.content : [];
         const firstText = content.find((c) => c?.type === "output_text" || c?.type === "text")?.text;
         if (typeof firstText === "string" && firstText.length > 0) {
-          return [{ kind: "text", text: firstText, provider: "codex", sessionId }];
+          const closeIdx = firstText.indexOf("</think>");
+          const cleaned = closeIdx >= 0 ? firstText.slice(closeIdx + "</think>".length).trim() : firstText;
+          if (cleaned.length === 0) return [];
+          return [{ kind: "text", text: cleaned, provider: "codex", sessionId }];
         }
         return [];
       }
@@ -1305,15 +1308,13 @@ var TLiveLoop = class extends EventEmitter7 {
         if (!text2) continue;
         const body = text2.length > MAX_IM_TEXT_LEN ? text2.slice(0, MAX_IM_TEXT_LEN) + "..." : text2;
         const structEvent = toNotificationEvent(msg);
-        const enrichedEvent = structEvent && structEvent.kind === "activity_text" ? { ...structEvent, title: `${LABEL.terminal} \xB7 ${this.sessionTag()}`, footer: LABEL.replyHint } : structEvent;
+        const enrichedEvent = structEvent && structEvent.kind === "activity_text" ? { ...structEvent, title: `${LABEL.terminal} \xB7 ${this.sessionTag()} \xB7 local` } : structEvent;
         this.notifications.push({
           kind: "activity_text",
           dedupeKey: `activity:${event.uuid}:${msg.kind}`,
           sessionId: this.session.info.sessionId,
-          title: `${LABEL.terminal} \xB7 ${this.sessionTag()}`,
-          body: body + `
-
-${LABEL.replyHint}`,
+          title: `${LABEL.terminal} \xB7 ${this.sessionTag()} \xB7 local`,
+          body,
           event: enrichedEvent ?? void 0
         });
         continue;
@@ -1791,17 +1792,14 @@ async function runFlavor(opts) {
     const projectName = workdir.split("/").filter(Boolean).pop() ?? "unknown";
     const sessionTag = `${projectName} \xB7 #${loop.sessionInfo.sessionId.slice(0, 6)}`;
     ipc.send("notification", {
-      text: `\u{1F680} tlive ${adapter.name} started
-${sessionTag}
-
-\u21A9 Reply here to interact`,
+      text: `\u{1F3E0} tlive ${adapter.name} (local terminal) started
+${sessionTag}`,
       sessionId: loop.sessionInfo.sessionId,
       workdir,
       event: {
         kind: "activity_text",
         text: `\`${workdir}\``,
-        title: `\u{1F680} tlive ${adapter.name} \xB7 ${sessionTag}`,
-        footer: "\u21A9 Reply here to interact"
+        title: `\u{1F3E0} tlive ${adapter.name} \xB7 ${sessionTag} \xB7 local`
       }
     });
   } else {

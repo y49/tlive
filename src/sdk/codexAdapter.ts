@@ -71,7 +71,16 @@ export class CodexAdapter implements ProviderAdapter {
         const content = Array.isArray(p.content) ? p.content : [];
         const firstText = content.find((c: any) => c?.type === 'output_text' || c?.type === 'text')?.text;
         if (typeof firstText === 'string' && firstText.length > 0) {
-          return [{ kind: 'text', text: firstText, provider: 'codex', sessionId }];
+          // Some models (gpt-oss, minimax-m2.5) emit reasoning followed by a
+          // closing </think> tag in the assistant text — the opening <think>
+          // already lives in a separate `reasoning` item. Drop everything up
+          // to and including the first </think> so only the answer surfaces.
+          const closeIdx = firstText.indexOf('</think>');
+          const cleaned = closeIdx >= 0
+            ? firstText.slice(closeIdx + '</think>'.length).trim()
+            : firstText;
+          if (cleaned.length === 0) return [];
+          return [{ kind: 'text', text: cleaned, provider: 'codex', sessionId }];
         }
         return [];
       }
