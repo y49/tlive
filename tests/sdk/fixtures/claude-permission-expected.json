@@ -1,0 +1,29 @@
+{
+  "bash_permission": {
+    "input": {
+      "toolUseId": "perm_bash_1", "toolName": "Bash",
+      "input": { "command": "rm -rf node_modules" }, "timestamp": 0
+    },
+    "expected": {
+      "kind": "permission_request",
+      "toolName": "Bash",
+      "toolInput": "rm -rf node_modules",
+      "permissionId": "perm_bash_1"
+    }
+  },
+  "askq_permission": {
+    "input": {
+      "toolUseId": "perm_askq_1", "toolName": "AskUserQuestion",
+      "input": { "questions": [ { "question": "Which env?", "options": [ { "label": "prod" }, { "label": "staging" } ] } ] },
+      "timestamp": 0,
+      "questionText": "Which env?",
+      "questionOptions": ["prod", "staging"]
+    },
+    "expected": {
+      "kind": "ask_user_question",
+      "question": "Which env?",
+      "toolUseId": "perm_askq_1",
+      "options": [ { "label": "prod" }, { "label": "staging" } ]
+    }
+  }
+}

@@ -12,7 +12,10 @@ import type {
   ThinkingTriggerEvent,
 } from './providerAdapter.js';
 import { findLastSession } from '../core/sessionDiscovery.js';
-import { normalizeSessionLine } from './messageNormalizer.js';
+import { normalizeSessionLine, formatToolArgsBrief, extractTodos } from './messageNormalizer.js';
+import type { NotificationEvent } from './sharedEvents.js';
+import type { ScannerContextSnapshot } from '../core/scannerContext.js';
+import type { ToolUseEvent } from '../core/sessionScanner.js';
 
 /**
  * Extract content blocks from a Claude .jsonl message.
@@ -90,6 +93,94 @@ export class ClaudeAdapter implements ProviderAdapter {
       'claude',
       ctx?.sessionId ?? '',
     );
+  }
+
+  toEvents(raw: Record<string, unknown>, _ctx: ScannerContextSnapshot): NotificationEvent[] {
+    const type = raw.type;
+    const blocks = getContentBlocks((raw as { message?: unknown }).message);
+    const out: NotificationEvent[] = [];
+
+    if (type === 'assistant') {
+      for (const block of blocks) {
+        const bt = block.type;
+        if (bt === 'text' && typeof block.text === 'string' && block.text.length > 0) {
+          out.push({ kind: 'activity_text', text: block.text });
+        } else if (bt === 'tool_use') {
+          const toolName = (block.name as string) ?? 'unknown';
+          const toolUseId = (block.id as string) ?? '';
+          const input = block.input as Record<string, unknown> | undefined;
+
+          if (toolName === 'AskUserQuestion') {
+            const questions = Array.isArray(input?.questions)
+              ? (input!.questions as Array<Record<string, unknown>>)
+              : [];
+            const firstQ: Record<string, unknown> =
+              questions[0] ?? (input as Record<string, unknown> | undefined) ?? {};
+            const rawOpts = Array.isArray(firstQ.options)
+              ? (firstQ.options as Array<Record<string, unknown>>)
+              : [];
+            const options = rawOpts.map((o) => ({
+              label: (o.label as string) ?? (o.description as string) ?? '?',
+              ...(o.description ? { description: o.description as string } : {}),
+            }));
+            out.push({
+              kind: 'ask_user_question',
+              question: (firstQ.question as string) ?? '',
+              ...(firstQ.header ? { header: firstQ.header as string } : {}),
+              ...(options.length > 0 ? { options } : {}),
+              toolUseId,
+            });
+            continue;
+          }
+
+          if (toolName === 'TodoWrite') {
+            const todos = extractTodos(input);
+            if (todos) {
+              out.push({ kind: 'todo_update', items: todos });
+              continue;
+            }
+          }
+
+          out.push({
+            kind: 'activity_tool',
+            toolName,
+            toolInput: formatToolArgsBrief(toolName, input),
+          });
+        }
+        // thinking blocks: skip (internal)
+      }
+    }
+    // type === 'user' with tool_result: filtered (no IM emission)
+    return out;
+  }
+
+  toPermissionEvent(toolUse: ToolUseEvent, _ctx: ScannerContextSnapshot): NotificationEvent {
+    if (toolUse.toolName === 'AskUserQuestion') {
+      const rawInput = toolUse.input as Record<string, unknown> | undefined;
+      const questions = Array.isArray(rawInput?.questions)
+        ? (rawInput!.questions as Array<Record<string, unknown>>)
+        : [];
+      const firstQ: Record<string, unknown> = questions[0] ?? {};
+      const rawOpts = Array.isArray(firstQ.options)
+        ? (firstQ.options as Array<Record<string, unknown>>)
+        : [];
+      const options = rawOpts.map((o) => ({
+        label: (o.label as string) ?? (o.description as string) ?? '?',
+        ...(o.description ? { description: o.description as string } : {}),
+      }));
+      return {
+        kind: 'ask_user_question',
+        question: toolUse.questionText ?? (firstQ.question as string) ?? 'Question from Claude',
+        ...(options.length > 0 ? { options } : {}),
+        toolUseId: toolUse.toolUseId,
+      };
+    }
+    return {
+      kind: 'permission_request',
+      toolName: toolUse.toolName,
+      toolInput: formatToolArgsBrief(toolUse.toolName, toolUse.input),
+      permissionId: toolUse.toolUseId,
+    };
   }
 
   /**

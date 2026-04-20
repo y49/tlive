@@ -1,0 +1,41 @@
+{
+  "u1": [
+    { "kind": "activity_text", "text": "I will read the file." }
+  ],
+  "u2": [
+    { "kind": "activity_tool", "toolName": "Read", "toolInput": "/tmp/foo.ts" }
+  ],
+  "u3": [],
+  "u4": [
+    { "kind": "activity_tool", "toolName": "Bash", "toolInput": "ls -la" }
+  ],
+  "u5": [
+    { "kind": "activity_tool", "toolName": "Edit", "toolInput": "/tmp/x.ts" }
+  ],
+  "u6": [
+    { "kind": "todo_update", "items": [
+      { "content": "Step 1", "status": "completed" },
+      { "content": "Step 2", "status": "in_progress" },
+      { "content": "Step 3", "status": "pending" }
+    ] }
+  ],
+  "u7": [
+    { "kind": "ask_user_question",
+      "question": "Pick an approach",
+      "header": "Design",
+      "options": [
+        { "label": "A", "description": "Option A desc" },
+        { "label": "B", "description": "Option B desc" }
+      ],
+      "toolUseId": "tool_05"
+    }
+  ],
+  "u8": [
+    { "kind": "activity_text", "text": "Done." },
+    { "kind": "activity_tool", "toolName": "Grep", "toolInput": "foo" }
+  ],
+  "u9": [
+    { "kind": "activity_text", "text": "External reply" }
+  ],
+  "u10_unknown": []
+}
