@@ -137,6 +137,13 @@ export class TLiveLoop extends EventEmitter {
    * title/body on the envelope are only used for plain-text fallback when a channel
    * lacks a renderer; the real rendering happens on the bridge side via the decorator
    * + platform-specific renderer.
+   *
+   * Note: the passed-in `dedupeKey` is used as the default; two kinds override it
+   *   - ask_user_question → `askq:${toolUseId}` (must match handlePermissionNeeded for
+   *     dual-emit dedup: the immediate card from toEvents and the delayed card from
+   *     toPermissionEvent share this key so NotificationHub keeps only the first)
+   *   - todo_update → `todo:${dedupeKey}` (namespaced to avoid collision with same-uuid
+   *     activity_text entries)
    */
   private toHubEvent(e: BridgeNotificationEvent, dedupeKey: string): HubNotificationEvent | null {
     switch (e.kind) {
@@ -168,6 +175,7 @@ export class TLiveLoop extends EventEmitter {
         }
         return {
           kind: 'ask_user_question',
+          // Override: must match handlePermissionNeeded's key for dual-emit dedup.
           dedupeKey: `askq:${e.toolUseId}`,
           sessionId: this.ctx.snapshot.sessionId,
           title: '',
@@ -179,6 +187,7 @@ export class TLiveLoop extends EventEmitter {
       case 'todo_update':
         return {
           kind: 'todo_update',
+          // Override: namespace to avoid collision with activity_text on the same uuid.
           dedupeKey: `todo:${dedupeKey}`,
           sessionId: this.ctx.snapshot.sessionId,
           title: '',
@@ -194,11 +203,23 @@ export class TLiveLoop extends EventEmitter {
           body: e.message,
           event: e,
         };
-      default:
-        // permission_request, thinking, reasoning_summary, file_change_list, session_complete,
-        // activity_tool (covered above) — not emitted via toEvents directly. session_complete
-        // is pushed from handleSessionComplete; permission_request from handlePermissionNeeded.
+      case 'permission_request':
+      case 'thinking':
+      case 'reasoning_summary':
+      case 'file_change_list':
+      case 'session_complete':
+        // Not emitted via toEvents — session_complete is pushed from handleSessionComplete,
+        // permission_request from handlePermissionNeeded, thinking from session.on('thinking'),
+        // reasoning_summary / file_change_list are bridge-path only.
         return null;
+      default: {
+        // Exhaustiveness check: if NotificationEvent gains a new variant in sharedEvents.ts,
+        // TypeScript will refuse to assign it to `never` and this file stops compiling —
+        // forcing a decision about whether to emit it via toEvents or keep it filtered.
+        const _exhaustive: never = e;
+        void _exhaustive;
+        return null;
+      }
     }
   }
 
