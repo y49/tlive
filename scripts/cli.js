@@ -277,6 +277,41 @@ async function runDoctor() {
   const bridgePid = getBridgePid();
   console.log(bridgePid ? `  Bridge:   running (PID ${bridgePid})` : '  Bridge:   not running');
 
+  // Runtimes
+  console.log('Runtimes:');
+
+  // codex binary (optional — only needed for /runtime codex)
+  const CODEX_MIN = '0.121.0';
+  const compareVersions = (a, b) => {
+    const pa = a.split('.').map(Number);
+    const pb = b.split('.').map(Number);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const x = pa[i] ?? 0;
+      const y = pb[i] ?? 0;
+      if (x > y) return 1;
+      if (x < y) return -1;
+    }
+    return 0;
+  };
+  const codexResult = (() => {
+    try {
+      const r = spawnSync('codex', ['--version'], { encoding: 'utf-8', timeout: 5000 });
+      if (r.status !== 0 || !r.stdout) return { ok: false, msg: `not installed. Run: npm i -g @openai/codex@latest (only needed for /runtime codex)` };
+      const match = r.stdout.match(/codex-cli\s+(\d+\.\d+\.\d+)/);
+      if (!match) return { ok: false, msg: `unexpected version output: ${r.stdout.trim()}` };
+      const version = match[1];
+      const meets = compareVersions(version, CODEX_MIN) >= 0;
+      return meets
+        ? { ok: true, msg: `v${version}` }
+        : { ok: false, msg: `v${version} < required ${CODEX_MIN}. Run: npm i -g @openai/codex@latest` };
+    } catch {
+      return { ok: false, msg: `not installed. Run: npm i -g @openai/codex@latest (only needed for /runtime codex)` };
+    }
+  })();
+  console.log(codexResult.ok
+    ? `  codex:   OK (${codexResult.msg}) [optional]`
+    : `  codex:   ${codexResult.msg} [optional]`);
+
   console.log('\n=== Done ===');
 }
 
