@@ -346,7 +346,8 @@ export class CommandRouter {
           // Pre-check: reject if Codex SDK not installed
           if (runtime === 'codex' && !await checkCodexAvailable()) {
             await adapter.send(msg.chatId, r.renderSimpleText(
-              '❌ Codex SDK not installed.\nRun: `npm install @openai/codex-sdk` in the bridge directory.',
+              '❌ codex binary not installed (or version < 0.121.0).\n' +
+              'Run: `npm i -g @openai/codex@latest` to install.',
             ));
             return true;
           }
