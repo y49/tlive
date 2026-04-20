@@ -52,17 +52,30 @@ export class CodexAppServerProvider implements LLMProvider {
     let activeThreadId: string | null = null;
     let activeTurnId: string | null = null;
     let client: CodexAppServerClient | null = null;
+    let transport: StdioJsonlTransport | null = null;
+    let streamClosed = false;
+
+    const closeStream = (controller: ReadableStreamDefaultController<CanonicalEvent>) => {
+      if (!streamClosed) {
+        streamClosed = true;
+        controller.close();
+      }
+    };
+
+    const enqueue = (controller: ReadableStreamDefaultController<CanonicalEvent>, event: CanonicalEvent) => {
+      if (!streamClosed) controller.enqueue(event);
+    };
 
     const stream = new ReadableStream<CanonicalEvent>({
       start: async (controller) => {
         const child = this.spawnSubprocess();
-        const transport = new StdioJsonlTransport(child);
+        transport = new StdioJsonlTransport(child);
         client = new CodexAppServerClient(transport);
 
         const forward = (method: string) => {
           client!.onNotification(method, (p) => {
             const events = eventAdapter.handle(method, p);
-            events.forEach((e) => controller.enqueue(e));
+            events.forEach((e) => enqueue(controller, e));
           });
         };
         [
@@ -89,12 +102,12 @@ export class CodexAppServerProvider implements LLMProvider {
 
         transport.onExit(({ code }) => {
           if (code !== 0) {
-            controller.enqueue({
+            enqueue(controller, {
               kind: 'error',
               message: `Codex app-server exited unexpectedly (code ${code})`,
             });
           }
-          controller.close();
+          closeStream(controller);
         });
 
         const approvalBridge = new CodexApprovalBridge(client, eventAdapter, params.onPermissionRequest);
@@ -136,14 +149,15 @@ export class CodexAppServerProvider implements LLMProvider {
           activeTurnId = turnResult.turn.id;
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          controller.enqueue({ kind: 'error', message });
-          controller.close();
+          enqueue(controller, { kind: 'error', message });
+          closeStream(controller);
         }
       },
       cancel: () => {
         if (client && activeThreadId && activeTurnId) {
           client.request('turn/interrupt', { threadId: activeThreadId, turnId: activeTurnId }).catch(() => {});
         }
+        transport?.close().catch(() => {});
       },
     });
 
@@ -153,12 +167,14 @@ export class CodexAppServerProvider implements LLMProvider {
           // Fire-and-forget: don't await — server may not reply before closing
           client.request('turn/interrupt', { threadId: activeThreadId, turnId: activeTurnId }).catch(() => {});
         }
+        transport?.close().catch(() => {});
         abortCtrl?.abort();
       },
       stopTask: async (_taskId: string) => {
         if (client && activeThreadId && activeTurnId) {
           client.request('turn/interrupt', { threadId: activeThreadId, turnId: activeTurnId }).catch(() => {});
         }
+        transport?.close().catch(() => {});
         abortCtrl?.abort();
       },
     };
