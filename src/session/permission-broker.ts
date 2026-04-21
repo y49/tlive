@@ -65,9 +65,12 @@ export class PermissionBroker {
   }
 
   denyAllForSession(sessionId: string): void {
-    for (const [id, entry] of this.entries) {
-      if (entry.sessionId === sessionId) this.resolve(id, 'deny');
-    }
+    // Snapshot ids first — iteration is safe under mutation but snapshot keeps
+    // denyAll / denyAllForSession symmetrical and clearer to a later reader.
+    const ids = [...this.entries.entries()]
+      .filter(([, entry]) => entry.sessionId === sessionId)
+      .map(([id]) => id);
+    for (const id of ids) this.resolve(id, 'deny');
   }
 
   denyAll(): void {
