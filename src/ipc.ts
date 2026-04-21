@@ -172,3 +172,34 @@ export class IPCClient extends EventEmitter {
     this._connected = false;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Typed request/response layer — used by CLI subcommands (tlive list / stop
+// / resume / claude / codex). Wraps IPCClient.send('request', ...) with a
+// correlated awaitable reply.
+// ---------------------------------------------------------------------------
+
+import type { Envelope, IPCRequest, IPCResponse } from './ipc-protocol.js';
+import { randomUUID } from 'node:crypto';
+
+export class IPCClientRequester {
+  constructor(private readonly client: IPCClient) {}
+
+  async request(req: IPCRequest, timeoutMs = 10_000): Promise<IPCResponse> {
+    const requestId = randomUUID();
+    return new Promise((resolve, reject) => {
+      const t = setTimeout(() => {
+        this.client.off('response', off as (p: unknown) => void);
+        reject(new Error(`IPC timeout (${req.type})`));
+      }, timeoutMs);
+      const off = (payload: Envelope<IPCResponse>) => {
+        if (payload.requestId !== requestId) return;
+        clearTimeout(t);
+        this.client.off('response', off as (p: unknown) => void);
+        resolve(payload.message);
+      };
+      this.client.on('response', off as (p: unknown) => void);
+      this.client.send('request', { envelope: { requestId, message: req } } as Record<string, unknown>);
+    });
+  }
+}

@@ -181,6 +181,11 @@ export class BridgeManager {
     return this.renderers;
   }
 
+  /** Returns the workspace manager (for passing to IPCSessionHandler). */
+  getWorkspaceManager(): WorkspaceManager {
+    return this.workspaceManager;
+  }
+
   /** Whether any SDK-managed session is currently active */
   hasActiveSessions(): boolean {
     return this.sdkEngine.hasActiveSessions();

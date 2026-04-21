@@ -18,6 +18,8 @@ import { PermissionBroker as RuntimePermissionBroker } from '../../src/session/p
 import { ClaudeSdkRuntime } from '../../src/runtime/claude-sdk.js';
 import { CodexAppServerRuntime } from '../../src/runtime/codex-app-server/index.js';
 import type { AgentProvider } from '../../src/runtime/types.js';
+import { IPCServer } from '../../src/ipc.js';
+import { IPCSessionHandler } from './engine/ipc-session-handler.js';
 
 function writeStatusFile(tliveHome: string, data: Record<string, unknown>): void {
   try {
@@ -89,6 +91,15 @@ async function main() {
   }
   await manager.start();
   logger.info('Bridge started — SDK-only mode');
+
+  // Typed IPC session handler — accepts CLI requests regardless of the
+  // TL_USE_SESSION_MANAGER flag. Legacy scanner-path IPC messages
+  // (session_register, etc.) use different `type` values so they don't collide
+  // with the `type: 'request'` envelope the handler consumes.
+  const ipc = new IPCServer();
+  ipc.start();
+  const ipcSessionHandler = new IPCSessionHandler(ipc, sessionManager, runtimeBroker, manager.getWorkspaceManager());
+  ipcSessionHandler.start();
 
   // Terminal relay — IPC bridge between `tlive claude` and IM adapters
   const relay = new TerminalRelay({
