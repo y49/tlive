@@ -325,11 +325,9 @@ Usage:
   tlive <cmd> [args]         Wrap any command with web terminal
   tlive <subcommand>         Manage TLive services
 
-Web Terminal:
-  tlive claude               Wrap Claude Code with web-accessible terminal
-  tlive codex                Wrap Codex CLI with web-accessible terminal
-  tlive python train.py      Wrap any long-running command
-  tlive npm run build        Access from phone browser via QR code
+Sessions:
+  tlive claude [prompt]      Start a Claude Code session (driven from IM)
+  tlive codex [prompt]       Start a Codex session (driven from IM)
 
 Setup (one-time):
   tlive setup                Configure IM platforms (Telegram/Discord/Feishu)
@@ -393,41 +391,18 @@ if (command === '--version' || command === '-v' || command === '-V') {
   process.exit(0);
 }
 
-switch (command) {
-  case 'claude': {
-    // v1.0: Pure Node dual-channel mode (no Go Core)
-    const claudeEntry = join(PACKAGE_ROOT, 'dist', 'src', 'tlive-claude.mjs');
-    if (!existsSync(claudeEntry)) {
-      console.error('v1.0 build not found. Run: npm run build:src');
-      process.exit(1);
-    }
-    ensureBridgeRunning();
-    const { claudeCommand } = await import(claudeEntry);
-    await claudeCommand({
-      sessionId: args.includes('--session-id') ? args[args.indexOf('--session-id') + 1] : undefined,
-      resume: args.includes('--resume') || args.includes('--continue'),
-      workdir: process.cwd(),
-      worktree: args.includes('--worktree') ? (args[args.indexOf('--worktree') + 1] || true) : undefined,
-    });
-    break;
+if (command === 'claude' || command === 'codex') {
+  ensureBridgeRunning();
+  const bundle = join(PACKAGE_ROOT, 'dist', 'src', `tlive-${command}.mjs`);
+  if (!existsSync(bundle)) {
+    console.error(`ERROR: ${bundle} not found. Run: npm run build:all`);
+    process.exit(1);
   }
+  const r = spawnSync(process.execPath, [bundle, ...args], { stdio: 'inherit' });
+  process.exit(r.status ?? 1);
+}
 
-  case 'codex': {
-    const codexEntry = join(PACKAGE_ROOT, 'dist', 'src', 'tlive-codex.mjs');
-    if (!existsSync(codexEntry)) {
-      console.error('v1.0 codex build not found. Run: npm run build:src');
-      process.exit(1);
-    }
-    ensureBridgeRunning();
-    const { codexCommand } = await import(codexEntry);
-    await codexCommand({
-      sessionId: args.includes('--session-id') ? args[args.indexOf('--session-id') + 1] : undefined,
-      resume: args.includes('--resume') || args.includes('--continue'),
-      workdir: process.cwd(),
-      worktree: args.includes('--worktree') ? (args[args.indexOf('--worktree') + 1] || true) : undefined,
-    });
-    break;
-  }
+switch (command) {
 
   case 'setup': {
     if (args.includes('--qr')) {
