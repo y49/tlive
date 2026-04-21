@@ -208,14 +208,20 @@ export class CodexAppServerRuntime implements AgentRuntime {
       // (each call registers a fresh exit listener and hangs waiting for a
       // second exit that will never come).
       const message = err instanceof Error ? err.message : String(err);
+      const alreadyClosing = this.closed;  // true if stop() already ran (abort)
       this.closed = true;
       for (const cb of this.eventCbs) {
         try { cb({ kind: 'error', message }); } catch { /* ignore */ }
       }
-      if (this.client) {
-        try { await this.client.close(); } catch { /* ignore */ }
-      } else {
-        try { await this.transport?.close(); } catch { /* ignore */ }
+      // Only initiate close if stop() isn't already doing it. If stop() ran
+      // (e.g. via abort), it owns the teardown — re-closing would double-call
+      // transport.close() and hang.
+      if (!alreadyClosing) {
+        if (this.client) {
+          try { await this.client.close(); } catch { /* ignore */ }
+        } else {
+          try { await this.transport?.close(); } catch { /* ignore */ }
+        }
       }
       throw err;
     }
