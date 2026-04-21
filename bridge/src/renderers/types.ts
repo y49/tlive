@@ -1,6 +1,13 @@
 import type { ChannelType, Button } from '../channels/types.js';
 
-// Structured notification events — IPC protocol between terminal and bridge
+// bridge/src/renderers/types.ts
+//
+// Renderer-facing types. The authoritative event union lives in
+// src/runtime/events.ts; this file would ideally re-export from there, but
+// bridge/tsconfig.json has `rootDir: src` which rejects cross-project imports
+// with TS6059. Until Phase 3 T14 consolidates the projects, we keep a
+// structural duplicate here. Any change to the union MUST be mirrored in
+// src/runtime/events.ts (and vice versa).
 export interface AskOption {
   label: string;
   description?: string;
