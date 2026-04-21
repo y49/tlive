@@ -3,6 +3,9 @@
 // The legacy per-kind IM-formatting / jsonl-normalization pipeline was removed
 // in the scanner refactor — adapters now produce NotificationEvent directly.
 
+import type { TodoItem } from './sharedEvents.js';
+export type { TodoItem };
+
 export function formatToolArgsBrief(toolName: string | undefined, input: unknown): string {
   if (!input || typeof input !== 'object' || !toolName) return '';
   const args = input as Record<string, unknown>;
@@ -14,11 +17,6 @@ export function formatToolArgsBrief(toolName: string | undefined, input: unknown
     if (typeof v === 'string' && v.length > 0) return v.slice(0, 200);
   }
   return '';
-}
-
-export interface TodoItem {
-  content: string;
-  status: 'pending' | 'in_progress' | 'completed';
 }
 
 export function extractTodos(toolInput: unknown): TodoItem[] | null {

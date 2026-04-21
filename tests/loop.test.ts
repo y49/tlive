@@ -46,6 +46,7 @@ function mockConfig(): TLiveConfig {
     port: 8849, token: 'test', defaultProvider: 'claude',
     permissionTimeout: 55000, webEnabled: false,
     messageBatchDelay: 50, proactiveNotifyDelay: 100, proactiveQuestionDelay: 50,
+    activeThreshold: 30000,
   };
 }
 
