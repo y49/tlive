@@ -1,92 +1,52 @@
-import type { CodexAppServerClient } from './client.js';
-import type { CodexEventAdapter } from './event-adapter.js';
+// src/runtime/codex-app-server/approval-bridge.ts
+//
+// Bridges codex-app-server's server-initiated approval requests to the
+// session-level PermissionBroker via a PermissionRequest emitter. Unlike
+// the bridge/ copy (which calls a bridge-level onPermissionRequest handler
+// directly), this variant emits a PermissionRequest and awaits resolution
+// through the shared types.
 
-type PermissionDecision = 'allow' | 'deny' | 'allow_always';
-type PermissionRequestHandler = (
-  toolName: string,
-  input: Record<string, unknown>,
-  reason: string,
-) => Promise<PermissionDecision>;
+import type { PermissionRequest, PermissionDecision } from '../types.js';
 
-const CLAUDE_TO_EXEC_FILE = {
-  allow: 'accept' as const,
-  allow_always: 'acceptForSession' as const,
-  deny: 'decline' as const,
-};
+export interface CodexApprovalBridgeDeps {
+  sessionId: string;
+  emit: (req: PermissionRequest) => void;
+}
 
 export class CodexApprovalBridge {
-  constructor(
-    private client: CodexAppServerClient,
-    private eventAdapter: CodexEventAdapter,
-    private onPermissionRequest: PermissionRequestHandler | undefined,
-  ) {}
+  constructor(private readonly deps: CodexApprovalBridgeDeps) {}
 
-  wireHandlers(): void {
-    this.client.onCommandExecutionApproval((p) => this.handleCommandExec(p));
-    this.client.onFileChangeApproval((p) => this.handleFileChange(p));
-    this.client.onPermissionsApproval((p) => this.handlePermissions(p));
-    this.client.onMcpElicitation((p) => this.handleMcpElicitation(p));
+  async handleCommandExecutionApproval(
+    toolUseId: string,
+    command: string[],
+    cwd: string,
+  ): Promise<'approved' | 'approved_for_session' | 'denied' | 'abort'> {
+    const decision = await this.ask(toolUseId, 'exec', { command, cwd });
+    return this.toCodex(decision);
   }
 
-  private async handleCommandExec(params: unknown): Promise<unknown> {
-    const p = (params ?? {}) as Record<string, unknown>;
-    if (!this.onPermissionRequest) return { decision: 'accept' };
-    const input = { command: p.command ?? '', cwd: p.cwd ?? '' };
-    const reason = (p.reason as string) ?? (p.command as string) ?? 'Codex command execution';
-    try {
-      const decision = await this.onPermissionRequest('Bash', input as Record<string, unknown>, reason);
-      return { decision: CLAUDE_TO_EXEC_FILE[decision] };
-    } catch (err) {
-      console.warn(`[codex-approval-bridge] commandExecution broker error, declining: ${(err as Error).message}`);
-      return { decision: 'decline' };
-    }
+  async handleFileChangeApproval(
+    toolUseId: string,
+    path: string,
+    changes: Array<{ kind: 'add' | 'delete' | 'update' }>,
+  ): Promise<'approved' | 'approved_for_session' | 'denied' | 'abort'> {
+    const decision = await this.ask(toolUseId, 'file', { path, changes });
+    return this.toCodex(decision);
   }
 
-  private async handleFileChange(params: unknown): Promise<unknown> {
-    const p = (params ?? {}) as Record<string, unknown>;
-    if (!this.onPermissionRequest) return { decision: 'accept' };
-    const itemId = p.itemId as string | undefined;
-    const cached = itemId ? this.eventAdapter.getItem(itemId) : undefined;
-    const changes = (cached?.changes as unknown) ?? [];
-    const input = { changes };
-    const reason = (p.reason as string) ?? 'Codex file change';
-    try {
-      const decision = await this.onPermissionRequest('Edit', input as Record<string, unknown>, reason);
-      return { decision: CLAUDE_TO_EXEC_FILE[decision] };
-    } catch (err) {
-      console.warn(`[codex-approval-bridge] fileChange broker error, declining: ${(err as Error).message}`);
-      return { decision: 'decline' };
-    }
+  private ask(
+    toolUseId: string,
+    kind: 'exec' | 'file',
+    toolInput: Record<string, unknown>,
+  ): Promise<PermissionDecision> {
+    return new Promise<PermissionDecision>((resolveDecision) => {
+      const id = `${this.deps.sessionId}:${toolUseId}`;
+      const toolName = kind === 'exec' ? 'Bash' : 'Edit';
+      this.deps.emit({ id, toolName, toolInput, resolve: resolveDecision });
+    });
   }
 
-  private async handlePermissions(params: unknown): Promise<unknown> {
-    const p = (params ?? {}) as Record<string, unknown>;
-    const permissionsReq = (p.permissions ?? {}) as Record<string, unknown>;
-    if (!this.onPermissionRequest) {
-      return { permissions: permissionsReq, scope: 'turn' };
-    }
-    const reason = (p.reason as string) ?? 'Codex requests additional permissions';
-    try {
-      const decision = await this.onPermissionRequest(
-        'Permissions',
-        permissionsReq,
-        reason,
-      );
-      if (decision === 'deny') {
-        return { permissions: {}, scope: 'turn' };
-      }
-      return {
-        permissions: permissionsReq,
-        scope: decision === 'allow_always' ? 'session' : 'turn',
-      };
-    } catch (err) {
-      console.warn(`[codex-approval-bridge] permissions broker error, declining: ${(err as Error).message}`);
-      return { permissions: {}, scope: 'turn' };
-    }
-  }
-
-  private async handleMcpElicitation(_params: unknown): Promise<unknown> {
-    console.warn('[codex-approval-bridge] MCP elicitation received — auto-declining (not supported in v1.1)');
-    return { action: 'decline', content: null };
+  private toCodex(d: PermissionDecision): 'approved' | 'approved_for_session' | 'denied' {
+    return d === 'allow' ? 'approved' : d === 'allow_always' ? 'approved_for_session' : 'denied';
   }
 }

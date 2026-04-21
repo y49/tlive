@@ -1,4 +1,17 @@
-import type { CanonicalEvent } from '../../messages/schema.js';
+// src/runtime/codex-app-server/event-adapter.ts
+//
+// Maps codex-app-server notifications to NotificationEvent frames.
+// The bridge copy's mapping targets were CanonicalEvent; this copy produces
+// the unified AdaptedFrame { events: NotificationEvent[]; usage?; isSessionEnd? }
+// matching claude-event-adapter's shape.
+
+import type { NotificationEvent, UsageStats } from '../events.js';
+
+export interface AdaptedFrame {
+  events: NotificationEvent[];
+  usage?: UsageStats;
+  isSessionEnd?: boolean;
+}
 
 interface ThreadItem {
   id: string;
@@ -9,34 +22,36 @@ interface ThreadItem {
 interface TokenUsageSummary {
   inputTokens: number;
   outputTokens: number;
+  costUsd?: number;
+  durationMs?: number;
   [k: string]: unknown;
 }
 
 export class CodexEventAdapter {
   private threadId: string | null = null;
   private recentItems = new Map<string, ThreadItem>();
-  private pendingAgentText = new Map<string, string>();
   private tokenUsage: TokenUsageSummary | null = null;
 
-  handle(method: string, params: unknown): CanonicalEvent[] {
+  /** Dispatch a codex-app-server JSON-RPC notification and return the frame. */
+  handle(method: string, params: unknown): AdaptedFrame {
     const p = (params ?? {}) as Record<string, unknown>;
     switch (method) {
       case 'thread/started':
-        this.threadId = ((p.thread as any)?.id ?? null) as string | null;
-        return [];
+        this.threadId = ((p.thread as { id?: string } | undefined)?.id ?? null);
+        return { events: [] };
       case 'thread/tokenUsage/updated':
         this.tokenUsage = this.extractUsage(p.tokenUsage);
-        return [];
+        return { events: [] };
       case 'turn/started':
-        return [{ kind: 'status', sessionId: this.threadId ?? '', model: '' }];
+        return { events: [] };
       case 'turn/completed':
         return this.handleTurnCompleted(p);
       case 'item/started':
         return this.handleItemStarted(p);
       case 'item/completed':
-        return this.handleItemCompleted(p);
+        return { events: this.handleItemCompleted(p) };
       case 'error':
-        return [{ kind: 'error', message: String(p.message ?? 'Unknown error') }];
+        return { events: [{ kind: 'error', message: String(p.message ?? 'Unknown error') }] };
       // Deltas + turn-wide aggregates intentionally suppressed (minimal mapping)
       case 'item/agentMessage/delta':
       case 'item/reasoning/textDelta':
@@ -52,12 +67,13 @@ export class CodexEventAdapter {
       case 'thread/status/changed':
       case 'thread/closed':
       case 'serverRequest/resolved':
-        return [];
+        return { events: [] };
       default:
-        return [];
+        return { events: [] };
     }
   }
 
+  /** Retrieve an item cached during item/started for approval-bridge lookups. */
   getItem(itemId: string): ThreadItem | undefined {
     return this.recentItems.get(itemId);
   }
@@ -65,38 +81,43 @@ export class CodexEventAdapter {
   reset(): void {
     this.threadId = null;
     this.recentItems.clear();
-    this.pendingAgentText.clear();
     this.tokenUsage = null;
   }
 
-  private handleTurnCompleted(p: Record<string, unknown>): CanonicalEvent[] {
+  private handleTurnCompleted(p: Record<string, unknown>): AdaptedFrame {
     const turn = p.turn as { id?: string; status?: string; error?: { message?: string } } | undefined;
     const status = turn?.status ?? 'completed';
-    const sessionId = this.threadId ?? '';
-    const usage = this.tokenUsage ?? (() => {
-      console.warn(`[codex-event-adapter] turn/completed without prior tokenUsage (thread: ${sessionId})`);
-      return { inputTokens: 0, outputTokens: 0 };
-    })();
+    const usage: UsageStats = {
+      inputTokens: this.tokenUsage?.inputTokens ?? 0,
+      outputTokens: this.tokenUsage?.outputTokens ?? 0,
+      costUsd: this.tokenUsage?.costUsd ?? 0,
+      durationMs: this.tokenUsage?.durationMs ?? 0,
+    };
     // Clear items + tokenUsage at turn boundary
     this.recentItems.clear();
-    this.pendingAgentText.clear();
     this.tokenUsage = null;
     if (status === 'failed') {
-      return [
-        { kind: 'query_result', sessionId, isError: true, usage },
-        { kind: 'error', message: turn?.error?.message ?? 'Codex turn failed' },
-      ];
+      return {
+        events: [
+          { kind: 'session_complete', summary: '', cost: usage },
+          { kind: 'error', message: turn?.error?.message ?? 'Codex turn failed' },
+        ],
+        usage,
+      };
     }
-    return [{ kind: 'query_result', sessionId, isError: false, usage }];
+    return {
+      events: [{ kind: 'session_complete', summary: '', cost: usage }],
+      usage,
+    };
   }
 
-  private handleItemStarted(p: Record<string, unknown>): CanonicalEvent[] {
+  private handleItemStarted(p: Record<string, unknown>): AdaptedFrame {
     const item = p.item as ThreadItem | undefined;
     if (item && item.id) this.recentItems.set(item.id, item);
-    return [];
+    return { events: [] };
   }
 
-  private handleItemCompleted(p: Record<string, unknown>): CanonicalEvent[] {
+  private handleItemCompleted(p: Record<string, unknown>): NotificationEvent[] {
     const item = p.item as ThreadItem | undefined;
     if (!item) return [];
     // Refresh cache with final item state (completed items have full data)
@@ -105,46 +126,32 @@ export class CodexEventAdapter {
       case 'agentMessage': {
         const raw = (item.text as string) ?? '';
         // Some models (gpt-oss family, minimax) embed reasoning inside
-        // <think>...</think> markers. Sometimes the opening tag is missing
-        // because the reasoning is emitted as a separate `reasoning` item
-        // and only the closing </think> remains in the agent message.
-        // Treat everything before the FIRST </think> as reasoning so it
-        // renders in its own block instead of leaking into the answer.
-        const events: CanonicalEvent[] = [];
+        // <think>...</think> markers. Treat everything before the first
+        // </think> as reasoning so it renders separately from the answer.
+        const events: NotificationEvent[] = [];
         const closeIdx = raw.indexOf('</think>');
         if (closeIdx >= 0) {
           let head = raw.slice(0, closeIdx);
-          // Strip an optional opening <think> from the head
           const openMatch = head.match(/^\s*<think>/);
           if (openMatch) head = head.slice(openMatch[0].length);
           const reasoning = head.trim();
-          if (reasoning.length > 0) events.push({ kind: 'reasoning_complete', text: reasoning });
+          if (reasoning.length > 0) events.push({ kind: 'reasoning_summary', text: reasoning });
           const tail = raw.slice(closeIdx + '</think>'.length).trim();
-          if (tail.length > 0) events.push({ kind: 'text_delta', text: tail });
-          if (events.length === 0) events.push({ kind: 'text_delta', text: '' });
+          if (tail.length > 0) events.push({ kind: 'activity_text', text: tail });
+          if (events.length === 0) events.push({ kind: 'activity_text', text: '' });
           return events;
         }
-        return [{ kind: 'text_delta', text: raw }];
+        return [{ kind: 'activity_text', text: raw }];
       }
       case 'reasoning': {
         const summary = Array.isArray(item.summary) ? (item.summary as string[]).filter(Boolean) : [];
         const content = Array.isArray(item.content) ? (item.content as string[]).filter(Boolean) : [];
         const text = [...summary, ...content].join('\n\n');
-        return [{ kind: 'reasoning_complete', text }];
+        return [{ kind: 'reasoning_summary', text }];
       }
       case 'commandExecution': {
         const input = { command: (item.command as string) ?? '', cwd: (item.cwd as string) ?? '' };
-        const exitCode = item.exitCode as number | null;
-        const output = (item.aggregatedOutput as string) ?? '';
-        return [
-          { kind: 'tool_start', id: String(item.id), name: 'Bash', input },
-          {
-            kind: 'tool_result',
-            toolUseId: String(item.id),
-            content: output,
-            isError: typeof exitCode === 'number' && exitCode !== 0,
-          },
-        ];
+        return [{ kind: 'activity_tool', toolName: 'Bash', toolInput: safeStringify(input) }];
       }
       case 'fileChange': {
         const changes = Array.isArray(item.changes) ? (item.changes as Array<{ path: string; kind: string }>) : [];
@@ -157,31 +164,20 @@ export class CodexEventAdapter {
       }
       case 'plan': {
         const description = (item.text as string) ?? '';
-        return [{ kind: 'agent_progress', description }];
+        return description ? [{ kind: 'activity_text', text: description }] : [];
       }
       case 'mcpToolCall': {
         const server = (item.server as string) ?? '?';
         const tool = (item.tool as string) ?? '?';
         const args = (item.arguments as Record<string, unknown>) ?? {};
-        const result = (item.result as string | undefined) ?? '';
-        const errorMsg = (item.error as string | undefined);
-        return [
-          { kind: 'tool_start', id: String(item.id), name: `MCP:${server}.${tool}`, input: args },
-          {
-            kind: 'tool_result',
-            toolUseId: String(item.id),
-            content: errorMsg ?? result,
-            isError: !!errorMsg,
-          },
-        ];
+        return [{ kind: 'activity_tool', toolName: `MCP:${server}.${tool}`, toolInput: safeStringify(args) }];
       }
       case 'webSearch': {
         const query = (item.query as string) ?? '';
-        return [{ kind: 'agent_progress', description: `Searched: ${query}` }];
+        return [{ kind: 'activity_text', text: `Searched: ${query}` }];
       }
-      default: {
-        return [{ kind: 'agent_progress', description: `[codex:${String(item.type)}]` }];
-      }
+      default:
+        return [];
     }
   }
 
@@ -192,4 +188,8 @@ export class CodexEventAdapter {
       outputTokens: r?.last?.outputTokens ?? 0,
     };
   }
+}
+
+function safeStringify(v: unknown): string {
+  try { return JSON.stringify(v); } catch { return '[unserializable]'; }
 }

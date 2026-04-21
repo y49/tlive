@@ -1,13 +1,20 @@
+// src/runtime/codex-app-server/index.ts
+//
+// CodexAppServerRuntime — spawns `codex app-server`, speaks JSON-RPC over
+// stdio, emits NotificationEvent and PermissionRequest through the
+// AgentRuntime interface. Mirrors the ClaudeSdkRuntime shape.
+
 import { spawn, execFile as nodeExecFile } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { LLMProvider, StreamChatParams, StreamChatResult, ProviderCapabilities, QueryControls } from '../base.js';
-import { flavorCapabilities } from '../../flavors.js';
+import type {
+  AgentRuntime, AgentRuntimeOptions, PermissionRequest,
+} from '../types.js';
+import type { NotificationEvent, UsageStats } from '../events.js';
 import { StdioJsonlTransport } from './transport.js';
 import { CodexAppServerClient } from './client.js';
 import { CodexEventAdapter } from './event-adapter.js';
 import { CodexApprovalBridge } from './approval-bridge.js';
-import type { CanonicalEvent } from '../../messages/schema.js';
 
 const execFileAsync = promisify(nodeExecFile);
 const MIN_CODEX_VERSION = '0.121.0';
@@ -22,199 +29,209 @@ export function __testing_resetBinaryDetectCache(): void {
   _availabilityCache = null;
 }
 
-interface ProviderDeps {
+export interface CodexAppServerRuntimeDeps {
   execFile?: ExecFileFn;
   spawnSubprocess?: () => ChildProcess;
 }
 
-export class CodexAppServerProvider implements LLMProvider {
-  private execFile: ExecFileFn;
-  private spawnSubprocess: () => ChildProcess;
+// Codex notification methods the adapter knows how to handle. The wrapper
+// subscribes to each and fans the result into the session-level listeners.
+const FORWARDED_METHODS = [
+  'thread/started',
+  'thread/tokenUsage/updated',
+  'thread/status/changed',
+  'thread/closed',
+  'turn/started',
+  'turn/completed',
+  'item/started',
+  'item/completed',
+  'item/agentMessage/delta',
+  'item/reasoning/textDelta',
+  'item/reasoning/summaryTextDelta',
+  'item/commandExecution/outputDelta',
+  'item/fileChange/outputDelta',
+  'item/mcpToolCall/progress',
+  'item/plan/delta',
+  'turn/diff/updated',
+  'turn/plan/updated',
+  'error',
+  'serverRequest/resolved',
+] as const;
 
-  constructor(deps: ProviderDeps = {}) {
-    this.execFile = deps.execFile ?? (execFileAsync as ExecFileFn);
-    this.spawnSubprocess = deps.spawnSubprocess ?? spawnCodexAppServer;
-  }
+export class CodexAppServerRuntime implements AgentRuntime {
+  readonly provider = 'codex' as const;
 
-  async isAvailable(): Promise<boolean> {
+  private readonly eventCbs = new Set<(e: NotificationEvent) => void>();
+  private readonly permCbs = new Set<(r: PermissionRequest) => void>();
+  private readonly usageCbs = new Set<(u: UsageStats) => void>();
+
+  private started = false;
+  private closed = false;
+  private transport: StdioJsonlTransport | null = null;
+  private client: CodexAppServerClient | null = null;
+  private threadId: string | null = null;
+
+  constructor(private deps: CodexAppServerRuntimeDeps = {}) {}
+
+  static async isAvailable(execFile: ExecFileFn = execFileAsync): Promise<boolean> {
     if (_availabilityCache) return _availabilityCache;
-    _availabilityCache = this.detectCodexBinary();
+    _availabilityCache = (async () => {
+      try {
+        const { stdout } = await execFile('codex', ['--version']);
+        const match = stdout.match(/codex-cli\s+(\d+\.\d+\.\d+)/);
+        if (!match) return false;
+        return compareVersions(match[1], MIN_CODEX_VERSION) >= 0;
+      } catch { return false; }
+    })();
     return _availabilityCache;
   }
 
-  capabilities(): ProviderCapabilities {
-    return flavorCapabilities('codex');
-  }
+  async start(opts: AgentRuntimeOptions): Promise<void> {
+    if (this.started) throw new Error('runtime already started');
+    this.started = true;
+    if (opts.signal.aborted) { this.closed = true; return; }
+    opts.signal.addEventListener('abort', () => { void this.stop(); }, { once: true });
 
-  streamChat(params: StreamChatParams): StreamChatResult {
+    const child = (this.deps.spawnSubprocess ?? spawnCodexAppServer)();
+    const transport = new StdioJsonlTransport(child);
+    this.transport = transport;
     const eventAdapter = new CodexEventAdapter();
-    let abortCtrl: AbortController | null = new AbortController();
-    let activeThreadId: string | null = null;
-    let activeTurnId: string | null = null;
-    let client: CodexAppServerClient | null = null;
-    let transport: StdioJsonlTransport | null = null;
-    let streamClosed = false;
-    let lastErrorMessage: string | null = null;
-
-    const closeStream = (controller: ReadableStreamDefaultController<CanonicalEvent>) => {
-      if (!streamClosed) {
-        streamClosed = true;
-        controller.close();
-      }
-    };
-
-    const enqueue = (controller: ReadableStreamDefaultController<CanonicalEvent>, event: CanonicalEvent) => {
-      if (streamClosed) return;
-      // Codex app-server may surface the same protocol error via both an `error`
-      // notification AND a JSON-RPC error response — drop consecutive duplicates.
-      if (event.kind === 'error') {
-        const msg = (event as { message: string }).message;
-        if (msg === lastErrorMessage) return;
-        lastErrorMessage = msg;
-      }
-      controller.enqueue(event);
-      // query_result is the turn-ended sentinel. Close the stream so the
-      // consumer's reader.read() returns done; tear down the subprocess so
-      // the next user message starts a fresh streamChat (which thread/resumes
-      // via sessionId). Otherwise the engine keeps the turn in-flight and
-      // queues subsequent messages forever.
-      if (event.kind === 'query_result') {
-        closeStream(controller);
-        transport?.close().catch(() => {});
-      }
-    };
-
-    const stream = new ReadableStream<CanonicalEvent>({
-      start: async (controller) => {
-        const child = this.spawnSubprocess();
-        transport = new StdioJsonlTransport(child);
-        client = new CodexAppServerClient(transport);
-
-        const forward = (method: string) => {
-          client!.onNotification(method, (p) => {
-            const events = eventAdapter.handle(method, p);
-            events.forEach((e) => enqueue(controller, e));
-          });
-        };
-        [
-          'thread/started',
-          'thread/tokenUsage/updated',
-          'thread/status/changed',
-          'thread/closed',
-          'turn/started',
-          'turn/completed',
-          'item/started',
-          'item/completed',
-          'item/agentMessage/delta',
-          'item/reasoning/textDelta',
-          'item/reasoning/summaryTextDelta',
-          'item/commandExecution/outputDelta',
-          'item/fileChange/outputDelta',
-          'item/mcpToolCall/progress',
-          'item/plan/delta',
-          'turn/diff/updated',
-          'turn/plan/updated',
-          'error',
-          'serverRequest/resolved',
-        ].forEach(forward);
-
-        transport.onExit(({ code }) => {
-          if (code !== 0) {
-            enqueue(controller, {
-              kind: 'error',
-              message: `Codex app-server exited unexpectedly (code ${code})`,
-            });
-          }
-          closeStream(controller);
-        });
-
-        const approvalBridge = new CodexApprovalBridge(client, eventAdapter, params.onPermissionRequest);
-        approvalBridge.wireHandlers();
-
-        try {
-          await client.initialize({
-            clientInfo: { name: 'tlive', title: null, version: '1.0.0' },
-            capabilities: { experimentalApi: false },
-          });
-
-          if (params.sessionId) {
-            const resumeResult = await client.request<
-              { threadId: string; cwd?: string; model?: string; persistExtendedHistory: boolean },
-              { thread: { id: string } }
-            >('thread/resume', {
-              threadId: params.sessionId,
-              cwd: params.workingDirectory,
-              model: params.model,
-              persistExtendedHistory: false,
-            });
-            activeThreadId = resumeResult.thread.id;
-          } else {
-            const startResult = await client.request<
-              { cwd?: string; model?: string; experimentalRawEvents: boolean; persistExtendedHistory: boolean },
-              { thread: { id: string } }
-            >('thread/start', {
-              cwd: params.workingDirectory,
-              model: params.model,
-              experimentalRawEvents: false,
-              persistExtendedHistory: false,
-            });
-            activeThreadId = startResult.thread.id;
-          }
-
-          const turnResult = await client.request<
-            { threadId: string; input: Array<{ type: 'text'; text: string; text_elements: Array<unknown> }>; effort?: string; model?: string },
-            { turn: { id: string } }
-          >('turn/start', {
-            threadId: activeThreadId,
-            input: [{ type: 'text', text: params.prompt, text_elements: [] }],
-            effort: params.effort,
-            model: params.model,
-          });
-          activeTurnId = turnResult.turn.id;
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          enqueue(controller, { kind: 'error', message });
-          closeStream(controller);
-        }
-      },
-      cancel: () => {
-        if (client && activeThreadId && activeTurnId) {
-          client.request('turn/interrupt', { threadId: activeThreadId, turnId: activeTurnId }).catch(() => {});
-        }
-        transport?.close().catch(() => {});
-      },
+    const approvalBridge = new CodexApprovalBridge({
+      sessionId: opts.sessionId,
+      emit: (req) => { for (const cb of this.permCbs) cb(req); },
     });
 
-    const controls: QueryControls = {
-      interrupt: async () => {
-        if (client && activeThreadId && activeTurnId) {
-          // Fire-and-forget: don't await — server may not reply before closing
-          client.request('turn/interrupt', { threadId: activeThreadId, turnId: activeTurnId }).catch(() => {});
-        }
-        transport?.close().catch(() => {});
-        abortCtrl?.abort();
-      },
-      stopTask: async (_taskId: string) => {
-        if (client && activeThreadId && activeTurnId) {
-          client.request('turn/interrupt', { threadId: activeThreadId, turnId: activeTurnId }).catch(() => {});
-        }
-        transport?.close().catch(() => {});
-        abortCtrl?.abort();
-      },
-    };
+    const client = new CodexAppServerClient(transport);
+    this.client = client;
 
-    return { stream, controls };
+    // Wire notification forwarding — adapter fans each method into NotificationEvents.
+    for (const method of FORWARDED_METHODS) {
+      client.onNotification(method, (params) => {
+        const frame = eventAdapter.handle(method, params);
+        for (const e of frame.events) for (const cb of this.eventCbs) cb(e);
+        if (frame.usage) for (const cb of this.usageCbs) cb(frame.usage);
+      });
+    }
+
+    // Wire server-initiated approval requests.
+    client.onCommandExecutionApproval(async (params) => {
+      const p = (params ?? {}) as Record<string, unknown>;
+      const itemId = (p.itemId as string) ?? (p.callId as string) ?? 'unknown';
+      const command = Array.isArray(p.command)
+        ? (p.command as string[])
+        : typeof p.command === 'string'
+          ? [p.command as string]
+          : [];
+      const cwd = (p.cwd as string) ?? '';
+      const decision = await approvalBridge.handleCommandExecutionApproval(itemId, command, cwd);
+      return { decision: codexDecisionToRpc(decision) };
+    });
+    client.onFileChangeApproval(async (params) => {
+      const p = (params ?? {}) as Record<string, unknown>;
+      const itemId = (p.itemId as string) ?? (p.callId as string) ?? 'unknown';
+      const path = (p.path as string) ?? '';
+      const cached = eventAdapter.getItem(itemId);
+      const changes = Array.isArray(cached?.changes)
+        ? (cached!.changes as Array<{ kind: 'add' | 'delete' | 'update' }>)
+        : [];
+      const decision = await approvalBridge.handleFileChangeApproval(itemId, path, changes);
+      return { decision: codexDecisionToRpc(decision) };
+    });
+
+    transport.onExit(({ code }) => {
+      if (code !== 0 && !this.closed) {
+        for (const cb of this.eventCbs) cb({
+          kind: 'error',
+          message: `Codex app-server exited unexpectedly (code ${code})`,
+        });
+      }
+      this.closed = true;
+    });
+
+    try {
+      await client.initialize({
+        clientInfo: { name: 'tlive', title: null, version: '1.0.0' },
+        capabilities: { experimentalApi: false },
+      });
+
+      if (opts.sessionId) {
+        const resumeResult = await client.request<
+          { threadId: string; cwd?: string; model?: string; persistExtendedHistory: boolean },
+          { thread: { id: string } }
+        >('thread/resume', {
+          threadId: opts.sessionId,
+          cwd: opts.workdir,
+          model: opts.model,
+          persistExtendedHistory: false,
+        });
+        this.threadId = resumeResult.thread.id;
+      } else {
+        const startResult = await client.request<
+          { cwd?: string; model?: string; experimentalRawEvents: boolean; persistExtendedHistory: boolean },
+          { thread: { id: string } }
+        >('thread/start', {
+          cwd: opts.workdir,
+          model: opts.model,
+          experimentalRawEvents: false,
+          persistExtendedHistory: false,
+        });
+        this.threadId = startResult.thread.id;
+      }
+
+      if (opts.initialPrompt) {
+        await this.turnStart(opts.initialPrompt, opts.effort, opts.model);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      for (const cb of this.eventCbs) cb({ kind: 'error', message });
+      throw err;
+    }
   }
 
-  private async detectCodexBinary(): Promise<boolean> {
-    try {
-      const { stdout } = await this.execFile('codex', ['--version']);
-      const match = stdout.match(/codex-cli\s+(\d+\.\d+\.\d+)/);
-      if (!match) return false;
-      return compareVersions(match[1], MIN_CODEX_VERSION) >= 0;
-    } catch {
-      return false;
-    }
+  async sendInput(text: string): Promise<void> {
+    if (this.closed || !this.client || !this.threadId) throw new Error('runtime closed');
+    await this.turnStart(text);
+  }
+
+  async stop(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    try { await this.client?.close(); } catch { /* ignore */ }
+    try { await this.transport?.close(); } catch { /* ignore */ }
+  }
+
+  onEvent(cb: (e: NotificationEvent) => void) { this.eventCbs.add(cb); return () => this.eventCbs.delete(cb); }
+  onPermissionRequest(cb: (r: PermissionRequest) => void) { this.permCbs.add(cb); return () => this.permCbs.delete(cb); }
+  onUsage(cb: (u: UsageStats) => void) { this.usageCbs.add(cb); return () => this.usageCbs.delete(cb); }
+
+  // ---- private ------------------------------------------------------------
+
+  private async turnStart(text: string, effort?: string, model?: string): Promise<void> {
+    if (!this.client || !this.threadId) throw new Error('runtime not initialized');
+    await this.client.request<
+      {
+        threadId: string;
+        input: Array<{ type: 'text'; text: string; text_elements: Array<unknown> }>;
+        effort?: string;
+        model?: string;
+      },
+      { turn: { id: string } }
+    >('turn/start', {
+      threadId: this.threadId,
+      input: [{ type: 'text', text, text_elements: [] }],
+      effort,
+      model,
+    });
+  }
+}
+
+function codexDecisionToRpc(d: 'approved' | 'approved_for_session' | 'denied' | 'abort'): string {
+  // Codex app-server expects exec/file approval responses as 'accept' | 'acceptForSession' | 'decline'.
+  switch (d) {
+    case 'approved': return 'accept';
+    case 'approved_for_session': return 'acceptForSession';
+    case 'denied': return 'decline';
+    case 'abort': return 'decline';
   }
 }
 
@@ -232,7 +249,7 @@ function compareVersions(a: string, b: string): number {
 }
 
 /** Spawn the codex app-server subprocess. */
-export function spawnCodexAppServer(): ChildProcess {
+function spawnCodexAppServer(): ChildProcess {
   return spawn('codex', ['app-server'], {
     stdio: ['pipe', 'pipe', 'inherit'],
   });
