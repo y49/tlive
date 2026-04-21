@@ -2,8 +2,9 @@
 //
 // Source of truth for the runtime event contract.
 // Every AgentRuntime.onEvent emits exactly these shapes. The bridge's
-// renderers consume the same union (via a type-only re-export in
-// bridge/src/renderers/types.ts).
+// renderers consume the same union (currently a structural duplicate in
+// bridge/src/renderers/types.ts — TS6059 blocks a cross-rootDir re-export;
+// Phase 3 T14 consolidates).
 //
 // Adding a variant: add here first, then handle it in every renderer
 // (telegram/discord/feishu) before merging.
