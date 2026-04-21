@@ -1,0 +1,81 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { SessionPersistence, type SessionSnapshot } from '../../src/session/persistence.js';
+import type { NotificationEvent } from '../../src/runtime/events.js';
+
+function makeSnap(id: string, overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
+  return {
+    id,
+    ctx: { sessionId: id, workdir: '/x', workspaceId: 'ws', workspaceName: 'x',
+           provider: 'claude', createdAt: 1 },
+    status: 'active',
+    createdAt: 1,
+    lastActivityAt: 2,
+    cost: { inputTokens: 0, outputTokens: 0, costUsd: 0, durationMs: 0 },
+    pendingPermissionIds: [],
+    ...overrides,
+  };
+}
+
+describe('SessionPersistence', () => {
+  let root: string;
+  let p: SessionPersistence;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'tlive-persist-'));
+    p = new SessionPersistence(root);
+    await p.init();
+  });
+
+  afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+
+  it('loadSnapshot returns null for missing session', async () => {
+    expect(await p.loadSnapshot('nope')).toBeNull();
+  });
+
+  it('saveSnapshot + loadSnapshot round-trips', async () => {
+    const snap = makeSnap('s1');
+    await p.saveSnapshot(snap);
+    expect(await p.loadSnapshot('s1')).toEqual(snap);
+  });
+
+  it('appendEvent accumulates and loadHistory reads back in order', async () => {
+    const e1: NotificationEvent = { kind: 'thinking', active: true };
+    const e2: NotificationEvent = { kind: 'activity_text', text: 'hi' };
+    await p.appendEvent('s1', e1);
+    await p.appendEvent('s1', e2);
+    expect(await p.loadHistory('s1')).toEqual([e1, e2]);
+  });
+
+  it('loadHistory returns [] for missing history file', async () => {
+    expect(await p.loadHistory('ghost')).toEqual([]);
+  });
+
+  it('loadHistory skips malformed lines without crashing', async () => {
+    await p.appendEvent('s1', { kind: 'thinking', active: true });
+    const { appendFile } = await import('node:fs/promises');
+    await appendFile(join(root, 's1.jsonl'), 'not-json\n');
+    await p.appendEvent('s1', { kind: 'thinking', active: false });
+    const events = await p.loadHistory('s1');
+    expect(events).toHaveLength(2);
+  });
+
+  it('listSnapshots sorts by lastActivityAt descending', async () => {
+    await p.saveSnapshot(makeSnap('a', { lastActivityAt: 10 }));
+    await p.saveSnapshot(makeSnap('b', { lastActivityAt: 30 }));
+    await p.saveSnapshot(makeSnap('c', { lastActivityAt: 20 }));
+    const ids = (await p.listSnapshots()).map((s) => s.id);
+    expect(ids).toEqual(['b', 'c', 'a']);
+  });
+
+  it('removeSession deletes both files and is idempotent', async () => {
+    await p.saveSnapshot(makeSnap('s1'));
+    await p.appendEvent('s1', { kind: 'thinking', active: true });
+    await p.removeSession('s1');
+    expect(await p.loadSnapshot('s1')).toBeNull();
+    expect(await p.loadHistory('s1')).toEqual([]);
+    await p.removeSession('s1'); // must not throw
+  });
+});
