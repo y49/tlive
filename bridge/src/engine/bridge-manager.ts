@@ -163,7 +163,11 @@ export class BridgeManager {
       import('./session-frontend.js').then(({ SessionFrontend }) => {
         const frontend = new SessionFrontend(sessionManager, this.router, this.renderers);
         frontend.start();
-      }).catch(() => { /* logger not available here; swallow */ });
+      }).catch((err) => {
+        // If this load fails, the flag appears to succeed but events don't flow.
+        // Surface via console.error so the silent-success failure mode is debuggable.
+        console.error('[bridge-manager] SessionFrontend load failed:', err);
+      });
     }
   }
 
