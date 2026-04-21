@@ -60,6 +60,27 @@ describe('Session', () => {
     await expect(env.session.sendInput('x', 'im')).rejects.toThrow(/stopped/);
   });
 
+  it('handlePermission preserves colons in toolUseId (splits on first : only)', async () => {
+    await env.session.start({});
+    env.runtime.emitPermission({
+      id: 's1:tu1:inner:42', toolName: 'Bash', toolInput: {}, resolve: vi.fn(),
+    });
+    // Broker re-keys as ${sessionId}:${toolUseId} where toolUseId is everything
+    // after the first colon — must be 'tu1:inner:42', not 'tu1'.
+    const pending = env.broker.listForSession('s1');
+    expect(pending).toHaveLength(1);
+    expect(pending[0].id).toBe('s1:tu1:inner:42');
+  });
+
+  it('setStatus guard: session_complete after stop does not flip status back to idle', async () => {
+    await env.session.start({});
+    await env.session.stop();
+    // Simulate a late runtime event (unsubscribe should already block this in
+    // practice; the guard is belt-and-suspenders for real SDK teardown races).
+    env.runtime.emitEvent({ kind: 'session_complete', summary: 'late' });
+    expect(env.session.getStatus()).toBe('stopped');
+  });
+
   it('stop() aborts, unsubscribes, denies pending permissions, stops runtime', async () => {
     await env.session.start({});
     env.runtime.emitPermission({

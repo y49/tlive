@@ -151,6 +151,9 @@ export class Session {
 
   private setStatus(s: SessionStatus): void {
     if (this.status === s) return;
+    // 'stopped' is terminal — guard against late events from real SDK runtimes
+    // flipping status back to 'idle' after teardown has committed.
+    if (this.status === 'stopped') return;
     this.status = s;
     this.emit({ kind: 'status', status: s });
   }
