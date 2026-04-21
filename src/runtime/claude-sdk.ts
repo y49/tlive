@@ -63,8 +63,10 @@ export class ClaudeSdkRuntime implements AgentRuntime {
         model: opts.model,
         effort: opts.effort,
         resume: opts.sessionId || undefined,
-        canUseTool: (toolName: string, toolInput: Record<string, unknown>) =>
-          this.handleCanUseTool(toolName, toolInput),
+        abortController: undefined,  // keep the SDK from auto-creating one
+        signal: opts.signal,
+        canUseTool: (toolName: string, toolInput: Record<string, unknown>, options?: { toolUseID?: string; suggestions?: unknown; signal?: AbortSignal }) =>
+          this.handleCanUseTool(toolName, toolInput, options),
       },
     } as Parameters<typeof query>[0]);
 
@@ -86,6 +88,11 @@ export class ClaudeSdkRuntime implements AgentRuntime {
     if (this.closed) return;
     this.closed = true;
     if (this.messageWaiter) { const w = this.messageWaiter; this.messageWaiter = null; w(null); }
+    // Attempt to interrupt in-flight SDK request if supported (blueprint pattern).
+    const iter = this.queryIter as (AsyncIterable<unknown> & { interrupt?: () => Promise<void> | void }) | null;
+    if (iter?.interrupt) {
+      try { await iter.interrupt(); } catch { /* ignore */ }
+    }
   }
 
   onEvent(cb: (e: NotificationEvent) => void) { this.eventCbs.add(cb); return () => this.eventCbs.delete(cb); }
@@ -103,6 +110,7 @@ export class ClaudeSdkRuntime implements AgentRuntime {
 
   private async consume(): Promise<void> {
     if (!this.queryIter) return;
+    let errored = false;
     try {
       for await (const msg of this.queryIter) {
         if (this.closed) break;
@@ -111,24 +119,35 @@ export class ClaudeSdkRuntime implements AgentRuntime {
         if (frame.usage) this.fireUsage(frame.usage);
       }
     } catch (err) {
+      errored = true;
       this.fireEvent({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
     } finally {
-      if (!this.closed) this.fireEvent({ kind: 'session_complete', summary: '' });
+      if (!this.closed && !errored) this.fireEvent({ kind: 'session_complete', summary: '' });
     }
   }
 
   private async handleCanUseTool(
     toolName: string,
     toolInput: Record<string, unknown>,
-  ): Promise<{ behavior: 'allow'; updatedInput: Record<string, unknown> } | { behavior: 'deny'; message: string }> {
+    options?: { toolUseID?: string; suggestions?: unknown; signal?: AbortSignal },
+  ): Promise<
+    | { behavior: 'allow'; updatedInput: Record<string, unknown>; updatedPermissions?: unknown }
+    | { behavior: 'deny'; message: string }
+  > {
     return new Promise((resolveSdk) => {
-      const toolUseId = randomUUID();
+      const toolUseId = options?.toolUseID ?? randomUUID();
       const id = `${this.currentSessionId ?? 'unknown'}:${toolUseId}`;
       const request: PermissionRequest = {
         id, toolName, toolInput,
         resolve: (decision: PermissionDecision) => {
-          if (decision === 'allow' || decision === 'allow_always') {
+          if (decision === 'allow') {
             resolveSdk({ behavior: 'allow', updatedInput: toolInput });
+          } else if (decision === 'allow_always') {
+            const reply: { behavior: 'allow'; updatedInput: Record<string, unknown>; updatedPermissions?: unknown } = {
+              behavior: 'allow', updatedInput: toolInput,
+            };
+            if (options?.suggestions !== undefined) reply.updatedPermissions = options.suggestions;
+            resolveSdk(reply);
           } else {
             resolveSdk({ behavior: 'deny', message: 'Denied by user' });
           }

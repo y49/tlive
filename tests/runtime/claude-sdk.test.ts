@@ -4,7 +4,7 @@ import type { PermissionRequest } from '../../src/runtime/types.js';
 
 /** Build a fake query() that yields the provided frames and collects canUseTool invocations. */
 function fakeQuery(frames: unknown[]) {
-  let capturedCanUseTool: ((name: string, input: any) => Promise<any>) | null = null;
+  let capturedCanUseTool: ((name: string, input: any, options?: any) => Promise<any>) | null = null;
   const fn = (args: any) => {
     capturedCanUseTool = args.options.canUseTool;
     // Consume prompt generator in background (we don't rely on its output for these tests)
@@ -85,5 +85,40 @@ describe('ClaudeSdkRuntime', () => {
     ac.abort();
     await new Promise((r) => setTimeout(r, 10));
     await expect(rt.sendInput('later')).rejects.toThrow(/closed/);
+  });
+
+  it('uses SDK-provided toolUseID and forwards suggestions on allow_always', async () => {
+    const q = fakeQuery([]);
+    const rt = new ClaudeSdkRuntime({ query: q.fn as any });
+    const requests: PermissionRequest[] = [];
+    rt.onPermissionRequest((r) => requests.push(r));
+    await rt.start({ sessionId: 'sess', workdir: '/x', signal: new AbortController().signal });
+    const sdkPromise = q.canUseTool('Bash', { cmd: 'ls' }, {
+      toolUseID: 'tu-from-sdk', suggestions: [{ type: 'addRules', rules: ['Bash'] }],
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(requests[0].id).toBe('sess:tu-from-sdk');
+    requests[0].resolve('allow_always');
+    const result = await sdkPromise;
+    expect(result).toMatchObject({
+      behavior: 'allow', updatedInput: { cmd: 'ls' },
+      updatedPermissions: [{ type: 'addRules', rules: ['Bash'] }],
+    });
+  });
+
+  it('consume() emits error OR session_complete, not both, on mid-stream failure', async () => {
+    async function* badStream() {
+      yield { type: 'assistant', message: { content: [{ type: 'text', text: 'hi' }] } };
+      throw new Error('boom');
+    }
+    const fn = (_args: any) => badStream();
+    const rt = new ClaudeSdkRuntime({ query: fn as any });
+    const events: any[] = [];
+    rt.onEvent((e) => events.push(e));
+    await rt.start({ sessionId: 's', workdir: '/x', signal: new AbortController().signal });
+    await new Promise((r) => setTimeout(r, 20));
+    const kinds = events.map((e) => e.kind);
+    expect(kinds).toContain('error');
+    expect(kinds).not.toContain('session_complete');
   });
 });
