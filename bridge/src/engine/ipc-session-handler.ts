@@ -87,6 +87,10 @@ export class IPCSessionHandler {
         // CLI tail reads jsonl directly; daemon just acks.
         return { type: 'ack', payload: { ok: true } };
       }
+      default: {
+        const _exhaustive: never = req;
+        throw new Error(`unhandled IPC request type: ${(_exhaustive as { type: string }).type}`);
+      }
     }
   }
 }

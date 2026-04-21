@@ -9,6 +9,14 @@ import { EventEmitter } from 'node:events';
 
 export const IPC_PATH = join(homedir(), '.tlive', 'ipc.sock');
 
+// Distinct socket path for the typed v1.0 IPC handler (IPCSessionHandler).
+// Keeps the legacy TerminalRelay socket (IPC_PATH) and the new typed server
+// from colliding on the same file path — both would otherwise unlink/rebind
+// each other during bridge startup. T10+ `ipc-client-lite.ts` MUST connect to
+// this path (not IPC_PATH). When T13/T14 delete TerminalRelay, this can be
+// consolidated back to IPC_PATH.
+export const IPC_PATH_V1 = join(homedir(), '.tlive', 'ipc-v1.sock');
+
 export interface IPCMessage {
   type: string;
   payload: Record<string, unknown>;
@@ -47,9 +55,11 @@ function sendMessage(socket: Socket, msg: IPCMessage): void {
 export class IPCServer extends EventEmitter {
   private server: ReturnType<typeof createServer> | null = null;
   private clients = new Set<Socket>();
+  private activePath: string = IPC_PATH;
 
   start(path: string = IPC_PATH): void {
     if (existsSync(path)) unlinkSync(path);
+    this.activePath = path;
 
     this.server = createServer((socket) => {
       this.clients.add(socket);
@@ -82,7 +92,7 @@ export class IPCServer extends EventEmitter {
   stop(): void {
     for (const client of this.clients) client.destroy();
     this.server?.close();
-    try { unlinkSync(IPC_PATH); } catch { /* already gone */ }
+    try { unlinkSync(this.activePath); } catch { /* already gone */ }
   }
 }
 
@@ -192,11 +202,11 @@ export class IPCClientRequester {
         this.client.off('response', off as (p: unknown) => void);
         reject(new Error(`IPC timeout (${req.type})`));
       }, timeoutMs);
-      const off = (payload: Envelope<IPCResponse>) => {
-        if (payload.requestId !== requestId) return;
+      const off = (payload: { envelope: Envelope<IPCResponse> }) => {
+        if (payload.envelope.requestId !== requestId) return;
         clearTimeout(t);
         this.client.off('response', off as (p: unknown) => void);
-        resolve(payload.message);
+        resolve(payload.envelope.message);
       };
       this.client.on('response', off as (p: unknown) => void);
       this.client.send('request', { envelope: { requestId, message: req } } as Record<string, unknown>);

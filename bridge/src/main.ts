@@ -18,7 +18,7 @@ import { PermissionBroker as RuntimePermissionBroker } from '../../src/session/p
 import { ClaudeSdkRuntime } from '../../src/runtime/claude-sdk.js';
 import { CodexAppServerRuntime } from '../../src/runtime/codex-app-server/index.js';
 import type { AgentProvider } from '../../src/runtime/types.js';
-import { IPCServer } from '../../src/ipc.js';
+import { IPCServer, IPC_PATH_V1 } from '../../src/ipc.js';
 import { IPCSessionHandler } from './engine/ipc-session-handler.js';
 
 function writeStatusFile(tliveHome: string, data: Record<string, unknown>): void {
@@ -97,7 +97,7 @@ async function main() {
   // (session_register, etc.) use different `type` values so they don't collide
   // with the `type: 'request'` envelope the handler consumes.
   const ipc = new IPCServer();
-  ipc.start();
+  ipc.start(IPC_PATH_V1);
   const ipcSessionHandler = new IPCSessionHandler(ipc, sessionManager, runtimeBroker, manager.getWorkspaceManager());
   ipcSessionHandler.start();
 
