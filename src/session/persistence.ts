@@ -1,6 +1,6 @@
 // src/session/persistence.ts
 
-import { mkdir, writeFile, readFile, appendFile, readdir, unlink, stat } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, appendFile, readdir, unlink, stat, rename } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -36,7 +36,6 @@ export class SessionPersistence {
     const tmp = this.metaPath(snap.id) + '.tmp';
     await writeFile(tmp, JSON.stringify(snap, null, 2), 'utf-8');
     // Atomic rename — avoids torn writes on daemon crash
-    const { rename } = await import('node:fs/promises');
     await rename(tmp, this.metaPath(snap.id));
   }
 
