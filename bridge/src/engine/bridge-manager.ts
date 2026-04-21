@@ -65,7 +65,10 @@ export class BridgeManager {
   private providerCache = new Map<string, LLMProvider>();
   private workspaceManager!: WorkspaceManager;
 
-  constructor(overrides?: { workspacesPersistPath?: string | null }) {
+  constructor(overrides?: {
+    workspacesPersistPath?: string | null;
+    sessionManager?: import('../../../src/session/manager.js').SessionManager | null;
+  }) {
     const config = loadConfig();
     const effectivePublicUrl = config.publicUrl || `http://${getLocalIP()}:${config.port || 4590}`;
     const gateway = new PendingPermissions();
@@ -151,6 +154,17 @@ export class BridgeManager {
     this.callbackRouter.onResumeSession = (adapter, chatId, sessionId, workdir) => {
       this.resumeSession(adapter, chatId, sessionId, workdir);
     };
+
+    // Phase 1 feature-flagged SessionManager wiring. Lazy-import so flag-off
+    // daemons don't pay the load cost. SessionFrontend.render is a no-op in
+    // Phase 1 — this proves the subscribe path without user-visible change.
+    if (overrides?.sessionManager) {
+      const sessionManager = overrides.sessionManager;
+      import('./session-frontend.js').then(({ SessionFrontend }) => {
+        const frontend = new SessionFrontend(sessionManager, this.router, this.renderers);
+        frontend.start();
+      }).catch(() => { /* logger not available here; swallow */ });
+    }
   }
 
   /** Returns all active adapters */

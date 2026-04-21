@@ -12,6 +12,12 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { discoverActiveSessions } from './engine/session-discovery.js';
+import { SessionManager } from '../../src/session/manager.js';
+import { SessionPersistence } from '../../src/session/persistence.js';
+import { PermissionBroker as RuntimePermissionBroker } from '../../src/session/permission-broker.js';
+import { ClaudeSdkRuntime } from '../../src/runtime/claude-sdk.js';
+import { CodexAppServerRuntime } from '../../src/runtime/codex-app-server/index.js';
+import type { AgentProvider } from '../../src/runtime/types.js';
 
 function writeStatusFile(tliveHome: string, data: Record<string, unknown>): void {
   try {
@@ -52,8 +58,27 @@ async function main() {
     defaultWorkdir: config.defaultWorkdir,
   });
 
+  // SessionManager wiring (Phase 1 — feature-flagged via TL_USE_SESSION_MANAGER).
+  // Built unconditionally so the flag-off path still benefits from validated deps;
+  // BridgeManager only subscribes when the flag is set.
+  const persistence = new SessionPersistence(join(tliveHome, 'sessions'));
+  await persistence.init();
+  const runtimeBroker = new RuntimePermissionBroker();
+  const sessionManager = new SessionManager({
+    persistence,
+    broker: runtimeBroker,
+    runtimeFactory: (provider: AgentProvider) =>
+      provider === 'claude' ? new ClaudeSdkRuntime() : new CodexAppServerRuntime(),
+  });
+  const persisted = await sessionManager.hydrateFromDisk();
+  logger.info(`Found ${persisted.length} persisted session(s) on disk`);
+
+  const useSessionManager = process.env.TL_USE_SESSION_MANAGER === '1';
+
   // IM adapters
-  const manager = new BridgeManager();
+  const manager = new BridgeManager({
+    sessionManager: useSessionManager ? sessionManager : null,
+  });
   for (const channelType of config.enabledChannels) {
     try {
       manager.registerAdapter(createAdapter(channelType as ChannelType));
