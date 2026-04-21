@@ -5,7 +5,7 @@
 // subcommand so they stay under ~30 LOC each.
 
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, openSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -35,22 +35,36 @@ export async function ensureDaemonRunning(): Promise<void> {
   if (!existsSync(entry)) {
     throw new Error(`Bridge not built at ${entry}. Run: npm run build:all`);
   }
+  // Route daemon stdout/stderr to ~/.tlive/logs/bridge.log so `tlive logs`
+  // can surface auto-start failures instead of silently discarding them.
+  const logDir = join(TLIVE_HOME, 'logs');
+  mkdirSync(logDir, { recursive: true });
+  const logFd = openSync(join(logDir, 'bridge.log'), 'a');
   const child = spawn(process.execPath, [entry], {
-    detached: true, stdio: 'ignore',
+    detached: true, stdio: ['ignore', logFd, logFd],
     env: { ...process.env },
   });
   child.unref();
-  // Give the daemon up to 5s to bind the IPC socket.
-  const client = new IPCClient({ path: IPC_PATH_V1, maxRetries: 10, retryDelay: 500 });
+  // Give the daemon up to ~6s to bind the IPC socket.
+  // (exponential backoff: 200+400+800+1600+3200 = 6.2s over 5 retries)
+  const client = new IPCClient({ path: IPC_PATH_V1, maxRetries: 5, retryDelay: 200, autoReconnect: false });
   const ok = await client.connect();
   client.disconnect();
-  if (!ok) throw new Error('Daemon failed to start within 5s');
+  if (!ok) throw new Error('Daemon failed to start within ~6s. Check: tlive logs');
 }
 
 export async function sendRequest(req: IPCRequest): Promise<IPCResponse> {
-  const client = new IPCClient({ path: IPC_PATH_V1, maxRetries: 3, retryDelay: 200 });
-  const ok = await client.connect();
-  if (!ok) throw new Error('Failed to connect to daemon IPC');
+  let client = new IPCClient({ path: IPC_PATH_V1, maxRetries: 3, retryDelay: 200, autoReconnect: false });
+  let ok = await client.connect();
+  if (!ok) {
+    // Stale PID file? Retry once after re-ensuring daemon.
+    client.disconnect();
+    try { unlinkSync(BRIDGE_PID); } catch { /* already gone */ }
+    await ensureDaemonRunning();
+    client = new IPCClient({ path: IPC_PATH_V1, maxRetries: 3, retryDelay: 200, autoReconnect: false });
+    ok = await client.connect();
+  }
+  if (!ok) throw new Error('Failed to connect to daemon IPC after retry');
   try {
     const requester = new IPCClientRequester(client);
     return await requester.request(req);
