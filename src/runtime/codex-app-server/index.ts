@@ -70,6 +70,7 @@ export class CodexAppServerRuntime implements AgentRuntime {
   private transport: StdioJsonlTransport | null = null;
   private client: CodexAppServerClient | null = null;
   private threadId: string | null = null;
+  private activeTurnId: string | null = null;
 
   constructor(private deps: CodexAppServerRuntimeDeps = {}) {}
 
@@ -105,8 +106,18 @@ export class CodexAppServerRuntime implements AgentRuntime {
     this.client = client;
 
     // Wire notification forwarding — adapter fans each method into NotificationEvents.
+    // Also capture activeTurnId from turn/started and clear on turn/completed so
+    // stop() can issue a best-effort turn/interrupt against the live turn.
     for (const method of FORWARDED_METHODS) {
       client.onNotification(method, (params) => {
+        if (method === 'turn/started') {
+          const p = (params ?? {}) as Record<string, unknown>;
+          const turn = (p.turn ?? {}) as Record<string, unknown>;
+          const id = typeof turn.id === 'string' ? turn.id : null;
+          if (id) this.activeTurnId = id;
+        } else if (method === 'turn/completed') {
+          this.activeTurnId = null;
+        }
         const frame = eventAdapter.handle(method, params);
         for (const e of frame.events) for (const cb of this.eventCbs) cb(e);
         if (frame.usage) for (const cb of this.usageCbs) cb(frame.usage);
@@ -137,6 +148,13 @@ export class CodexAppServerRuntime implements AgentRuntime {
       const decision = await approvalBridge.handleFileChangeApproval(itemId, path, changes);
       return { decision: codexDecisionToRpc(decision) };
     });
+    // Defensive auto-decline for session-escalation + MCP elicitation prompts.
+    // Without a registered handler, the client responds method_not_found; auto-
+    // declining is less disruptive. A future v1.1 task should route these
+    // through the session broker for real user interaction. No `permCbs` emit
+    // here — these are intentionally not surfaced to the IM until wired.
+    client.onPermissionsApproval(async () => ({ permissions: {}, scope: 'turn' }));
+    client.onMcpElicitation(async () => ({ action: 'decline', content: null }));
 
     transport.onExit(({ code }) => {
       if (code !== 0 && !this.closed) {
@@ -182,8 +200,23 @@ export class CodexAppServerRuntime implements AgentRuntime {
         await this.turnStart(opts.initialPrompt, opts.effort, opts.model);
       }
     } catch (err) {
+      // Init-phase failure: fire error, tear down client+transport so the
+      // spawned codex process doesn't leak, mark closed so sendInput rejects.
+      // Swallow cleanup errors — the caller only needs the original cause.
+      // NB: client.close() already awaits transport.close() internally; we
+      // don't double-close here because transport.close() is not idempotent
+      // (each call registers a fresh exit listener and hangs waiting for a
+      // second exit that will never come).
       const message = err instanceof Error ? err.message : String(err);
-      for (const cb of this.eventCbs) cb({ kind: 'error', message });
+      this.closed = true;
+      for (const cb of this.eventCbs) {
+        try { cb({ kind: 'error', message }); } catch { /* ignore */ }
+      }
+      if (this.client) {
+        try { await this.client.close(); } catch { /* ignore */ }
+      } else {
+        try { await this.transport?.close(); } catch { /* ignore */ }
+      }
       throw err;
     }
   }
@@ -196,8 +229,25 @@ export class CodexAppServerRuntime implements AgentRuntime {
   async stop(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    try { await this.client?.close(); } catch { /* ignore */ }
-    try { await this.transport?.close(); } catch { /* ignore */ }
+    // Best-effort: if a turn is in flight, tell codex to cancel it server-side
+    // before closing the transport. Otherwise aborting the signal only kills
+    // the subprocess without letting codex clean up the turn.
+    if (this.client && this.threadId && this.activeTurnId) {
+      try {
+        await this.client.request('turn/interrupt', {
+          threadId: this.threadId,
+          turnId: this.activeTurnId,
+        });
+      } catch { /* ignore — best effort */ }
+    }
+    // client.close() awaits transport.close() internally — don't double-close
+    // (transport.close() registers a fresh exit listener each call and hangs
+    // on the second call waiting for an exit that already fired).
+    if (this.client) {
+      try { await this.client.close(); } catch { /* ignore */ }
+    } else {
+      try { await this.transport?.close(); } catch { /* ignore */ }
+    }
   }
 
   onEvent(cb: (e: NotificationEvent) => void) { this.eventCbs.add(cb); return () => this.eventCbs.delete(cb); }
@@ -208,7 +258,7 @@ export class CodexAppServerRuntime implements AgentRuntime {
 
   private async turnStart(text: string, effort?: string, model?: string): Promise<void> {
     if (!this.client || !this.threadId) throw new Error('runtime not initialized');
-    await this.client.request<
+    const result = await this.client.request<
       {
         threadId: string;
         input: Array<{ type: 'text'; text: string; text_elements: Array<unknown> }>;
@@ -222,6 +272,10 @@ export class CodexAppServerRuntime implements AgentRuntime {
       effort,
       model,
     });
+    // Capture the turn id from the response as well — the turn/started
+    // notification may race with stop() for very fast rejections, and having
+    // the id set here ensures stop() can still issue turn/interrupt.
+    if (result?.turn?.id) this.activeTurnId = result.turn.id;
   }
 }
 
