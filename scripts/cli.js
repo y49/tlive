@@ -326,8 +326,12 @@ Usage:
   tlive <subcommand>         Manage TLive services
 
 Sessions:
-  tlive claude [prompt]      Start a Claude Code session (driven from IM)
-  tlive codex [prompt]       Start a Codex session (driven from IM)
+  tlive claude [prompt]       Start a Claude Code session (driven from IM)
+  tlive codex [prompt]        Start a Codex session (driven from IM)
+  tlive list                  Show active sessions
+  tlive stop <id>             Stop a session
+  tlive logs [--follow] <id>  Read-only tail of a session's history
+  tlive resume <id>           Re-activate an idle session in IM
 
 Setup (one-time):
   tlive setup                Configure IM platforms (Telegram/Discord/Feishu)
@@ -391,7 +395,8 @@ if (command === '--version' || command === '-v' || command === '-V') {
   process.exit(0);
 }
 
-if (command === 'claude' || command === 'codex') {
+const SESSION_SUBCOMMANDS = new Set(['claude', 'codex', 'list', 'stop', 'logs', 'resume']);
+if (SESSION_SUBCOMMANDS.has(command)) {
   ensureBridgeRunning();
   const bundle = join(PACKAGE_ROOT, 'dist', 'src', `tlive-${command}.mjs`);
   if (!existsSync(bundle)) {
