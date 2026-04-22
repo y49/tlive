@@ -9,6 +9,7 @@
 import type { SessionManager } from '../../../src/session/manager.js';
 import type { PermissionBroker as RuntimePermissionBroker } from '../../../src/session/permission-broker.js';
 import type { PermissionRequest } from '../../../src/runtime/types.js';
+import type { NotificationEvent as RuntimeNotificationEvent } from '../../../src/runtime/events.js';
 import type { NotificationRenderer, NotificationEvent } from '../renderers/types.js';
 import type { ChannelType } from '../channels/types.js';
 import type { Session } from '../../../src/session/session.js';
@@ -55,7 +56,10 @@ export class SessionFrontend {
     const existing = this.sessionUnsubs.get(session.id);
     if (existing) existing();
     const unsub = session.subscribe((ev) => {
-      if (ev.kind === 'event') void this.renderEvent(session.id, ev.event);
+      if (ev.kind === 'event') {
+        const rendererEvent = translateRuntimeEvent(ev.event);
+        if (rendererEvent) void this.renderEvent(session.id, rendererEvent);
+      }
     });
     this.sessionUnsubs.set(session.id, unsub);
   }
@@ -122,4 +126,47 @@ export class SessionFrontend {
     const firstKey = adapters.keys().next().value as ChannelType | undefined;
     return firstKey ? { channelType: firstKey, chatId: workspace.chatId } : null;
   }
+}
+
+/**
+ * Shim between the runtime event union (src/runtime/events.ts, post-T2) and the
+ * legacy renderer union (bridge/src/renderers/types.ts). Returns null for kinds
+ * the renderer does not know how to draw; the session-frontend simply skips
+ * those events. This entire bridge module is slated for deletion in T8 —
+ * this shim exists only to keep bridge typecheck green through T2-T7.
+ */
+function translateRuntimeEvent(e: RuntimeNotificationEvent): NotificationEvent | null {
+  switch (e.kind) {
+    case 'assistant_text_delta':
+    case 'assistant_text':
+      return { kind: 'activity_text', text: e.text };
+    case 'thinking_delta':
+      return { kind: 'reasoning_summary', text: e.text };
+    case 'thinking_end':
+      return { kind: 'thinking', active: false };
+    case 'tool_use_start':
+      return { kind: 'activity_tool', toolName: e.toolName, toolInput: safeStringify(e.input) };
+    case 'todo_write':
+      return { kind: 'todo_update', items: e.items.map((i) => ({ content: i.content, status: i.status })) };
+    case 'session_complete':
+      return { kind: 'session_complete', summary: e.summary };
+    case 'runtime_error':
+      return { kind: 'error', message: e.message };
+    case 'file_changed':
+      return {
+        kind: 'file_change_list',
+        changes: [{
+          path: e.path,
+          kind: e.op === 'created' ? 'add' : e.op === 'deleted' ? 'delete' : 'update',
+        }],
+        status: 'completed',
+      };
+    // Kinds with no legacy analogue — dropped for now (T8 deletes the bridge).
+    default:
+      return null;
+  }
+}
+
+function safeStringify(v: unknown): string {
+  try { return JSON.stringify(v); } catch { return '[unserializable]'; }
 }

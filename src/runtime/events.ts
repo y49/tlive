@@ -1,39 +1,58 @@
 // src/runtime/events.ts
 //
-// Source of truth for the runtime event contract.
-// Every AgentRuntime.onEvent emits exactly these shapes. The bridge's
-// renderers consume the same union (currently a structural duplicate in
-// bridge/src/renderers/types.ts — TS6059 blocks a cross-rootDir re-export;
-// Phase 3 T14 consolidates).
-//
-// Adding a variant: add here first, then handle it in every renderer
-// (telegram/discord/feishu) before merging.
+// Source of truth for the runtime event contract (spec §3.4).
+// Every AgentRuntime.onEvent emits exactly these shapes. Adding a variant:
+// update here, then expand both event adapters + every renderer before merging.
 
-export interface AskOption {
-  label: string;
-  description?: string;
-}
-
-export interface TodoItem {
-  content: string;
-  status: 'pending' | 'in_progress' | 'completed';
-}
+import type { PermissionCategory, PermissionDecision } from './types.js';
+import type { AgentStatus } from '../session/status.js';
 
 export interface UsageStats {
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
   costUsd: number;
-  durationMs: number;
 }
 
 export type NotificationEvent =
-  | { kind: 'permission_request'; toolName: string; toolInput: string; permissionId: string; expiresInMinutes?: number }
-  | { kind: 'ask_user_question'; question: string; header?: string; options?: AskOption[]; toolUseId: string }
-  | { kind: 'session_complete'; summary: string; cost?: UsageStats }
-  | { kind: 'error'; message: string }
-  | { kind: 'todo_update'; items: TodoItem[] }
-  | { kind: 'activity_text'; text: string; title?: string; footer?: string }
-  | { kind: 'activity_tool'; toolName: string; toolInput?: string }
-  | { kind: 'thinking'; active: boolean }
-  | { kind: 'reasoning_summary'; text: string; durationMs?: number; truncated?: boolean }
-  | { kind: 'file_change_list'; changes: Array<{ path: string; kind: 'add' | 'delete' | 'update' }>; status: 'completed' | 'failed' };
+  | { kind: 'turn_start'; turnId: string; userInputPreview: string; at: number }
+  | { kind: 'turn_end'; turnId: string; durationMs: number; costUsd: number; tokensIn: number; tokensOut: number }
+  | { kind: 'status_change'; status: AgentStatus }
+  | { kind: 'heartbeat'; elapsedMs: number }
+  | { kind: 'assistant_text_delta'; turnId: string; text: string; partial: true }
+  | { kind: 'assistant_text'; turnId: string; text: string; complete: true }
+  | { kind: 'thinking_delta'; turnId: string; text: string; partial: true }
+  | { kind: 'thinking_end'; turnId: string; totalTokens: number }
+  | { kind: 'tool_use_start'; turnId: string; toolUseId: string; toolName: string; input: unknown; batchId?: string; batchIndex?: number; batchSize?: number }
+  | { kind: 'tool_use_result'; toolUseId: string; output: unknown; durationMs: number; ok: boolean; overflowAttachmentId?: string }
+  | { kind: 'parallel_tool_batch_start'; batchId: string; count: number }
+  | { kind: 'parallel_tool_batch_end'; batchId: string }
+  | { kind: 'subagent_start'; agentId: string; parentTurnId: string; description: string; taskId: string }
+  | { kind: 'subagent_progress'; agentId: string; summary: string }
+  | { kind: 'subagent_event'; agentId: string; event: NotificationEvent }
+  | { kind: 'subagent_stop'; agentId: string; taskId: string; ok: boolean }
+  | { kind: 'file_changed'; path: string; op: 'created' | 'modified' | 'deleted'; diff?: string; userMessageId?: string }
+  | { kind: 'attachment_produced'; attachmentId: string; name: string; mime: string; sizeBytes: number; path: string }
+  | { kind: 'todo_write'; items: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed'; id?: string }> }
+  | { kind: 'prompt_suggestion'; turnId: string; suggestions: Array<{ id: string; text: string }> }
+  | { kind: 'ask_user_question_requested'; requestId: string; prompt: string; options: string[] }
+  | { kind: 'ask_user_question_resolved'; requestId: string; chosen: string[] }
+  | { kind: 'elicitation_requested'; requestId: string; mcpServerName: string; description?: string; schema?: unknown }
+  | { kind: 'elicitation_resolved'; requestId: string; action: 'accept' | 'decline'; content?: unknown }
+  | { kind: 'permission_requested'; requestId: string; category: PermissionCategory; toolName: string; toolInput: unknown }
+  | { kind: 'permission_resolved'; requestId: string; decision: PermissionDecision; resolvedByUserId?: string }
+  | { kind: 'pre_compact'; droppedMessages: number; keptMessages: number }
+  | { kind: 'post_compact'; tokensSaved: number }
+  | { kind: 'cache_warmth_change'; warmUntilMs: number | null }
+  | { kind: 'prewarm_tick'; atMs: number }
+  | { kind: 'api_throttle'; retryAfterMs: number; message: string }
+  | { kind: 'api_resumed' }
+  | { kind: 'rewind_files'; userMessageId: string; restored: number; skipped: number }
+  | { kind: 'session_forked'; newSdkSessionId: string; title: string }
+  | { kind: 'session_renamed'; title: string }
+  | { kind: 'mcp_status_change'; server: string; status: 'connected' | 'failed' | 'needs-auth' | 'pending' }
+  | { kind: 'plugin_reloaded'; commandsAdded: string[]; commandsRemoved: string[] }
+  | { kind: 'hook_generic'; event: string; payload: unknown }
+  | { kind: 'session_complete'; reason: string; summary: string }
+  | { kind: 'runtime_error'; severity: 'warn' | 'fatal'; code: string; message: string; retryHintMs?: number };

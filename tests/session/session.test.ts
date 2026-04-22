@@ -34,7 +34,7 @@ describe('Session', () => {
 
   it('events from runtime are appended to history and persisted', async () => {
     await env.session.start({});
-    const e: NotificationEvent = { kind: 'activity_text', text: 'hi' };
+    const e: NotificationEvent = { kind: 'assistant_text', turnId: 't1', text: 'hi', complete: true };
     env.runtime.emitEvent(e);
     expect(env.session.getHistory()).toEqual([e]);
     // Flush microtasks
@@ -44,7 +44,7 @@ describe('Session', () => {
 
   it('session_complete transitions status to idle', async () => {
     await env.session.start({});
-    env.runtime.emitEvent({ kind: 'session_complete', summary: 'done' });
+    env.runtime.emitEvent({ kind: 'session_complete', reason: 'normal', summary: 'done' });
     expect(env.session.getStatus()).toBe('idle');
   });
 
@@ -77,7 +77,7 @@ describe('Session', () => {
     await env.session.stop();
     // Simulate a late runtime event (unsubscribe should already block this in
     // practice; the guard is belt-and-suspenders for real SDK teardown races).
-    env.runtime.emitEvent({ kind: 'session_complete', summary: 'late' });
+    env.runtime.emitEvent({ kind: 'session_complete', reason: 'normal', summary: 'late' });
     expect(env.session.getStatus()).toBe('stopped');
   });
 
@@ -94,7 +94,7 @@ describe('Session', () => {
 
   it('snapshot reflects status, cost, and pending permissions', async () => {
     await env.session.start({});
-    env.runtime.emitUsage({ inputTokens: 10, outputTokens: 5, costUsd: 0.01, durationMs: 100 });
+    env.runtime.emitUsage({ inputTokens: 10, outputTokens: 5, costUsd: 0.01 });
     const snap = env.session.snapshot();
     expect(snap.cost.inputTokens).toBe(10);
     expect(snap.status).toBe('active');
@@ -105,8 +105,8 @@ describe('Session', () => {
     const log: string[] = [];
     env.session.subscribe((ev) => log.push(ev.kind));
     await env.session.start({});
-    env.runtime.emitEvent({ kind: 'thinking', active: true });
-    env.runtime.emitUsage({ inputTokens: 1, outputTokens: 1, costUsd: 0, durationMs: 1 });
+    env.runtime.emitEvent({ kind: 'heartbeat', elapsedMs: 5 });
+    env.runtime.emitUsage({ inputTokens: 1, outputTokens: 1, costUsd: 0 });
     expect(log).toContain('status');
     expect(log).toContain('event');
     expect(log).toContain('usage');

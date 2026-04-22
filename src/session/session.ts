@@ -125,7 +125,7 @@ export class Session {
     if (event.kind === 'session_complete') {
       this.setStatus('idle');
       void this.saveSnapshot();
-    } else if (event.kind === 'error') {
+    } else if (event.kind === 'runtime_error') {
       this.setStatus('idle');
       void this.saveSnapshot();
     }

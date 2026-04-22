@@ -13,7 +13,7 @@ function makeSnap(id: string, overrides: Partial<SessionSnapshot> = {}): Session
     status: 'active',
     createdAt: 1,
     lastActivityAt: 2,
-    cost: { inputTokens: 0, outputTokens: 0, costUsd: 0, durationMs: 0 },
+    cost: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, costUsd: 0 },
     pendingPermissionIds: [],
     ...overrides,
   };
@@ -42,8 +42,8 @@ describe('SessionPersistence', () => {
   });
 
   it('appendEvent accumulates and loadHistory reads back in order', async () => {
-    const e1: NotificationEvent = { kind: 'thinking', active: true };
-    const e2: NotificationEvent = { kind: 'activity_text', text: 'hi' };
+    const e1: NotificationEvent = { kind: 'heartbeat', elapsedMs: 0 };
+    const e2: NotificationEvent = { kind: 'assistant_text', turnId: 't1', text: 'hi', complete: true };
     await p.appendEvent('s1', e1);
     await p.appendEvent('s1', e2);
     expect(await p.loadHistory('s1')).toEqual([e1, e2]);
@@ -54,10 +54,10 @@ describe('SessionPersistence', () => {
   });
 
   it('loadHistory skips malformed lines without crashing', async () => {
-    await p.appendEvent('s1', { kind: 'thinking', active: true });
+    await p.appendEvent('s1', { kind: 'heartbeat', elapsedMs: 1 });
     const { appendFile } = await import('node:fs/promises');
     await appendFile(join(root, 's1.jsonl'), 'not-json\n');
-    await p.appendEvent('s1', { kind: 'thinking', active: false });
+    await p.appendEvent('s1', { kind: 'heartbeat', elapsedMs: 2 });
     const events = await p.loadHistory('s1');
     expect(events).toHaveLength(2);
   });
@@ -72,7 +72,7 @@ describe('SessionPersistence', () => {
 
   it('removeSession deletes both files and is idempotent', async () => {
     await p.saveSnapshot(makeSnap('s1'));
-    await p.appendEvent('s1', { kind: 'thinking', active: true });
+    await p.appendEvent('s1', { kind: 'heartbeat', elapsedMs: 0 });
     await p.removeSession('s1');
     expect(await p.loadSnapshot('s1')).toBeNull();
     expect(await p.loadHistory('s1')).toEqual([]);

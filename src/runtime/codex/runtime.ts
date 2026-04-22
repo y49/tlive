@@ -174,7 +174,9 @@ export class CodexAppServerRuntime implements AgentRuntime {
     transport.onExit(({ code }) => {
       if (code !== 0 && !this.closed) {
         for (const cb of this.eventCbs) cb({
-          kind: 'error',
+          kind: 'runtime_error',
+          severity: 'fatal',
+          code: 'codex_app_server_exit',
           message: `Codex app-server exited unexpectedly (code ${code})`,
         });
       }
@@ -221,7 +223,14 @@ export class CodexAppServerRuntime implements AgentRuntime {
       const alreadyClosing = this.closed;
       this.closed = true;
       for (const cb of this.eventCbs) {
-        try { cb({ kind: 'error', message }); } catch { /* ignore */ }
+        try {
+          cb({
+            kind: 'runtime_error',
+            severity: 'fatal',
+            code: 'codex_start_failed',
+            message,
+          });
+        } catch { /* ignore */ }
       }
       if (!alreadyClosing) {
         if (this.client) {

@@ -101,7 +101,7 @@ describe('SessionFrontend (full renderer)', () => {
     f.start();
     s.mgr.fireCreated('sid-ev');
     const subs = s.sessionSubs.get('sid-ev')!;
-    subs[0]({ kind: 'event', event: { kind: 'activity_text', text: 'hi' } });
+    subs[0]({ kind: 'event', event: { kind: 'assistant_text', turnId: 't1', text: 'hi', complete: true } });
     await new Promise((r) => setTimeout(r, 0));
     const adapter = s.adapters.get('telegram') as any;
     expect(adapter.send).toHaveBeenCalled();

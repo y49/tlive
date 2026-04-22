@@ -197,9 +197,14 @@ export class ClaudeSdkRuntime implements AgentRuntime {
       }
     } catch (err) {
       errored = true;
-      this.fireEvent({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
+      this.fireEvent({
+        kind: 'runtime_error',
+        severity: 'fatal',
+        code: 'claude_stream_error',
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
-      if (!this.closed && !errored) this.fireEvent({ kind: 'session_complete', summary: '' });
+      if (!this.closed && !errored) this.fireEvent({ kind: 'session_complete', reason: 'normal', summary: '' });
     }
   }
 
