@@ -310,3 +310,42 @@ describe('WorkspaceManager.getDefault / lazyBindDefault', () => {
     expect(mgr.findByName('alpha')!.chatId).toBeUndefined();
   });
 });
+
+describe('WorkspaceManager active-session tracking', () => {
+  let dir1: string;
+  let mgr: WorkspaceManager;
+
+  beforeEach(() => {
+    dir1 = mkdtempSync(join(tmpdir(), 'act-ws-'));
+    mgr = new WorkspaceManager({ persistPath: null, workdirWhitelist: undefined });
+    mgr.register({ name: 'alpha', workdir: dir1, runtime: 'claude' });
+  });
+
+  it('setActiveSession records the active session id and rolls lastSessionId', () => {
+    mgr.setActiveSession('alpha', 'sess-1');
+    expect(mgr.findByName('alpha')!.activeSessionId).toBe('sess-1');
+    expect(mgr.findByName('alpha')!.lastSessionId).toBeUndefined();
+
+    mgr.setActiveSession('alpha', 'sess-2');
+    expect(mgr.findByName('alpha')!.activeSessionId).toBe('sess-2');
+    expect(mgr.findByName('alpha')!.lastSessionId).toBe('sess-1');
+  });
+
+  it('clearActiveSession resets activeSessionId to undefined', () => {
+    mgr.setActiveSession('alpha', 'sess-1');
+    mgr.clearActiveSession('alpha');
+    expect(mgr.findByName('alpha')!.activeSessionId).toBeUndefined();
+  });
+
+  it('getActiveSessionIdForChat resolves via bound workspace', () => {
+    mgr.update('alpha', { chatId: 'chat-1' });
+    mgr.setActiveSession('alpha', 'sess-1');
+    expect(mgr.getActiveSessionIdForChat('chat-1')).toBe('sess-1');
+    expect(mgr.getActiveSessionIdForChat('chat-missing')).toBeNull();
+  });
+
+  it('getActiveSessionIdForChat returns null when workspace has no active session', () => {
+    mgr.update('alpha', { chatId: 'chat-1' });
+    expect(mgr.getActiveSessionIdForChat('chat-1')).toBeNull();
+  });
+});

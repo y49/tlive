@@ -46,9 +46,10 @@ export class IPCSessionHandler {
           workdir: req.payload.workdir,
           runtime: req.payload.provider,
         });
+        const wsName = req.payload.workspaceName ?? workspace?.name;
         const session = await this.sessionManager.create({
           workspaceId: req.payload.workspaceId ?? workspace?.name ?? 'default',
-          workspaceName: req.payload.workspaceName ?? workspace?.name,
+          workspaceName: wsName,
           provider: req.payload.provider,
           workdir: req.payload.workdir,
           initialPrompt: req.payload.initialPrompt,
@@ -56,6 +57,9 @@ export class IPCSessionHandler {
           effort: req.payload.effort,
           source: 'cli',
         });
+        // Stamp the workspace with this session so IM-side inbound routing
+        // (WorkspaceManager.getActiveSessionIdForChat) can find it.
+        if (wsName) this.workspaceManager.setActiveSession(wsName, session.id);
         return { type: 'session_created', payload: { sessionId: session.id } };
       }
       case 'send_input': {
@@ -65,6 +69,12 @@ export class IPCSessionHandler {
         return { type: 'ack', payload: { ok: true } };
       }
       case 'stop_session': {
+        // Clear workspace's active-session pointer before stopping so any
+        // race with IM inbound won't resolve a dead session id.
+        const snapshot = this.sessionManager.get(req.payload.sessionId)?.context;
+        if (snapshot?.workspaceName) {
+          this.workspaceManager.clearActiveSession(snapshot.workspaceName);
+        }
         await this.sessionManager.stop(req.payload.sessionId);
         return { type: 'ack', payload: { ok: true } };
       }

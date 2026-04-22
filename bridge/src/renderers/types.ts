@@ -28,11 +28,11 @@ export interface UsageStats {
 export type NotificationEvent =
   | { kind: 'permission_request'; toolName: string; toolInput: string; permissionId: string; expiresInMinutes?: number }
   | { kind: 'ask_user_question'; question: string; header?: string; options?: AskOption[]; toolUseId: string }
-  | { kind: 'session_complete'; summary: string; cost?: UsageStats; terminalUrl?: string; resumeHint?: string }
+  | { kind: 'session_complete'; summary: string; cost?: UsageStats }
   | { kind: 'error'; message: string }
   | { kind: 'todo_update'; items: TodoItem[] }
-  | { kind: 'activity_text'; text: string; title?: string; footer?: string; terminalUrl?: string }
-  | { kind: 'activity_tool'; toolName: string; toolInput?: string; terminalUrl?: string }
+  | { kind: 'activity_text'; text: string; title?: string; footer?: string }
+  | { kind: 'activity_tool'; toolName: string; toolInput?: string }
   | { kind: 'thinking'; active: boolean }
   | { kind: 'reasoning_summary'; text: string; durationMs?: number; truncated?: boolean }
   | { kind: 'file_change_list'; changes: Array<{ path: string; kind: 'add' | 'delete' | 'update' }>; status: 'completed' | 'failed' };

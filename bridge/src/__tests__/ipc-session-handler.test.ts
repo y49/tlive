@@ -23,7 +23,13 @@ function fakeManager() {
 }
 
 function fakeBroker() { return { resolve: vi.fn(() => true) }; }
-function fakeWsMgr() { return { ensureDefault: vi.fn(() => ({ name: 'ws' })) }; }
+function fakeWsMgr() {
+  return {
+    ensureDefault: vi.fn(() => ({ name: 'ws' })),
+    setActiveSession: vi.fn(),
+    clearActiveSession: vi.fn(),
+  };
+}
 
 describe('IPCSessionHandler', () => {
   it('dispatches create_session and replies with session_created', async () => {

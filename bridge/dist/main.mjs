@@ -16341,6 +16341,30 @@ var WorkspaceManager = class {
     Object.assign(ws, patch);
     return ws;
   }
+  /** Record a session id as the workspace's active session. Called after SessionManager.create. */
+  setActiveSession(workspaceName, sessionId) {
+    const ws = this.byName.get(workspaceName);
+    if (!ws) return;
+    ws.lastSessionId = ws.activeSessionId;
+    ws.activeSessionId = sessionId;
+    ws.lastActivityAt = Date.now();
+    this.persist();
+  }
+  /** Clear active session (called on SessionManager stop). */
+  clearActiveSession(workspaceName) {
+    const ws = this.byName.get(workspaceName);
+    if (!ws) return;
+    ws.activeSessionId = void 0;
+    this.persist();
+  }
+  /** Resolve chatId → active sessionId via the bound workspace.
+   *  Returns null if no workspace is bound to the chat or no session is active. */
+  getActiveSessionIdForChat(chatId) {
+    for (const ws of this.byName.values()) {
+      if (ws.chatId === chatId) return ws.activeSessionId ?? null;
+    }
+    return null;
+  }
   makeUniqueName(base) {
     if (!this.byName.has(base)) return base;
     let i = 2;
@@ -24466,15 +24490,7 @@ var TelegramRenderer = class {
       lines.push("");
       lines.push(`${cost} \xB7 ${tokens} \xB7 ${duration3}`);
     }
-    if (event.resumeHint) {
-      lines.push("");
-      lines.push(`<i>${escapeHtml2(event.resumeHint)}</i>`);
-    }
-    const result = { html: lines.join("\n") };
-    if (event.terminalUrl) {
-      result.buttons = [{ label: "\u{1F517} Open Terminal", callbackData: "_", url: event.terminalUrl }];
-    }
-    return result;
+    return { html: lines.join("\n") };
   }
   renderError(event) {
     return { html: `\u274C <pre>${escapeHtml2(event.message)}</pre>` };
@@ -24487,11 +24503,7 @@ var TelegramRenderer = class {
     if (event.title) parts.push(`<b>${escapeHtml2(event.title)}</b>`);
     parts.push(escapeHtml2(event.text));
     if (event.footer) parts.push(`<i>${escapeHtml2(event.footer)}</i>`);
-    const result = { html: parts.join("\n\n") };
-    if (event.terminalUrl) {
-      result.buttons = [{ label: "\u{1F517} Open Terminal", callbackData: "_", url: event.terminalUrl }];
-    }
-    return result;
+    return { html: parts.join("\n\n") };
   }
   renderActivityTool(event) {
     const input = event.toolInput ? " " + escapeHtml2(event.toolInput) : "";
@@ -24757,8 +24769,6 @@ ${input}
     const parts = [event.summary.length > 500 ? `\`\`\`
 ${event.summary.slice(0, 497)}...
 \`\`\`` : event.summary];
-    if (event.resumeHint) parts.push(`_${event.resumeHint}_`);
-    if (event.terminalUrl) parts.push(`\u{1F517} [Open Terminal](${event.terminalUrl})`);
     let footer;
     if (event.cost) {
       const tokens = formatTokenCount2(event.cost.inputTokens + event.cost.outputTokens);
@@ -24797,7 +24807,6 @@ ${event.message}
   renderActivityText(event) {
     const parts = [event.text];
     if (event.footer) parts.push(`_${event.footer}_`);
-    if (event.terminalUrl) parts.push(`\u{1F517} [Open Terminal](${event.terminalUrl})`);
     return embed({ color: COLOR_GRAY, title: event.title, description: parts.join("\n\n") });
   }
   renderActivityTool(event) {
@@ -25139,14 +25148,6 @@ ${input}
         content: `${cost} \xB7 ${tokens} tokens \xB7 ${duration3}`
       });
     }
-    if (event.resumeHint) {
-      elements.push({ tag: "hr" });
-      elements.push({ tag: "markdown", content: event.resumeHint });
-    }
-    if (event.terminalUrl) {
-      elements.push({ tag: "hr" });
-      elements.push({ tag: "markdown", content: `\u{1F517} [Open Terminal](${event.terminalUrl})` });
-    }
     return {
       card: buildCard("green", "\u2705 Done", elements)
     };
@@ -25171,10 +25172,6 @@ ${event.message}
     const elements = [{ tag: "markdown", content: event.text }];
     if (event.footer) {
       elements.push({ tag: "markdown", content: event.footer });
-    }
-    if (event.terminalUrl) {
-      elements.push({ tag: "hr" });
-      elements.push({ tag: "markdown", content: `\u{1F517} [Open Terminal](${event.terminalUrl})` });
     }
     if (event.title) {
       return { card: buildCard("blue", event.title, elements) };
@@ -25475,8 +25472,21 @@ var BridgeManager = class _BridgeManager {
         getAdapters: () => this.adapters
       });
       this.sessionFrontend.start();
+      const sm = overrides.sessionManager;
+      this.sessionManagerUnsub = sm.subscribe((ev) => {
+        if (ev.kind === "stopped") {
+          const ws = this.workspaceManager.list().find((w) => w.activeSessionId === ev.sessionId);
+          if (ws) this.workspaceManager.clearActiveSession(ws.name);
+        } else if (ev.kind === "created" || ev.kind === "resumed") {
+          const wsName = ev.session.context.workspaceName;
+          if (wsName && this.workspaceManager.findByName(wsName)) {
+            this.workspaceManager.setActiveSession(wsName, ev.session.id);
+          }
+        }
+      });
     }
   }
+  sessionManagerUnsub = null;
   /** Returns all active adapters */
   getAdapters() {
     return Array.from(this.adapters.values());
@@ -25572,6 +25582,8 @@ var BridgeManager = class _BridgeManager {
     this.sdkEngine.stopSessionPruning();
     this.sessionFrontend?.stop();
     this.sessionFrontend = null;
+    this.sessionManagerUnsub?.();
+    this.sessionManagerUnsub = null;
     this.permissions.getGateway().denyAll();
     for (const adapter of this.adapters.values()) {
       await adapter.stop();
@@ -27359,7 +27371,7 @@ var PermissionBroker2 = class {
 
 // ../src/runtime/claude-sdk.ts
 import { query as query3 } from "@anthropic-ai/claude-agent-sdk";
-import { randomUUID as randomUUID2 } from "node:crypto";
+import { randomBytes } from "node:crypto";
 
 // ../src/runtime/claude-event-adapter.ts
 var ClaudeEventAdapter = class {
@@ -27571,7 +27583,7 @@ var ClaudeSdkRuntime = class {
   }
   async handleCanUseTool(toolName, toolInput, options) {
     return new Promise((resolveSdk) => {
-      const toolUseId = options?.toolUseID ?? randomUUID2();
+      const toolUseId = randomBytes(4).toString("hex");
       const id = `${this.currentSessionId ?? "unknown"}:${toolUseId}`;
       const request = {
         id,
@@ -27969,21 +27981,23 @@ function safeStringify2(v) {
 }
 
 // ../src/runtime/codex-app-server/approval-bridge.ts
+import { randomBytes as randomBytes2 } from "node:crypto";
 var CodexApprovalBridge2 = class {
   constructor(deps) {
     this.deps = deps;
   }
-  async handleCommandExecutionApproval(toolUseId, command, cwd) {
-    const decision = await this.ask(toolUseId, "exec", { command, cwd });
+  async handleCommandExecutionApproval(_toolUseId, command, cwd) {
+    const decision = await this.ask("exec", { command, cwd });
     return this.toCodex(decision);
   }
-  async handleFileChangeApproval(toolUseId, path, changes) {
-    const decision = await this.ask(toolUseId, "file", { path, changes });
+  async handleFileChangeApproval(_toolUseId, path, changes) {
+    const decision = await this.ask("file", { path, changes });
     return this.toCodex(decision);
   }
-  ask(toolUseId, kind, toolInput) {
+  ask(kind, toolInput) {
     return new Promise((resolveDecision) => {
-      const id = `${this.deps.sessionId}:${toolUseId}`;
+      const shortId = randomBytes2(4).toString("hex");
+      const id = `${this.deps.sessionId}:${shortId}`;
       const toolName = kind === "exec" ? "Bash" : "Edit";
       this.deps.emit({ id, toolName, toolInput, resolve: resolveDecision });
     });
@@ -28345,9 +28359,10 @@ var IPCSessionHandler = class {
           workdir: req.payload.workdir,
           runtime: req.payload.provider
         });
+        const wsName = req.payload.workspaceName ?? workspace?.name;
         const session = await this.sessionManager.create({
           workspaceId: req.payload.workspaceId ?? workspace?.name ?? "default",
-          workspaceName: req.payload.workspaceName ?? workspace?.name,
+          workspaceName: wsName,
           provider: req.payload.provider,
           workdir: req.payload.workdir,
           initialPrompt: req.payload.initialPrompt,
@@ -28355,6 +28370,7 @@ var IPCSessionHandler = class {
           effort: req.payload.effort,
           source: "cli"
         });
+        if (wsName) this.workspaceManager.setActiveSession(wsName, session.id);
         return { type: "session_created", payload: { sessionId: session.id } };
       }
       case "send_input": {
@@ -28364,6 +28380,10 @@ var IPCSessionHandler = class {
         return { type: "ack", payload: { ok: true } };
       }
       case "stop_session": {
+        const snapshot = this.sessionManager.get(req.payload.sessionId)?.context;
+        if (snapshot?.workspaceName) {
+          this.workspaceManager.clearActiveSession(snapshot.workspaceName);
+        }
         await this.sessionManager.stop(req.payload.sessionId);
         return { type: "ack", payload: { ok: true } };
       }
@@ -28453,7 +28473,10 @@ async function main() {
   ipcSessionHandler.start();
   const keepAliveInterval = setInterval(() => {
   }, 6e4);
+  let shuttingDown = false;
   const shutdown = async (reason = "signal") => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     logger.info("Shutting down...");
     clearInterval(keepAliveInterval);
     writeStatusFile(tliveHome, {

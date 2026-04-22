@@ -201,8 +201,6 @@ export class DiscordRenderer implements NotificationRenderer<DiscordOutbound> {
     const parts: string[] = [event.summary.length > 500
       ? `\`\`\`\n${event.summary.slice(0, 497)}...\n\`\`\``
       : event.summary];
-    if (event.resumeHint) parts.push(`_${event.resumeHint}_`);
-    if (event.terminalUrl) parts.push(`🔗 [Open Terminal](${event.terminalUrl})`);
 
     let footer: string | undefined;
     if (event.cost) {
@@ -244,7 +242,6 @@ export class DiscordRenderer implements NotificationRenderer<DiscordOutbound> {
   private renderActivityText(event: Extract<NotificationEvent, { kind: 'activity_text' }>): DiscordOutbound {
     const parts: string[] = [event.text];
     if (event.footer) parts.push(`_${event.footer}_`);
-    if (event.terminalUrl) parts.push(`🔗 [Open Terminal](${event.terminalUrl})`);
     return embed({ color: COLOR_GRAY, title: event.title, description: parts.join('\n\n') });
   }
 

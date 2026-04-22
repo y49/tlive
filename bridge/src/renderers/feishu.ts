@@ -244,14 +244,6 @@ export class FeishuRenderer implements NotificationRenderer<FeishuOutbound> {
         content: `${cost} \u00B7 ${tokens} tokens \u00B7 ${duration}`,
       });
     }
-    if (event.resumeHint) {
-      elements.push({ tag: 'hr' });
-      elements.push({ tag: 'markdown', content: event.resumeHint });
-    }
-    if (event.terminalUrl) {
-      elements.push({ tag: 'hr' });
-      elements.push({ tag: 'markdown', content: `🔗 [Open Terminal](${event.terminalUrl})` });
-    }
 
     return {
       card: buildCard('green', '\u2705 Done', elements),
@@ -278,10 +270,6 @@ export class FeishuRenderer implements NotificationRenderer<FeishuOutbound> {
     const elements: CardElement[] = [{ tag: 'markdown', content: event.text }];
     if (event.footer) {
       elements.push({ tag: 'markdown', content: event.footer });
-    }
-    if (event.terminalUrl) {
-      elements.push({ tag: 'hr' });
-      elements.push({ tag: 'markdown', content: `🔗 [Open Terminal](${event.terminalUrl})` });
     }
     // With a title we render a proper card-with-header so workspace context
     // (e.g. "💻 Terminal · y · #abc") sits in its own bar above the body.

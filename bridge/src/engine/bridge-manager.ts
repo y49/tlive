@@ -168,7 +168,7 @@ export class BridgeManager {
     // Session-runtime wiring: SessionFrontend is the authoritative render path
     // for SessionManager events. When sessionManager + permissionBroker are
     // present, subscribe unconditionally — the legacy SDKEngine path remains
-    // active for IM → provider traffic until T13 removes it.
+    // active for IM → provider traffic until T14+ removes it.
     if (overrides?.sessionManager && overrides?.permissionBroker) {
       this.sessionFrontend = new SessionFrontend({
         sessionManager: overrides.sessionManager,
@@ -178,8 +178,31 @@ export class BridgeManager {
         getAdapters: () => this.adapters,
       });
       this.sessionFrontend.start();
+
+      // Clear workspace.activeSessionId when a session stops so IM-side inbound
+      // routing (WorkspaceManager.getActiveSessionIdForChat) doesn't hand out
+      // a stale id. ipc-session-handler already clears before stop for the CLI
+      // path; this guards against stops initiated elsewhere (e.g. stopAll on
+      // shutdown, future /stop IM command).
+      const sm = overrides.sessionManager;
+      this.sessionManagerUnsub = sm.subscribe((ev) => {
+        if (ev.kind === 'stopped') {
+          // Session is already gone from the manager; scan workspaces by id.
+          const ws = this.workspaceManager.list().find((w) => w.activeSessionId === ev.sessionId);
+          if (ws) this.workspaceManager.clearActiveSession(ws.name);
+        } else if (ev.kind === 'created' || ev.kind === 'resumed') {
+          // Idempotent: ipc-session-handler already stamped workspaceName at create time,
+          // but subscribing here keeps the invariant even if a future code path bypasses it.
+          const wsName = ev.session.context.workspaceName;
+          if (wsName && this.workspaceManager.findByName(wsName)) {
+            this.workspaceManager.setActiveSession(wsName, ev.session.id);
+          }
+        }
+      });
     }
   }
+
+  private sessionManagerUnsub: (() => void) | null = null;
 
   /** Returns all active adapters */
   getAdapters(): BaseChannelAdapter[] {
@@ -291,6 +314,8 @@ export class BridgeManager {
     this.sdkEngine.stopSessionPruning();
     this.sessionFrontend?.stop();
     this.sessionFrontend = null;
+    this.sessionManagerUnsub?.();
+    this.sessionManagerUnsub = null;
     this.permissions.getGateway().denyAll();
     for (const adapter of this.adapters.values()) {
       await adapter.stop();

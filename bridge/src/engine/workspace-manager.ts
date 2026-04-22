@@ -183,6 +183,33 @@ export class WorkspaceManager {
     return ws;
   }
 
+  /** Record a session id as the workspace's active session. Called after SessionManager.create. */
+  setActiveSession(workspaceName: string, sessionId: string): void {
+    const ws = this.byName.get(workspaceName);
+    if (!ws) return;
+    ws.lastSessionId = ws.activeSessionId;
+    ws.activeSessionId = sessionId;
+    ws.lastActivityAt = Date.now();
+    this.persist();
+  }
+
+  /** Clear active session (called on SessionManager stop). */
+  clearActiveSession(workspaceName: string): void {
+    const ws = this.byName.get(workspaceName);
+    if (!ws) return;
+    ws.activeSessionId = undefined;
+    this.persist();
+  }
+
+  /** Resolve chatId → active sessionId via the bound workspace.
+   *  Returns null if no workspace is bound to the chat or no session is active. */
+  getActiveSessionIdForChat(chatId: string): string | null {
+    for (const ws of this.byName.values()) {
+      if (ws.chatId === chatId) return ws.activeSessionId ?? null;
+    }
+    return null;
+  }
+
   private makeUniqueName(base: string): string {
     if (!this.byName.has(base)) return base;
     let i = 2;
