@@ -58,13 +58,12 @@ export class Session {
   getHistory(): readonly NotificationEvent[] { return this.history; }
   getStatus(): SessionStatus { return this.status; }
 
-  async start(opts: Omit<AgentRuntimeOptions, 'sessionId' | 'workdir' | 'signal'>): Promise<void> {
+  async start(opts: Omit<AgentRuntimeOptions, 'workdir' | 'signal'>): Promise<void> {
     this.unsubscribers.push(this.runtime.onEvent((e) => this.handleEvent(e)));
     this.unsubscribers.push(this.runtime.onPermissionRequest((req) => this.handlePermission(req)));
     this.unsubscribers.push(this.runtime.onUsage((u) => this.handleUsage(u)));
     await this.runtime.start({
       ...opts,
-      sessionId: this.id,
       workdir: this.ctx.snapshot.workdir,
       signal: this.abortCtrl.signal,
     });
@@ -138,7 +137,7 @@ export class Session {
     // let the broker re-key so there is exactly one source of truth for ids.
     const toolUseId = req.id.includes(':') ? req.id.slice(req.id.indexOf(':') + 1) : req.id;
     const { request } = this.broker.waitFor(
-      this.id, toolUseId, req.toolName, req.toolInput, req.resolve,
+      this.id, toolUseId, req.toolName, req.toolInput as Record<string, unknown>, req.resolve,
     );
     this.emit({ kind: 'permission', request });
   }

@@ -1,9 +1,8 @@
-// src/runtime/codex-app-server/event-adapter.ts
+// src/runtime/codex/event-adapter.ts
 //
 // Maps codex-app-server notifications to NotificationEvent frames.
-// The bridge copy's mapping targets were CanonicalEvent; this copy produces
-// the unified AdaptedFrame { events: NotificationEvent[]; usage?; isSessionEnd? }
-// matching claude-event-adapter's shape.
+// Produces the unified AdaptedFrame { events: NotificationEvent[]; usage?;
+// isSessionEnd? } matching claude/event-adapter.ts's shape.
 
 import type { NotificationEvent, UsageStats } from '../events.js';
 

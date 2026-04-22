@@ -40,10 +40,15 @@ export class PermissionBroker {
     let promiseResolve!: (d: PermissionDecision) => void;
     const completion = new Promise<PermissionDecision>((r) => { promiseResolve = r; });
     const chained = (d: PermissionDecision) => { runtimeResolve(d); promiseResolve(d); };
+    // T4 will extend this broker with category-split brokers (exec/file-edit/
+    // generic/elicitation). For now every passthrough request is 'generic'
+    // until the session layer's handlePermission forwards the upstream category.
     const request: PermissionRequest = {
       id, toolName, toolInput,
-      resolve: (decision) => this.resolve(id, decision),
+      category: 'generic',
+      resolve: () => this.resolve(id, 'allow'),  // replaced below
     };
+    request.resolve = (decision: PermissionDecision) => { this.resolve(id, decision); };
     this.entries.set(id, { request, promiseResolve: chained, sessionId });
     this.emit({ kind: 'pending', request, sessionId });
     return { request, completion };

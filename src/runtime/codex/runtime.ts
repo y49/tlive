@@ -1,27 +1,36 @@
-// src/runtime/codex-app-server/index.ts
+// src/runtime/codex/runtime.ts
 //
 // CodexAppServerRuntime — spawns `codex app-server`, speaks JSON-RPC over
-// stdio, emits NotificationEvent and PermissionRequest through the
-// AgentRuntime interface. Mirrors the ClaudeSdkRuntime shape.
+// stdio, emits NotificationEvent + PermissionRequest through AgentRuntime.
+// Methods not exposed by app-server throw UnsupportedByRuntimeError; see
+// docs/superpowers/specs/2026-04-22-t14b-full-cutover-design.md §3.5.
 
 import { spawn, execFile as nodeExecFile } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import type {
-  AgentRuntime, AgentRuntimeOptions, PermissionRequest,
+  AgentRuntime, AgentRuntimeOptions, AgentRuntimeStartResult,
+  PermissionRequest, AskUserQuestionRequest, ElicitationRequest,
+  SendInputOptions, PermissionMode, McpServerConfig, McpSetServersResult,
+  McpServerStatus, ContextUsage, AccountInfo, SlashCommandInfo, ModelInfo,
+  AgentInfo, RewindResult,
 } from '../types.js';
 import type { NotificationEvent, UsageStats } from '../events.js';
 import { StdioJsonlTransport } from './transport.js';
 import { CodexAppServerClient } from './client.js';
 import { CodexEventAdapter } from './event-adapter.js';
-import { CodexApprovalBridge } from './approval-bridge.js';
+import {
+  makeExecApprovalHandler, makeFileChangeApprovalHandler, makePermissionsApprovalHandler,
+  type CodexApprovalResult,
+} from './approval-handler.js';
+import { UnsupportedByRuntimeError } from '../abstractions.js';
 
 const execFileAsync = promisify(nodeExecFile);
 const MIN_CODEX_VERSION = '0.121.0';
 
 type ExecFileFn = typeof execFileAsync;
 
-// Module-level cache — isAvailable() result stable for process lifetime
+// Module-level cache — isAvailable() stable for process lifetime
 let _availabilityCache: Promise<boolean> | null = null;
 
 /** Test-only: reset the module-level availability cache. */
@@ -34,8 +43,7 @@ export interface CodexAppServerRuntimeDeps {
   spawnSubprocess?: () => ChildProcess;
 }
 
-// Codex notification methods the adapter knows how to handle. The wrapper
-// subscribes to each and fans the result into the session-level listeners.
+// Codex notifications fanned into NotificationEvents via the adapter.
 const FORWARDED_METHODS = [
   'thread/started',
   'thread/tokenUsage/updated',
@@ -63,6 +71,8 @@ export class CodexAppServerRuntime implements AgentRuntime {
 
   private readonly eventCbs = new Set<(e: NotificationEvent) => void>();
   private readonly permCbs = new Set<(r: PermissionRequest) => void>();
+  private readonly askCbs = new Set<(r: AskUserQuestionRequest) => void>();
+  private readonly elicitCbs = new Set<(r: ElicitationRequest) => void>();
   private readonly usageCbs = new Set<(u: UsageStats) => void>();
 
   private started = false;
@@ -87,27 +97,21 @@ export class CodexAppServerRuntime implements AgentRuntime {
     return _availabilityCache;
   }
 
-  async start(opts: AgentRuntimeOptions): Promise<void> {
+  async start(opts: AgentRuntimeOptions): Promise<AgentRuntimeStartResult> {
     if (this.started) throw new Error('runtime already started');
     this.started = true;
-    if (opts.signal.aborted) { this.closed = true; return; }
+    if (opts.signal.aborted) { this.closed = true; throw new Error('aborted'); }
     opts.signal.addEventListener('abort', () => { void this.stop(); }, { once: true });
 
     const child = (this.deps.spawnSubprocess ?? spawnCodexAppServer)();
     const transport = new StdioJsonlTransport(child);
     this.transport = transport;
     const eventAdapter = new CodexEventAdapter();
-    const approvalBridge = new CodexApprovalBridge({
-      sessionId: opts.sessionId,
-      emit: (req) => { for (const cb of this.permCbs) cb(req); },
-    });
 
     const client = new CodexAppServerClient(transport);
     this.client = client;
 
-    // Wire notification forwarding — adapter fans each method into NotificationEvents.
-    // Also capture activeTurnId from turn/started and clear on turn/completed so
-    // stop() can issue a best-effort turn/interrupt against the live turn.
+    // Event/usage fanout via the adapter.
     for (const method of FORWARDED_METHODS) {
       client.onNotification(method, (params) => {
         if (method === 'turn/started') {
@@ -124,36 +128,47 @@ export class CodexAppServerRuntime implements AgentRuntime {
       });
     }
 
-    // Wire server-initiated approval requests.
+    // Approval handlers — each produces a categorized PermissionRequest.
+    const approvalCtx = {
+      sdkSessionId: () => this.threadId,
+      emitRequest: (r: PermissionRequest) => { for (const cb of this.permCbs) cb(r); },
+    };
+    const execApproval = makeExecApprovalHandler(approvalCtx);
+    const fileApproval = makeFileChangeApprovalHandler(approvalCtx);
+    const permApproval = makePermissionsApprovalHandler(approvalCtx);
+
     client.onCommandExecutionApproval(async (params) => {
       const p = (params ?? {}) as Record<string, unknown>;
       const itemId = (p.itemId as string) ?? (p.callId as string) ?? 'unknown';
-      const command = Array.isArray(p.command)
-        ? (p.command as string[])
-        : typeof p.command === 'string'
-          ? [p.command as string]
-          : [];
-      const cwd = (p.cwd as string) ?? '';
-      const decision = await approvalBridge.handleCommandExecutionApproval(itemId, command, cwd);
-      return { decision: codexDecisionToRpc(decision) };
+      const cmd = Array.isArray(p.command)
+        ? (p.command as string[]).join(' ')
+        : typeof p.command === 'string' ? (p.command as string) : '';
+      const result = await execApproval({ command: cmd, cwd: p.cwd as string | undefined, call_id: itemId });
+      return { decision: codexResultToRpc(result) };
     });
     client.onFileChangeApproval(async (params) => {
       const p = (params ?? {}) as Record<string, unknown>;
       const itemId = (p.itemId as string) ?? (p.callId as string) ?? 'unknown';
       const path = (p.path as string) ?? '';
-      const cached = eventAdapter.getItem(itemId);
-      const changes = Array.isArray(cached?.changes)
-        ? (cached!.changes as Array<{ kind: 'add' | 'delete' | 'update' }>)
-        : [];
-      const decision = await approvalBridge.handleFileChangeApproval(itemId, path, changes);
-      return { decision: codexDecisionToRpc(decision) };
+      const diff = (p.diff as string | undefined) ?? '';
+      const result = await fileApproval({ path, diff, call_id: itemId });
+      return { decision: codexResultToRpc(result) };
     });
-    // Defensive auto-decline for session-escalation + MCP elicitation prompts.
-    // Without a registered handler, the client responds method_not_found; auto-
-    // declining is less disruptive. A future v1.1 task should route these
-    // through the session broker for real user interaction. No `permCbs` emit
-    // here — these are intentionally not surfaced to the IM until wired.
-    client.onPermissionsApproval(async () => ({ permissions: {}, scope: 'turn' }));
+    client.onPermissionsApproval(async (params) => {
+      const p = (params ?? {}) as Record<string, unknown>;
+      const itemId = (p.itemId as string) ?? (p.callId as string) ?? 'unknown';
+      const result = await permApproval({
+        description: (p.description as string | undefined),
+        call_id: itemId,
+        ...p,
+      });
+      // Codex permissions approval expects { permissions, scope } — for now return
+      // an empty permission set and mark the scope from the user decision.
+      if (result.outcome === 'denied') return { permissions: {}, scope: 'turn' };
+      const scope = result.outcome === 'approved_for_session' ? 'session' : 'turn';
+      return { permissions: {}, scope };
+    });
+    // Elicitation passthrough (T2 will wire the real flow).
     client.onMcpElicitation(async () => ({ action: 'decline', content: null }));
 
     transport.onExit(({ code }) => {
@@ -172,12 +187,12 @@ export class CodexAppServerRuntime implements AgentRuntime {
         capabilities: { experimentalApi: false },
       });
 
-      if (opts.sessionId) {
+      if (opts.resumeSdkSessionId) {
         const resumeResult = await client.request<
           { threadId: string; cwd?: string; model?: string; persistExtendedHistory: boolean },
           { thread: { id: string } }
         >('thread/resume', {
-          threadId: opts.sessionId,
+          threadId: opts.resumeSdkSessionId,
           cwd: opts.workdir,
           model: opts.model,
           persistExtendedHistory: false,
@@ -199,23 +214,15 @@ export class CodexAppServerRuntime implements AgentRuntime {
       if (opts.initialPrompt) {
         await this.turnStart(opts.initialPrompt, opts.effort, opts.model);
       }
+
+      return { sdkSessionId: this.threadId };
     } catch (err) {
-      // Init-phase failure: fire error, tear down client+transport so the
-      // spawned codex process doesn't leak, mark closed so sendInput rejects.
-      // Swallow cleanup errors — the caller only needs the original cause.
-      // NB: client.close() already awaits transport.close() internally; we
-      // don't double-close here because transport.close() is not idempotent
-      // (each call registers a fresh exit listener and hangs waiting for a
-      // second exit that will never come).
       const message = err instanceof Error ? err.message : String(err);
-      const alreadyClosing = this.closed;  // true if stop() already ran (abort)
+      const alreadyClosing = this.closed;
       this.closed = true;
       for (const cb of this.eventCbs) {
         try { cb({ kind: 'error', message }); } catch { /* ignore */ }
       }
-      // Only initiate close if stop() isn't already doing it. If stop() ran
-      // (e.g. via abort), it owns the teardown — re-closing would double-call
-      // transport.close() and hang.
       if (!alreadyClosing) {
         if (this.client) {
           try { await this.client.close(); } catch { /* ignore */ }
@@ -227,28 +234,22 @@ export class CodexAppServerRuntime implements AgentRuntime {
     }
   }
 
-  async sendInput(text: string): Promise<void> {
+  async sendInput(text: string, opts?: SendInputOptions): Promise<void> {
     if (this.closed || !this.client || !this.threadId) throw new Error('runtime closed');
-    await this.turnStart(text);
+    await this.turnStart(text, opts?.effort, opts?.model);
   }
 
   async stop(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    // Best-effort: if a turn is in flight, tell codex to cancel it server-side
-    // before closing the transport. Otherwise aborting the signal only kills
-    // the subprocess without letting codex clean up the turn.
     if (this.client && this.threadId && this.activeTurnId) {
       try {
         await this.client.request('turn/interrupt', {
           threadId: this.threadId,
           turnId: this.activeTurnId,
         });
-      } catch { /* ignore — best effort */ }
+      } catch { /* best effort */ }
     }
-    // client.close() awaits transport.close() internally — don't double-close
-    // (transport.close() registers a fresh exit listener each call and hangs
-    // on the second call waiting for an exit that already fired).
     if (this.client) {
       try { await this.client.close(); } catch { /* ignore */ }
     } else {
@@ -256,11 +257,110 @@ export class CodexAppServerRuntime implements AgentRuntime {
     }
   }
 
-  onEvent(cb: (e: NotificationEvent) => void) { this.eventCbs.add(cb); return () => this.eventCbs.delete(cb); }
-  onPermissionRequest(cb: (r: PermissionRequest) => void) { this.permCbs.add(cb); return () => this.permCbs.delete(cb); }
-  onUsage(cb: (u: UsageStats) => void) { this.usageCbs.add(cb); return () => this.usageCbs.delete(cb); }
+  // ---- Control face ------------------------------------------------------
 
-  // ---- private ------------------------------------------------------------
+  async interrupt(): Promise<void> {
+    if (!this.client || !this.threadId || !this.activeTurnId) return;
+    try {
+      await this.client.request('turn/interrupt', {
+        threadId: this.threadId,
+        turnId: this.activeTurnId,
+      });
+    } catch { /* ignore */ }
+  }
+
+  async setModel(_model?: string): Promise<void> {
+    throw new UnsupportedByRuntimeError('codex', 'setModel');
+  }
+
+  async setPermissionMode(_mode: PermissionMode): Promise<void> {
+    // Codex permission mode is set via thread/start on session boot; changing
+    // mid-session is not supported by the app-server protocol today.
+    throw new UnsupportedByRuntimeError('codex', 'setPermissionMode');
+  }
+
+  async applyPermissionRules(_rules: { allow?: string[]; deny?: string[] }): Promise<void> {
+    throw new UnsupportedByRuntimeError('codex', 'applyPermissionRules');
+  }
+
+  async stopTask(_taskId: string): Promise<void> {
+    throw new UnsupportedByRuntimeError('codex', 'stopTask');
+  }
+
+  async supportedCommands(): Promise<SlashCommandInfo[]> {
+    return [];
+  }
+
+  async supportedModels(): Promise<ModelInfo[]> {
+    // Static list — codex app-server doesn't expose this yet. Kept minimal;
+    // expanded by T10 alongside Codex prompt bundles.
+    return [
+      { id: 'gpt-5-codex', displayName: 'GPT-5 Codex' },
+      { id: 'o4-mini', displayName: 'o4-mini' },
+    ];
+  }
+
+  async supportedAgents(): Promise<AgentInfo[]> {
+    return [];
+  }
+
+  async mcpServerStatus(): Promise<McpServerStatus[]> {
+    return [];
+  }
+
+  async getContextUsage(): Promise<ContextUsage> {
+    return {
+      totalTokens: 0,
+      systemPromptTokens: 0,
+      messagesTokens: 0,
+      toolsTokens: 0,
+      mcpToolsTokens: 0,
+      memoryFilesTokens: 0,
+      maxTokens: 200000,
+    };
+  }
+
+  async accountInfo(): Promise<AccountInfo> {
+    return {};
+  }
+
+  async forkSession(_title?: string): Promise<{ sdkSessionId: string }> {
+    throw new UnsupportedByRuntimeError('codex', 'forkSession');
+  }
+
+  async renameSession(_title: string): Promise<void> {
+    throw new UnsupportedByRuntimeError('codex', 'renameSession');
+  }
+
+  async rewindFiles(_userMessageId: string, _opts?: { dryRun?: boolean }): Promise<RewindResult> {
+    throw new UnsupportedByRuntimeError('codex', 'rewindFiles');
+  }
+
+  async reloadPlugins(): Promise<void> {
+    throw new UnsupportedByRuntimeError('codex', 'reloadPlugins');
+  }
+
+  async setMcpServers(_servers: Record<string, McpServerConfig>): Promise<McpSetServersResult> {
+    throw new UnsupportedByRuntimeError('codex', 'setMcpServers');
+  }
+
+  async reconnectMcpServer(_name: string): Promise<void> {
+    throw new UnsupportedByRuntimeError('codex', 'reconnectMcpServer');
+  }
+
+  async toggleMcpServer(_name: string, _enabled: boolean): Promise<void> {
+    throw new UnsupportedByRuntimeError('codex', 'toggleMcpServer');
+  }
+
+  // ---- Subscriptions -----------------------------------------------------
+
+  onEvent(cb: (e: NotificationEvent) => void) { this.eventCbs.add(cb); return () => { this.eventCbs.delete(cb); }; }
+  onPermissionRequest(cb: (r: PermissionRequest) => void) { this.permCbs.add(cb); return () => { this.permCbs.delete(cb); }; }
+  onAskUserQuestion(cb: (r: AskUserQuestionRequest) => void) { this.askCbs.add(cb); return () => { this.askCbs.delete(cb); }; }
+  onElicitation(cb: (r: ElicitationRequest) => void) { this.elicitCbs.add(cb); return () => { this.elicitCbs.delete(cb); }; }
+  onUsage(cb: (u: UsageStats) => void) { this.usageCbs.add(cb); return () => { this.usageCbs.delete(cb); }; }
+
+  // ---- private -----------------------------------------------------------
 
   private async turnStart(text: string, effort?: string, model?: string): Promise<void> {
     if (!this.client || !this.threadId) throw new Error('runtime not initialized');
@@ -278,20 +378,15 @@ export class CodexAppServerRuntime implements AgentRuntime {
       effort,
       model,
     });
-    // Capture the turn id from the response as well — the turn/started
-    // notification may race with stop() for very fast rejections, and having
-    // the id set here ensures stop() can still issue turn/interrupt.
     if (result?.turn?.id) this.activeTurnId = result.turn.id;
   }
 }
 
-function codexDecisionToRpc(d: 'approved' | 'approved_for_session' | 'denied' | 'abort'): string {
-  // Codex app-server expects exec/file approval responses as 'accept' | 'acceptForSession' | 'decline'.
-  switch (d) {
-    case 'approved': return 'accept';
+function codexResultToRpc(r: CodexApprovalResult): string {
+  switch (r.outcome) {
+    case 'approved_for_request': return 'accept';
     case 'approved_for_session': return 'acceptForSession';
     case 'denied': return 'decline';
-    case 'abort': return 'decline';
   }
 }
 

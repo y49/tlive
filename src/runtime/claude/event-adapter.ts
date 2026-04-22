@@ -1,18 +1,20 @@
-// src/runtime/claude-event-adapter.ts
+// src/runtime/claude/event-adapter.ts
 //
-// Maps raw Claude Agent SDK stream messages to NotificationEvent.
-// Pure function — no I/O, no timers, no mutable state beyond the per-call
-// accumulator (e.g., matching tool_use_start with tool_use_end).
+// Maps raw Claude Agent SDK stream messages to NotificationEvent. T1 keeps
+// this deliberately minimal — enough to surface init + result + basic
+// assistant/thinking events so runtime.ts can compile and integration runs.
+// T2 replaces the body with full union coverage (tool_use, todo_update,
+// file_change_list, ask_user_question, etc).
 
-import type { NotificationEvent, TodoItem, UsageStats } from './events.js';
+import type { NotificationEvent, TodoItem, UsageStats } from '../events.js';
+import type { AskUserQuestionRequest } from '../types.js';
 
-// SDK payload shapes (loosely typed — the SDK exports its own types; we accept `unknown`
-// and narrow defensively so a shape change in the SDK doesn't crash the daemon).
 type SdkMessage = { type: string; [k: string]: unknown };
 
 export interface AdaptedFrame {
   events: NotificationEvent[];
   usage?: UsageStats;
+  askUserQuestion?: AskUserQuestionRequest;
   isSessionEnd?: boolean;
 }
 
@@ -22,7 +24,7 @@ export class ClaudeEventAdapter {
       case 'assistant':
         return { events: this.fromAssistant(msg) };
       case 'user':
-        return { events: this.fromUserToolResult(msg) };
+        return { events: [] };
       case 'result':
         return this.fromResult(msg);
       case 'thinking':
@@ -58,21 +60,6 @@ export class ClaudeEventAdapter {
     return out;
   }
 
-  private fromUserToolResult(msg: SdkMessage): NotificationEvent[] {
-    // tool_result blocks; we mostly ignore for UI, but file-change tools emit file_change_list.
-    const message = msg.message as { content?: Array<{ type: string; [k: string]: unknown }> } | undefined;
-    for (const block of message?.content ?? []) {
-      if (block.type === 'tool_result') {
-        const toolUseId = (block as unknown as { tool_use_id?: string }).tool_use_id;
-        const meta = (msg.toolUseMeta as Record<string, { toolName?: string }> | undefined)?.[toolUseId ?? ''];
-        if (meta?.toolName === 'Edit' || meta?.toolName === 'Write' || meta?.toolName === 'MultiEdit') {
-          // Placeholder: extracting actual file paths is tool-specific — leave for follow-up
-        }
-      }
-    }
-    return [];
-  }
-
   private fromResult(msg: SdkMessage): AdaptedFrame {
     const usage = msg.usage as { input_tokens?: number; output_tokens?: number } | undefined;
     const cost = msg.total_cost_usd as number | undefined;
@@ -86,7 +73,7 @@ export class ClaudeEventAdapter {
         costUsd: cost ?? 0,
         durationMs: duration ?? 0,
       } : undefined,
-      isSessionEnd: false,  // result per-turn; true session-end detected by AbortSignal
+      isSessionEnd: false,
     };
   }
 }
@@ -102,7 +89,10 @@ function extractTodos(input: unknown): TodoItem[] | null {
   const out: TodoItem[] = [];
   for (const t of todos) {
     if (t && typeof t === 'object' && 'content' in t && 'status' in t) {
-      out.push({ content: String((t as { content: unknown }).content), status: (t as { status: TodoItem['status'] }).status });
+      out.push({
+        content: String((t as { content: unknown }).content),
+        status: (t as { status: TodoItem['status'] }).status,
+      });
     }
   }
   return out.length > 0 ? out : null;
