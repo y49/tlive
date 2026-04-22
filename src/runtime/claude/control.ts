@@ -86,10 +86,12 @@ export function makeClaudeControlFace(
     },
     mcpServerStatus: async () => {
       const list = await req().mcpServerStatus();
+      // SDK exposes: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'.
+      // Pass through unchanged so callers can distinguish intentional disablement
+      // from broken servers.
       return list.map((s) => ({
         name: s.name,
-        // 'disabled' collapses to 'failed' for tlive (user-facing distinction minimal).
-        status: s.status === 'disabled' ? 'failed' : s.status,
+        status: s.status,
         error: s.error,
       }));
     },
@@ -128,11 +130,14 @@ export function makeClaudeControlFace(
     },
     rewindFiles: async (userMessageId, opts) => {
       const result = await req().rewindFiles(userMessageId, opts);
+      // SDK's RewindFilesResult: filesChanged is string[] (paths touched);
+      // insertions/deletions are line counts, not file counts.
       return {
         canRewind: result.canRewind,
         error: result.error,
-        restored: result.insertions ?? 0,
-        skipped: result.deletions ?? 0,
+        filesChanged: result.filesChanged?.length ?? 0,
+        insertions: result.insertions ?? 0,
+        deletions: result.deletions ?? 0,
       };
     },
     reloadPlugins: async () => { await req().reloadPlugins(); },

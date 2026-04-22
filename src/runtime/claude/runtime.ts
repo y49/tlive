@@ -24,6 +24,11 @@ import { UnsupportedByRuntimeError } from '../abstractions.js';
 
 type QueueEntry = { text: string; opts?: SendInputOptions };
 
+export interface ClaudeSdkRuntimeDeps {
+  /** Override the SDK `query` entrypoint. Test-only. */
+  query?: typeof sdkQuery;
+}
+
 export class ClaudeSdkRuntime implements AgentRuntime {
   readonly provider = 'claude' as const;
 
@@ -41,6 +46,11 @@ export class ClaudeSdkRuntime implements AgentRuntime {
   private queryIter: Query | null = null;
   private sdkSessionId: string | null = null;
   private control = makeClaudeControlFace(() => this.queryIter, () => this.sdkSessionId);
+  private readonly queryFn: typeof sdkQuery;
+
+  constructor(deps: ClaudeSdkRuntimeDeps = {}) {
+    this.queryFn = deps.query ?? sdkQuery;
+  }
 
   async start(opts: AgentRuntimeOptions): Promise<AgentRuntimeStartResult> {
     if (this.started) throw new Error('runtime already started');
@@ -80,14 +90,27 @@ export class ClaudeSdkRuntime implements AgentRuntime {
     }
 
     const options = buildClaudeOptions(opts, canUseTool, onElicitation);
-    this.queryIter = sdkQuery({ prompt: prompts(), options });
+    this.queryIter = this.queryFn({ prompt: prompts(), options });
 
     // Wait for init event to capture sdkSessionId, then spawn background consumer.
+    // If the stream errors or aborts before `system/init` arrives, the partially
+    // spawned SDK subprocess must be closed and `started` reset so a retry is
+    // possible. Mirrors the Codex runtime's try/catch around initialize().
     const iter = this.queryIter;
-    const initMsg = await this.firstInitMessage(iter);
-    this.sdkSessionId = initMsg.session_id;
+    let sessionId: string;
+    try {
+      if (opts.signal.aborted) throw new Error('aborted');
+      const initMsg = await this.firstInitMessage(iter);
+      sessionId = initMsg.session_id;
+      this.sdkSessionId = sessionId;
+    } catch (err) {
+      try { this.queryIter?.close?.(); } catch { /* ignore */ }
+      this.queryIter = null;
+      this.started = false;
+      throw err;
+    }
     void this.consume(iter);
-    return { sdkSessionId: this.sdkSessionId };
+    return { sdkSessionId: sessionId };
   }
 
   async sendInput(text: string, opts?: SendInputOptions): Promise<void> {

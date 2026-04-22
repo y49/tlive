@@ -89,7 +89,7 @@ export interface AgentRuntimeStartResult {
 
 export interface McpServerStatus {
   name: string;
-  status: 'connected' | 'failed' | 'needs-auth' | 'pending';
+  status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled';
   error?: string;
 }
 
@@ -137,8 +137,12 @@ export interface SlashCommandInfo {
 export interface RewindResult {
   canRewind: boolean;
   error?: string;
-  restored: number;
-  skipped: number;
+  /** Number of files touched by the rewind. */
+  filesChanged: number;
+  /** Lines added by the rewind (SDK semantics). */
+  insertions: number;
+  /** Lines removed by the rewind (SDK semantics). */
+  deletions: number;
 }
 
 export interface AgentRuntime {
