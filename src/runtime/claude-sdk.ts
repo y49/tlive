@@ -6,7 +6,7 @@
 // adapted to the AgentRuntime interface.
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import type {
   AgentRuntime, AgentRuntimeOptions, PermissionRequest, PermissionDecision,
 } from './types.js';
@@ -135,7 +135,12 @@ export class ClaudeSdkRuntime implements AgentRuntime {
     | { behavior: 'deny'; message: string }
   > {
     return new Promise((resolveSdk) => {
-      const toolUseId = options?.toolUseID ?? randomUUID();
+      // Short local id (8 hex chars) keeps the full permission id
+      // `${sessionId}:${toolUseId}` under Telegram's 53-byte callback_data
+      // limit after renderers prepend `perm:allow:` / `perm:deny:` prefixes.
+      // The SDK's options.toolUseID is discarded — nothing downstream needs
+      // correlation with the SDK's native tool_use id today.
+      const toolUseId = randomBytes(4).toString('hex');
       const id = `${this.currentSessionId ?? 'unknown'}:${toolUseId}`;
       const request: PermissionRequest = {
         id, toolName, toolInput,

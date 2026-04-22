@@ -8,7 +8,10 @@ describe('CodexApprovalBridge', () => {
     const bridge = new CodexApprovalBridge({ sessionId: 's', emit: (r) => emitted.push(r) });
     const p = bridge.handleCommandExecutionApproval('tu1', ['ls'], '/x');
     expect(emitted).toHaveLength(1);
-    expect(emitted[0].id).toBe('s:tu1');
+    // id shape: `${sessionId}:${shortHex8}` — incoming codex toolUseId is
+    // discarded to keep callback_data under Telegram's 53-byte limit.
+    expect(emitted[0].id.startsWith('s:')).toBe(true);
+    expect(emitted[0].id.slice('s:'.length)).toMatch(/^[0-9a-f]{8}$/);
     expect(emitted[0].toolName).toBe('Bash');
     expect(emitted[0].toolInput).toEqual({ command: ['ls'], cwd: '/x' });
     emitted[0].resolve('allow');
@@ -20,7 +23,8 @@ describe('CodexApprovalBridge', () => {
     const bridge = new CodexApprovalBridge({ sessionId: 's', emit: (r) => emitted.push(r) });
     const p = bridge.handleFileChangeApproval('tu2', '/f.ts', [{ kind: 'update' }]);
     expect(emitted).toHaveLength(1);
-    expect(emitted[0].id).toBe('s:tu2');
+    expect(emitted[0].id.startsWith('s:')).toBe(true);
+    expect(emitted[0].id.slice('s:'.length)).toMatch(/^[0-9a-f]{8}$/);
     expect(emitted[0].toolName).toBe('Edit');
     emitted[0].resolve('allow_always');
     await expect(p).resolves.toBe('approved_for_session');

@@ -87,7 +87,7 @@ describe('ClaudeSdkRuntime', () => {
     await expect(rt.sendInput('later')).rejects.toThrow(/closed/);
   });
 
-  it('uses SDK-provided toolUseID and forwards suggestions on allow_always', async () => {
+  it('mints a short local toolUseId and forwards suggestions on allow_always', async () => {
     const q = fakeQuery([]);
     const rt = new ClaudeSdkRuntime({ query: q.fn as any });
     const requests: PermissionRequest[] = [];
@@ -97,7 +97,10 @@ describe('ClaudeSdkRuntime', () => {
       toolUseID: 'tu-from-sdk', suggestions: [{ type: 'addRules', rules: ['Bash'] }],
     });
     await new Promise((r) => setTimeout(r, 10));
-    expect(requests[0].id).toBe('sess:tu-from-sdk');
+    // Permission id shape: `${sessionId}:${shortHex8}` — the SDK's native
+    // options.toolUseID is discarded to keep callback_data under 53 bytes.
+    expect(requests[0].id.startsWith('sess:')).toBe(true);
+    expect(requests[0].id.slice('sess:'.length)).toMatch(/^[0-9a-f]{8}$/);
     requests[0].resolve('allow_always');
     const result = await sdkPromise;
     expect(result).toMatchObject({

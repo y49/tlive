@@ -96,7 +96,10 @@ async function main() {
   // Graceful shutdown — stop sessions + deny pending broker requests first so
   // runtimes drain into idle-state snapshots before the process exits.
   const keepAliveInterval = setInterval(() => {}, 60_000);
+  let shuttingDown = false;
   const shutdown = async (reason = 'signal') => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     logger.info('Shutting down...');
     clearInterval(keepAliveInterval);
     writeStatusFile(tliveHome, {
