@@ -188,4 +188,57 @@ describe('ClaudeEventAdapter', () => {
     expect(frame.events).toHaveLength(2);
     expect(frame.events.every((e) => e.kind === 'file_changed')).toBe(true);
   });
+
+  it('emits tool_use_result from tool_result content block in user message', () => {
+    const adapter = new ClaudeEventAdapter();
+    const frame = adapter.adapt({
+      type: 'user',
+      message: {
+        content: [
+          { type: 'tool_result', tool_use_id: 'tu-1', content: 'ok', is_error: false },
+        ],
+      },
+    });
+    const kinds = frame.events.map((e) => e.kind);
+    expect(kinds).toContain('tool_use_result');
+    expect(kinds).not.toContain('turn_start');
+    const tr = frame.events.find((e) => e.kind === 'tool_use_result');
+    expect(tr).toMatchObject({
+      kind: 'tool_use_result',
+      toolUseId: 'tu-1',
+      output: 'ok',
+      ok: true,
+    });
+  });
+
+  it('emits both tool_use_result and turn_start when user message mixes tool_result and text', () => {
+    const adapter = new ClaudeEventAdapter();
+    const frame = adapter.adapt({
+      type: 'user',
+      message: {
+        content: [
+          { type: 'tool_result', tool_use_id: 'tu-2', content: 'done', is_error: false },
+          { type: 'text', text: 'continue please' },
+        ],
+      },
+    });
+    const kinds = frame.events.map((e) => e.kind);
+    expect(kinds).toEqual(['tool_use_result', 'turn_start']);
+    expect(frame.events[0]).toMatchObject({ kind: 'tool_use_result', toolUseId: 'tu-2', ok: true });
+    expect(frame.events[1]).toMatchObject({ kind: 'turn_start', userInputPreview: 'continue please' });
+  });
+
+  it('tool_use_result with is_error=true sets ok=false', () => {
+    const adapter = new ClaudeEventAdapter();
+    const frame = adapter.adapt({
+      type: 'user',
+      message: {
+        content: [
+          { type: 'tool_result', tool_use_id: 'tu-3', content: 'boom', is_error: true },
+        ],
+      },
+    });
+    const tr = frame.events.find((e) => e.kind === 'tool_use_result');
+    expect(tr).toMatchObject({ kind: 'tool_use_result', toolUseId: 'tu-3', ok: false });
+  });
 });

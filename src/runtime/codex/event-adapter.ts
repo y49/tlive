@@ -1,8 +1,19 @@
 // src/runtime/codex/event-adapter.ts
 //
-// Maps codex-app-server JSON-RPC notifications to NotificationEvent frames
-// (spec §3.4). Produces the unified AdaptedFrame { events: NotificationEvent[];
-// usage? } matching claude/event-adapter.ts.
+// Translates codex-app-server JSON-RPC notifications into tlive
+// NotificationEvent frames (spec §3.4). Produces the unified AdaptedFrame
+// { events: NotificationEvent[]; usage? } matching claude/event-adapter.ts.
+//
+// Emits: turn lifecycle (turn_start/turn_end), assistant_text /
+// assistant_text_delta, thinking_delta / thinking_end, tool_use_start,
+// tool_use_result, file_changed, api_throttle, runtime_error.
+//
+// Does NOT emit: permission_requested / permission_resolved,
+// ask_user_question_requested / ask_user_question_resolved,
+// elicitation_requested, status_change. Those are produced by the session
+// layer (T3) and permission/ask/elicitation brokers (T4) after they consume
+// the corresponding app-server server-requests (applyPatchApproval /
+// execCommandApproval etc.) surfaced by CodexAppServerRuntime.
 //
 // The set of forwarded JSON-RPC methods is owned by CodexAppServerRuntime —
 // this adapter must gracefully no-op on unknown method names (return empty

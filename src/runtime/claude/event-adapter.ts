@@ -1,16 +1,24 @@
 // src/runtime/claude/event-adapter.ts
 //
-// Maps raw Claude Agent SDK stream messages (SDKMessage union) to NotificationEvent
-// per spec §3.4. Maintains per-turn state (current turnId, turnStartedAt) plus
-// parallel-batch tracking so tool_use_start events carry batchId/batchIndex when
-// an assistant reply contains multiple tool_use blocks.
+// Translates Claude Agent SDK messages (SDKMessage union) into tlive
+// NotificationEvent frames per spec §3.4. Maintains per-turn state (current
+// turnId, turnStartedAt) plus parallel-batch tracking so tool_use_start events
+// carry batchId/batchIndex when an assistant reply contains multiple tool_use
+// blocks.
 //
-// Only the event-translation surface lives here. PermissionRequest /
-// AskUserQuestionRequest / ElicitationRequest flow through the canPermissionUse
-// + onAskUserQuestion + onElicitation callbacks on the SDK Query and are
-// installed by ClaudeSdkRuntime directly; this adapter emits the companion
-// notification events (`permission_requested`, `ask_user_question_requested`,
-// `elicitation_requested`) on demand from the runtime.
+// Emits: turn lifecycle (turn_start/turn_end), assistant_text /
+// assistant_text_delta, thinking_delta / thinking_end, tool_use_start,
+// tool_use_result, parallel_tool_batch_start/end, file_changed, todo_write,
+// prompt_suggestion, pre_compact / post_compact, api_throttle / api_resumed,
+// subagent_start / subagent_progress / subagent_stop, elicitation_resolved,
+// runtime_error, hook_generic.
+//
+// Does NOT emit: permission_requested / permission_resolved,
+// ask_user_question_requested / ask_user_question_resolved,
+// elicitation_requested, status_change. Those are produced by the session
+// layer (T3) and permission/ask/elicitation brokers (T4) after they consume
+// the corresponding runtime callbacks (canUseTool / onAskUserQuestion /
+// onElicitation) on the SDK Query.
 
 import { randomBytes } from 'node:crypto';
 import type { NotificationEvent, UsageStats } from '../events.js';
@@ -118,16 +126,32 @@ export class ClaudeEventAdapter {
         break;
       }
       case 'user': {
-        // New turn boundary — SDK emits a synthetic user replay on resume, so we
-        // still issue turn_start. Frontends dedupe against the persisted history.
-        const turnId = this.newTurn();
-        const content = extractUserText(msg);
-        events.push({
-          kind: 'turn_start',
-          turnId,
-          userInputPreview: content.slice(0, 80),
-          at: Date.now(),
-        });
+        // The Claude Agent SDK delivers tool results as `tool_result` content
+        // blocks embedded in the *next* user message after the assistant's
+        // tool_use, not as a standalone top-level message. We scan the content
+        // blocks and emit one tool_use_result per tool_result block, then only
+        // emit turn_start when there is real user text — a user message that
+        // is nothing but tool_result relays is not a new turn boundary.
+        const blocks = extractUserBlocks(msg);
+        for (const tr of blocks.toolResults) {
+          events.push({
+            kind: 'tool_use_result',
+            toolUseId: tr.id,
+            output: tr.content,
+            // TODO: durationMs not surfaced by SDK on tool_result blocks.
+            durationMs: 0,
+            ok: !tr.isError,
+          });
+        }
+        if (blocks.text.trim().length > 0) {
+          const turnId = this.newTurn();
+          events.push({
+            kind: 'turn_start',
+            turnId,
+            userInputPreview: blocks.text.slice(0, 80),
+            at: Date.now(),
+          });
+        }
         break;
       }
       case 'assistant': {
@@ -309,15 +333,34 @@ export class ClaudeEventAdapter {
 
 // ---- helpers -------------------------------------------------------------
 
-function extractUserText(msg: { [k: string]: unknown }): string {
+interface UserMessageBlocks {
+  /** Concatenated text from real user input (excludes tool_result relays). */
+  text: string;
+  /** tool_result content blocks found in message.content (SDK Anthropic-style). */
+  toolResults: Array<{ id: string; content: unknown; isError: boolean }>;
+}
+
+function extractUserBlocks(msg: { [k: string]: unknown }): UserMessageBlocks {
   const m = msg.message as { content?: unknown } | undefined;
-  if (typeof m?.content === 'string') return m.content;
-  if (Array.isArray(m?.content)) {
-    return m.content
-      .map((c: unknown) => (c as { type?: string; text?: string })?.text ?? '')
-      .join(' ');
+  if (typeof m?.content === 'string') {
+    return { text: m.content, toolResults: [] };
   }
-  return '';
+  if (!Array.isArray(m?.content)) return { text: '', toolResults: [] };
+  const text: string[] = [];
+  const toolResults: UserMessageBlocks['toolResults'] = [];
+  for (const block of m.content as Array<Record<string, unknown>>) {
+    if (!block || typeof block !== 'object') continue;
+    if (block.type === 'tool_result') {
+      toolResults.push({
+        id: String(block.tool_use_id ?? ''),
+        content: block.content,
+        isError: Boolean(block.is_error),
+      });
+    } else if (block.type === 'text') {
+      text.push(String(block.text ?? ''));
+    }
+  }
+  return { text: text.join(' '), toolResults };
 }
 
 function extractAssistantContent(
