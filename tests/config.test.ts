@@ -13,39 +13,43 @@ describe('loadConfig', () => {
 
   it('returns defaults when no config file exists', () => {
     const config = loadConfig(join(testDir, 'nonexistent.env'));
-    expect(config.port).toBe(8849);
-    expect(config.defaultProvider).toBe('claude');
-    expect(config.permissionTimeout).toBe(55000);
-    expect(config.proactiveNotifyDelay).toBe(60000);
-    expect(config.proactiveQuestionDelay).toBe(5000);
+    expect(config.token).toBe('');
+    expect(config.runtime).toBe('claude');
+    expect(config.telegram).toBeUndefined();
+    expect(config.discord).toBeUndefined();
+    expect(config.feishu).toBeUndefined();
   });
 
   it('reads config.env values', () => {
     writeFileSync(envPath, [
-      'TL_PORT=9000',
       'TL_TOKEN=mytoken',
-      'TL_DEFAULT_PROVIDER=claude',
-      'TL_PERMISSION_TIMEOUT=0',
-      'TL_TELEGRAM_TOKEN=tg123',
-      'TL_TELEGRAM_CHAT_ID=456',
+      'TL_RUNTIME=codex',
+      'TL_TG_BOT_TOKEN=tg123',
+      'TL_TG_CHAT_ID=456',
     ].join('\n'));
     const config = loadConfig(envPath);
-    expect(config.port).toBe(9000);
     expect(config.token).toBe('mytoken');
+    expect(config.runtime).toBe('codex');
     expect(config.telegram).toEqual({ token: 'tg123', chatId: '456' });
   });
 
   it('skips comments and blank lines', () => {
-    writeFileSync(envPath, '# comment\n\nTL_PORT=7777\n');
+    writeFileSync(envPath, '# comment\n\nTL_TOKEN=secret\n');
     const config = loadConfig(envPath);
-    expect(config.port).toBe(7777);
+    expect(config.token).toBe('secret');
   });
 
   it('env vars override config file', () => {
-    writeFileSync(envPath, 'TL_PORT=9000\n');
-    process.env.TL_PORT = '8000';
+    writeFileSync(envPath, 'TL_TOKEN=from-file\n');
+    process.env.TL_TOKEN = 'from-env';
     const config = loadConfig(envPath);
-    expect(config.port).toBe(8000);
-    delete process.env.TL_PORT;
+    expect(config.token).toBe('from-env');
+    delete process.env.TL_TOKEN;
+  });
+
+  it('falls back to claude when TL_RUNTIME is unknown', () => {
+    writeFileSync(envPath, 'TL_RUNTIME=gpt\n');
+    const config = loadConfig(envPath);
+    expect(config.runtime).toBe('claude');
   });
 });

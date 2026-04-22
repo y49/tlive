@@ -108,7 +108,6 @@ function daemonStart() {
     ...config,
     TL_RUNTIME: runtime,
     TL_DEFAULT_WORKDIR: process.env.TL_DEFAULT_WORKDIR || process.cwd(),
-    TL_WEB_DIR: join(PACKAGE_ROOT, 'web'),
   };
 
   const child = spawn(process.execPath, [BRIDGE_ENTRY], {
@@ -206,7 +205,6 @@ function ensureBridgeRunning() {
     ...config,
     TL_RUNTIME: runtime,
     TL_DEFAULT_WORKDIR: process.env.TL_DEFAULT_WORKDIR || process.cwd(),
-    TL_WEB_DIR: join(PACKAGE_ROOT, 'web'),
   };
 
   try {
@@ -338,13 +336,13 @@ Setup (one-time):
   tlive install skills       Install /tlive skill + hooks to Claude Code
 
 Service Management:
-  tlive start [--runtime R]  Start IM Bridge (R: claude|codex, default: claude)
-  tlive stop                 Stop IM Bridge daemon
-  tlive status               Show Bridge + Web Terminal status
-  tlive logs [N]             Show last N log lines (default: 50)
-  tlive doctor               Run diagnostic checks
-  tlive update               Update to latest version
-  tlive version              Show version info
+  tlive start [--runtime R]    Start IM Bridge (R: claude|codex, default: claude)
+  tlive stop-daemon            Stop IM Bridge daemon
+  tlive status                 Show Bridge + Web Terminal status
+  tlive daemon-logs [N]        Show last N lines of bridge.log (default: 50)
+  tlive doctor                 Run diagnostic checks
+  tlive update                 Update to latest version
+  tlive version                Show version info
 
 Hook Control:
   tlive hooks                Show hook approval status
@@ -369,7 +367,7 @@ In Claude Code (AI-guided):
   /tlive doctor              Diagnose issues + suggest fixes
 `;
 
-const NODE_COMMANDS = new Set(['setup', 'start', 'stop', 'status', 'logs', 'hooks', 'doctor', 'version', 'update']);
+const NODE_COMMANDS = new Set(['setup', 'start', 'stop-daemon', 'status', 'daemon-logs', 'hooks', 'doctor', 'version', 'update']);
 
 function run(cmd, opts = {}) {
   try {
@@ -410,19 +408,6 @@ if (SESSION_SUBCOMMANDS.has(command)) {
 switch (command) {
 
   case 'setup': {
-    if (args.includes('--qr')) {
-      const claudeEntry = join(PACKAGE_ROOT, 'dist', 'src', 'tlive-claude.mjs');
-      if (existsSync(claudeEntry)) {
-        const { setupQR } = await import(claudeEntry);
-        const config = loadConfigEnv();
-        const port = parseInt(config.TL_PORT || '8849', 10);
-        const token = config.TL_TOKEN || 'tlive';
-        setupQR(port, token);
-      } else {
-        console.error('Build required: npm run build:src');
-      }
-      break;
-    }
     const setupEntry = join(PACKAGE_ROOT, 'bridge', 'dist', 'setup.mjs');
     if (existsSync(setupEntry)) {
       const r = spawnSync(process.execPath, [setupEntry], { stdio: 'inherit' });
@@ -450,7 +435,7 @@ switch (command) {
     break;
   }
 
-  case 'stop':
+  case 'stop-daemon':
     daemonStop();
     break;
 
@@ -458,7 +443,7 @@ switch (command) {
     await daemonStatus();
     break;
 
-  case 'logs':
+  case 'daemon-logs':
     daemonLogs(parseInt(args[0], 10) || 50);
     break;
 
@@ -564,7 +549,7 @@ switch (command) {
 
   default: {
     // Check for typos of known commands before forwarding to Go Core
-    const known = ['setup', 'start', 'stop', 'status', 'logs', 'hooks', 'doctor', 'install', 'help', 'version', 'update'];
+    const known = ['setup', 'start', 'stop-daemon', 'status', 'daemon-logs', 'hooks', 'doctor', 'install', 'help', 'version', 'update', 'claude', 'codex', 'list', 'stop', 'logs', 'resume'];
     const similar = known.find(k => {
       if (Math.abs(k.length - command.length) > 2) return false;
       let diff = 0;
