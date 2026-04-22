@@ -15784,8 +15784,8 @@ var CodexEventAdapter = class {
         ];
       }
       case "webSearch": {
-        const query3 = item.query ?? "";
-        return [{ kind: "agent_progress", description: `Searched: ${query3}` }];
+        const query4 = item.query ?? "";
+        return [{ kind: "agent_progress", description: `Searched: ${query4}` }];
       }
       default: {
         return [{ kind: "agent_progress", description: `[codex:${String(item.type)}]` }];
@@ -17197,11 +17197,12 @@ ${ws.workdir}`));
 
 // src/engine/callback-router.ts
 var CallbackRouter = class {
-  constructor(permissions, sdkState, handleInboundMessage, renderers) {
+  constructor(permissions, sdkState, handleInboundMessage, renderers, runtimeBroker) {
     this.permissions = permissions;
     this.sdkState = sdkState;
     this.handleInboundMessage = handleInboundMessage;
     this.renderers = renderers;
+    this.runtimeBroker = runtimeBroker;
   }
   controlPanel;
   /** Callback for forwarding terminal permission actions via IPC to `tlive claude` */
@@ -17250,8 +17251,22 @@ var CallbackRouter = class {
     }
     if (msg.callbackData.startsWith("perm:allow:") || msg.callbackData.startsWith("perm:deny:") || msg.callbackData.startsWith("perm:takeover:")) {
       const parts = msg.callbackData.split(":");
+      const action = parts[1];
+      const permId = parts.slice(2).join(":");
+      if (this.runtimeBroker && permId.includes(":")) {
+        const decision = action === "allow" ? "allow" : action === "deny" ? "deny" : action === "takeover" ? "deny" : (
+          // takeover resolves as deny on this path
+          "deny"
+        );
+        if (this.runtimeBroker.resolve(permId, decision)) {
+          const label = action === "allow" ? "\u2705 Allowed" : action === "deny" ? "\u274C Denied" : "\u{1F5A5} Takeover";
+          const renderer = this.renderers.get(adapter.channelType);
+          await adapter.editMessage(msg.chatId, msg.messageId, renderer.renderSimpleText(label)).catch(() => {
+          });
+          return true;
+        }
+      }
       if (parts.length === 3) {
-        const [, action, permId] = parts;
         const isSdkPerm = permId.startsWith("sdk-") || this.permissions.getGateway().isPending(permId);
         if (!isSdkPerm && this.onTerminalPermissionCallback) {
           this.onTerminalPermissionCallback(action, permId, "");
@@ -18487,8 +18502,8 @@ var MessageRouter = class {
   /** Load persisted chatIds from disk (called once at startup) */
   loadChatIds() {
     try {
-      const { readFileSync: readFileSync7 } = __require("node:fs");
-      const data = JSON.parse(readFileSync7(this.chatIdFile, "utf-8"));
+      const { readFileSync: readFileSync4 } = __require("node:fs");
+      const data = JSON.parse(readFileSync4(this.chatIdFile, "utf-8"));
       for (const [k, v] of Object.entries(data)) {
         if (typeof v === "string") this.lastChatId.set(k, v);
       }
@@ -18883,6 +18898,95 @@ var ControlPanel = class {
     if (hours < 24) return `${hours}h ago`;
     const days = Math.floor(hours / 24);
     return `${days}d ago`;
+  }
+};
+
+// src/engine/session-frontend.ts
+var SessionFrontend = class {
+  constructor(deps) {
+    this.deps = deps;
+  }
+  sessionUnsubs = /* @__PURE__ */ new Map();
+  managerUnsub = null;
+  brokerUnsub = null;
+  start() {
+    this.managerUnsub = this.deps.sessionManager.subscribe((ev) => {
+      if (ev.kind === "created" || ev.kind === "resumed") this.attach(ev.session);
+      else if (ev.kind === "stopped") this.detach(ev.sessionId);
+    });
+    this.brokerUnsub = this.deps.permissionBroker.subscribe((ev) => {
+      if (ev.kind === "pending") void this.renderPermission(ev.sessionId, ev.request);
+    });
+  }
+  stop() {
+    this.managerUnsub?.();
+    this.managerUnsub = null;
+    this.brokerUnsub?.();
+    this.brokerUnsub = null;
+    for (const un of this.sessionUnsubs.values()) un();
+    this.sessionUnsubs.clear();
+  }
+  attach(session) {
+    const existing = this.sessionUnsubs.get(session.id);
+    if (existing) existing();
+    const unsub = session.subscribe((ev) => {
+      if (ev.kind === "event") void this.renderEvent(session.id, ev.event);
+    });
+    this.sessionUnsubs.set(session.id, unsub);
+  }
+  detach(sessionId) {
+    const unsub = this.sessionUnsubs.get(sessionId);
+    if (unsub) {
+      unsub();
+      this.sessionUnsubs.delete(sessionId);
+    }
+  }
+  async renderEvent(sessionId, event) {
+    const target = this.resolveChannel(sessionId);
+    if (!target) return;
+    const renderer = this.deps.renderers.get(target.channelType);
+    if (!renderer) return;
+    const message = renderer.renderNotification(event);
+    if (!message) return;
+    const adapter = this.deps.getAdapters().get(target.channelType);
+    if (!adapter) return;
+    await adapter.send(target.chatId, message).catch(() => {
+    });
+  }
+  async renderPermission(sessionId, request) {
+    const notification = {
+      kind: "permission_request",
+      toolName: request.toolName,
+      toolInput: JSON.stringify(request.toolInput),
+      permissionId: request.id
+    };
+    await this.renderEvent(sessionId, notification);
+  }
+  /**
+   * Pick the target (channelType, chatId) to render a session event to.
+   * Workspace → chatId is the canonical binding; the adapter map decides
+   * which channelType owns that chatId. Falls back to the first adapter if
+   * no adapter claims ownership via a `canAddress` duck-typed method.
+   *
+   * Limitation: when multiple channels are enabled and the workspace was
+   * bound via a different channel, we may broadcast to the wrong one. This
+   * is acceptable for Phase 2 — Phase 3 may refine by storing `channelType`
+   * on the workspace record.
+   */
+  resolveChannel(sessionId) {
+    const session = this.deps.sessionManager.get(sessionId);
+    if (!session) return null;
+    const workspace = this.deps.workspaceManager.findByName(session.context.workspaceId) ?? this.deps.workspaceManager.getDefault();
+    if (!workspace?.chatId) return null;
+    const adapters = this.deps.getAdapters();
+    for (const [key, adapter] of adapters) {
+      const canAddr = adapter.canAddress;
+      if (typeof canAddr === "function" && canAddr.call(adapter, workspace.chatId)) {
+        return { channelType: key, chatId: workspace.chatId };
+      }
+    }
+    const firstKey = adapters.keys().next().value;
+    return firstKey ? { channelType: firstKey, chatId: workspace.chatId } : null;
   }
 };
 
@@ -25280,6 +25384,7 @@ var BridgeManager = class _BridgeManager {
   callbackRouter;
   sdkEngine;
   messageRouter;
+  sessionFrontend = null;
   /** Cached LLM providers keyed by runtime name */
   providerCache = /* @__PURE__ */ new Map();
   workspaceManager;
@@ -25315,7 +25420,8 @@ var BridgeManager = class _BridgeManager {
       this.permissions,
       this.sdkEngine.getQuestionState(),
       (adapter, msg) => this.handleInboundMessage(adapter, msg),
-      this.renderers
+      this.renderers,
+      overrides?.permissionBroker
     );
     const controlPanel = new ControlPanel(
       this.state,
@@ -25360,6 +25466,16 @@ var BridgeManager = class _BridgeManager {
     this.callbackRouter.onResumeSession = (adapter, chatId, sessionId, workdir) => {
       this.resumeSession(adapter, chatId, sessionId, workdir);
     };
+    if (overrides?.sessionManager && overrides?.permissionBroker) {
+      this.sessionFrontend = new SessionFrontend({
+        sessionManager: overrides.sessionManager,
+        permissionBroker: overrides.permissionBroker,
+        workspaceManager: this.workspaceManager,
+        renderers: this.renderers,
+        getAdapters: () => this.adapters
+      });
+      this.sessionFrontend.start();
+    }
   }
   /** Returns all active adapters */
   getAdapters() {
@@ -25368,6 +25484,10 @@ var BridgeManager = class _BridgeManager {
   /** Returns the renderer map (for passing to TerminalRelay). */
   getRenderers() {
     return this.renderers;
+  }
+  /** Returns the workspace manager (for passing to IPCSessionHandler). */
+  getWorkspaceManager() {
+    return this.workspaceManager;
   }
   /** Whether any SDK-managed session is currently active */
   hasActiveSessions() {
@@ -25450,6 +25570,8 @@ var BridgeManager = class _BridgeManager {
   async stop() {
     this.running = false;
     this.sdkEngine.stopSessionPruning();
+    this.sessionFrontend?.stop();
+    this.sessionFrontend = null;
     this.permissions.getGateway().denyAll();
     for (const adapter of this.adapters.values()) {
       await adapter.stop();
@@ -25567,499 +25689,11 @@ var BridgeManager = class _BridgeManager {
   }
 };
 
-// src/engine/terminal-relay.ts
-import { join as join10 } from "node:path";
-
-// src/engine/ipc-server.ts
-import { createServer } from "node:net";
-import { existsSync as existsSync7, unlinkSync as unlinkSync3 } from "node:fs";
-import { EventEmitter } from "node:events";
-function attachLineParser(socket, onMessage) {
-  let buffer = "";
-  socket.on("data", (data) => {
-    buffer += data.toString();
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        onMessage(JSON.parse(line));
-      } catch {
-      }
-    }
-  });
-}
-function sendJson(socket, msg) {
-  socket.write(JSON.stringify(msg) + "\n");
-}
-var IPCServer = class extends EventEmitter {
-  constructor(socketPath, log) {
-    super();
-    this.socketPath = socketPath;
-    this.log = log;
-  }
-  server = null;
-  clients = /* @__PURE__ */ new Set();
-  get clientCount() {
-    return this.clients.size;
-  }
-  start() {
-    if (existsSync7(this.socketPath)) unlinkSync3(this.socketPath);
-    this.server = createServer((socket) => {
-      this.clients.add(socket);
-      this.log(`Terminal connected (${this.clients.size} active)`);
-      this.emit("connect", socket);
-      attachLineParser(socket, (msg) => {
-        this.emit("message", msg.payload, msg.type, socket);
-      });
-      socket.on("close", () => {
-        this.clients.delete(socket);
-        this.emit("disconnect", socket);
-        this.log(`Terminal disconnected (${this.clients.size} active)`);
-      });
-      socket.on("error", () => {
-        this.clients.delete(socket);
-      });
-    });
-    this.server.listen(this.socketPath, () => this.log(`IPC listening at ${this.socketPath}`));
-  }
-  stop() {
-    for (const client of this.clients) client.destroy();
-    this.server?.close();
-    try {
-      unlinkSync3(this.socketPath);
-    } catch {
-    }
-  }
-  broadcast(msg) {
-    for (const client of this.clients) sendJson(client, msg);
-  }
-  reply(socket, msg) {
-    sendJson(socket, msg);
-  }
-};
-
-// src/engine/session-registry.ts
-var SessionRegistry = class {
-  sessions = /* @__PURE__ */ new Map();
-  register(sessionId, socket, meta3) {
-    this.sessions.set(sessionId, {
-      socket,
-      sessionId,
-      workdir: meta3.workdir,
-      projectName: meta3.projectName
-    });
-  }
-  unregister(sessionId) {
-    this.sessions.delete(sessionId);
-  }
-  getSession(sessionId) {
-    return this.sessions.get(sessionId);
-  }
-  listSessions() {
-    return [...this.sessions.values()];
-  }
-  getBySocket(socket) {
-    return [...this.sessions.values()].filter((s) => s.socket === socket);
-  }
-  removeBySocket(socket) {
-    const removed = [];
-    for (const [sid, entry] of this.sessions) {
-      if (entry.socket === socket) {
-        this.sessions.delete(sid);
-        removed.push(sid);
-      }
-    }
-    return removed;
-  }
-};
-
-// src/engine/web-terminal.ts
-import { readFileSync as readFileSync4, existsSync as existsSync8 } from "node:fs";
-import { join as join8, extname } from "node:path";
-import { createServer as createHttpServer } from "node:http";
-import { WebSocketServer } from "ws";
-var MIME = {
-  ".html": "text/html",
-  ".css": "text/css",
-  ".js": "application/javascript",
-  ".json": "application/json",
-  ".png": "image/png",
-  ".svg": "image/svg+xml"
-};
-var WebTerminal = class {
-  httpServer = null;
-  wsServer = null;
-  webClients = /* @__PURE__ */ new Map();
-  deps;
-  /** Called when a web client sends input — wire this to IPC broadcast. */
-  onWebInput = null;
-  constructor(deps) {
-    this.deps = deps;
-  }
-  start() {
-    const { port, token, webDir, registry: registry2, log } = this.deps;
-    this.httpServer = createHttpServer((req, res) => {
-      const url2 = new URL(req.url ?? "/", `http://localhost:${port}`);
-      if (url2.pathname === "/health") {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ status: "ok", sessions: registry2.listSessions().length }));
-        return;
-      }
-      const needsAuth = url2.pathname === "/" || url2.pathname === "/index.html" || url2.pathname === "/terminal.html";
-      if (needsAuth && token && url2.searchParams.get("token") !== token) {
-        res.writeHead(403);
-        res.end("Unauthorized");
-        return;
-      }
-      if (url2.pathname === "/" || url2.pathname === "/index.html") {
-        const sessions = registry2.listSessions();
-        res.writeHead(200, { "Content-Type": "text/html" });
-        res.end(this.renderSessionList(sessions, token));
-        return;
-      }
-      if (webDir) {
-        const safePath = url2.pathname.replace(/\.\./g, "");
-        const filePath = join8(webDir, safePath);
-        if (existsSync8(filePath)) {
-          try {
-            const content = readFileSync4(filePath);
-            const mime = MIME[extname(filePath)] || "application/octet-stream";
-            res.writeHead(200, { "Content-Type": mime });
-            res.end(content);
-            return;
-          } catch {
-          }
-        }
-      }
-      res.writeHead(404);
-      res.end("Not found");
-    });
-    this.wsServer = new WebSocketServer({ server: this.httpServer });
-    this.wsServer.on("connection", (ws, req) => {
-      const url2 = new URL(req.url ?? "", `http://localhost:${port}`);
-      if (token && url2.searchParams.get("token") !== token) {
-        ws.close(4001, "Unauthorized");
-        return;
-      }
-      const sessionId = url2.searchParams.get("session");
-      if (!sessionId || !registry2.getSession(sessionId)) {
-        ws.close(4002, "Session not found");
-        return;
-      }
-      if (!this.webClients.has(sessionId)) this.webClients.set(sessionId, /* @__PURE__ */ new Set());
-      this.webClients.get(sessionId).add(ws);
-      ws.on("message", (raw) => {
-        const data = raw.toString();
-        this.onWebInput?.(sessionId, data);
-      });
-      ws.on("close", () => {
-        this.webClients.get(sessionId)?.delete(ws);
-      });
-    });
-    this.httpServer.listen(port, () => {
-      log(`Web terminal at http://localhost:${port}`);
-    });
-  }
-  stop() {
-    for (const clients of this.webClients.values()) {
-      for (const ws of clients) ws.close();
-    }
-    this.wsServer?.close();
-    this.httpServer?.close();
-  }
-  /** Forward PTY data from terminal to web clients watching a session. */
-  forwardPtyData(sessionId, data) {
-    const clients = this.webClients.get(sessionId);
-    if (clients) {
-      const buf = Buffer.from(data);
-      for (const ws of clients) {
-        if (ws.readyState === ws.OPEN) ws.send(buf);
-      }
-    }
-  }
-  /** Clean up web clients for a session (called on session unregister). */
-  closeSessionClients(sessionId) {
-    const clients = this.webClients.get(sessionId);
-    if (clients) {
-      for (const ws of clients) ws.close();
-      this.webClients.delete(sessionId);
-    }
-  }
-  // ---------------------------------------------------------------------------
-  // Internal
-  // ---------------------------------------------------------------------------
-  renderSessionList(sessions, token) {
-    const tokenParam = token ? `?token=${token}` : "";
-    if (sessions.length === 0) {
-      return `<!DOCTYPE html><html><body style="font-family:system-ui;text-align:center;padding:3em">
-        <h2>TLive Web Terminal</h2><p>No active sessions</p>
-        <p>Start one with: <code>tlive claude</code></p></body></html>`;
-    }
-    const items = sessions.map(
-      (s) => `<li><a href="/terminal.html${tokenParam ? tokenParam + "&" : "?"}session=${s.sessionId}">${s.projectName || "session"} &middot; #${s.sessionId.slice(0, 6)}</a> <small>${s.workdir}</small></li>`
-    ).join("");
-    return `<!DOCTYPE html><html><body style="font-family:system-ui;padding:2em">
-      <h2>TLive Web Terminal</h2><ul style="list-style:none;padding:0">${items}</ul></body></html>`;
-  }
-};
-
-// src/engine/reply-interceptor.ts
-var ReplyInterceptor = class {
-  trackedMsgIds = /* @__PURE__ */ new Set();
-  /** Callback invoked when a reply should be forwarded to the terminal. */
-  onForward = null;
-  log;
-  constructor(log) {
-    this.log = log;
-  }
-  /** Track a message ID so replies to it can be intercepted. */
-  trackMessage(messageId) {
-    this.trackedMsgIds.add(messageId);
-    this.log(`Tracked notification: ${messageId}`);
-  }
-  /** Pure check: would interceptReply consume this message? Side-effect free. */
-  isReplyToTracked(replyToMessageId) {
-    return !!replyToMessageId && this.trackedMsgIds.has(replyToMessageId);
-  }
-  /**
-   * Check if an inbound IM message is a reply to a tracked notification.
-   * Returns true if consumed (forwarded to terminal via onForward callback).
-   */
-  interceptReply(msg) {
-    this.log(`interceptReply: replyTo=${msg.replyToMessageId ?? "NONE"}, tracked=${this.trackedMsgIds.size}, match=${msg.replyToMessageId ? this.trackedMsgIds.has(msg.replyToMessageId) : false}`);
-    if (!msg.replyToMessageId || !this.trackedMsgIds.has(msg.replyToMessageId)) {
-      return false;
-    }
-    this.log(`Forwarding reply to terminal: "${msg.text.slice(0, 50)}"`);
-    this.onForward?.({ type: "terminal_input", payload: { text: msg.text } });
-    return true;
-  }
-  /**
-   * Handle a callback from IM that targets a terminal session question.
-   * Returns true if consumed.
-   */
-  handleAskCallback(callbackData) {
-    if (!callbackData.startsWith("askq:")) return false;
-    const parts = callbackData.split(":");
-    const toolUseId = parts[1];
-    const selection = parts[2];
-    const answer = selection === "skip" ? "" : selection;
-    const optionIndex = selection === "skip" ? -1 : parseInt(selection, 10);
-    this.onForward?.({
-      type: "question_answer",
-      payload: { toolUseId, answer, optionIndex }
-    });
-    return true;
-  }
-};
-
-// src/engine/notification-dispatcher.ts
-var NotificationDispatcher = class {
-  constructor(getAdapters, targetResolver, renderers, log, warn) {
-    this.getAdapters = getAdapters;
-    this.targetResolver = targetResolver;
-    this.renderers = renderers;
-    this.log = log;
-    this.warn = warn;
-  }
-  /** Called after a notification is successfully sent — provides messageId for tracking. */
-  onSent = null;
-  /**
-   * Dispatch a notification to all configured IM adapters.
-   * Returns a map of channelType -> messageId for successfully sent messages.
-   */
-  async dispatch(notification) {
-    const results = /* @__PURE__ */ new Map();
-    for (const adapter of this.getAdapters()) {
-      const target = this.targetResolver.resolve(adapter.channelType);
-      if (!target) continue;
-      const renderer = this.renderers.get(adapter.channelType);
-      try {
-        let result;
-        if (notification.event && renderer) {
-          const rendered = renderer.renderNotification(notification.event);
-          result = await adapter.send(target.chatId, rendered);
-        } else if (renderer) {
-          result = await adapter.send(target.chatId, renderer.renderSimpleText(notification.text));
-        } else {
-          this.warn(`No renderer for ${adapter.channelType}, skipping notification`);
-          continue;
-        }
-        const msgId = result?.messageId;
-        if (msgId) {
-          results.set(adapter.channelType, msgId);
-          this.onSent?.({ channelType: adapter.channelType, messageId: msgId });
-        }
-      } catch (err) {
-        this.warn(`-> ${adapter.channelType}: ${err}`);
-      }
-    }
-    return results;
-  }
-};
-
-// src/engine/target-resolver.ts
-import { readFileSync as readFileSync5 } from "node:fs";
-import { join as join9 } from "node:path";
-function feishuReceiveIdType(id) {
-  if (id.startsWith("ou_")) return "open_id";
-  if (id.startsWith("oc_")) return "chat_id";
-  return "user_id";
-}
-var TargetResolver = class {
-  constructor(getLastChatId, config3, tliveHome) {
-    this.getLastChatId = getLastChatId;
-    const chatIdsFile = join9(tliveHome, "runtime", "chat-ids.json");
-    try {
-      this.cachedChatIds = JSON.parse(readFileSync5(chatIdsFile, "utf-8"));
-    } catch {
-    }
-    this.platformResolvers = {
-      telegram: () => config3.telegram.chatId ? { chatId: config3.telegram.chatId } : null,
-      feishu: () => {
-        const id = config3.feishu.allowedUsers[0];
-        return id ? { chatId: id, receiveIdType: feishuReceiveIdType(id) } : null;
-      },
-      discord: () => null
-    };
-  }
-  cachedChatIds = {};
-  platformResolvers;
-  resolve(channelType) {
-    const active = this.getLastChatId(channelType);
-    if (active) return this.withIdType(channelType, active);
-    const fromConfig = this.platformResolvers[channelType]?.();
-    if (fromConfig) return fromConfig;
-    const cached2 = this.cachedChatIds[channelType];
-    if (cached2) return this.withIdType(channelType, cached2);
-    return null;
-  }
-  withIdType(channelType, chatId) {
-    return {
-      chatId,
-      receiveIdType: channelType === "feishu" ? feishuReceiveIdType(chatId) : void 0
-    };
-  }
-};
-
-// src/engine/terminal-relay.ts
-var TerminalRelay = class {
-  ipcServer;
-  registry;
-  webTerminal;
-  replyInterceptor;
-  notificationDispatcher;
-  targetResolver;
-  deps;
-  constructor(deps) {
-    this.deps = deps;
-    this.ipcServer = new IPCServer(join10(deps.tliveHome, "ipc.sock"), deps.log);
-    this.targetResolver = new TargetResolver(deps.getLastChatId, deps.config, deps.tliveHome);
-    this.registry = new SessionRegistry();
-    this.webTerminal = new WebTerminal({
-      port: deps.config.port || 8849,
-      token: deps.config.token,
-      webDir: deps.webDir || process.env.TL_WEB_DIR || "",
-      registry: this.registry,
-      log: deps.log
-    });
-    this.replyInterceptor = new ReplyInterceptor(deps.log);
-    this.replyInterceptor.onForward = (msg) => this.ipcServer.broadcast(msg);
-    this.notificationDispatcher = new NotificationDispatcher(
-      deps.getAdapters,
-      this.targetResolver,
-      deps.renderers ?? /* @__PURE__ */ new Map(),
-      deps.log,
-      deps.warn
-    );
-    this.notificationDispatcher.onSent = ({ messageId }) => this.replyInterceptor.trackMessage(messageId);
-  }
-  start() {
-    this.ipcServer.on("message", (p, t, s) => this.routeIPC(t, p, s));
-    this.ipcServer.on("disconnect", (socket) => {
-      for (const sid of this.registry.removeBySocket(socket)) this.webTerminal.closeSessionClients(sid);
-    });
-    this.webTerminal.onWebInput = (sessionId, data) => {
-      const session = this.registry.getSession(sessionId);
-      if (session) this.ipcServer.reply(session.socket, { type: "web_input", payload: { data } });
-    };
-    this.ipcServer.start();
-    this.webTerminal.start();
-  }
-  stop() {
-    this.webTerminal.stop();
-    this.ipcServer.stop();
-  }
-  // ---- Public API (delegated) ----
-  interceptReply(msg) {
-    return this.replyInterceptor.interceptReply(msg);
-  }
-  isReplyToTracked(replyToMessageId) {
-    return this.replyInterceptor.isReplyToTracked(replyToMessageId);
-  }
-  handleAskCallback(callbackData) {
-    return this.replyInterceptor.handleAskCallback(callbackData);
-  }
-  forwardConfigUpdate(payload) {
-    this.ipcServer.broadcast({ type: "config_update", payload });
-  }
-  forwardPermissionAction(action, toolUseId, sessionId) {
-    this.ipcServer.broadcast({ type: "permission_action", payload: { action, toolUseId, sessionId } });
-  }
-  hasActiveClient() {
-    return this.ipcServer.clientCount > 0;
-  }
-  resolveTarget(channelType) {
-    return this.targetResolver.resolve(channelType);
-  }
-  // ---- IPC message routing ----
-  routeIPC(type, payload, socket) {
-    switch (type) {
-      case "notification": {
-        const n = payload;
-        this.notificationDispatcher.dispatch(n).then((results) => {
-          for (const [channelType, messageId] of results)
-            this.ipcServer.reply(socket, { type: "message_sent", payload: { messageId, sessionId: n.sessionId, channelType } });
-        });
-        break;
-      }
-      case "session_status":
-        this.deps.log(`Terminal session: ${JSON.stringify(payload)}`);
-        break;
-      case "session_list":
-        this.ipcServer.reply(socket, { type: "session_list_response", payload: { sessions: [] } });
-        break;
-      case "config_update":
-        this.ipcServer.broadcast({ type: "config_update", payload });
-        break;
-      case "session_register": {
-        const { sessionId, workdir, projectName } = payload;
-        this.registry.register(sessionId, socket, { workdir, projectName: projectName || "" });
-        this.deps.log(`Session registered: ${sessionId.slice(0, 8)} (${projectName})`);
-        break;
-      }
-      case "session_unregister": {
-        const { sessionId } = payload;
-        this.registry.unregister(sessionId);
-        this.webTerminal.closeSessionClients(sessionId);
-        this.deps.log(`Session unregistered: ${sessionId.slice(0, 8)}`);
-        break;
-      }
-      case "pty_data": {
-        const { sessionId, data } = payload;
-        this.webTerminal.forwardPtyData(sessionId, data);
-        break;
-      }
-    }
-  }
-};
-
 // src/channels/telegram.ts
 import { Bot } from "grammy";
 import { run } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
-import { createServer as createServer2 } from "node:http";
+import { createServer } from "node:http";
 
 // src/channels/base.ts
 var BaseChannelAdapter = class {
@@ -26351,7 +25985,7 @@ var TelegramAdapter = class extends BaseChannelAdapter {
         allowed_updates: ["message", "callback_query", "message_reaction"]
       });
       const webhookPath = "/telegram-webhook";
-      this.webhookServer = createServer2((req, res) => {
+      this.webhookServer = createServer((req, res) => {
         if (req.method !== "POST" || req.url !== webhookPath) {
           res.writeHead(404);
           res.end();
@@ -26984,15 +26618,15 @@ async function readFeishuBuffer(resp) {
     return Buffer.concat(chunks);
   }
   if (typeof r.writeFile === "function") {
-    const { join: join13 } = await import("node:path");
+    const { join: join11 } = await import("node:path");
     const { tmpdir: tmpdir2 } = await import("node:os");
-    const { readFile, unlink } = await import("node:fs/promises");
-    const tmp = join13(tmpdir2(), `tlive-feishu-${Date.now()}.tmp`);
+    const { readFile: readFile2, unlink: unlink2 } = await import("node:fs/promises");
+    const tmp = join11(tmpdir2(), `tlive-feishu-${Date.now()}.tmp`);
     try {
       await r.writeFile(tmp);
-      return await readFile(tmp);
+      return await readFile2(tmp);
     } finally {
-      await unlink(tmp).catch(() => {
+      await unlink2(tmp).catch(() => {
       });
     }
   }
@@ -27286,105 +26920,1488 @@ var FeishuAdapter = class extends BaseChannelAdapter {
 registerAdapterFactory("feishu", () => new FeishuAdapter(loadConfig().feishu));
 
 // src/main.ts
-import { join as join12 } from "node:path";
+import { join as join10 } from "node:path";
 import { homedir as homedir6 } from "node:os";
 import { mkdirSync as mkdirSync6, writeFileSync as writeFileSync6 } from "node:fs";
 
-// src/engine/session-discovery.ts
-import { readdirSync, statSync as statSync2, readFileSync as readFileSync6, existsSync as existsSync9 } from "node:fs";
-import { join as join11 } from "node:path";
-import { homedir as homedir5 } from "node:os";
-var UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-function decodeProjectDir(encoded) {
-  if (encoded.startsWith("-")) {
-    return encoded.replace(/-/g, "/");
+// ../src/session/manager.ts
+import { randomUUID } from "node:crypto";
+
+// ../src/session/context.ts
+var SessionContext = class _SessionContext {
+  constructor(snapshot) {
+    this.snapshot = snapshot;
   }
-  return encoded.replace(/--/g, ":/").replace(/-/g, "/");
+  static create(opts) {
+    const workspaceName = opts.workspaceName ?? deriveWorkspaceName(opts.workdir);
+    return new _SessionContext({
+      sessionId: opts.sessionId,
+      workdir: opts.workdir,
+      workspaceId: opts.workspaceId,
+      workspaceName,
+      provider: opts.provider,
+      createdAt: opts.createdAt ?? Date.now()
+    });
+  }
+};
+function deriveWorkspaceName(workdir) {
+  const parts = workdir.split("/").filter(Boolean);
+  return parts.length > 0 ? parts[parts.length - 1] : "unknown";
 }
-function extractProjectName(projectDir) {
-  const decoded = decodeProjectDir(projectDir);
-  const parts = decoded.split("/").filter(Boolean);
-  return parts.length > 0 ? parts[parts.length - 1] : projectDir;
-}
-function discoverActiveSessions(recencyMs = 10 * 60 * 1e3) {
-  const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || join11(homedir5(), ".claude");
-  const projectsDir = join11(claudeConfigDir, "projects");
-  if (!existsSync9(projectsDir)) return [];
-  const now = Date.now();
-  const results = [];
-  try {
-    for (const projectDir of readdirSync(projectsDir)) {
-      const fullProjectDir = join11(projectsDir, projectDir);
-      let stat;
+
+// ../src/session/cost-tracker.ts
+var CostTracker2 = class {
+  state = { inputTokens: 0, outputTokens: 0, costUsd: 0, durationMs: 0 };
+  add(u) {
+    this.state = {
+      inputTokens: this.state.inputTokens + u.inputTokens,
+      outputTokens: this.state.outputTokens + u.outputTokens,
+      costUsd: this.state.costUsd + u.costUsd,
+      durationMs: this.state.durationMs + u.durationMs
+    };
+  }
+  snapshot() {
+    return { ...this.state };
+  }
+};
+
+// ../src/session/session.ts
+var Session = class {
+  id;
+  ctx;
+  runtime;
+  persistence;
+  broker;
+  cost = new CostTracker2();
+  listeners = /* @__PURE__ */ new Set();
+  unsubscribers = [];
+  history = [];
+  status = "starting";
+  createdAt;
+  lastActivityAt;
+  abortCtrl = new AbortController();
+  constructor(init) {
+    this.ctx = init.ctx;
+    this.runtime = init.runtime;
+    this.persistence = init.persistence;
+    this.broker = init.broker;
+    this.id = init.ctx.snapshot.sessionId;
+    this.createdAt = init.ctx.snapshot.createdAt;
+    this.lastActivityAt = this.createdAt;
+  }
+  get context() {
+    return this.ctx.snapshot;
+  }
+  get provider() {
+    return this.ctx.snapshot.provider;
+  }
+  getHistory() {
+    return this.history;
+  }
+  getStatus() {
+    return this.status;
+  }
+  async start(opts) {
+    this.unsubscribers.push(this.runtime.onEvent((e) => this.handleEvent(e)));
+    this.unsubscribers.push(this.runtime.onPermissionRequest((req) => this.handlePermission(req)));
+    this.unsubscribers.push(this.runtime.onUsage((u) => this.handleUsage(u)));
+    await this.runtime.start({
+      ...opts,
+      sessionId: this.id,
+      workdir: this.ctx.snapshot.workdir,
+      signal: this.abortCtrl.signal
+    });
+    this.setStatus("active");
+    await this.saveSnapshot();
+  }
+  async sendInput(text2, _source) {
+    if (this.status === "stopped") throw new Error("Session stopped");
+    this.touch();
+    await this.runtime.sendInput(text2);
+  }
+  /** Frontend (IM/CLI) calls this. Returns false if id unknown. */
+  resolvePermission(id, decision) {
+    return this.broker.resolve(id, decision);
+  }
+  listPendingPermissions() {
+    return this.broker.listForSession(this.id);
+  }
+  subscribe(listener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  snapshot() {
+    return {
+      id: this.id,
+      ctx: this.ctx.snapshot,
+      status: this.status,
+      createdAt: this.createdAt,
+      lastActivityAt: this.lastActivityAt,
+      cost: this.cost.snapshot(),
+      pendingPermissionIds: this.listPendingPermissions().map((r) => r.id)
+    };
+  }
+  async stop() {
+    if (this.status === "stopped") return;
+    this.abortCtrl.abort();
+    for (const un of this.unsubscribers) un();
+    this.unsubscribers.length = 0;
+    this.broker.denyAllForSession(this.id);
+    try {
+      await this.runtime.stop();
+    } catch {
+    }
+    this.setStatus("stopped");
+    await this.saveSnapshot();
+  }
+  // ---- private ------------------------------------------------------------
+  handleEvent(event) {
+    this.touch();
+    this.history.push(event);
+    void this.persistence.appendEvent(this.id, event).catch(() => {
+    });
+    this.emit({ kind: "event", event });
+    if (event.kind === "session_complete") {
+      this.setStatus("idle");
+      void this.saveSnapshot();
+    } else if (event.kind === "error") {
+      this.setStatus("idle");
+      void this.saveSnapshot();
+    }
+  }
+  handlePermission(req) {
+    this.touch();
+    const toolUseId = req.id.includes(":") ? req.id.slice(req.id.indexOf(":") + 1) : req.id;
+    const { request } = this.broker.waitFor(
+      this.id,
+      toolUseId,
+      req.toolName,
+      req.toolInput,
+      req.resolve
+    );
+    this.emit({ kind: "permission", request });
+  }
+  handleUsage(u) {
+    this.cost.add(u);
+    this.emit({ kind: "usage", usage: u });
+    void this.saveSnapshot();
+  }
+  setStatus(s) {
+    if (this.status === s) return;
+    if (this.status === "stopped") return;
+    this.status = s;
+    this.emit({ kind: "status", status: s });
+  }
+  emit(ev) {
+    for (const l of this.listeners) {
       try {
-        stat = statSync2(fullProjectDir);
-      } catch {
-        continue;
-      }
-      if (!stat.isDirectory()) continue;
-      try {
-        for (const file2 of readdirSync(fullProjectDir)) {
-          if (!file2.endsWith(".jsonl")) continue;
-          const sessionId = file2.replace(".jsonl", "");
-          if (!UUID_PATTERN.test(sessionId)) continue;
-          const filePath = join11(fullProjectDir, file2);
-          let fileStat;
-          try {
-            fileStat = statSync2(filePath);
-          } catch {
-            continue;
-          }
-          if (now - fileStat.mtime.getTime() > recencyMs) continue;
-          let lastType = "";
-          let isWaiting = false;
-          try {
-            const content = readFileSync6(filePath, "utf-8");
-            const lines = content.trim().split("\n");
-            for (let i = lines.length - 1; i >= 0; i--) {
-              try {
-                const msg = JSON.parse(lines[i]);
-                if (msg.type === "assistant" || msg.type === "user") {
-                  lastType = msg.type;
-                  isWaiting = msg.type === "assistant";
-                  break;
-                }
-              } catch {
-                continue;
-              }
-            }
-          } catch {
-          }
-          results.push({
-            sessionId,
-            projectDir,
-            projectName: extractProjectName(projectDir),
-            workdir: decodeProjectDir(projectDir),
-            mtime: fileStat.mtime.getTime(),
-            lastType,
-            isWaiting
-          });
-        }
+        l(ev);
       } catch {
       }
     }
-  } catch {
   }
-  return results.sort((a, b) => b.mtime - a.mtime);
+  touch() {
+    this.lastActivityAt = Date.now();
+  }
+  async saveSnapshot() {
+    try {
+      await this.persistence.saveSnapshot(this.snapshot());
+    } catch {
+    }
+  }
+};
+
+// ../src/session/manager.ts
+var SessionManager = class {
+  constructor(deps) {
+    this.deps = deps;
+  }
+  sessions = /* @__PURE__ */ new Map();
+  listeners = /* @__PURE__ */ new Set();
+  async create(opts) {
+    const id = randomUUID();
+    const ctx = SessionContext.create({
+      sessionId: id,
+      workdir: opts.workdir,
+      workspaceId: opts.workspaceId,
+      workspaceName: opts.workspaceName,
+      provider: opts.provider
+    });
+    const runtime = this.deps.runtimeFactory(opts.provider);
+    const session = new Session({ ctx, runtime, persistence: this.deps.persistence, broker: this.deps.broker });
+    this.sessions.set(id, session);
+    await session.start({
+      model: opts.model,
+      effort: opts.effort,
+      permissionMode: opts.permissionMode,
+      initialPrompt: opts.initialPrompt
+    });
+    this.emit({ kind: "created", session });
+    return session;
+  }
+  get(id) {
+    return this.sessions.get(id);
+  }
+  list() {
+    return [...this.sessions.values()].map((s) => s.snapshot());
+  }
+  async stop(id) {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    await s.stop();
+    this.sessions.delete(id);
+    this.emit({ kind: "stopped", sessionId: id });
+  }
+  /**
+   * Stop every live session in parallel. Used by the daemon's SIGTERM/SIGINT
+   * shutdown path so runtimes get a chance to drain and persist idle-state
+   * snapshots before the process exits. Individual stop() failures are swallowed
+   * so one misbehaving session can't block the rest.
+   */
+  async stopAll() {
+    const ids = [...this.sessions.keys()];
+    await Promise.all(ids.map((id) => this.stop(id).catch(() => {
+    })));
+  }
+  /**
+   * Load persisted snapshots from disk at daemon startup. Does NOT restart runtimes.
+   * User must explicitly resume.
+   */
+  async hydrateFromDisk() {
+    return this.deps.persistence.listSnapshots();
+  }
+  /**
+   * Resume a previously-persisted session by creating a fresh runtime and
+   * passing the old sessionId so the SDK picks up its cached thread.
+   */
+  async resume(id) {
+    if (this.sessions.has(id)) return this.sessions.get(id) ?? null;
+    const snap = await this.deps.persistence.loadSnapshot(id);
+    if (!snap) return null;
+    const ctx = new SessionContext(snap.ctx);
+    const runtime = this.deps.runtimeFactory(snap.ctx.provider);
+    const session = new Session({ ctx, runtime, persistence: this.deps.persistence, broker: this.deps.broker });
+    this.sessions.set(id, session);
+    await session.start({
+      /* no initialPrompt on resume */
+    });
+    this.emit({ kind: "resumed", session });
+    return session;
+  }
+  subscribe(listener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  /** Convenience: forward a session's events to a listener. */
+  subscribeToSession(id, listener) {
+    const s = this.sessions.get(id);
+    return s ? s.subscribe(listener) : null;
+  }
+  emit(ev) {
+    for (const l of this.listeners) {
+      try {
+        l(ev);
+      } catch {
+      }
+    }
+  }
+};
+
+// ../src/session/persistence.ts
+import { mkdir, writeFile, readFile, appendFile, readdir, unlink, stat, rename } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { join as join8 } from "node:path";
+import { createInterface } from "node:readline";
+var SessionPersistence = class {
+  constructor(rootDir) {
+    this.rootDir = rootDir;
+  }
+  async init() {
+    await mkdir(this.rootDir, { recursive: true });
+  }
+  historyPath(id) {
+    return join8(this.rootDir, `${id}.jsonl`);
+  }
+  metaPath(id) {
+    return join8(this.rootDir, `${id}.meta.json`);
+  }
+  async appendEvent(sessionId, event) {
+    await appendFile(this.historyPath(sessionId), JSON.stringify(event) + "\n", "utf-8");
+  }
+  async saveSnapshot(snap) {
+    const tmp = this.metaPath(snap.id) + ".tmp";
+    await writeFile(tmp, JSON.stringify(snap, null, 2), "utf-8");
+    await rename(tmp, this.metaPath(snap.id));
+  }
+  async loadSnapshot(sessionId) {
+    try {
+      const raw = await readFile(this.metaPath(sessionId), "utf-8");
+      return JSON.parse(raw);
+    } catch (err) {
+      if (err.code === "ENOENT") return null;
+      throw err;
+    }
+  }
+  async listSnapshots() {
+    let entries;
+    try {
+      entries = await readdir(this.rootDir);
+    } catch (err) {
+      if (err.code === "ENOENT") return [];
+      throw err;
+    }
+    const ids = entries.filter((f) => f.endsWith(".meta.json")).map((f) => f.slice(0, -".meta.json".length));
+    const snaps = [];
+    for (const id of ids) {
+      const snap = await this.loadSnapshot(id);
+      if (snap) snaps.push(snap);
+    }
+    return snaps.sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+  }
+  async loadHistory(sessionId) {
+    const path = this.historyPath(sessionId);
+    try {
+      await stat(path);
+    } catch {
+      return [];
+    }
+    const events = [];
+    const rl = createInterface({ input: createReadStream(path, { encoding: "utf-8" }), crlfDelay: Infinity });
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+      try {
+        events.push(JSON.parse(line));
+      } catch {
+      }
+    }
+    return events;
+  }
+  async removeSession(sessionId) {
+    for (const p of [this.historyPath(sessionId), this.metaPath(sessionId)]) {
+      try {
+        await unlink(p);
+      } catch (err) {
+        if (err.code !== "ENOENT") throw err;
+      }
+    }
+  }
+};
+
+// ../src/session/permission-broker.ts
+var PermissionBroker2 = class {
+  entries = /* @__PURE__ */ new Map();
+  // key = request.id
+  listeners = /* @__PURE__ */ new Set();
+  /**
+   * Register a pending permission. Called by Session.handlePermission.
+   * Returns the broker-managed PermissionRequest (so Session can emit it to
+   * listeners) and a completion promise that resolves when a frontend
+   * (IM/CLI) calls resolve(). Both are wired to also invoke runtimeResolve
+   * so the SDK/transport sees the decision.
+   */
+  waitFor(sessionId, toolUseId, toolName, toolInput, runtimeResolve) {
+    const id = `${sessionId}:${toolUseId}`;
+    if (this.entries.has(id)) {
+      throw new Error(`PermissionBroker: duplicate pending id ${id}`);
+    }
+    let promiseResolve;
+    const completion = new Promise((r) => {
+      promiseResolve = r;
+    });
+    const chained = (d) => {
+      runtimeResolve(d);
+      promiseResolve(d);
+    };
+    const request = {
+      id,
+      toolName,
+      toolInput,
+      resolve: (decision) => this.resolve(id, decision)
+    };
+    this.entries.set(id, { request, promiseResolve: chained, sessionId });
+    this.emit({ kind: "pending", request, sessionId });
+    return { request, completion };
+  }
+  resolve(id, decision) {
+    const entry = this.entries.get(id);
+    if (!entry) return false;
+    this.entries.delete(id);
+    entry.promiseResolve(decision);
+    this.emit({ kind: "resolved", id, decision, sessionId: entry.sessionId });
+    return true;
+  }
+  listForSession(sessionId) {
+    return [...this.entries.values()].filter((e) => e.sessionId === sessionId).map((e) => e.request);
+  }
+  denyAllForSession(sessionId) {
+    const ids = [...this.entries.entries()].filter(([, entry]) => entry.sessionId === sessionId).map(([id]) => id);
+    for (const id of ids) this.resolve(id, "deny");
+  }
+  denyAll() {
+    for (const id of [...this.entries.keys()]) this.resolve(id, "deny");
+  }
+  pendingCount() {
+    return this.entries.size;
+  }
+  subscribe(listener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  emit(ev) {
+    for (const l of this.listeners) {
+      try {
+        l(ev);
+      } catch {
+      }
+    }
+  }
+};
+
+// ../src/runtime/claude-sdk.ts
+import { query as query3 } from "@anthropic-ai/claude-agent-sdk";
+import { randomUUID as randomUUID2 } from "node:crypto";
+
+// ../src/runtime/claude-event-adapter.ts
+var ClaudeEventAdapter = class {
+  adapt(msg) {
+    switch (msg.type) {
+      case "assistant":
+        return { events: this.fromAssistant(msg) };
+      case "user":
+        return { events: this.fromUserToolResult(msg) };
+      case "result":
+        return this.fromResult(msg);
+      case "thinking":
+        return { events: [{ kind: "thinking", active: true }] };
+      case "system":
+        return { events: [] };
+      default:
+        return { events: [] };
+    }
+  }
+  fromAssistant(msg) {
+    const message = msg.message;
+    const out = [];
+    for (const block2 of message?.content ?? []) {
+      if (block2.type === "text") {
+        const text2 = block2.text;
+        if (text2) out.push({ kind: "activity_text", text: text2 });
+      } else if (block2.type === "tool_use") {
+        const toolName = block2.name;
+        const inputJson = safeStringify(block2.input);
+        if (toolName === "TodoWrite") {
+          const items = extractTodos(block2.input);
+          if (items) out.push({ kind: "todo_update", items });
+        } else {
+          out.push({ kind: "activity_tool", toolName, toolInput: inputJson });
+        }
+      } else if (block2.type === "thinking") {
+        const text2 = block2.thinking;
+        if (text2) out.push({ kind: "reasoning_summary", text: text2 });
+      }
+    }
+    return out;
+  }
+  fromUserToolResult(msg) {
+    const message = msg.message;
+    for (const block2 of message?.content ?? []) {
+      if (block2.type === "tool_result") {
+        const toolUseId = block2.tool_use_id;
+        const meta3 = msg.toolUseMeta?.[toolUseId ?? ""];
+        if (meta3?.toolName === "Edit" || meta3?.toolName === "Write" || meta3?.toolName === "MultiEdit") {
+        }
+      }
+    }
+    return [];
+  }
+  fromResult(msg) {
+    const usage = msg.usage;
+    const cost = msg.total_cost_usd;
+    const duration3 = msg.duration_ms;
+    const summary = msg.result ?? "";
+    return {
+      events: [{ kind: "session_complete", summary }],
+      usage: usage ? {
+        inputTokens: usage.input_tokens ?? 0,
+        outputTokens: usage.output_tokens ?? 0,
+        costUsd: cost ?? 0,
+        durationMs: duration3 ?? 0
+      } : void 0,
+      isSessionEnd: false
+      // result per-turn; true session-end detected by AbortSignal
+    };
+  }
+};
+function safeStringify(v) {
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return "[unserializable]";
+  }
 }
+function extractTodos(input) {
+  if (!input || typeof input !== "object") return null;
+  const todos = input.todos;
+  if (!Array.isArray(todos)) return null;
+  const out = [];
+  for (const t of todos) {
+    if (t && typeof t === "object" && "content" in t && "status" in t) {
+      out.push({ content: String(t.content), status: t.status });
+    }
+  }
+  return out.length > 0 ? out : null;
+}
+
+// ../src/runtime/claude-sdk.ts
+var ClaudeSdkRuntime = class {
+  provider = "claude";
+  query;
+  adapter = new ClaudeEventAdapter();
+  eventCbs = /* @__PURE__ */ new Set();
+  permCbs = /* @__PURE__ */ new Set();
+  usageCbs = /* @__PURE__ */ new Set();
+  started = false;
+  closed = false;
+  messageQueue = [];
+  messageWaiter = null;
+  queryIter = null;
+  currentSessionId = null;
+  constructor(deps = {}) {
+    this.query = deps.query ?? query3;
+  }
+  async start(opts) {
+    if (this.started) throw new Error("runtime already started");
+    this.started = true;
+    this.currentSessionId = opts.sessionId;
+    if (opts.signal.aborted) {
+      this.closed = true;
+      return;
+    }
+    opts.signal.addEventListener("abort", () => {
+      void this.stop();
+    }, { once: true });
+    if (opts.initialPrompt) this.messageQueue.push(opts.initialPrompt);
+    const self = this;
+    async function* prompts() {
+      while (true) {
+        const msg = await self.nextMessage();
+        if (msg === null) return;
+        yield { type: "user", message: { role: "user", content: msg } };
+      }
+    }
+    const iter = this.query({
+      prompt: prompts(),
+      options: {
+        cwd: opts.workdir,
+        model: opts.model,
+        effort: opts.effort,
+        resume: opts.sessionId || void 0,
+        abortController: void 0,
+        // keep the SDK from auto-creating one
+        signal: opts.signal,
+        canUseTool: (toolName, toolInput, options) => this.handleCanUseTool(toolName, toolInput, options)
+      }
+    });
+    this.queryIter = iter;
+    void this.consume();
+  }
+  async sendInput(text2) {
+    if (this.closed) throw new Error("runtime closed");
+    if (this.messageWaiter) {
+      const w = this.messageWaiter;
+      this.messageWaiter = null;
+      w(text2);
+    } else {
+      this.messageQueue.push(text2);
+    }
+  }
+  async stop() {
+    if (this.closed) return;
+    this.closed = true;
+    if (this.messageWaiter) {
+      const w = this.messageWaiter;
+      this.messageWaiter = null;
+      w(null);
+    }
+    const iter = this.queryIter;
+    if (iter?.interrupt) {
+      try {
+        await iter.interrupt();
+      } catch {
+      }
+    }
+  }
+  onEvent(cb) {
+    this.eventCbs.add(cb);
+    return () => this.eventCbs.delete(cb);
+  }
+  onPermissionRequest(cb) {
+    this.permCbs.add(cb);
+    return () => this.permCbs.delete(cb);
+  }
+  onUsage(cb) {
+    this.usageCbs.add(cb);
+    return () => this.usageCbs.delete(cb);
+  }
+  // ---- private ------------------------------------------------------------
+  nextMessage() {
+    if (this.closed) return Promise.resolve(null);
+    const queued = this.messageQueue.shift();
+    if (queued !== void 0) return Promise.resolve(queued);
+    return new Promise((resolve2) => {
+      this.messageWaiter = resolve2;
+    });
+  }
+  async consume() {
+    if (!this.queryIter) return;
+    let errored = false;
+    try {
+      for await (const msg of this.queryIter) {
+        if (this.closed) break;
+        const frame = this.adapter.adapt(msg);
+        for (const e of frame.events) this.fireEvent(e);
+        if (frame.usage) this.fireUsage(frame.usage);
+      }
+    } catch (err) {
+      errored = true;
+      this.fireEvent({ kind: "error", message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      if (!this.closed && !errored) this.fireEvent({ kind: "session_complete", summary: "" });
+    }
+  }
+  async handleCanUseTool(toolName, toolInput, options) {
+    return new Promise((resolveSdk) => {
+      const toolUseId = options?.toolUseID ?? randomUUID2();
+      const id = `${this.currentSessionId ?? "unknown"}:${toolUseId}`;
+      const request = {
+        id,
+        toolName,
+        toolInput,
+        resolve: (decision) => {
+          if (decision === "allow") {
+            resolveSdk({ behavior: "allow", updatedInput: toolInput });
+          } else if (decision === "allow_always") {
+            const reply = {
+              behavior: "allow",
+              updatedInput: toolInput
+            };
+            if (options?.suggestions !== void 0) reply.updatedPermissions = options.suggestions;
+            resolveSdk(reply);
+          } else {
+            resolveSdk({ behavior: "deny", message: "Denied by user" });
+          }
+        }
+      };
+      for (const cb of this.permCbs) cb(request);
+    });
+  }
+  fireEvent(e) {
+    for (const cb of this.eventCbs) cb(e);
+  }
+  fireUsage(u) {
+    for (const cb of this.usageCbs) cb(u);
+  }
+};
+
+// ../src/runtime/codex-app-server/index.ts
+import { spawn as spawn2, execFile as nodeExecFile2 } from "node:child_process";
+import { promisify as promisify2 } from "node:util";
+
+// ../src/runtime/codex-app-server/transport.ts
+var StdioJsonlTransport2 = class {
+  constructor(child) {
+    this.child = child;
+    if (!child.stdout || !child.stdin) {
+      throw new Error("StdioJsonlTransport: child process must have stdout + stdin");
+    }
+    child.stdout.on("data", (chunk) => this.onData(chunk));
+    child.stdout.on("error", (err) => this.errorHandlers.forEach((h) => h(err)));
+    child.on("exit", (code2, signal) => {
+      this.exitHandlers.forEach((h) => h({ code: code2, signal }));
+    });
+  }
+  buffer = "";
+  decoder = new TextDecoder("utf-8", { fatal: false });
+  messageHandlers = [];
+  errorHandlers = [];
+  exitHandlers = [];
+  closed = false;
+  onMessage(cb) {
+    this.messageHandlers.push(cb);
+  }
+  onError(cb) {
+    this.errorHandlers.push(cb);
+  }
+  onExit(cb) {
+    this.exitHandlers.push(cb);
+  }
+  sendMessage(msg) {
+    if (this.closed) return;
+    this.child.stdin.write(JSON.stringify(msg) + "\n");
+  }
+  async close(timeoutMs = 5e3) {
+    this.closed = true;
+    return new Promise((resolve2) => {
+      let resolved = false;
+      const done = (e) => {
+        if (resolved) return;
+        resolved = true;
+        resolve2(e);
+      };
+      this.onExit(done);
+      try {
+        this.child.stdin?.end();
+      } catch {
+      }
+      const termTimer = setTimeout(() => {
+        if (resolved) return;
+        try {
+          this.child.kill("SIGTERM");
+        } catch {
+        }
+      }, timeoutMs);
+      const killTimer = setTimeout(() => {
+        if (resolved) return;
+        try {
+          this.child.kill("SIGKILL");
+        } catch {
+        }
+      }, timeoutMs + 1e3);
+      this.onExit(() => {
+        clearTimeout(termTimer);
+        clearTimeout(killTimer);
+      });
+    });
+  }
+  onData(chunk) {
+    this.buffer += this.decoder.decode(chunk, { stream: true });
+    let idx;
+    while ((idx = this.buffer.indexOf("\n")) >= 0) {
+      const line = this.buffer.slice(0, idx);
+      this.buffer = this.buffer.slice(idx + 1);
+      if (line.length === 0) continue;
+      try {
+        const msg = JSON.parse(line);
+        this.messageHandlers.forEach((h) => h(msg));
+      } catch (err) {
+        this.errorHandlers.forEach((h) => h(err));
+      }
+    }
+  }
+};
+
+// ../src/runtime/codex-app-server/client.ts
+var METHOD_COMMAND_EXEC_APPROVAL2 = "item/commandExecution/requestApproval";
+var METHOD_FILE_CHANGE_APPROVAL2 = "item/fileChange/requestApproval";
+var METHOD_PERMISSIONS_APPROVAL2 = "item/permissions/requestApproval";
+var METHOD_MCP_ELICITATION2 = "mcpServer/elicitation/request";
+var CodexAppServerClient2 = class {
+  constructor(transport) {
+    this.transport = transport;
+    this.transport.onMessage((m) => this.onMessage(m));
+  }
+  initialized = false;
+  nextId = 1;
+  pending = /* @__PURE__ */ new Map();
+  notificationHandlers = /* @__PURE__ */ new Map();
+  serverRequestHandlers = /* @__PURE__ */ new Map();
+  async initialize(params) {
+    const result = await this.requestRaw("initialize", params, 1e4);
+    this.initialized = true;
+    return result;
+  }
+  async request(method, params, timeoutMs = 3e4) {
+    if (!this.initialized) {
+      throw new Error(`CodexAppServerClient: must call initialize() before request("${method}")`);
+    }
+    return this.requestRaw(method, params, timeoutMs);
+  }
+  notify(method, params) {
+    this.transport.sendMessage({ method, params });
+  }
+  onNotification(method, handler) {
+    const existing = this.notificationHandlers.get(method) ?? [];
+    existing.push(handler);
+    this.notificationHandlers.set(method, existing);
+  }
+  onCommandExecutionApproval(handler) {
+    this.serverRequestHandlers.set(METHOD_COMMAND_EXEC_APPROVAL2, handler);
+  }
+  onFileChangeApproval(handler) {
+    this.serverRequestHandlers.set(METHOD_FILE_CHANGE_APPROVAL2, handler);
+  }
+  onPermissionsApproval(handler) {
+    this.serverRequestHandlers.set(METHOD_PERMISSIONS_APPROVAL2, handler);
+  }
+  onMcpElicitation(handler) {
+    this.serverRequestHandlers.set(METHOD_MCP_ELICITATION2, handler);
+  }
+  async close() {
+    for (const [, p] of this.pending) {
+      clearTimeout(p.timer);
+      p.reject(new Error("Client closed"));
+    }
+    this.pending.clear();
+    await this.transport.close();
+  }
+  async requestRaw(method, params, timeoutMs) {
+    const id = this.nextId++;
+    return new Promise((resolve2, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Request timeout after ${timeoutMs}ms (method: ${method})`));
+      }, timeoutMs);
+      this.pending.set(id, { resolve: resolve2, reject, timer });
+      this.transport.sendMessage({ id, method, params });
+    });
+  }
+  onMessage(msg) {
+    if (typeof msg !== "object" || msg === null) return;
+    const m = msg;
+    if ("id" in m && ("result" in m || "error" in m)) {
+      const id = m.id;
+      const p = this.pending.get(id);
+      if (!p) {
+        console.warn(`[codex-client] Received response for unknown id ${id}, dropping`);
+        return;
+      }
+      this.pending.delete(id);
+      clearTimeout(p.timer);
+      if ("error" in m) {
+        const err = m.error;
+        p.reject(new Error(err.message ?? `JSON-RPC error (code ${err.code})`));
+      } else {
+        p.resolve(m.result);
+      }
+      return;
+    }
+    if ("id" in m && "method" in m) {
+      this.handleServerRequest(m.id, m.method, m.params);
+      return;
+    }
+    if ("method" in m && !("id" in m)) {
+      const method = m.method;
+      const handlers = this.notificationHandlers.get(method) ?? [];
+      handlers.forEach((h) => h(m.params));
+      return;
+    }
+  }
+  async handleServerRequest(id, method, params) {
+    const handler = this.serverRequestHandlers.get(method);
+    if (!handler) {
+      console.warn(`[codex-client] Unhandled server request: ${method}`);
+      this.transport.sendMessage({
+        id,
+        error: { code: -32601, message: `Method not handled by client: ${method}` }
+      });
+      return;
+    }
+    try {
+      const result = await handler(params);
+      this.transport.sendMessage({ id, result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.transport.sendMessage({
+        id,
+        error: { code: -32e3, message }
+      });
+    }
+  }
+};
+
+// ../src/runtime/codex-app-server/event-adapter.ts
+var CodexEventAdapter2 = class {
+  threadId = null;
+  recentItems = /* @__PURE__ */ new Map();
+  tokenUsage = null;
+  /** Dispatch a codex-app-server JSON-RPC notification and return the frame. */
+  handle(method, params) {
+    const p = params ?? {};
+    switch (method) {
+      case "thread/started":
+        this.threadId = p.thread?.id ?? null;
+        return { events: [] };
+      case "thread/tokenUsage/updated":
+        this.tokenUsage = this.extractUsage(p.tokenUsage);
+        return { events: [] };
+      case "turn/started":
+        return { events: [] };
+      case "turn/completed":
+        return this.handleTurnCompleted(p);
+      case "item/started":
+        return this.handleItemStarted(p);
+      case "item/completed":
+        return { events: this.handleItemCompleted(p) };
+      case "error":
+        return { events: [{ kind: "error", message: String(p.message ?? "Unknown error") }] };
+      // Deltas + turn-wide aggregates intentionally suppressed (minimal mapping)
+      case "item/agentMessage/delta":
+      case "item/reasoning/textDelta":
+      case "item/reasoning/summaryTextDelta":
+      case "item/reasoning/summaryPartAdded":
+      case "item/commandExecution/outputDelta":
+      case "item/fileChange/outputDelta":
+      case "item/mcpToolCall/progress":
+      case "item/plan/delta":
+      case "item/commandExecution/terminalInteraction":
+      case "turn/diff/updated":
+      case "turn/plan/updated":
+      case "thread/status/changed":
+      case "thread/closed":
+      case "serverRequest/resolved":
+        return { events: [] };
+      default:
+        return { events: [] };
+    }
+  }
+  /** Retrieve an item cached during item/started for approval-bridge lookups. */
+  getItem(itemId) {
+    return this.recentItems.get(itemId);
+  }
+  reset() {
+    this.threadId = null;
+    this.recentItems.clear();
+    this.tokenUsage = null;
+  }
+  handleTurnCompleted(p) {
+    const turn = p.turn;
+    const status = turn?.status ?? "completed";
+    const usage = {
+      inputTokens: this.tokenUsage?.inputTokens ?? 0,
+      outputTokens: this.tokenUsage?.outputTokens ?? 0,
+      costUsd: this.tokenUsage?.costUsd ?? 0,
+      durationMs: this.tokenUsage?.durationMs ?? 0
+    };
+    this.recentItems.clear();
+    this.tokenUsage = null;
+    if (status === "failed") {
+      return {
+        events: [
+          { kind: "session_complete", summary: "", cost: usage },
+          { kind: "error", message: turn?.error?.message ?? "Codex turn failed" }
+        ],
+        usage
+      };
+    }
+    return {
+      events: [{ kind: "session_complete", summary: "", cost: usage }],
+      usage
+    };
+  }
+  handleItemStarted(p) {
+    const item = p.item;
+    if (item && item.id) this.recentItems.set(item.id, item);
+    return { events: [] };
+  }
+  handleItemCompleted(p) {
+    const item = p.item;
+    if (!item) return [];
+    if (item.id) this.recentItems.set(item.id, item);
+    switch (item.type) {
+      case "agentMessage": {
+        const raw = item.text ?? "";
+        const events = [];
+        const closeIdx = raw.indexOf("</think>");
+        if (closeIdx >= 0) {
+          let head = raw.slice(0, closeIdx);
+          const openMatch = head.match(/^\s*<think>/);
+          if (openMatch) head = head.slice(openMatch[0].length);
+          const reasoning = head.trim();
+          if (reasoning.length > 0) events.push({ kind: "reasoning_summary", text: reasoning });
+          const tail = raw.slice(closeIdx + "</think>".length).trim();
+          if (tail.length > 0) events.push({ kind: "activity_text", text: tail });
+          if (events.length === 0) events.push({ kind: "activity_text", text: "" });
+          return events;
+        }
+        return [{ kind: "activity_text", text: raw }];
+      }
+      case "reasoning": {
+        const summary = Array.isArray(item.summary) ? item.summary.filter(Boolean) : [];
+        const content = Array.isArray(item.content) ? item.content.filter(Boolean) : [];
+        const text2 = [...summary, ...content].join("\n\n");
+        return [{ kind: "reasoning_summary", text: text2 }];
+      }
+      case "commandExecution": {
+        const input = { command: item.command ?? "", cwd: item.cwd ?? "" };
+        return [{ kind: "activity_tool", toolName: "Bash", toolInput: safeStringify2(input) }];
+      }
+      case "fileChange": {
+        const changes = Array.isArray(item.changes) ? item.changes : [];
+        const mapped = changes.map((c) => ({
+          path: c.path,
+          kind: c.kind === "add" || c.kind === "delete" || c.kind === "update" ? c.kind : "update"
+        }));
+        const status = item.status === "failed" ? "failed" : "completed";
+        return [{ kind: "file_change_list", changes: mapped, status }];
+      }
+      case "plan": {
+        const description = item.text ?? "";
+        return description ? [{ kind: "activity_text", text: description }] : [];
+      }
+      case "mcpToolCall": {
+        const server = item.server ?? "?";
+        const tool = item.tool ?? "?";
+        const args = item.arguments ?? {};
+        return [{ kind: "activity_tool", toolName: `MCP:${server}.${tool}`, toolInput: safeStringify2(args) }];
+      }
+      case "webSearch": {
+        const query4 = item.query ?? "";
+        return [{ kind: "activity_text", text: `Searched: ${query4}` }];
+      }
+      default:
+        return [];
+    }
+  }
+  extractUsage(raw) {
+    const r = raw;
+    return {
+      inputTokens: r?.last?.inputTokens ?? 0,
+      outputTokens: r?.last?.outputTokens ?? 0
+    };
+  }
+};
+function safeStringify2(v) {
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return "[unserializable]";
+  }
+}
+
+// ../src/runtime/codex-app-server/approval-bridge.ts
+var CodexApprovalBridge2 = class {
+  constructor(deps) {
+    this.deps = deps;
+  }
+  async handleCommandExecutionApproval(toolUseId, command, cwd) {
+    const decision = await this.ask(toolUseId, "exec", { command, cwd });
+    return this.toCodex(decision);
+  }
+  async handleFileChangeApproval(toolUseId, path, changes) {
+    const decision = await this.ask(toolUseId, "file", { path, changes });
+    return this.toCodex(decision);
+  }
+  ask(toolUseId, kind, toolInput) {
+    return new Promise((resolveDecision) => {
+      const id = `${this.deps.sessionId}:${toolUseId}`;
+      const toolName = kind === "exec" ? "Bash" : "Edit";
+      this.deps.emit({ id, toolName, toolInput, resolve: resolveDecision });
+    });
+  }
+  toCodex(d) {
+    return d === "allow" ? "approved" : d === "allow_always" ? "approved_for_session" : "denied";
+  }
+};
+
+// ../src/runtime/codex-app-server/index.ts
+var execFileAsync2 = promisify2(nodeExecFile2);
+var MIN_CODEX_VERSION2 = "0.121.0";
+var _availabilityCache2 = null;
+var FORWARDED_METHODS = [
+  "thread/started",
+  "thread/tokenUsage/updated",
+  "thread/status/changed",
+  "thread/closed",
+  "turn/started",
+  "turn/completed",
+  "item/started",
+  "item/completed",
+  "item/agentMessage/delta",
+  "item/reasoning/textDelta",
+  "item/reasoning/summaryTextDelta",
+  "item/commandExecution/outputDelta",
+  "item/fileChange/outputDelta",
+  "item/mcpToolCall/progress",
+  "item/plan/delta",
+  "turn/diff/updated",
+  "turn/plan/updated",
+  "error",
+  "serverRequest/resolved"
+];
+var CodexAppServerRuntime = class {
+  constructor(deps = {}) {
+    this.deps = deps;
+  }
+  provider = "codex";
+  eventCbs = /* @__PURE__ */ new Set();
+  permCbs = /* @__PURE__ */ new Set();
+  usageCbs = /* @__PURE__ */ new Set();
+  started = false;
+  closed = false;
+  transport = null;
+  client = null;
+  threadId = null;
+  activeTurnId = null;
+  static async isAvailable(execFile = execFileAsync2) {
+    if (_availabilityCache2) return _availabilityCache2;
+    _availabilityCache2 = (async () => {
+      try {
+        const { stdout } = await execFile("codex", ["--version"]);
+        const match2 = stdout.match(/codex-cli\s+(\d+\.\d+\.\d+)/);
+        if (!match2) return false;
+        return compareVersions2(match2[1], MIN_CODEX_VERSION2) >= 0;
+      } catch {
+        return false;
+      }
+    })();
+    return _availabilityCache2;
+  }
+  async start(opts) {
+    if (this.started) throw new Error("runtime already started");
+    this.started = true;
+    if (opts.signal.aborted) {
+      this.closed = true;
+      return;
+    }
+    opts.signal.addEventListener("abort", () => {
+      void this.stop();
+    }, { once: true });
+    const child = (this.deps.spawnSubprocess ?? spawnCodexAppServer2)();
+    const transport = new StdioJsonlTransport2(child);
+    this.transport = transport;
+    const eventAdapter = new CodexEventAdapter2();
+    const approvalBridge = new CodexApprovalBridge2({
+      sessionId: opts.sessionId,
+      emit: (req) => {
+        for (const cb of this.permCbs) cb(req);
+      }
+    });
+    const client = new CodexAppServerClient2(transport);
+    this.client = client;
+    for (const method of FORWARDED_METHODS) {
+      client.onNotification(method, (params) => {
+        if (method === "turn/started") {
+          const p = params ?? {};
+          const turn = p.turn ?? {};
+          const id = typeof turn.id === "string" ? turn.id : null;
+          if (id) this.activeTurnId = id;
+        } else if (method === "turn/completed") {
+          this.activeTurnId = null;
+        }
+        const frame = eventAdapter.handle(method, params);
+        for (const e of frame.events) for (const cb of this.eventCbs) cb(e);
+        if (frame.usage) for (const cb of this.usageCbs) cb(frame.usage);
+      });
+    }
+    client.onCommandExecutionApproval(async (params) => {
+      const p = params ?? {};
+      const itemId = p.itemId ?? p.callId ?? "unknown";
+      const command = Array.isArray(p.command) ? p.command : typeof p.command === "string" ? [p.command] : [];
+      const cwd = p.cwd ?? "";
+      const decision = await approvalBridge.handleCommandExecutionApproval(itemId, command, cwd);
+      return { decision: codexDecisionToRpc(decision) };
+    });
+    client.onFileChangeApproval(async (params) => {
+      const p = params ?? {};
+      const itemId = p.itemId ?? p.callId ?? "unknown";
+      const path = p.path ?? "";
+      const cached2 = eventAdapter.getItem(itemId);
+      const changes = Array.isArray(cached2?.changes) ? cached2.changes : [];
+      const decision = await approvalBridge.handleFileChangeApproval(itemId, path, changes);
+      return { decision: codexDecisionToRpc(decision) };
+    });
+    client.onPermissionsApproval(async () => ({ permissions: {}, scope: "turn" }));
+    client.onMcpElicitation(async () => ({ action: "decline", content: null }));
+    transport.onExit(({ code: code2 }) => {
+      if (code2 !== 0 && !this.closed) {
+        for (const cb of this.eventCbs) cb({
+          kind: "error",
+          message: `Codex app-server exited unexpectedly (code ${code2})`
+        });
+      }
+      this.closed = true;
+    });
+    try {
+      await client.initialize({
+        clientInfo: { name: "tlive", title: null, version: "1.0.0" },
+        capabilities: { experimentalApi: false }
+      });
+      if (opts.sessionId) {
+        const resumeResult = await client.request("thread/resume", {
+          threadId: opts.sessionId,
+          cwd: opts.workdir,
+          model: opts.model,
+          persistExtendedHistory: false
+        });
+        this.threadId = resumeResult.thread.id;
+      } else {
+        const startResult = await client.request("thread/start", {
+          cwd: opts.workdir,
+          model: opts.model,
+          experimentalRawEvents: false,
+          persistExtendedHistory: false
+        });
+        this.threadId = startResult.thread.id;
+      }
+      if (opts.initialPrompt) {
+        await this.turnStart(opts.initialPrompt, opts.effort, opts.model);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const alreadyClosing = this.closed;
+      this.closed = true;
+      for (const cb of this.eventCbs) {
+        try {
+          cb({ kind: "error", message });
+        } catch {
+        }
+      }
+      if (!alreadyClosing) {
+        if (this.client) {
+          try {
+            await this.client.close();
+          } catch {
+          }
+        } else {
+          try {
+            await this.transport?.close();
+          } catch {
+          }
+        }
+      }
+      throw err;
+    }
+  }
+  async sendInput(text2) {
+    if (this.closed || !this.client || !this.threadId) throw new Error("runtime closed");
+    await this.turnStart(text2);
+  }
+  async stop() {
+    if (this.closed) return;
+    this.closed = true;
+    if (this.client && this.threadId && this.activeTurnId) {
+      try {
+        await this.client.request("turn/interrupt", {
+          threadId: this.threadId,
+          turnId: this.activeTurnId
+        });
+      } catch {
+      }
+    }
+    if (this.client) {
+      try {
+        await this.client.close();
+      } catch {
+      }
+    } else {
+      try {
+        await this.transport?.close();
+      } catch {
+      }
+    }
+  }
+  onEvent(cb) {
+    this.eventCbs.add(cb);
+    return () => this.eventCbs.delete(cb);
+  }
+  onPermissionRequest(cb) {
+    this.permCbs.add(cb);
+    return () => this.permCbs.delete(cb);
+  }
+  onUsage(cb) {
+    this.usageCbs.add(cb);
+    return () => this.usageCbs.delete(cb);
+  }
+  // ---- private ------------------------------------------------------------
+  async turnStart(text2, effort, model) {
+    if (!this.client || !this.threadId) throw new Error("runtime not initialized");
+    const result = await this.client.request("turn/start", {
+      threadId: this.threadId,
+      input: [{ type: "text", text: text2, text_elements: [] }],
+      effort,
+      model
+    });
+    if (result?.turn?.id) this.activeTurnId = result.turn.id;
+  }
+};
+function codexDecisionToRpc(d) {
+  switch (d) {
+    case "approved":
+      return "accept";
+    case "approved_for_session":
+      return "acceptForSession";
+    case "denied":
+      return "decline";
+    case "abort":
+      return "decline";
+  }
+}
+function compareVersions2(a, b) {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x > y) return 1;
+    if (x < y) return -1;
+  }
+  return 0;
+}
+function spawnCodexAppServer2() {
+  return spawn2("codex", ["app-server"], {
+    stdio: ["pipe", "pipe", "inherit"]
+  });
+}
+
+// ../src/ipc.ts
+import { createServer as createServer2, connect } from "node:net";
+import { homedir as homedir5 } from "node:os";
+import { join as join9 } from "node:path";
+import { unlinkSync as unlinkSync3, existsSync as existsSync7 } from "node:fs";
+import { EventEmitter } from "node:events";
+var IPC_PATH = join9(homedir5(), ".tlive", "ipc.sock");
+var IPC_PATH_V1 = join9(homedir5(), ".tlive", "ipc-v1.sock");
+function attachLineParser(socket, onMessage) {
+  let buffer = "";
+  socket.on("data", (data) => {
+    buffer += data.toString();
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        onMessage(JSON.parse(line));
+      } catch {
+      }
+    }
+  });
+}
+function sendMessage(socket, msg) {
+  socket.write(JSON.stringify(msg) + "\n");
+}
+var IPCServer = class extends EventEmitter {
+  server = null;
+  clients = /* @__PURE__ */ new Set();
+  activePath = IPC_PATH;
+  start(path = IPC_PATH) {
+    if (existsSync7(path)) unlinkSync3(path);
+    this.activePath = path;
+    this.server = createServer2((socket) => {
+      this.clients.add(socket);
+      this.emit("client:connect", socket);
+      attachLineParser(socket, (msg) => this.emit("message", msg, socket));
+      socket.on("close", () => {
+        this.clients.delete(socket);
+        this.emit("client:disconnect", socket);
+      });
+      socket.on("error", () => this.clients.delete(socket));
+    });
+    this.server.listen(path);
+  }
+  broadcast(msg) {
+    for (const client of this.clients) sendMessage(client, msg);
+  }
+  reply(socket, msg) {
+    sendMessage(socket, msg);
+  }
+  get clientCount() {
+    return this.clients.size;
+  }
+  stop() {
+    for (const client of this.clients) client.destroy();
+    this.server?.close();
+    try {
+      unlinkSync3(this.activePath);
+    } catch {
+    }
+  }
+};
+
+// src/engine/ipc-session-handler.ts
+var IPCSessionHandler = class {
+  constructor(ipc, sessionManager, permissionBroker, workspaceManager) {
+    this.ipc = ipc;
+    this.sessionManager = sessionManager;
+    this.permissionBroker = permissionBroker;
+    this.workspaceManager = workspaceManager;
+  }
+  start() {
+    this.ipc.on("message", (msg, socket) => {
+      if (msg.type !== "request") return;
+      const envelope = msg.payload.envelope;
+      if (!envelope) return;
+      void this.dispatch(envelope.message).then((reply) => {
+        this.ipc.reply(socket, {
+          type: "response",
+          payload: { envelope: { requestId: envelope.requestId, message: reply } }
+        });
+      }).catch((err) => {
+        this.ipc.reply(socket, {
+          type: "response",
+          payload: {
+            envelope: {
+              requestId: envelope.requestId,
+              message: { type: "error", payload: { message: err.message } }
+            }
+          }
+        });
+      });
+    });
+  }
+  async dispatch(req) {
+    switch (req.type) {
+      case "create_session": {
+        const workspace = this.workspaceManager.ensureDefault({
+          workdir: req.payload.workdir,
+          runtime: req.payload.provider
+        });
+        const session = await this.sessionManager.create({
+          workspaceId: req.payload.workspaceId ?? workspace?.name ?? "default",
+          workspaceName: req.payload.workspaceName ?? workspace?.name,
+          provider: req.payload.provider,
+          workdir: req.payload.workdir,
+          initialPrompt: req.payload.initialPrompt,
+          model: req.payload.model,
+          effort: req.payload.effort,
+          source: "cli"
+        });
+        return { type: "session_created", payload: { sessionId: session.id } };
+      }
+      case "send_input": {
+        const s = this.sessionManager.get(req.payload.sessionId);
+        if (!s) return { type: "error", payload: { message: "session not found" } };
+        await s.sendInput(req.payload.text, "cli");
+        return { type: "ack", payload: { ok: true } };
+      }
+      case "stop_session": {
+        await this.sessionManager.stop(req.payload.sessionId);
+        return { type: "ack", payload: { ok: true } };
+      }
+      case "resume_session": {
+        const s = await this.sessionManager.resume(req.payload.sessionId);
+        return s ? { type: "session_created", payload: { sessionId: s.id } } : { type: "error", payload: { message: "session not found" } };
+      }
+      case "list_sessions": {
+        return { type: "session_list", payload: { sessions: this.sessionManager.list() } };
+      }
+      case "resolve_permission": {
+        const ok = this.permissionBroker.resolve(req.payload.permissionId, req.payload.decision);
+        return ok ? { type: "ack", payload: { ok: true } } : { type: "error", payload: { message: "permission id unknown" } };
+      }
+      case "tail_history": {
+        return { type: "ack", payload: { ok: true } };
+      }
+      default: {
+        const _exhaustive = req;
+        throw new Error(`unhandled IPC request type: ${_exhaustive.type}`);
+      }
+    }
+  }
+};
 
 // src/main.ts
 function writeStatusFile(tliveHome, data) {
   try {
-    mkdirSync6(join12(tliveHome, "runtime"), { recursive: true });
-    writeFileSync6(join12(tliveHome, "runtime", "status.json"), JSON.stringify(data, null, 2));
+    mkdirSync6(join10(tliveHome, "runtime"), { recursive: true });
+    writeFileSync6(join10(tliveHome, "runtime", "status.json"), JSON.stringify(data, null, 2));
   } catch {
   }
 }
 async function main() {
   const config3 = loadConfig();
-  const tliveHome = join12(homedir6(), ".tlive");
+  const tliveHome = join10(homedir6(), ".tlive");
   const logger = new Logger(
-    join12(tliveHome, "logs", "bridge.log"),
+    join10(tliveHome, "logs", "bridge.log"),
     [config3.token, config3.telegram.botToken, config3.discord.botToken, config3.feishu.appSecret].filter(Boolean)
   );
   logger.info("TLive Bridge starting...");
@@ -27395,7 +28412,7 @@ async function main() {
     channels: config3.enabledChannels,
     version: "1.0.0"
   });
-  const store = new JsonFileStore(join12(tliveHome, "data"));
+  const store = new JsonFileStore(join10(tliveHome, "data"));
   const permissions = new PendingPermissions();
   const llm = resolveProvider(config3.runtime, permissions, {
     claudeSettingSources: config3.claudeSettingSources
@@ -27406,7 +28423,20 @@ async function main() {
     permissions,
     defaultWorkdir: config3.defaultWorkdir
   });
-  const manager = new BridgeManager();
+  const persistence = new SessionPersistence(join10(tliveHome, "sessions"));
+  await persistence.init();
+  const runtimeBroker = new PermissionBroker2();
+  const sessionManager = new SessionManager({
+    persistence,
+    broker: runtimeBroker,
+    runtimeFactory: (provider) => provider === "claude" ? new ClaudeSdkRuntime() : new CodexAppServerRuntime()
+  });
+  const persisted = await sessionManager.hydrateFromDisk();
+  logger.info(`Found ${persisted.length} persisted session(s) on disk`);
+  const manager = new BridgeManager({
+    sessionManager,
+    permissionBroker: runtimeBroker
+  });
   for (const channelType of config3.enabledChannels) {
     try {
       manager.registerAdapter(createAdapter(channelType));
@@ -27416,68 +28446,26 @@ async function main() {
     }
   }
   await manager.start();
-  logger.info("Bridge started \u2014 SDK-only mode");
-  const relay = new TerminalRelay({
-    config: config3,
-    tliveHome,
-    webDir: process.env.TL_WEB_DIR || "",
-    getAdapters: () => manager.getAdapters(),
-    getLastChatId: (ch) => manager.getLastChatId(ch),
-    renderers: manager.getRenderers(),
-    log: (msg) => logger.info(msg),
-    warn: (msg) => logger.warn(msg)
-  });
-  relay.start();
-  const knownSessions = /* @__PURE__ */ new Set();
-  const DISCOVERY_INTERVAL = 3e4;
-  const bootTime = Date.now();
-  for (const s of discoverActiveSessions(5 * 60 * 1e3)) {
-    knownSessions.add(s.sessionId);
-  }
-  const discoveryTimer = setInterval(() => {
-    const sessions = discoverActiveSessions(5 * 60 * 1e3);
-    for (const session of sessions) {
-      if (knownSessions.has(session.sessionId)) continue;
-      knownSessions.add(session.sessionId);
-      if (!session.isWaiting) continue;
-      if (relay.hasActiveClient() || manager.hasActiveSessions()) continue;
-      const renderers = manager.getRenderers();
-      for (const adapter of manager.getAdapters()) {
-        const target = relay.resolveTarget(adapter.channelType);
-        if (!target) continue;
-        const renderer = renderers.get(adapter.channelType);
-        if (!renderer) continue;
-        adapter.send(target.chatId, renderer.renderCommandResponse({
-          title: "\u{1F5A5} Claude session detected",
-          body: `${session.projectName} \xB7 #${session.sessionId.slice(0, 6)}
-
-Claude is waiting for input`,
-          buttons: [
-            { label: "\u{1F4AC} Resume from IM", callbackData: `resume:${session.sessionId}:${session.workdir}` },
-            { label: "\u{1F515} Ignore", callbackData: `resume:ignore:${session.sessionId}` }
-          ]
-        })).catch(() => {
-        });
-      }
-    }
-  }, DISCOVERY_INTERVAL);
-  manager.onInboundMessage = (_ch, msg) => relay.interceptReply(msg);
-  manager.isTerminalReply = (replyToMessageId) => relay.isReplyToTracked(replyToMessageId);
-  manager.onTerminalPermissionCallback = (action, id, sid) => relay.forwardPermissionAction(action, id, sid);
-  manager.onTerminalQuestionCallback = (data) => relay.handleAskCallback(data);
-  manager.onConfigUpdate = (update) => relay.forwardConfigUpdate(update);
+  logger.info("Bridge started");
+  const ipc = new IPCServer();
+  ipc.start(IPC_PATH_V1);
+  const ipcSessionHandler = new IPCSessionHandler(ipc, sessionManager, runtimeBroker, manager.getWorkspaceManager());
+  ipcSessionHandler.start();
   const keepAliveInterval = setInterval(() => {
   }, 6e4);
   const shutdown = async (reason = "signal") => {
     logger.info("Shutting down...");
     clearInterval(keepAliveInterval);
-    clearInterval(discoveryTimer);
-    relay.stop();
     writeStatusFile(tliveHome, {
       pid: process.pid,
       exitedAt: (/* @__PURE__ */ new Date()).toISOString(),
       exitReason: reason
     });
+    try {
+      await sessionManager.stopAll();
+    } catch {
+    }
+    runtimeBroker.denyAll();
     await manager.stop();
     permissions.denyAll();
     logger.close();

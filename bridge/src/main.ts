@@ -5,13 +5,11 @@ import { JsonFileStore } from './store/json-file.js';
 import { resolveProvider } from './providers/index.js';
 import { PendingPermissions } from './permissions/gateway.js';
 import { BridgeManager } from './engine/bridge-manager.js';
-import { TerminalRelay } from './engine/terminal-relay.js';
 import { createAdapter } from './channels/index.js';
 import type { ChannelType } from './channels/types.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { discoverActiveSessions } from './engine/session-discovery.js';
 import { SessionManager } from '../../src/session/manager.js';
 import { SessionPersistence } from '../../src/session/persistence.js';
 import { PermissionBroker as RuntimePermissionBroker } from '../../src/session/permission-broker.js';
@@ -60,9 +58,7 @@ async function main() {
     defaultWorkdir: config.defaultWorkdir,
   });
 
-  // SessionManager wiring (Phase 1 — feature-flagged via TL_USE_SESSION_MANAGER).
-  // Built unconditionally so the flag-off path still benefits from validated deps;
-  // BridgeManager only subscribes when the flag is set.
+  // SessionManager + runtime broker — the authoritative session runtime.
   const persistence = new SessionPersistence(join(tliveHome, 'sessions'));
   await persistence.init();
   const runtimeBroker = new RuntimePermissionBroker();
@@ -75,11 +71,10 @@ async function main() {
   const persisted = await sessionManager.hydrateFromDisk();
   logger.info(`Found ${persisted.length} persisted session(s) on disk`);
 
-  const useSessionManager = process.env.TL_USE_SESSION_MANAGER === '1';
-
   // IM adapters
   const manager = new BridgeManager({
-    sessionManager: useSessionManager ? sessionManager : null,
+    sessionManager,
+    permissionBroker: runtimeBroker,
   });
   for (const channelType of config.enabledChannels) {
     try {
@@ -90,93 +85,27 @@ async function main() {
     }
   }
   await manager.start();
-  logger.info('Bridge started — SDK-only mode');
+  logger.info('Bridge started');
 
-  // Typed IPC session handler — accepts CLI requests regardless of the
-  // TL_USE_SESSION_MANAGER flag. Legacy scanner-path IPC messages
-  // (session_register, etc.) use different `type` values so they don't collide
-  // with the `type: 'request'` envelope the handler consumes.
+  // Typed IPC session handler — accepts CLI requests from `tlive claude/codex`.
   const ipc = new IPCServer();
   ipc.start(IPC_PATH_V1);
   const ipcSessionHandler = new IPCSessionHandler(ipc, sessionManager, runtimeBroker, manager.getWorkspaceManager());
   ipcSessionHandler.start();
 
-  // Terminal relay — IPC bridge between `tlive claude` and IM adapters
-  const relay = new TerminalRelay({
-    config,
-    tliveHome,
-    webDir: process.env.TL_WEB_DIR || '',
-    getAdapters: () => manager.getAdapters(),
-    getLastChatId: (ch) => manager.getLastChatId(ch),
-    renderers: manager.getRenderers(),
-    log: (msg) => logger.info(msg),
-    warn: (msg) => logger.warn(msg),
-  });
-
-  relay.start();
-
-  // Session discovery — detect non-tlive Claude sessions and notify IM
-  const knownSessions = new Set<string>();
-  const DISCOVERY_INTERVAL = 30_000;
-  const bootTime = Date.now();
-
-  // Pre-populate known sessions so we don't spam on first boot
-  for (const s of discoverActiveSessions(5 * 60 * 1000)) {
-    knownSessions.add(s.sessionId);
-  }
-
-  const discoveryTimer = setInterval(() => {
-    const sessions = discoverActiveSessions(5 * 60 * 1000); // active in last 5 min
-
-    for (const session of sessions) {
-      if (knownSessions.has(session.sessionId)) continue;
-      knownSessions.add(session.sessionId);
-
-      // Only notify for sessions that are waiting for user input
-      if (!session.isWaiting) continue;
-
-      // Don't notify for sessions managed via IPC (tlive claude) or SDK (bridge-initiated)
-      if (relay.hasActiveClient() || manager.hasActiveSessions()) continue;
-
-      // Notify IM
-      const renderers = manager.getRenderers();
-      for (const adapter of manager.getAdapters()) {
-        const target = relay.resolveTarget(adapter.channelType);
-        if (!target) continue;
-
-        const renderer = renderers.get(adapter.channelType as ChannelType);
-        if (!renderer) continue;
-        adapter.send(target.chatId, renderer.renderCommandResponse({
-          title: '🖥 Claude session detected',
-          body: `${session.projectName} · #${session.sessionId.slice(0, 6)}\n\nClaude is waiting for input`,
-          buttons: [
-            { label: '💬 Resume from IM', callbackData: `resume:${session.sessionId}:${session.workdir}` },
-            { label: '🔕 Ignore', callbackData: `resume:ignore:${session.sessionId}` },
-          ],
-        })).catch(() => {});
-      }
-    }
-  }, DISCOVERY_INTERVAL);
-
-  // Wire IM → terminal: reply interception + permission/question callbacks
-  manager.onInboundMessage = (_ch, msg) => relay.interceptReply(msg);
-  manager.isTerminalReply = (replyToMessageId) => relay.isReplyToTracked(replyToMessageId);
-  manager.onTerminalPermissionCallback = (action, id, sid) => relay.forwardPermissionAction(action, id, sid);
-  manager.onTerminalQuestionCallback = (data) => relay.handleAskCallback(data);
-  manager.onConfigUpdate = (update) => relay.forwardConfigUpdate(update);
-
-  // Graceful shutdown
+  // Graceful shutdown — stop sessions + deny pending broker requests first so
+  // runtimes drain into idle-state snapshots before the process exits.
   const keepAliveInterval = setInterval(() => {}, 60_000);
   const shutdown = async (reason = 'signal') => {
     logger.info('Shutting down...');
     clearInterval(keepAliveInterval);
-    clearInterval(discoveryTimer);
-    relay.stop();
     writeStatusFile(tliveHome, {
       pid: process.pid,
       exitedAt: new Date().toISOString(),
       exitReason: reason,
     });
+    try { await sessionManager.stopAll(); } catch { /* isolate */ }
+    runtimeBroker.denyAll();
     await manager.stop();
     permissions.denyAll();
     logger.close();

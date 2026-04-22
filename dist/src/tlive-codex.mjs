@@ -1,6 +1,6 @@
 // src/cli/ipc-client-lite.ts
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, openSync, unlinkSync } from "node:fs";
 import { join as join2, dirname } from "node:path";
 import { homedir as homedir2 } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -143,21 +143,34 @@ async function ensureDaemonRunning() {
   if (!existsSync(entry)) {
     throw new Error(`Bridge not built at ${entry}. Run: npm run build:all`);
   }
+  const logDir = join2(TLIVE_HOME, "logs");
+  mkdirSync(logDir, { recursive: true });
+  const logFd = openSync(join2(logDir, "bridge.log"), "a");
   const child = spawn(process.execPath, [entry], {
     detached: true,
-    stdio: "ignore",
+    stdio: ["ignore", logFd, logFd],
     env: { ...process.env }
   });
   child.unref();
-  const client = new IPCClient({ path: IPC_PATH_V1, maxRetries: 10, retryDelay: 500 });
+  const client = new IPCClient({ path: IPC_PATH_V1, maxRetries: 5, retryDelay: 200, autoReconnect: false });
   const ok = await client.connect();
   client.disconnect();
-  if (!ok) throw new Error("Daemon failed to start within 5s");
+  if (!ok) throw new Error("Daemon failed to start within ~6s. Check: tlive logs");
 }
 async function sendRequest(req) {
-  const client = new IPCClient({ path: IPC_PATH_V1, maxRetries: 3, retryDelay: 200 });
-  const ok = await client.connect();
-  if (!ok) throw new Error("Failed to connect to daemon IPC");
+  let client = new IPCClient({ path: IPC_PATH_V1, maxRetries: 3, retryDelay: 200, autoReconnect: false });
+  let ok = await client.connect();
+  if (!ok) {
+    client.disconnect();
+    try {
+      unlinkSync(BRIDGE_PID);
+    } catch {
+    }
+    await ensureDaemonRunning();
+    client = new IPCClient({ path: IPC_PATH_V1, maxRetries: 3, retryDelay: 200, autoReconnect: false });
+    ok = await client.connect();
+  }
+  if (!ok) throw new Error("Failed to connect to daemon IPC after retry");
   try {
     const requester = new IPCClientRequester(client);
     return await requester.request(req);

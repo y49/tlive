@@ -78,4 +78,14 @@ describe('SessionManager', () => {
   it('resume returns null for unknown id', async () => {
     expect(await env.mgr.resume('nope')).toBeNull();
   });
+
+  it('stopAll stops every live session', async () => {
+    const a = await env.mgr.create({ workspaceId: 'ws', provider: 'claude', workdir: '/a', source: 'cli' });
+    const b = await env.mgr.create({ workspaceId: 'ws', provider: 'claude', workdir: '/b', source: 'cli' });
+    expect(env.mgr.list()).toHaveLength(2);
+    await env.mgr.stopAll();
+    expect(env.mgr.get(a.id)).toBeUndefined();
+    expect(env.mgr.get(b.id)).toBeUndefined();
+    expect(env.mgr.list()).toHaveLength(0);
+  });
 });

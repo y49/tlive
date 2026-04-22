@@ -12,9 +12,16 @@ import { SessionStateManager } from './session-state.js';
 import { PermissionCoordinator } from './permission-coordinator.js';
 import { CommandRouter } from './command-router.js';
 import { CallbackRouter } from './callback-router.js';
+// TODO(T13): SDKEngine/MessageRouter are legacy — SessionManager is the
+// authoritative session runtime (see session-frontend.ts). They remain here
+// because ControlPanel, runAdapterLoop, and the command/callback routers
+// still call into them. Phase 3 T13 removes this path entirely.
 import { SDKEngine } from './sdk-engine.js';
 import { MessageRouter } from './message-router.js';
 import { ControlPanel } from './control-panel.js';
+import { SessionFrontend } from './session-frontend.js';
+import type { SessionManager } from '../../../src/session/manager.js';
+import type { PermissionBroker as RuntimePermissionBroker } from '../../../src/session/permission-broker.js';
 import { networkInterfaces, homedir } from 'node:os';
 import { join } from 'node:path';
 import type { NotificationRenderer } from '../renderers/types.js';
@@ -61,13 +68,15 @@ export class BridgeManager {
   private callbackRouter: CallbackRouter;
   private sdkEngine: SDKEngine;
   private messageRouter: MessageRouter;
+  private sessionFrontend: SessionFrontend | null = null;
   /** Cached LLM providers keyed by runtime name */
   private providerCache = new Map<string, LLMProvider>();
   private workspaceManager!: WorkspaceManager;
 
   constructor(overrides?: {
     workspacesPersistPath?: string | null;
-    sessionManager?: import('../../../src/session/manager.js').SessionManager | null;
+    sessionManager?: SessionManager;
+    permissionBroker?: RuntimePermissionBroker;
   }) {
     const config = loadConfig();
     const effectivePublicUrl = config.publicUrl || `http://${getLocalIP()}:${config.port || 4590}`;
@@ -99,6 +108,7 @@ export class BridgeManager {
       this.sdkEngine.getQuestionState(),
       (adapter, msg) => this.handleInboundMessage(adapter, msg),
       this.renderers,
+      overrides?.permissionBroker,
     );
 
     // Wire control panel into command & callback routers
@@ -155,19 +165,19 @@ export class BridgeManager {
       this.resumeSession(adapter, chatId, sessionId, workdir);
     };
 
-    // Phase 1 feature-flagged SessionManager wiring. Lazy-import so flag-off
-    // daemons don't pay the load cost. SessionFrontend.render is a no-op in
-    // Phase 1 — this proves the subscribe path without user-visible change.
-    if (overrides?.sessionManager) {
-      const sessionManager = overrides.sessionManager;
-      import('./session-frontend.js').then(({ SessionFrontend }) => {
-        const frontend = new SessionFrontend(sessionManager, this.router, this.renderers);
-        frontend.start();
-      }).catch((err) => {
-        // If this load fails, the flag appears to succeed but events don't flow.
-        // Surface via console.error so the silent-success failure mode is debuggable.
-        console.error('[bridge-manager] SessionFrontend load failed:', err);
+    // Session-runtime wiring: SessionFrontend is the authoritative render path
+    // for SessionManager events. When sessionManager + permissionBroker are
+    // present, subscribe unconditionally — the legacy SDKEngine path remains
+    // active for IM → provider traffic until T13 removes it.
+    if (overrides?.sessionManager && overrides?.permissionBroker) {
+      this.sessionFrontend = new SessionFrontend({
+        sessionManager: overrides.sessionManager,
+        permissionBroker: overrides.permissionBroker,
+        workspaceManager: this.workspaceManager,
+        renderers: this.renderers,
+        getAdapters: () => this.adapters,
       });
+      this.sessionFrontend.start();
     }
   }
 
@@ -279,6 +289,8 @@ export class BridgeManager {
   async stop(): Promise<void> {
     this.running = false;
     this.sdkEngine.stopSessionPruning();
+    this.sessionFrontend?.stop();
+    this.sessionFrontend = null;
     this.permissions.getGateway().denyAll();
     for (const adapter of this.adapters.values()) {
       await adapter.stop();

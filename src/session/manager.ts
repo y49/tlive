@@ -74,6 +74,17 @@ export class SessionManager {
   }
 
   /**
+   * Stop every live session in parallel. Used by the daemon's SIGTERM/SIGINT
+   * shutdown path so runtimes get a chance to drain and persist idle-state
+   * snapshots before the process exits. Individual stop() failures are swallowed
+   * so one misbehaving session can't block the rest.
+   */
+  async stopAll(): Promise<void> {
+    const ids = [...this.sessions.keys()];
+    await Promise.all(ids.map((id) => this.stop(id).catch(() => { /* isolate */ })));
+  }
+
+  /**
    * Load persisted snapshots from disk at daemon startup. Does NOT restart runtimes.
    * User must explicitly resume.
    */

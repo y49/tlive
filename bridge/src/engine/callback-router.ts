@@ -3,6 +3,8 @@ import type { ChannelType, InboundMessage } from '../channels/types.js';
 import type { PermissionCoordinator } from './permission-coordinator.js';
 import type { ControlPanel } from './control-panel.js';
 import type { NotificationRenderer } from '../renderers/types.js';
+import type { PermissionBroker as RuntimePermissionBroker } from '../../../src/session/permission-broker.js';
+import type { PermissionDecision } from '../../../src/runtime/types.js';
 
 /** Shared SDK question state — owned by SDKEngine, read/written by CallbackRouter */
 export interface SdkQuestionState {
@@ -34,6 +36,10 @@ export class CallbackRouter {
     private sdkState: SdkQuestionState,
     private handleInboundMessage: (adapter: BaseChannelAdapter, msg: InboundMessage) => Promise<boolean>,
     private renderers: Map<ChannelType, NotificationRenderer>,
+    /** Session-level broker. When set, permission buttons whose id looks like
+     *  `${sessionId}:${toolUseId}` route through here instead of the legacy
+     *  scanner gateway. */
+    private runtimeBroker?: RuntimePermissionBroker,
   ) {}
 
   /** Inject ControlPanel after construction (avoids circular deps) */
@@ -80,10 +86,31 @@ export class CallbackRouter {
     // v1.0 terminal permission callbacks (perm:allow:<toolUseId>, perm:deny:<id>, perm:takeover:<id>)
     // SDK sessions use permId format "sdk-<ts>-<rand>" and resolve via the gateway below.
     // Terminal sessions use tool_use_ids and route via IPC.
+    // Session-runtime permissions use "sessionId:toolUseId" format and route through runtimeBroker.
     if (msg.callbackData.startsWith('perm:allow:') || msg.callbackData.startsWith('perm:deny:') || msg.callbackData.startsWith('perm:takeover:')) {
+      // Session-runtime ids carry a colon (`${sessionId}:${toolUseId}`) so the full
+      // callback has >3 parts. We rejoin parts[2..] to recover the id intact.
       const parts = msg.callbackData.split(':');
+      const action = parts[1];
+      const permId = parts.slice(2).join(':');
+
+      // Route through session-level broker first when it owns the id
+      if (this.runtimeBroker && permId.includes(':')) {
+        const decision: PermissionDecision =
+          action === 'allow' ? 'allow' :
+          action === 'deny' ? 'deny' :
+          action === 'takeover' ? 'deny' :  // takeover resolves as deny on this path
+          'deny';
+        if (this.runtimeBroker.resolve(permId, decision)) {
+          const label = action === 'allow' ? '✅ Allowed' : action === 'deny' ? '❌ Denied' : '🖥 Takeover';
+          const renderer = this.renderers.get(adapter.channelType)!;
+          await adapter.editMessage(msg.chatId, msg.messageId, renderer.renderSimpleText(label)).catch(() => {});
+          return true;
+        }
+        // Not found in broker — fall through to legacy paths below.
+      }
+
       if (parts.length === 3) {
-        const [, action, permId] = parts;
         // If this is an SDK-managed permission, let the broker handle it below
         const isSdkPerm = permId.startsWith('sdk-') || this.permissions.getGateway().isPending(permId);
         if (!isSdkPerm && this.onTerminalPermissionCallback) {
