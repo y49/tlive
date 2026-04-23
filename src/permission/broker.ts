@@ -72,8 +72,14 @@ export class PermissionBroker {
    *
    * `workspaceId` routes PolicyStore lookup; pass `undefined` / empty string
    * to skip auto-resolve (tests do this).
+   *
+   * Returns `true` when the request was enqueued as pending (listeners saw
+   * a `pending` event), `false` when it was auto-resolved via a policy
+   * match (only a `resolved` event fired). Callers that emit their own
+   * legacy "pending permission" surface events use this to avoid lying
+   * about already-resolved requests.
    */
-  issue(sessionId: string, workspaceId: string | undefined, req: PermissionRequest): void {
+  issue(sessionId: string, workspaceId: string | undefined, req: PermissionRequest): boolean {
     // Guard: duplicate id on the same session is a programmer error. Surface
     // loudly so runtime/session wiring bugs don't silently drop requests.
     const sessionMap = this.pending.get(sessionId) ?? new Map<string, PermissionRequest>();
@@ -93,12 +99,13 @@ export class PermissionBroker {
         decision: autoRule.decision,
         autoResolvedBy: autoRule.id,
       });
-      return;
+      return false;
     }
 
     sessionMap.set(req.id, req);
     this.pending.set(sessionId, sessionMap);
     this.emit({ kind: 'pending', sessionId, request: req });
+    return true;
   }
 
   /**

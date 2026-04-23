@@ -16,6 +16,7 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import type { Attachment } from './store.js';
+import { sanitizeFilename } from './util.js';
 
 const INLINE_TEXT_LIMIT = 50_000; // bytes
 
@@ -71,14 +72,19 @@ export async function ingest(
     };
   }
 
-  // Binary / large text → drop into workdir and reference by path.
+  // Binary / large text → drop into workdir and reference by path. The
+  // timestamp prefix MUST be included in the agent-facing text so concurrent
+  // same-name uploads address distinct files on disk (the previous version
+  // dropped the prefix from the message and the agent then read a
+  // nonexistent path).
   const uploadsDir = join(opts.workdir, 'tlive-uploads');
   await fs.mkdir(uploadsDir, { recursive: true });
-  const safeName = attachment.name.replace(/[/\\:\0]/g, '_').slice(0, 200) || 'upload';
-  const dest = join(uploadsDir, `${Date.now()}-${safeName}`);
+  const safeName = sanitizeFilename(attachment.name) || 'upload';
+  const actualName = `${Date.now()}-${safeName}`;
+  const dest = join(uploadsDir, actualName);
   await fs.writeFile(dest, data);
   return {
-    block: { type: 'text', text: `File placed at ./tlive-uploads/${safeName}` },
+    block: { type: 'text', text: `File placed at ./tlive-uploads/${actualName}` },
     writtenPath: dest,
   };
 }

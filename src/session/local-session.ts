@@ -404,9 +404,11 @@ export class LocalSession implements SessionLike {
     this.touch();
     // Runtime stamped `req.id` as `${sdkSessionId}:${shortId}`; broker stores
     // it verbatim. PolicyStore auto-resolve may drop the request before any
-    // listener sees it — that's deliberate (§5.4 of the spec).
-    this.broker.issue(this.id, this.workspaceId, req);
-    this.emitLegacy({ kind: 'permission', request: req });
+    // listener sees it — that's deliberate (§5.4 of the spec). In that case
+    // broker.issue returns false and we must NOT emit the legacy "pending
+    // permission" event, because req.resolve() has already fired.
+    const wasPending = this.broker.issue(this.id, this.workspaceId, req);
+    if (wasPending) this.emitLegacy({ kind: 'permission', request: req });
   }
 
   private handleAsk(req: AskUserQuestionRequest): void {

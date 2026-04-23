@@ -13,6 +13,7 @@ import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { sanitizeFilename } from './util.js';
 
 export type AttachmentDirection = 'inbound' | 'outbound';
 
@@ -60,7 +61,7 @@ export class AttachmentStore {
     const id = randomBytes(6).toString('hex');
     const sub = join(this.dir, direction, sessionId);
     await fs.mkdir(sub, { recursive: true });
-    const safeName = sanitizeName(name);
+    const safeName = sanitizeFilename(name) || 'attachment';
     // Embed the attachment id in the filename so two inbound uploads with
     // the same name within the same millisecond still get distinct paths.
     const path = join(sub, `${Date.now()}-${id}-${safeName}`);
@@ -91,10 +92,4 @@ export class AttachmentStore {
   size(): number {
     return this.index.size;
   }
-}
-
-/** Strip path separators + control chars so a malicious IM filename can't
- *  escape the per-session directory. */
-function sanitizeName(name: string): string {
-  return name.replace(/[/\\:\0]/g, '_').slice(0, 200) || 'attachment';
 }
