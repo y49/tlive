@@ -17,6 +17,7 @@ import type { LocalSession } from '../../../session/local-session.js';
 import type { RemoteSession } from '../../../session/remote-session.js';
 import { jsonResult, errorResult, requireString, optionalString, optionalObject } from './util.js';
 import { runPipeline, loadPipeline, type Pipeline } from '../orchestrator.js';
+import { awaitTurnOutput, type WaitMode, DEFAULT_AWAIT_TIMEOUT_MS } from '../session-await.js';
 
 type AnySession = LocalSession | RemoteSession;
 
@@ -126,12 +127,17 @@ export function makeSessionsExecuteTool(deps: McpToolDeps): McpTool {
   return {
     definition: {
       name: 'tlive.sessions.execute',
-      description: 'Send a prompt to an existing local session. Returns a turnId.',
+      description:
+        'Send a prompt to an existing local session. Omit `waitFor` for fire-and-forget (returns a turnId). '
+        + 'Pass `waitFor: "complete"` to block until turn_end and return the accumulated assistant text plus cost/tokens. '
+        + 'Pass `waitFor: "first_response"` to return on the first assistant message.',
       inputSchema: {
         type: 'object',
         properties: {
           alias: { type: 'string' },
           prompt: { type: 'string' },
+          waitFor: { type: 'string', enum: ['complete', 'first_response'] },
+          timeoutMs: { type: 'number' },
         },
         required: ['alias', 'prompt'],
         additionalProperties: false,
@@ -140,11 +146,29 @@ export function makeSessionsExecuteTool(deps: McpToolDeps): McpTool {
     async handler(args) {
       const alias = requireString(args, 'alias');
       const prompt = requireString(args, 'prompt');
+      const waitForRaw = optionalString(args, 'waitFor');
+      const timeoutMs = typeof args.timeoutMs === 'number' ? args.timeoutMs : DEFAULT_AWAIT_TIMEOUT_MS;
       const s = resolveAlias(deps, alias);
       if (!s) return errorResult(`session not found: ${alias}`);
       if (s.kind !== 'local') return errorResult(`session ${alias} is not a LocalSession`);
-      await (s as LocalSession).sendInput(prompt, 'im');
-      return jsonResult({ turnId: `${s.id}:${Date.now()}`, ok: true });
+      // TODO(T5-followup): SessionLike should expose sendInput/onEvent
+      // uniformly so this cast goes away.
+      const local = s as LocalSession;
+      if (!waitForRaw) {
+        // Fire-and-forget — preserve the historical turnId shape.
+        await local.sendInput(prompt, 'im');
+        return jsonResult({ turnId: `${s.id}:${Date.now()}`, ok: true });
+      }
+      if (waitForRaw !== 'complete' && waitForRaw !== 'first_response') {
+        return errorResult(`waitFor must be "complete" or "first_response"`);
+      }
+      const waitFor: WaitMode = waitForRaw;
+      try {
+        const r = await awaitTurnOutput(local, prompt, waitFor, timeoutMs);
+        return jsonResult(r);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   };
 }
@@ -174,11 +198,17 @@ export function makeSessionsOrchestrateTool(deps: McpToolDeps): McpTool {
         : await loadPipeline(deps, ctx.workspaceId, name);
       if (!pipeline) return errorResult(`pipeline not found: ${name}`);
       const result = await runPipeline(pipeline, input, {
-        executeStep: async (alias, prompt) => {
+        executeStep: async (alias, prompt, waitFor) => {
           const s = resolveAlias(deps, alias);
           if (!s || s.kind !== 'local') throw new Error(`pipeline step: session ${alias} not found or not local`);
-          await (s as LocalSession).sendInput(prompt, 'im');
-          return `executed:${s.shortAlias}`;
+          // TODO(T5-followup): SessionLike should expose sendInput/onEvent
+          // uniformly so this cast goes away.
+          const local = s as LocalSession;
+          const r = await awaitTurnOutput(local, prompt, waitFor, DEFAULT_AWAIT_TIMEOUT_MS);
+          if (!r.ok && r.reason === 'timeout') {
+            throw new Error(`pipeline step ${alias}: timeout waiting for ${waitFor}`);
+          }
+          return r.output;
         },
       });
       return jsonResult(result);

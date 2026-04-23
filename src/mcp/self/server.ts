@@ -29,6 +29,19 @@ import type { Federation } from './federation.js';
 import type { RemoteSession } from '../../session/remote-session.js';
 import type { NotificationEvent } from '../../runtime/events.js';
 
+// Helper to satisfy the MCP SDK's `setRequestHandler<T>` wide return-type
+// constraint without leaking the `as unknown as never` boilerplate. The SDK's
+// handler signature is typed against `ServerResult | ResultT`, but a
+// narrowly-typed CallToolResult / GetPromptResult / federation result doesn't
+// satisfy it without a widening cast. Prefer migrating to McpServer
+// (high-level API) in a future hardening pass — see TODO below.
+function asServerResult<T>(v: T): never {
+  return v as unknown as never;
+}
+// TODO(post-v1.0): migrate to McpServer.registerTool / registerResource /
+// registerPrompt to eliminate these casts, once the oninitialized hook and
+// sampling createMessage path are confirmed on the high-level API.
+
 export interface TliveMcpServerOptions {
   deps: McpToolDeps;
   federation?: Federation;
@@ -138,17 +151,17 @@ export async function startTliveMcpServer(opts: TliveMcpServerOptions): Promise<
     // Federation dispatch: names containing a `.` with a known downstream prefix.
     if (opts.federation && name.includes('.') && !toolIndex.has(name)) {
       const result = await opts.federation.callTool(ctx.workspaceId, name, args);
-      if (result) return result as unknown as never;
+      if (result) return asServerResult(result);
     }
     const tool = toolIndex.get(name);
     if (!tool) {
-      return { content: [{ type: 'text', text: `unknown tool: ${name}` }], isError: true } as unknown as never;
+      return asServerResult({ content: [{ type: 'text', text: `unknown tool: ${name}` }], isError: true });
     }
     try {
       const r = await tool.handler(args, ctx);
-      return r as unknown as never;
+      return asServerResult(r);
     } catch (err) {
-      return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true } as unknown as never;
+      return asServerResult({ content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true });
     }
   });
 
@@ -197,7 +210,7 @@ export async function startTliveMcpServer(opts: TliveMcpServerOptions): Promise<
     const args = (req.params.arguments ?? {}) as Record<string, string>;
     const result = await prompts.get(req.params.name, args, ctx.workspaceId);
     if (!result) throw new Error(`unknown prompt: ${req.params.name}`);
-    return result as unknown as never;
+    return asServerResult(result);
   });
 
   const transport = opts.transport ?? new StdioServerTransport();
@@ -212,6 +225,13 @@ export async function startTliveMcpServer(opts: TliveMcpServerOptions): Promise<
       subscriptions.clear();
       if (remoteSession) {
         deps.sessions.stop(remoteSession.id).catch(() => undefined);
+      }
+      // Tear down any downstream MCP subprocesses spawned lazily by the
+      // federation gateway so daemon shutdown doesn't orphan them.
+      if (opts.federation) {
+        await opts.federation.closeAll().catch((err) => {
+          console.error('[tlive-self] federation.closeAll failed:', err);
+        });
       }
       await server.close();
     },

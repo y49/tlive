@@ -23,6 +23,9 @@ import type { AgentRuntime } from '../runtime/types.js';
 
 // ---- Fallback stub persistence for the standalone code path ----------------
 
+// TODO(T9): replace with daemon IPC client. The standalone path exists so
+// `claude mcp add tlive` works before the daemon ships; once T9 lands we'll
+// reach into the daemon's shared SessionManager / WorkspaceManager instead.
 function stubPersistence(): SessionPersistence {
   // Minimal SessionPersistence; the standalone server never persists.
   return {
@@ -39,6 +42,9 @@ function stubPersistence(): SessionPersistence {
   } as unknown as SessionPersistence;
 }
 
+// TODO(T9): replace with daemon IPC client. Standalone launches decline to
+// spawn runtimes — MCP tool calls that need a runtime surface a clear error
+// rather than silently breaking.
 function stubRuntime(): AgentRuntime {
   throw new Error('tlive mcp standalone: no daemon IPC available; runtime creation disabled');
 }

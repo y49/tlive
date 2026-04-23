@@ -73,4 +73,42 @@ describe('Federation', () => {
     const agg = await fed.aggregateTools('ws-1');
     expect(agg).toHaveLength(0);
   });
+
+  it('closeAll closes every spawned downstream exactly once', async () => {
+    await registry.add({ name: 'github', config: { command: 'node' }, enabled: true });
+    await registry.add({ name: 'linear', config: { command: 'node' }, enabled: true });
+    const clients: DownstreamClient[] = [];
+    const fac = vi.fn().mockImplementation((e) => {
+      const c = fakeClient(e.name); clients.push(c); return c;
+    });
+    const fed = new Federation(registry, fac);
+    await fed.aggregateTools('ws-1');
+    expect(clients).toHaveLength(2);
+
+    await fed.closeAll();
+    for (const c of clients) {
+      expect((c.close as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(1);
+    }
+    // A second closeAll is a no-op (map cleared).
+    await fed.closeAll();
+    for (const c of clients) {
+      expect((c.close as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('close(name) tears down a single downstream', async () => {
+    await registry.add({ name: 'github', config: { command: 'node' }, enabled: true });
+    const clients: DownstreamClient[] = [];
+    const fac = vi.fn().mockImplementation((e) => {
+      const c = fakeClient(e.name); clients.push(c); return c;
+    });
+    const fed = new Federation(registry, fac);
+    await fed.aggregateTools('ws-1');
+    expect(clients).toHaveLength(1);
+
+    expect(await fed.close('github')).toBe(true);
+    expect((clients[0]!.close as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(1);
+    // Second close — already gone.
+    expect(await fed.close('github')).toBe(false);
+  });
 });

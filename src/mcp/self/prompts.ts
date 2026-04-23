@@ -46,7 +46,7 @@ export class PromptRegistry {
     return [
       {
         name: 'tlive-daily-standup',
-        description: "Assemble yesterday's session activity into a standup draft.",
+        description: 'Assemble recent sessions (last 24h) into a standup draft.',
       },
       {
         name: 'tlive-review-session',
@@ -91,7 +91,7 @@ export class PromptRegistry {
     const infos = this.deps.sessions.listInfo()
       .filter((i) => i.workspaceId === workspaceId && i.lastActivityAt >= since);
     const lines = infos.map((i) => `- ${i.shortAlias}: ${i.title ?? '(untitled)'} [${i.status.phase}]`);
-    const body = `Yesterday's sessions in this workspace:\n${lines.join('\n') || '(none)'}\n\nProduce a 3-5 bullet standup draft.`;
+    const body = `Recent sessions (last 24h) in this workspace:\n${lines.join('\n') || '(none)'}\n\nProduce a 3-5 bullet standup draft.`;
     return { description: 'Daily standup draft', messages: [{ role: 'user', content: { type: 'text', text: body } }] };
   }
 

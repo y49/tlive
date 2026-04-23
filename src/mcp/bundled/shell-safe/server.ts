@@ -6,6 +6,9 @@
 //
 // Safety: argv whitelist — no shell interpolation, no pipes, no I/O
 // redirection. Subprocess spawn directly via node:child_process.execFile.
+//
+// NOTE: Tool factories only. The stdio MCP server wrapping happens in the
+// T9/T10 installer layer; this file does not spawn its own transport.
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';

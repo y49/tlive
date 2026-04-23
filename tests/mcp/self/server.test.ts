@@ -81,3 +81,25 @@ describe('tlive-self MCP server', () => {
     expect(ListToolsRequestSchema).toBeDefined();
   });
 });
+
+describe('tlive-self MCP server — federation teardown', () => {
+  it('handle.close() calls federation.closeAll()', async () => {
+    const harness = await buildHarness();
+    const closeAll = (await import('vitest')).vi.fn().mockResolvedValue(undefined);
+    const fakeFederation = {
+      closeAll,
+      aggregateTools: async () => [],
+      callTool: async () => null,
+    } as unknown as import('../../../src/mcp/self/federation.js').Federation;
+    const [serverTransport] = InMemoryTransport.createLinkedPair();
+    const handle = await startTliveMcpServer({
+      deps: harness.deps,
+      agentInfoOverride: { name: 'claude-code', cwd: '/tmp/project-fed', provider: 'claude' },
+      transport: serverTransport,
+      federation: fakeFederation,
+    });
+    await handle.close();
+    expect(closeAll).toHaveBeenCalledTimes(1);
+    await rm(harness.root, { recursive: true, force: true });
+  });
+});

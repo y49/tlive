@@ -2,6 +2,12 @@
 //
 // CronEngine — persistent scheduled tasks fired in-daemon.
 //
+// Precision: the scheduler advances via a setInterval tick (default 60_000 ms).
+// That means `at` / `daily` / `weekly` / 5-field `cron` targets fire within
+// **60 seconds** of the wall-clock target, not on the second. Second-precision
+// scheduling is **not supported** in v1; plumb a finer tickMs via
+// CronEngineOptions only if you know the cost.
+//
 // Scope: minimal, good-enough-for-v1 cron parser. Supports:
 //   - `daily: "HH:MM"` — fires every day at HH:MM local time.
 //   - `weekly: { day: "monday" | ..., at: "HH:MM" }`
@@ -48,6 +54,18 @@ interface CronEngineOptions {
 }
 
 const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+const DAY_ALIASES: Record<string, number> = {
+  sun: 0, mon: 1, tue: 2, tues: 2, wed: 3, thu: 4, thur: 4, thurs: 4, fri: 5, sat: 6,
+};
+
+/** Match `"monday" | "Monday" | "mon" | "Mon"` to 0-6 (Sunday=0). */
+function parseDayName(raw: string): number {
+  const low = raw.trim().toLowerCase();
+  const full = DAYS.indexOf(low);
+  if (full >= 0) return full;
+  const alias = DAY_ALIASES[low];
+  return alias === undefined ? -1 : alias;
+}
 
 /** Pure cron-ish check: "does this task fire at this instant?" */
 export function shouldFireAt(task: ScheduledTask, atMs: number, lastRunMs?: number): boolean {
@@ -73,7 +91,7 @@ export function shouldFireAt(task: ScheduledTask, atMs: number, lastRunMs?: numb
   }
 
   if (task.weekly) {
-    const day = DAYS.indexOf(task.weekly.day.toLowerCase());
+    const day = parseDayName(task.weekly.day);
     if (day < 0) return false;
     const [h, m] = task.weekly.at.split(':').map((s) => Number(s));
     return dow === day && h === hour && m === minute;

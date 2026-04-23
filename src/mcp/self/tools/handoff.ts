@@ -30,7 +30,10 @@ export function makeHandoffReleaseTool(deps: McpToolDeps): McpTool {
         }
       }
       deps.workspaces.clearActiveSession(workspaceId);
-      return jsonResult({ ok: true, sdkId: current });
+      // `releasedSdkId` is null when the slot was already free so callers
+      // can branch cleanly on presence rather than inspecting the old
+      // ambiguous `sdkId` field.
+      return jsonResult({ ok: true, releasedSdkId: current ?? null });
     },
   };
 }

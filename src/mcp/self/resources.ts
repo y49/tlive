@@ -144,11 +144,17 @@ export class ResourceProvider {
       case 'session_transcript': {
         const s = this.resolveAlias(parsed.alias!);
         if (!s) return null;
+        // TODO(T6): render real transcript from SessionManager history +
+        // markdown renderer — the live-updates subscribe channel is wired
+        // separately. This placeholder exists so initial reads are valid.
         return { uri, mimeType: 'text/markdown', text: `# ${s.shortAlias}\n\n(transcript live updates via subscribe)` };
       }
       case 'session_todos': {
         const s = this.resolveAlias(parsed.alias!);
         if (!s) return null;
+        // TODO(T6): render real todos from TodoWrite events captured by
+        // SessionManager. Until the event filter lands, return an explicit
+        // empty placeholder.
         return { uri, mimeType: 'text/markdown', text: `# TODOs — ${s.shortAlias}\n\n(no todos tracked yet)` };
       }
       case 'workspace_config': {

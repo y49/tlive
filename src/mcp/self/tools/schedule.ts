@@ -10,7 +10,9 @@ export function makeScheduleCreateTool(deps: McpToolDeps): McpTool {
   return {
     definition: {
       name: 'tlive.schedule.create',
-      description: 'Schedule a prompt to run (cron | at | daily | weekly).',
+      description:
+        'Schedule a prompt to run (cron | at | daily | weekly). '
+        + 'Tasks fire within 60s of the target time; second-precision scheduling is not supported.',
       inputSchema: {
         type: 'object',
         properties: {

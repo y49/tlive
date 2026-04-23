@@ -98,6 +98,23 @@ export class Federation {
     this.clients.clear();
   }
 
+  /**
+   * Close a single downstream client and forget it. Intended for the
+   * registry disable-hook (T9) so flipping enabled=false tears the
+   * subprocess down; a subsequent enable=true re-spawns lazily.
+   *
+   * No-op (returns false) if we haven't spawned this downstream yet.
+   */
+  async close(name: string): Promise<boolean> {
+    const client = this.clients.get(name);
+    if (!client) return false;
+    this.clients.delete(name);
+    try { await client.close(); } catch (err) {
+      console.error(`[federation] close(${name}) failed:`, err);
+    }
+    return true;
+  }
+
   private async ensureClient(entry: RegistryEntry): Promise<DownstreamClient | null> {
     const cached = this.clients.get(entry.name);
     if (cached) return cached;

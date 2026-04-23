@@ -25,6 +25,7 @@ export class InMemorySignalBus implements SignalBus {
       this.waiters.set(sessionId, set);
       const timer = setTimeout(() => {
         set.delete(waiter);
+        if (set.size === 0) this.waiters.delete(sessionId);
         resolve(null);
       }, Math.max(1, timeoutMs));
       const waiter: Waiter = { kind, resolve, timer };

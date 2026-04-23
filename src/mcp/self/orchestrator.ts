@@ -31,7 +31,13 @@ export interface RunPipelineResult {
 }
 
 export interface RunPipelineOptions {
-  executeStep: (alias: string, prompt: string) => Promise<string>;
+  /**
+   * Execute a single pipeline step. `waitFor` mirrors the `tlive.sessions.execute`
+   * tool: 'complete' blocks until turn_end and returns accumulated assistant
+   * text; 'first_response' returns the first assistant message. Real
+   * production wiring uses `awaitTurnOutput` from `session-await.ts`.
+   */
+  executeStep: (alias: string, prompt: string, waitFor: 'complete' | 'first_response') => Promise<string>;
   maxRetries?: number;
 }
 
@@ -55,10 +61,11 @@ export async function runPipeline(
   for (let i = 0; i < pipeline.steps.length; i++) {
     const step = pipeline.steps[i]!;
     const prompt = resolveTemplate(step.promptTemplate, input, outputs);
+    const waitFor: 'complete' | 'first_response' = step.waitFor ?? 'complete';
     let attempt = 0;
     while (true) {
       try {
-        const out = await opts.executeStep(step.alias, prompt);
+        const out = await opts.executeStep(step.alias, prompt, waitFor);
         outputs.push(out);
         break;
       } catch (err) {

@@ -41,12 +41,17 @@ class RateLimiter {
 
 const defaultLimiter = new RateLimiter(30);
 
-export async function webFetch(url: string, opts: WebFetchOptions = {}, limiter = defaultLimiter): Promise<WebFetchResult> {
+export async function webFetch(url: string, opts: WebFetchOptions = {}, limiter?: RateLimiter): Promise<WebFetchResult> {
   const maxBytes = opts.maxBytes ?? 1_000_000; // 1 MB default
   const maxRedirects = opts.maxRedirects ?? 5;
   const timeoutMs = opts.timeoutMs ?? 15_000;
   const method = opts.method ?? 'GET';
-  if (!limiter.allow()) throw new Error('rate limit exceeded');
+  // Per-call override wins; otherwise fall back to the module-level 30/min
+  // default. Threaded from opts so callers can tighten throttle policy.
+  const active = limiter ?? (opts.rateLimitPerMinute !== undefined
+    ? new RateLimiter(opts.rateLimitPerMinute)
+    : defaultLimiter);
+  if (!active.allow()) throw new Error('rate limit exceeded');
 
   const redirects: string[] = [];
   let current = url;
