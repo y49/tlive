@@ -114,4 +114,24 @@ describe('LocalSession', () => {
     expect(errors).toContain('budget_exceeded');
     expect(session.status.phase).toBe('errored');
   });
+
+  it('interrupt preserves errored phase set by BudgetGuard', async () => {
+    // Fresh session with a cap so budget_exceeded trips during the turn_end.
+    // The FakeRuntime's interrupt() throws UnsupportedByRuntimeError, which
+    // LocalSession swallows, so once the awaited interrupt resolves we still
+    // need to see phase='errored' (not overwritten with 'interrupted').
+    const local = await setup({ maxBudgetUsd: 0.01 });
+    await local.session.start({});
+    local.runtime.emitEvent({
+      kind: 'turn_end', turnId: 't1', durationMs: 1,
+      costUsd: 0.05, tokensIn: 1, tokensOut: 1,
+    });
+    // BudgetGuard.onEvent fires interrupt() asynchronously; await it.
+    await local.session.interrupt();
+    expect(local.session.status.phase).toBe('errored');
+    if (local.session.status.phase === 'errored') {
+      expect(local.session.status.code).toBe('budget_exceeded');
+    }
+    await rm(local.root, { recursive: true, force: true });
+  });
 });

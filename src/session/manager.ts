@@ -20,6 +20,7 @@ import type { SessionPersistence, SessionSnapshot } from './persistence.js';
 import type { PermissionBroker } from './permission-broker.js';
 import { resolveByPrefix } from '../util/short-id.js';
 import { WarmRuntimePool } from './warm-pool.js';
+import type { CostRollupStore } from '../cost/rollups.js';
 
 // ---- Options -------------------------------------------------------------
 
@@ -56,6 +57,8 @@ export interface SessionManagerDeps {
   runtimeFactory: RuntimeFactory;
   /** Optional warm pool. When provided, stopped LocalSessions park runtimes here. */
   warmPool?: WarmRuntimePool;
+  /** Optional rollup store. LocalSessions will append per-turn cost deltas here. */
+  rollupStore?: CostRollupStore;
 }
 
 // ---- Manager -------------------------------------------------------------
@@ -64,9 +67,13 @@ export class SessionManager {
   private sessions = new Map<string, SessionLike>();
   private listeners = new Set<ManagerEventListener>();
   private readonly warmPool: WarmRuntimePool | null;
+  private readonly rollupStore: CostRollupStore | null;
+  /** True while stopAll() is draining — suppresses warm-pool parking. */
+  private shuttingDown = false;
 
   constructor(private readonly deps: SessionManagerDeps) {
     this.warmPool = deps.warmPool ?? null;
+    this.rollupStore = deps.rollupStore ?? null;
   }
 
   // ---- New v1.0 API --------------------------------------------------------
@@ -87,6 +94,7 @@ export class SessionManager {
       persistence: this.deps.persistence,
       broker: this.deps.broker,
       maxBudgetUsd: opts.maxBudgetUsd,
+      rollupStore: this.rollupStore ?? undefined,
     });
     this.sessions.set(id, session);
     await session.start({
@@ -111,6 +119,7 @@ export class SessionManager {
       runtime,
       persistence: this.deps.persistence,
       broker: this.deps.broker,
+      rollupStore: this.rollupStore ?? undefined,
     });
     this.sessions.set(id, session);
     await session.start({});
@@ -152,16 +161,36 @@ export class SessionManager {
   }
 
   async stopAll(): Promise<void> {
-    const ids = [...this.sessions.keys()];
-    await Promise.all(ids.map((id) => this.stop(id).catch(() => { /* isolate */ })));
-    if (this.warmPool) await this.warmPool.drain();
+    this.shuttingDown = true;
+    try {
+      const ids = [...this.sessions.keys()];
+      await Promise.all(ids.map((id) => this.stop(id).catch(() => { /* isolate */ })));
+      if (this.warmPool) await this.warmPool.drain();
+    } finally {
+      this.shuttingDown = false;
+    }
   }
 
   async stop(id: string): Promise<void> {
     const s = this.sessions.get(id);
     if (!s) return;
     if (s.kind === 'local') {
-      await (s as LocalSession).stop();
+      const local = s as LocalSession;
+      // Park the warm runtime for reuse unless we're tearing down the whole
+      // pool (stopAll) — in that case the pool is about to drain, so parking
+      // would just cost a TTL timer that fires during shutdown.
+      if (this.warmPool && !this.shuttingDown) {
+        try {
+          const runtime = local.detachRuntime();
+          this.warmPool.park(runtime, local.workspaceId);
+        } catch {
+          // Detach rejected (already detached / torn down) — fall back to
+          // a hard stop so the session is still removed from the map.
+          await local.stop().catch(() => undefined);
+        }
+      } else {
+        await local.stop();
+      }
     } else {
       (s as RemoteSession).onDisconnect('manager_stop');
     }

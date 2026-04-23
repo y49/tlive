@@ -22,6 +22,7 @@ import { shortId } from '../util/short-id.js';
 import { InputQueue } from './input-queue.js';
 import { CacheWarmth } from './cache-warmth.js';
 import { BudgetGuard } from './budget-guard.js';
+import { CostRollupStore, dateKeyOf } from '../cost/rollups.js';
 
 /** Legacy status used by bridge + v0.x tests. */
 export type SessionStatus = 'starting' | 'active' | 'idle' | 'stopped';
@@ -41,6 +42,12 @@ export interface SessionInit {
   broker: PermissionBroker;
   /** Optional budget cap in USD for this session. */
   maxBudgetUsd?: number;
+  /**
+   * Optional cross-session cost rollup store. When provided, every turn_end
+   * appends a RollupDelta for the `/cost` dashboard. Must be shared across
+   * sessions so per-day aggregation works.
+   */
+  rollupStore?: CostRollupStore;
 }
 
 /**
@@ -68,15 +75,17 @@ export class LocalSession implements SessionLike {
   readonly cacheWarmth = new CacheWarmth();
 
   // Internal state
-  private readonly runtime: AgentRuntime;
+  private runtime: AgentRuntime;
   private readonly persistence: SessionPersistence;
   private readonly broker: PermissionBroker;
+  private readonly rollupStore: CostRollupStore | null;
   private readonly unsubscribers: Array<() => void> = [];
   private readonly legacyListeners = new Set<SessionEventListener>();
   private readonly eventListeners = new Set<(e: NotificationEvent) => void>();
   private readonly statusListeners = new Set<(s: AgentStatus) => void>();
   private readonly sessionIdReadyListeners = new Set<(id: string) => void>();
   private readonly budgetGuard: BudgetGuard;
+  private detached = false;
 
   private history: NotificationEvent[] = [];
   private legacyStatus: SessionStatus = 'starting';
@@ -91,6 +100,7 @@ export class LocalSession implements SessionLike {
     this.runtime = init.runtime;
     this.persistence = init.persistence;
     this.broker = init.broker;
+    this.rollupStore = init.rollupStore ?? null;
     this.id = init.ctx.snapshot.sessionId;
     this.shortAlias = shortId(this.id);
     this.provider = init.ctx.snapshot.provider;
@@ -213,7 +223,13 @@ export class LocalSession implements SessionLike {
     // Reject pending permissions so any canUseTool await unblocks immediately.
     this.broker.denyAllForSession(this.id);
     try { await this.runtime.interrupt(); } catch { /* runtime may not support it */ }
-    this.setAgentStatus({ phase: 'interrupted', at: Date.now() });
+    // Don't clobber a meaningful terminal phase set by BudgetGuard's
+    // runtime_error emission ('errored') or an already-stopped session:
+    // renderers rely on `code: 'budget_exceeded'` to show the override UI.
+    const phase = this.agentStatus.phase;
+    if (phase !== 'errored' && phase !== 'stopped') {
+      this.setAgentStatus({ phase: 'interrupted', at: Date.now() });
+    }
   }
 
   async stop(): Promise<void> {
@@ -222,11 +238,37 @@ export class LocalSession implements SessionLike {
     for (const un of this.unsubscribers) un();
     this.unsubscribers.length = 0;
     this.broker.denyAllForSession(this.id);
-    try { await this.runtime.stop(); } catch { /* already stopping */ }
+    if (!this.detached) {
+      try { await this.runtime.stop(); } catch { /* already stopping */ }
+    }
     this.cacheWarmth.dispose();
     this.setLegacyStatus('stopped');
     this.setAgentStatus({ phase: 'stopped' });
     await this.saveSnapshot();
+  }
+
+  /**
+   * Detach the underlying AgentRuntime from this session WITHOUT stopping it,
+   * so SessionManager can park it in a WarmRuntimePool for reuse. The session
+   * instance transitions to 'stopped' and must not receive further input —
+   * subscriptions are unwired here so runtime-side events after detach don't
+   * leak into the stopped session. Caller owns the returned runtime.
+   */
+  detachRuntime(): AgentRuntime {
+    if (this.detached) {
+      throw new Error(`LocalSession(${this.id}): runtime already detached`);
+    }
+    this.detached = true;
+    for (const un of this.unsubscribers) un();
+    this.unsubscribers.length = 0;
+    this.broker.denyAllForSession(this.id);
+    this.cacheWarmth.dispose();
+    this.setLegacyStatus('stopped');
+    this.setAgentStatus({ phase: 'stopped' });
+    // Snapshot is best-effort; detach must not await disk I/O to keep pool
+    // transfer cheap. Persistence failures surface via their own logger.
+    void this.saveSnapshot().catch(() => undefined);
+    return this.runtime;
   }
 
   // ---- Permission bridge (unchanged from T1/T2) ----------------------------
@@ -301,6 +343,21 @@ export class LocalSession implements SessionLike {
         inputTokens: event.tokensIn,
         outputTokens: event.tokensOut,
       });
+      // Persist a per-turn rollup delta so the /cost dashboard reflects usage
+      // across sessions. Fire-and-forget: filesystem hiccups must not crash the
+      // fold — rollup gaps are acceptable, turn-fold failures aren't.
+      if (this.rollupStore) {
+        const at = Date.now();
+        void this.rollupStore.append({
+          workspaceId: this.workspaceId,
+          sdkSessionId: this.id,
+          dateKey: dateKeyOf(at),
+          deltaUsd: event.costUsd,
+          deltaIn: event.tokensIn,
+          deltaOut: event.tokensOut,
+          at,
+        }).catch(() => undefined);
+      }
     }
 
     // Mark assistant response for cache warmth tracking
