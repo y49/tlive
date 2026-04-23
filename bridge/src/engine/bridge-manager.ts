@@ -21,7 +21,7 @@ import { MessageRouter } from './message-router.js';
 import { ControlPanel } from './control-panel.js';
 import { SessionFrontend } from './session-frontend.js';
 import type { SessionManager } from '../../../src/session/manager.js';
-import type { PermissionBroker as RuntimePermissionBroker } from '../../../src/session/permission-broker.js';
+import type { PermissionBroker as RuntimePermissionBroker } from '../../../src/permission/broker.js';
 import { networkInterfaces, homedir } from 'node:os';
 import { join } from 'node:path';
 import type { NotificationRenderer } from '../renderers/types.js';

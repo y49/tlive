@@ -12,7 +12,7 @@ import { homedir } from 'node:os';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { SessionManager } from '../../src/session/manager.js';
 import { SessionPersistence } from '../../src/session/persistence.js';
-import { PermissionBroker as RuntimePermissionBroker } from '../../src/session/permission-broker.js';
+import { PermissionBroker as RuntimePermissionBroker } from '../../src/permission/broker.js';
 import { ClaudeSdkRuntime } from '../../src/runtime/claude/runtime.js';
 import { CodexAppServerRuntime } from '../../src/runtime/codex/runtime.js';
 import type { AgentProvider } from '../../src/runtime/types.js';

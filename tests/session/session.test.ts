@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { Session } from '../../src/session/session.js';
 import { SessionContext } from '../../src/session/context.js';
 import { SessionPersistence } from '../../src/session/persistence.js';
-import { PermissionBroker } from '../../src/session/permission-broker.js';
+import { PermissionBroker } from '../../src/permission/broker.js';
 import { FakeRuntime } from './fake-runtime.js';
 import type { NotificationEvent } from '../../src/runtime/events.js';
 
@@ -60,14 +60,14 @@ describe('Session', () => {
     await expect(env.session.sendInput('x', 'im')).rejects.toThrow(/stopped/);
   });
 
-  it('handlePermission preserves colons in toolUseId (splits on first : only)', async () => {
+  it('handlePermission preserves the runtime-provided id verbatim', async () => {
     await env.session.start({});
     env.runtime.emitPermission({
-      id: 's1:tu1:inner:42', toolName: 'Bash', toolInput: {}, resolve: vi.fn(),
+      id: 's1:tu1:inner:42', toolName: 'Bash', toolInput: {},
+      category: 'exec', resolve: vi.fn(),
     });
-    // Broker re-keys as ${sessionId}:${toolUseId} where toolUseId is everything
-    // after the first colon — must be 'tu1:inner:42', not 'tu1'.
-    const pending = env.broker.listForSession('s1');
+    // T4 broker stores the runtime request by its full id; no re-keying.
+    const pending = env.broker.pendingFor('s1');
     expect(pending).toHaveLength(1);
     expect(pending[0].id).toBe('s1:tu1:inner:42');
   });
@@ -84,12 +84,13 @@ describe('Session', () => {
   it('stop() aborts, unsubscribes, denies pending permissions, stops runtime', async () => {
     await env.session.start({});
     env.runtime.emitPermission({
-      id: 's1:tu1', toolName: 'Bash', toolInput: {}, resolve: vi.fn(),
+      id: 's1:tu1', toolName: 'Bash', toolInput: {},
+      category: 'exec', resolve: vi.fn(),
     });
     await env.session.stop();
     expect(env.runtime.stopCalls).toBe(1);
     expect(env.session.getStatus()).toBe('stopped');
-    expect(env.broker.listForSession('s1')).toEqual([]);
+    expect(env.broker.pendingFor('s1')).toEqual([]);
   });
 
   it('snapshot reflects status, cost, and pending permissions', async () => {

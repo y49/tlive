@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionManager } from '../../src/session/manager.js';
 import { SessionPersistence } from '../../src/session/persistence.js';
-import { PermissionBroker } from '../../src/session/permission-broker.js';
+import { PermissionBroker } from '../../src/permission/broker.js';
 import { FakeRuntime } from './fake-runtime.js';
 
 async function setup() {

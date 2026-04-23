@@ -9,11 +9,14 @@
 
 import type {
   AgentRuntime, AgentRuntimeOptions, AgentProvider, PermissionRequest,
+  AskUserQuestionRequest, ElicitationRequest,
 } from '../runtime/types.js';
 import type { NotificationEvent, UsageStats } from '../runtime/events.js';
 import { SessionContext, type SessionContextSnapshot } from './context.js';
 import type { SessionPersistence, SessionSnapshot } from './persistence.js';
-import type { PermissionBroker } from './permission-broker.js';
+import type { PermissionBroker } from '../permission/broker.js';
+import type { AskUserQuestionBroker } from '../permission/ask-broker.js';
+import type { ElicitationBroker } from '../permission/elicitation-broker.js';
 import { CostTracker } from '../cost/tracker.js';
 import type { AgentStatus } from './status.js';
 import { transition } from './status.js';
@@ -40,6 +43,11 @@ export interface SessionInit {
   runtime: AgentRuntime;
   persistence: SessionPersistence;
   broker: PermissionBroker;
+  /** Optional AskUserQuestion broker. When absent, ask requests are dropped
+   *  (the runtime's own promise still resolves via 'decline' on stop). */
+  askBroker?: AskUserQuestionBroker;
+  /** Optional Elicitation broker. Same semantics as askBroker. */
+  elicitationBroker?: ElicitationBroker;
   /** Optional budget cap in USD for this session. */
   maxBudgetUsd?: number;
   /**
@@ -78,6 +86,8 @@ export class LocalSession implements SessionLike {
   private runtime: AgentRuntime;
   private readonly persistence: SessionPersistence;
   private readonly broker: PermissionBroker;
+  private readonly askBroker: AskUserQuestionBroker | null;
+  private readonly elicitationBroker: ElicitationBroker | null;
   private readonly rollupStore: CostRollupStore | null;
   private readonly unsubscribers: Array<() => void> = [];
   private readonly legacyListeners = new Set<SessionEventListener>();
@@ -100,6 +110,8 @@ export class LocalSession implements SessionLike {
     this.runtime = init.runtime;
     this.persistence = init.persistence;
     this.broker = init.broker;
+    this.askBroker = init.askBroker ?? null;
+    this.elicitationBroker = init.elicitationBroker ?? null;
     this.rollupStore = init.rollupStore ?? null;
     this.id = init.ctx.snapshot.sessionId;
     this.shortAlias = shortId(this.id);
@@ -193,6 +205,8 @@ export class LocalSession implements SessionLike {
   async start(opts: Omit<AgentRuntimeOptions, 'workdir' | 'signal'> = {}): Promise<void> {
     this.unsubscribers.push(this.runtime.onEvent((e) => this.handleEvent(e)));
     this.unsubscribers.push(this.runtime.onPermissionRequest((req) => this.handlePermission(req)));
+    this.unsubscribers.push(this.runtime.onAskUserQuestion((req) => this.handleAsk(req)));
+    this.unsubscribers.push(this.runtime.onElicitation((req) => this.handleElicitation(req)));
     this.unsubscribers.push(this.runtime.onUsage((u) => this.handleUsage(u)));
     await this.runtime.start({
       ...opts,
@@ -220,10 +234,11 @@ export class LocalSession implements SessionLike {
 
   async interrupt(): Promise<void> {
     if (this.legacyStatus === 'stopped') return;
-    // Reject pending permissions so any canUseTool await unblocks immediately.
-    // TODO(T4): also deny pending askBroker + elicitationBroker requests once
-    // the category-split PermissionBroker and sibling brokers land.
-    this.broker.denyAllForSession(this.id);
+    // Reject every pending request (permission / ask / elicitation) so any
+    // canUseTool / askUserQuestion / elicit awaits unblock immediately.
+    this.broker.denyAllForSession(this.id, 'interrupt');
+    this.askBroker?.denyAllForSession(this.id, 'interrupt');
+    this.elicitationBroker?.denyAllForSession(this.id, 'interrupt');
     try { await this.runtime.interrupt(); } catch { /* runtime may not support it */ }
     // Don't clobber a meaningful terminal phase set by BudgetGuard's
     // runtime_error emission ('errored') or an already-stopped session:
@@ -239,7 +254,9 @@ export class LocalSession implements SessionLike {
     this.abortCtrl.abort();
     for (const un of this.unsubscribers) un();
     this.unsubscribers.length = 0;
-    this.broker.denyAllForSession(this.id);
+    this.broker.denyAllForSession(this.id, 'session_stopped');
+    this.askBroker?.denyAllForSession(this.id, 'session_stopped');
+    this.elicitationBroker?.denyAllForSession(this.id, 'session_stopped');
     if (!this.detached) {
       try { await this.runtime.stop(); } catch { /* already stopping */ }
     }
@@ -267,7 +284,9 @@ export class LocalSession implements SessionLike {
     this.detached = true;
     for (const un of this.unsubscribers) un();
     this.unsubscribers.length = 0;
-    this.broker.denyAllForSession(this.id);
+    this.broker.denyAllForSession(this.id, 'runtime_detached');
+    this.askBroker?.denyAllForSession(this.id, 'runtime_detached');
+    this.elicitationBroker?.denyAllForSession(this.id, 'runtime_detached');
     this.cacheWarmth.dispose();
     this.setLegacyStatus('stopped');
     this.setAgentStatus({ phase: 'stopped' });
@@ -277,14 +296,14 @@ export class LocalSession implements SessionLike {
     return this.runtime;
   }
 
-  // ---- Permission bridge (unchanged from T1/T2) ----------------------------
+  // ---- Permission bridge ---------------------------------------------------
 
-  resolvePermission(id: string, decision: 'allow' | 'deny' | 'allow_always'): boolean {
-    return this.broker.resolve(id, decision);
+  resolvePermission(id: string, decision: 'allow' | 'deny' | 'allow_always', userId?: string): boolean {
+    return this.broker.resolve(this.id, id, decision, userId);
   }
 
   listPendingPermissions(): PermissionRequest[] {
-    return this.broker.listForSession(this.id);
+    return this.broker.pendingFor(this.id);
   }
 
   // ---- Runtime control face delegation (spec §4.2) --------------------------
@@ -383,13 +402,21 @@ export class LocalSession implements SessionLike {
 
   private handlePermission(req: PermissionRequest): void {
     this.touch();
-    // Runtime emits id as `${sessionId}:${toolUseId}`. Split once so broker
-    // rekeys under the canonical form.
-    const toolUseId = req.id.includes(':') ? req.id.slice(req.id.indexOf(':') + 1) : req.id;
-    const { request } = this.broker.waitFor(
-      this.id, toolUseId, req.toolName, req.toolInput as Record<string, unknown>, req.resolve,
-    );
-    this.emitLegacy({ kind: 'permission', request });
+    // Runtime stamped `req.id` as `${sdkSessionId}:${shortId}`; broker stores
+    // it verbatim. PolicyStore auto-resolve may drop the request before any
+    // listener sees it — that's deliberate (§5.4 of the spec).
+    this.broker.issue(this.id, this.workspaceId, req);
+    this.emitLegacy({ kind: 'permission', request: req });
+  }
+
+  private handleAsk(req: AskUserQuestionRequest): void {
+    this.touch();
+    this.askBroker?.issue(this.id, req);
+  }
+
+  private handleElicitation(req: ElicitationRequest): void {
+    this.touch();
+    this.elicitationBroker?.issue(this.id, req);
   }
 
   private handleUsage(u: UsageStats): void {

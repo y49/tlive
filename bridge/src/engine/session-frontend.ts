@@ -7,7 +7,7 @@
 // 'stopped' to prevent leaks.
 
 import type { SessionManager } from '../../../src/session/manager.js';
-import type { PermissionBroker as RuntimePermissionBroker } from '../../../src/session/permission-broker.js';
+import type { PermissionBroker as RuntimePermissionBroker } from '../../../src/permission/broker.js';
 import type { PermissionRequest } from '../../../src/runtime/types.js';
 import type { NotificationEvent as RuntimeNotificationEvent } from '../../../src/runtime/events.js';
 import type { NotificationRenderer, NotificationEvent } from '../renderers/types.js';

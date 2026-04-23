@@ -2,7 +2,7 @@
 
 import type { IPCServer } from '../../../src/ipc.js';
 import type { SessionManager } from '../../../src/session/manager.js';
-import type { PermissionBroker } from '../../../src/session/permission-broker.js';
+import type { PermissionBroker } from '../../../src/permission/broker.js';
 import type { WorkspaceManager } from './workspace-manager.js';
 import type { IPCRequest, IPCResponse, Envelope } from '../../../src/ipc-protocol.js';
 import type { Socket } from 'node:net';
@@ -88,7 +88,7 @@ export class IPCSessionHandler {
         return { type: 'session_list', payload: { sessions: this.sessionManager.list() } };
       }
       case 'resolve_permission': {
-        const ok = this.permissionBroker.resolve(req.payload.permissionId, req.payload.decision);
+        const ok = this.permissionBroker.resolveById(req.payload.permissionId, req.payload.decision);
         return ok
           ? { type: 'ack', payload: { ok: true } }
           : { type: 'error', payload: { message: 'permission id unknown' } };

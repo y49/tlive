@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { LocalSession } from '../../src/session/local-session.js';
 import { SessionContext } from '../../src/session/context.js';
 import { SessionPersistence } from '../../src/session/persistence.js';
-import { PermissionBroker } from '../../src/session/permission-broker.js';
+import { PermissionBroker } from '../../src/permission/broker.js';
 import { CostRollupStore, type RollupDelta } from '../../src/cost/rollups.js';
 import { FakeRuntime } from './fake-runtime.js';
 

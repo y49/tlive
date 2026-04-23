@@ -17,7 +17,10 @@ import type { SessionEventListener as LegacySessionEventListener } from './local
 import { RemoteSession, type RemoteSessionInit } from './remote-session.js';
 import type { SessionLike, SessionInfo } from './types.js';
 import type { SessionPersistence, SessionSnapshot } from './persistence.js';
-import type { PermissionBroker } from './permission-broker.js';
+import type { PermissionBroker } from '../permission/broker.js';
+import type { AskUserQuestionBroker } from '../permission/ask-broker.js';
+import type { ElicitationBroker } from '../permission/elicitation-broker.js';
+import type { AttachmentStore } from '../attachment/store.js';
 import { resolveByPrefix } from '../util/short-id.js';
 import { WarmRuntimePool } from './warm-pool.js';
 import type { CostRollupStore } from '../cost/rollups.js';
@@ -54,6 +57,14 @@ export type ManagerEventListener = (ev:
 export interface SessionManagerDeps {
   persistence: SessionPersistence;
   broker: PermissionBroker;
+  /** Optional AskUserQuestion broker. When absent, LocalSession drops ask
+   *  requests (the runtime's promise still settles via interrupt/stop). */
+  askBroker?: AskUserQuestionBroker;
+  /** Optional Elicitation broker. Same semantics as askBroker. */
+  elicitationBroker?: ElicitationBroker;
+  /** Optional shared AttachmentStore. Wired by T9 daemon bootstrap; T4 just
+   *  plumbs the type so downstream consumers can fetch inbound files. */
+  attachmentStore?: AttachmentStore;
   runtimeFactory: RuntimeFactory;
   /**
    * Optional warm pool. T3 scope keeps this as scaffolding only — stop()
@@ -95,6 +106,8 @@ export class SessionManager {
       runtime,
       persistence: this.deps.persistence,
       broker: this.deps.broker,
+      askBroker: this.deps.askBroker,
+      elicitationBroker: this.deps.elicitationBroker,
       maxBudgetUsd: opts.maxBudgetUsd,
       rollupStore: this.rollupStore ?? undefined,
     });
@@ -121,6 +134,8 @@ export class SessionManager {
       runtime,
       persistence: this.deps.persistence,
       broker: this.deps.broker,
+      askBroker: this.deps.askBroker,
+      elicitationBroker: this.deps.elicitationBroker,
       rollupStore: this.rollupStore ?? undefined,
     });
     this.sessions.set(id, session);

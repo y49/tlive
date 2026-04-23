@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { LocalSession } from '../../src/session/local-session.js';
 import { SessionContext } from '../../src/session/context.js';
 import { SessionPersistence } from '../../src/session/persistence.js';
-import { PermissionBroker } from '../../src/session/permission-broker.js';
+import { PermissionBroker } from '../../src/permission/broker.js';
 import { FakeRuntime } from './fake-runtime.js';
 import type { NotificationEvent } from '../../src/runtime/events.js';
 
@@ -98,7 +98,8 @@ describe('LocalSession', () => {
     await env.session.start({});
     env.runtime.emitPermission({
       id: '12345678-aaaa-bbbb-cccc-dddddddddddd:tu1',
-      toolName: 'Bash', toolInput: {}, resolve: () => undefined,
+      toolName: 'Bash', toolInput: {}, category: 'exec',
+      resolve: () => undefined,
     });
     await env.session.interrupt();
     expect(env.broker.pendingCount()).toBe(0);

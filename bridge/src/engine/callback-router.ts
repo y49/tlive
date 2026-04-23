@@ -3,7 +3,7 @@ import type { ChannelType, InboundMessage } from '../channels/types.js';
 import type { PermissionCoordinator } from './permission-coordinator.js';
 import type { ControlPanel } from './control-panel.js';
 import type { NotificationRenderer } from '../renderers/types.js';
-import type { PermissionBroker as RuntimePermissionBroker } from '../../../src/session/permission-broker.js';
+import type { PermissionBroker as RuntimePermissionBroker } from '../../../src/permission/broker.js';
 import type { PermissionDecision } from '../../../src/runtime/types.js';
 
 /** Shared SDK question state — owned by SDKEngine, read/written by CallbackRouter */
@@ -101,7 +101,7 @@ export class CallbackRouter {
           action === 'deny' ? 'deny' :
           action === 'takeover' ? 'deny' :  // takeover resolves as deny on this path
           'deny';
-        if (this.runtimeBroker.resolve(permId, decision)) {
+        if (this.runtimeBroker.resolveById(permId, decision)) {
           const label = action === 'allow' ? '✅ Allowed' : action === 'deny' ? '❌ Denied' : '🖥 Takeover';
           const renderer = this.renderers.get(adapter.channelType)!;
           await adapter.editMessage(msg.chatId, msg.messageId, renderer.renderSimpleText(label)).catch(() => {});
