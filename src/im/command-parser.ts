@@ -1,0 +1,155 @@
+// src/im/command-parser.ts
+//
+// Central slash-command dispatcher for the IM surface (spec §8). Each
+// command file under `src/im/commands/` exports a `CommandDef`; this file
+// owns the registry, the `CommandContext` shape, and the dispatch entry
+// point. T9's daemon bootstrap wires `dispatch()` to the PlatformAdapter's
+// `onInbound` callback.
+//
+// Design:
+// - Registry is a flat Map<string, CommandDef>. Aliases resolve to the same
+//   def (stored under each alias key). `listCommands()` dedupes via Set.
+// - Role gating: CommandContext carries the caller's role; dispatch rejects
+//   with a friendly message when the role is not in `def.role`.
+// - Parsing: we split on whitespace for simple commands; complex commands
+//   (e.g. `/rename <alias> "<title>"`) do their own quote handling inside
+//   `run()` via `parseQuotedTail` helpers.
+
+import type { Role } from '../permission/roles.js';
+import type { InboundEvent, ReplyMarkup } from '../platform/types.js';
+import type { SessionManager } from '../session/manager.js';
+import type { WorkspaceManager } from '../workspace/manager.js';
+import type { PermissionBroker } from '../permission/broker.js';
+import type { AskUserQuestionBroker } from '../permission/ask-broker.js';
+import type { ElicitationBroker } from '../permission/elicitation-broker.js';
+import type { CostRollupStore } from '../cost/rollups.js';
+import type { McpRegistry } from '../mcp/registry.js';
+import type { PolicyStore } from '../permission/policy-store.js';
+
+export interface CommandContext {
+  /** The inbound event that carried the command text. */
+  inbound: InboundEvent;
+  /** Operator id (raw user id string) — for audit + resolveByUserId. */
+  userId: string;
+  sessionManager: SessionManager;
+  workspaceManager: WorkspaceManager;
+  permissionBroker: PermissionBroker;
+  askBroker: AskUserQuestionBroker;
+  elicitationBroker: ElicitationBroker;
+  /** Resolve a PolicyStore for a given workspace. T9 wires a real provider. */
+  policyStoreFor?: (workspaceId: string) => PolicyStore | undefined;
+  /** Optional rollup store for `/cost`. */
+  rollupStore?: CostRollupStore;
+  /** Optional registry for `/mcp` subcommands. */
+  mcpRegistry?: McpRegistry;
+  /** Reply text back to the user; T9 wires this to the resolved adapter. */
+  reply: (text: string, opts?: { replyMarkup?: ReplyMarkup }) => Promise<void>;
+}
+
+export interface CommandDef {
+  name: string;
+  aliases?: string[];
+  /** Required role(s) to invoke. Empty array denies everyone. */
+  role: Role[];
+  /** Optional short description for autocomplete / help listing. */
+  description?: string;
+  run(ctx: CommandContext, args: string[]): Promise<void>;
+}
+
+const registry = new Map<string, CommandDef>();
+
+export function registerCommand(def: CommandDef): void {
+  registry.set(def.name, def);
+  for (const a of def.aliases ?? []) registry.set(a, def);
+}
+
+export function listCommands(): CommandDef[] {
+  return [...new Set(registry.values())];
+}
+
+export function findCommand(name: string): CommandDef | undefined {
+  return registry.get(name);
+}
+
+/** Test helper — wipes registry so tests don't bleed into each other. */
+export function resetRegistryForTests(): void {
+  registry.clear();
+}
+
+export async function dispatch(
+  ctx: CommandContext,
+  rawText: string,
+  userRole: Role,
+): Promise<void> {
+  const [nameRaw, ...args] = rawText.replace(/^\/+/, '').trim().split(/\s+/);
+  const name = (nameRaw ?? '').toLowerCase();
+  if (!name) {
+    await ctx.reply('Empty command. Try /help.');
+    return;
+  }
+  const def = registry.get(name);
+  if (!def) {
+    await ctx.reply(`Unknown command: /${name}. Try /help.`);
+    return;
+  }
+  if (!def.role.includes(userRole)) {
+    await ctx.reply(`You don't have permission to use /${def.name}.`);
+    return;
+  }
+  try {
+    await def.run(ctx, args);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await ctx.reply(`Command /${def.name} failed: ${msg}`);
+  }
+}
+
+// ---- Helpers for command implementations ---------------------------------
+
+/**
+ * Extract a quoted tail — handles `/rename abcd "my title"` style. Returns
+ * `{ head, quoted }` where head is the leading non-quoted words and quoted
+ * is the (possibly empty) content inside the first `"..."` pair.
+ */
+export function parseQuotedTail(args: string[]): { head: string[]; quoted: string | null } {
+  const joined = args.join(' ');
+  const m = joined.match(/^(.*?)"([^"]*)"\s*$/);
+  if (!m) return { head: args, quoted: null };
+  const head = m[1]!.trim().split(/\s+/).filter((s) => s.length > 0);
+  return { head, quoted: m[2] ?? null };
+}
+
+/**
+ * Parse `--key=value` and `--flag` tokens from a command line. Anything
+ * that doesn't start with `--` falls into `positional`.
+ */
+export function parseFlags(args: string[]): { flags: Record<string, string | boolean>; positional: string[] } {
+  const flags: Record<string, string | boolean> = {};
+  const positional: string[] = [];
+  for (const a of args) {
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      if (eq > 0) flags[a.slice(2, eq)] = a.slice(eq + 1);
+      else flags[a.slice(2)] = true;
+    } else {
+      positional.push(a);
+    }
+  }
+  return { flags, positional };
+}
+
+/**
+ * Resolve a user-typed short alias against live sessions. Returns a
+ * SessionLike pair `{ resolved, ambiguous }` — exactly the shape
+ * `SessionManager.getByPrefix` already returns.
+ */
+export function resolveSessionPrefix(
+  ctx: CommandContext,
+  prefix: string,
+): { resolved: ReturnType<SessionManager['get']> | null; ambiguous: Array<ReturnType<SessionManager['get']>> } {
+  const res = ctx.sessionManager.getByPrefix(prefix);
+  return {
+    resolved: (res.resolved as ReturnType<SessionManager['get']>) ?? null,
+    ambiguous: res.ambiguous as Array<ReturnType<SessionManager['get']>>,
+  };
+}

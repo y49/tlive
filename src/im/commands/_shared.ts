@@ -1,0 +1,71 @@
+// src/im/commands/_shared.ts
+//
+// Common helpers re-used across command implementations. Kept small and
+// dependency-light so each command file can stay at ≤30 LOC of actual
+// logic.
+
+import type { CommandContext } from '../command-parser.js';
+import type { LocalSession } from '../../session/local-session.js';
+import type { RemoteSession } from '../../session/remote-session.js';
+import type { Workspace } from '../../workspace/config.js';
+
+/**
+ * Resolve the workspace bound to this chat. Replies + returns null when
+ * none is registered.
+ */
+export function workspaceForChat(ctx: CommandContext): Workspace | null {
+  return ctx.workspaceManager.findByChat(ctx.inbound.channelType, ctx.inbound.chatId) ?? null;
+}
+
+/**
+ * Resolve the currently-active LocalSession for this chat's workspace.
+ * Replies + returns null when missing or remote.
+ */
+export async function activeLocalSession(ctx: CommandContext): Promise<LocalSession | null> {
+  const ws = workspaceForChat(ctx);
+  if (!ws) { await ctx.reply('No workspace bound to this chat. Use `/new` to start one.'); return null; }
+  const activeId = ws.activeSessionId;
+  if (!activeId) { await ctx.reply('No active session for this workspace.'); return null; }
+  const session = ctx.sessionManager.get(activeId);
+  if (!session) { await ctx.reply(`Active session ${activeId.slice(0, 8)} not found in manager.`); return null; }
+  if (session.kind !== 'local') { await ctx.reply('Active session is remote; runtime controls are unavailable.'); return null; }
+  return session as LocalSession;
+}
+
+/**
+ * Resolve a session by short-alias prefix, with nice ambiguity message on
+ * miss. Returns `null` when unresolvable and replies to the user.
+ */
+export async function resolveSessionArg(
+  ctx: CommandContext,
+  prefix: string,
+): Promise<LocalSession | RemoteSession | null> {
+  if (!prefix) { await ctx.reply('Missing session alias argument.'); return null; }
+  const res = ctx.sessionManager.getByPrefix(prefix);
+  if (res.resolved) return res.resolved as LocalSession | RemoteSession;
+  if (res.ambiguous.length > 1) {
+    const ids = res.ambiguous.map((s) => s.shortAlias).join(', ');
+    await ctx.reply(`Ambiguous prefix '${prefix}'. Matches: ${ids}`);
+  } else {
+    await ctx.reply(`No session matches prefix '${prefix}'.`);
+  }
+  return null;
+}
+
+/**
+ * Extract `"quoted tail"` at the end of args — e.g.
+ *   /rename abcd "my shiny title"
+ *       head=['abcd'], quoted='my shiny title'
+ */
+export function parseQuoted(args: string[]): { head: string[]; quoted: string | null } {
+  const joined = args.join(' ');
+  const m = joined.match(/^(.*?)"([^"]*)"\s*$/);
+  if (!m) return { head: args, quoted: null };
+  const head = m[1]!.trim().split(/\s+/).filter((s) => s.length > 0);
+  return { head, quoted: m[2] ?? null };
+}
+
+/** Short-id rendering — SDK ids are 36 chars; we print the first 8. */
+export function shortOf(id: string): string {
+  return id.replace(/-/g, '').slice(0, 8);
+}
