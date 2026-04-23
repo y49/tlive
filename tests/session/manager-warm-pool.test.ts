@@ -1,10 +1,14 @@
 // tests/session/manager-warm-pool.test.ts
 //
-// Regression coverage for the WarmRuntimePool <-> SessionManager wiring
-// (T3 review fixup). Stopping a LocalSession hands its runtime to the pool
-// instead of calling runtime.stop(), so the next createLocal in the same
-// (provider, workspaceId) plucks the warm instance. stopAll drains the pool
-// unconditionally so daemon shutdown doesn't leak subprocesses.
+// T3 scope: warm-pool infrastructure is present but reuse is deferred. Real
+// AgentRuntime implementations (Claude, Codex) throw on a second start() call,
+// so SessionManager.stop() always fully stops the runtime — the pool never has
+// anything parked in production. These tests lock that contract in:
+//   1) stop() calls runtime.stop() (not park), and a subsequent createLocal
+//      goes through the factory and gets a FRESH runtime instance.
+//   2) WarmRuntimePool.park() still works in isolation — the scaffolding is
+//      live so a future task (T9+) can re-enable pooling once
+//      AgentRuntime.reset() lands.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -29,41 +33,36 @@ async function setup() {
   return { root, persistence, broker, mgr, runtimes, warmPool };
 }
 
-describe('SessionManager <-> WarmRuntimePool', () => {
+describe('SessionManager stop -> factory (no warm-pool reuse in T3)', () => {
   let env: Awaited<ReturnType<typeof setup>>;
   beforeEach(async () => { env = await setup(); });
   afterEach(async () => { await rm(env.root, { recursive: true, force: true }); });
 
-  it('stop parks the runtime; next createLocal plucks the same instance', async () => {
+  it('stop calls runtime.stop(); next createLocal gets a fresh runtime', async () => {
     const first = await env.mgr.createLocal({
       workspaceId: 'ws-A', provider: 'claude', workdir: '/a', source: 'cli',
     });
-    // Sanity: the factory made exactly one runtime.
     expect(env.runtimes).toHaveLength(1);
-    const parkedRuntime = env.runtimes[0];
+    const firstRuntime = env.runtimes[0];
 
     await env.mgr.stop(first.id);
-    // Runtime parked, not stopped.
-    expect(parkedRuntime.stopCalls).toBe(0);
-    expect(env.warmPool.size()).toBe(1);
+    // Fully stopped — NOT parked.
+    expect(firstRuntime.stopCalls).toBe(1);
+    expect(env.warmPool.size()).toBe(0);
 
     const second = await env.mgr.createLocal({
       workspaceId: 'ws-A', provider: 'claude', workdir: '/a', source: 'cli',
     });
-    // Factory was NOT invoked a second time — the pool served the request.
-    expect(env.runtimes).toHaveLength(1);
-    expect(env.warmPool.size()).toBe(0);
-    // Second session is wired to the same runtime instance (cross-checked
-    // via the internal field; the public surface doesn't expose runtime).
-    const secondRuntime = (second as unknown as { runtime: FakeRuntime }).runtime;
-    expect(secondRuntime).toBe(parkedRuntime);
-    // Pluck-then-start means the runtime's start() ran again for the reused
-    // session — start/stop counts should be 2/0.
-    expect(parkedRuntime.startCalls).toBe(2);
-    expect(parkedRuntime.stopCalls).toBe(0);
+    // Factory invoked again — fresh runtime, not reused.
+    expect(env.runtimes).toHaveLength(2);
+    const secondRuntime = env.runtimes[1];
+    expect(secondRuntime).not.toBe(firstRuntime);
+    // Each runtime's start() ran exactly once (the production invariant).
+    expect(firstRuntime.startCalls).toBe(1);
+    expect(secondRuntime.startCalls).toBe(1);
   });
 
-  it('stopAll drains the pool — no parked runtimes leak past shutdown', async () => {
+  it('stopAll stops every live session runtime; pool is empty', async () => {
     const a = await env.mgr.createLocal({
       workspaceId: 'ws-A', provider: 'claude', workdir: '/a', source: 'cli',
     });
@@ -75,9 +74,23 @@ describe('SessionManager <-> WarmRuntimePool', () => {
 
     await env.mgr.stopAll();
 
-    // Every runtime stopped (either via LocalSession.stop on the direct
-    // session path, or via pool.drain on parked ones). Nothing left in pool.
     expect(env.warmPool.size()).toBe(0);
     for (const r of env.runtimes) expect(r.stopCalls).toBe(1);
+  });
+});
+
+describe('WarmRuntimePool scaffolding (unit — usable when T9 re-enables pooling)', () => {
+  it('park then pluck still roundtrips a runtime in isolation', () => {
+    const pool = new WarmRuntimePool({ ttlSec: 60, max: 2 });
+    const r = new FakeRuntime('claude');
+    pool.park(r, 'ws-X');
+    expect(pool.size()).toBe(1);
+    const plucked = pool.pluck('claude', 'ws-X');
+    expect(plucked).toBe(r);
+    expect(pool.size()).toBe(0);
+    // Pool does not call start() itself — the would-be consumer does,
+    // which is why reuse stays disabled until runtime.reset() exists.
+    expect(r.startCalls).toBe(0);
+    expect(r.stopCalls).toBe(0);
   });
 });

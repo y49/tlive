@@ -29,10 +29,10 @@ export class FakeRuntime implements AgentRuntime {
   constructor(provider: 'claude' | 'codex' = 'claude') { this.provider = provider; }
 
   async start(_opts: AgentRuntimeOptions): Promise<AgentRuntimeStartResult> {
-    // Warm-pool reuse replays start() on a runtime that was never stopped
-    // (LocalSession.detachRuntime preserves started=true). Real runtimes
-    // handle this as "start a new session" against the same process; the
-    // fake just allows re-entry and issues a fresh sdkSessionId.
+    // Production runtimes reject second start(); warm-pool reuse deferred
+    // until AgentRuntime.reset() lands (see T9+). Mirroring that invariant
+    // here keeps tests honest about the real-world constraint.
+    if (this.started) throw new Error('runtime already started');
     this.started = true;
     this.startCalls++;
     return { sdkSessionId: `fake-${this.startCalls}` };

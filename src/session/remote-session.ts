@@ -152,6 +152,7 @@ export class RemoteSession implements SessionLike {
    * the full AgentStatus from the MCP-reported phase + detail so renderers
    * can treat remote and local sessions uniformly.
    */
+  // TODO(T5): append RollupDelta to CostRollupStore when MCP sync.state carries cost_delta.
   setStatus(phase: AgentStatus['phase'], detail?: RemoteStatusDetail): void {
     if (this.disconnected) return;
     this.touch();

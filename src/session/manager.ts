@@ -55,7 +55,11 @@ export interface SessionManagerDeps {
   persistence: SessionPersistence;
   broker: PermissionBroker;
   runtimeFactory: RuntimeFactory;
-  /** Optional warm pool. When provided, stopped LocalSessions park runtimes here. */
+  /**
+   * Optional warm pool. T3 scope keeps this as scaffolding only — stop()
+   * never parks, so pluck() always returns null. Re-enabled once
+   * AgentRuntime.reset() lands (T9+).
+   */
   warmPool?: WarmRuntimePool;
   /** Optional rollup store. LocalSessions will append per-turn cost deltas here. */
   rollupStore?: CostRollupStore;
@@ -68,8 +72,6 @@ export class SessionManager {
   private listeners = new Set<ManagerEventListener>();
   private readonly warmPool: WarmRuntimePool | null;
   private readonly rollupStore: CostRollupStore | null;
-  /** True while stopAll() is draining — suppresses warm-pool parking. */
-  private shuttingDown = false;
 
   constructor(private readonly deps: SessionManagerDeps) {
     this.warmPool = deps.warmPool ?? null;
@@ -161,14 +163,11 @@ export class SessionManager {
   }
 
   async stopAll(): Promise<void> {
-    this.shuttingDown = true;
-    try {
-      const ids = [...this.sessions.keys()];
-      await Promise.all(ids.map((id) => this.stop(id).catch(() => { /* isolate */ })));
-      if (this.warmPool) await this.warmPool.drain();
-    } finally {
-      this.shuttingDown = false;
-    }
+    const ids = [...this.sessions.keys()];
+    await Promise.all(ids.map((id) => this.stop(id).catch(() => { /* isolate */ })));
+    // Pool is always empty in T3 (stop never parks), but drain anyway in case
+    // a future task re-enables pooling and forgets to update shutdown.
+    if (this.warmPool) await this.warmPool.drain();
   }
 
   async stop(id: string): Promise<void> {
@@ -176,21 +175,12 @@ export class SessionManager {
     if (!s) return;
     if (s.kind === 'local') {
       const local = s as LocalSession;
-      // Park the warm runtime for reuse unless we're tearing down the whole
-      // pool (stopAll) — in that case the pool is about to drain, so parking
-      // would just cost a TTL timer that fires during shutdown.
-      if (this.warmPool && !this.shuttingDown) {
-        try {
-          const runtime = local.detachRuntime();
-          this.warmPool.park(runtime, local.workspaceId);
-        } catch {
-          // Detach rejected (already detached / torn down) — fall back to
-          // a hard stop so the session is still removed from the map.
-          await local.stop().catch(() => undefined);
-        }
-      } else {
-        await local.stop();
-      }
+      // Warm-pool reuse is deferred: both ClaudeSdkRuntime and
+      // CodexAppServerRuntime throw on a second start(), so parking a
+      // runtime for reuse would crash the next createLocal. Always fully
+      // stop. When AgentRuntime.reset() lands (T9+), this branch can
+      // reintroduce the detach+park path.
+      await local.stop();
     } else {
       (s as RemoteSession).onDisconnect('manager_stop');
     }
@@ -237,6 +227,11 @@ export class SessionManager {
   // ---- Internal ------------------------------------------------------------
 
   private pluckOrBuildRuntime(provider: AgentProvider, workspaceId: string): AgentRuntime {
+    // T3 scope: warm-pool infrastructure is wired but reuse is deferred until
+    // AgentRuntime.reset() exists (real runtimes reject a second start()).
+    // stop() never parks, so pluck() is always null in production — the
+    // factory path is always taken. Kept as a placeholder so a future task
+    // can re-enable pooling by restoring the detach+park path in stop().
     if (this.warmPool) {
       const warm = this.warmPool.pluck(provider, workspaceId);
       if (warm) return warm;

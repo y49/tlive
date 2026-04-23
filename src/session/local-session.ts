@@ -221,6 +221,8 @@ export class LocalSession implements SessionLike {
   async interrupt(): Promise<void> {
     if (this.legacyStatus === 'stopped') return;
     // Reject pending permissions so any canUseTool await unblocks immediately.
+    // TODO(T4): also deny pending askBroker + elicitationBroker requests once
+    // the category-split PermissionBroker and sibling brokers land.
     this.broker.denyAllForSession(this.id);
     try { await this.runtime.interrupt(); } catch { /* runtime may not support it */ }
     // Don't clobber a meaningful terminal phase set by BudgetGuard's
@@ -253,6 +255,10 @@ export class LocalSession implements SessionLike {
    * instance transitions to 'stopped' and must not receive further input —
    * subscriptions are unwired here so runtime-side events after detach don't
    * leak into the stopped session. Caller owns the returned runtime.
+   *
+   * Unused in T3; intended for T9+ when runtime.reset() lands. Until then,
+   * SessionManager.stop() always calls stop() instead, because real runtimes
+   * (Claude, Codex) throw on a second start().
    */
   detachRuntime(): AgentRuntime {
     if (this.detached) {
