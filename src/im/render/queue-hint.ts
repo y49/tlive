@@ -5,7 +5,7 @@
 //   ⏭ Queued as #N · [cancel]
 // CallbackRouter (T7) binds the cancel button to InputQueue.cancel.
 
-import type { RendererDeps } from './types.js';
+import type { RendererDeps, RenderTarget } from './types.js';
 import type { ReplyMarkup } from '../../platform/types.js';
 
 export interface QueueHintInput {
@@ -31,9 +31,12 @@ export function queueHintButtons(entryId: string): ReplyMarkup {
 
 export class QueueHintRenderer {
   private readonly adapter: RendererDeps['adapter'];
+  private readonly target: RenderTarget;
 
   constructor(opts: RendererDeps) {
     this.adapter = opts.adapter;
+    this.target = opts.target;
+    void this.target;
   }
 
   async emit(input: QueueHintInput): Promise<string> {

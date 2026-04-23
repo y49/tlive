@@ -106,5 +106,60 @@ describe('integration: Telegram end-to-end turn', () => {
     expect(sends.some((s) => String(s.args.text).includes('Done'))).toBe(true);
     // Approval callback was invoked in our broker mock indirectly; broker side is T4's test.
     expect(approved).toBe(false); // our mock broker doesn't call request.resolve, that's fine.
+
+    // Cost accumulation (T6 review fix #3): turn_end costUsd should have been
+    // folded into state.costUsd AND surfaced via header edit.
+    const costShown = edits.some((e) => String(e.args.text ?? '').includes('$0.01'));
+    expect(costShown).toBe(true);
+  });
+
+  it('outbound call sequence: header → activity → permission → agent → header-cost', async () => {
+    const session = new FakeSession({ id: 'sess-seq', workspaceId: 'w1' });
+    ctx.sm.push({ kind: 'created', session });
+    await tick();
+
+    session.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: 'ls', at: 1_000_000 });
+    await tick();
+
+    ctx.pb.push({
+      kind: 'pending',
+      sessionId: 'sess-seq',
+      request: {
+        id: 'sess-seq:p1', category: 'file-edit', toolName: 'Edit',
+        toolInput: { file_path: 'a.ts' },
+        diffPreview: { from: 'old', to: 'new', added: 1, removed: 1, path: 'a.ts' },
+        resolve: () => { /* noop */ },
+      },
+    });
+    await tick();
+
+    session.emit({ kind: 'assistant_text', turnId: 't1', text: 'Looking at the code', complete: true });
+    session.emit({ kind: 'turn_end', turnId: 't1', durationMs: 200, costUsd: 0.07, tokensIn: 10, tokensOut: 5 });
+    await tick();
+
+    const sequence = ctx.adapter.calls.map((c) => ({
+      kind: c.kind,
+      text: String((c.args as { text?: unknown }).text ?? ''),
+    }));
+
+    // First event is the session header send (📁 prefix).
+    expect(sequence[0]!.kind).toBe('send');
+    expect(sequence[0]!.text).toContain('📁');
+
+    // Activity sticky thinking appears next.
+    const activityThink = sequence.find((s) => s.kind === 'send' && s.text.includes('🧠 thinking'));
+    expect(activityThink).toBeDefined();
+
+    // Permission card send occurs (📝 Edit prefix for file-edit).
+    const permission = sequence.find((s) => s.kind === 'send' && s.text.includes('📝 Edit'));
+    expect(permission).toBeDefined();
+
+    // Agent message send contains the text payload.
+    const agentMsg = sequence.find((s) => s.kind === 'send' && s.text.includes('Looking at the'));
+    expect(agentMsg).toBeDefined();
+
+    // A header edit with the accumulated cost appears after turn_end.
+    const costEdit = sequence.find((s) => s.kind === 'edit' && /\$0\.07/.test(s.text));
+    expect(costEdit).toBeDefined();
   });
 });

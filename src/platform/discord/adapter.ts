@@ -34,8 +34,15 @@ export class DiscordAdapter implements PlatformAdapter {
   private readonly client: Client;
   private readonly inboundListeners = new Set<(ev: InboundEvent) => void>();
   private readonly options: DiscordAdapterOptions;
-  /** Pending modal specs keyed by interaction customId. Consumed by command handler. */
-  readonly pendingModals = new Map<string, { title: string; fields: unknown[] }>();
+  /**
+   * Pending modal specs keyed by elicitation request id. Written by
+   * ElicitationFormRenderer (form mode on Discord) and consumed by T7's
+   * CallbackRouter when the user clicks the "Open form" button.
+   *
+   * `createdAt` is a simple TTL marker — T7 adds real cleanup; for now
+   * entries remain until T7 deletes them (or until the process restarts).
+   */
+  readonly pendingModals = new Map<string, { title: string; fields: unknown[]; createdAt?: number }>();
 
   constructor(options: DiscordAdapterOptions) {
     this.options = options;

@@ -5,6 +5,8 @@
 //
 // AttachmentExporter is the upstream producer; this renderer only handles the
 // outbound rendering, not the upload decision.
+//
+// v1.0 — renderer-per-target.
 
 import type { RendererDeps, SessionRenderState, RenderTarget } from './types.js';
 import type { ReplyMarkup } from '../../platform/types.js';
@@ -43,28 +45,30 @@ export interface AttachmentPreviewRendererOptions extends RendererDeps {
 export class AttachmentPreviewRenderer {
   private readonly adapter: AttachmentPreviewRendererOptions['adapter'];
   private readonly capabilities: AttachmentPreviewRendererOptions['capabilities'];
+  // `session` is held for future per-target book-keeping (e.g. attachment id → msgId).
   private readonly session: SessionRenderState;
+  private readonly target: RenderTarget;
 
   constructor(opts: AttachmentPreviewRendererOptions) {
     this.adapter = opts.adapter;
     this.capabilities = opts.capabilities;
     this.session = opts.session;
+    this.target = opts.target;
+    void this.session;
   }
 
   async onProduced(ev: AttachmentPreviewEvent): Promise<void> {
     const caption = renderAttachmentCaption(ev);
     const markup = attachmentButtons(ev.attachmentId);
-    for (const target of this.session.targets) {
-      await this.renderForTarget(target, ev, caption, markup);
-    }
+    await this.renderForTarget(ev, caption, markup);
   }
 
   private async renderForTarget(
-    target: RenderTarget,
     ev: AttachmentPreviewEvent,
     caption: string,
     markup: ReplyMarkup,
   ): Promise<void> {
+    const target = this.target;
     const eff = target.role === 'primary' ? markup : undefined;
     if (this.capabilities.fileUpload) {
       try {

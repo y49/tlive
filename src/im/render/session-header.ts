@@ -7,6 +7,8 @@
 //
 // Content shape (single line, terse):
 //   📁 {workspace} · 🧬 {short-alias} · 🤖 {model} · ⚡️ hot (Ns) · 💰 $0.12
+//
+// v1.0 — renderer-per-target: one SessionHeaderRenderer per binding.
 
 import type { RendererDeps, SessionRenderState, RenderTarget } from './types.js';
 import { targetKey } from './types.js';
@@ -41,51 +43,48 @@ export class SessionHeaderRenderer {
   private readonly adapter: SessionHeaderRendererOptions['adapter'];
   private readonly capabilities: SessionHeaderRendererOptions['capabilities'];
   private readonly session: SessionRenderState;
-  private readonly lastTextByTarget = new Map<string, string>();
+  private readonly target: RenderTarget;
+  private lastText: string | undefined;
 
   constructor(opts: SessionHeaderRendererOptions) {
     this.adapter = opts.adapter;
     this.capabilities = opts.capabilities;
     this.session = opts.session;
+    this.target = opts.target;
   }
 
-  /** Send the initial header for every target. Pins when supported. */
+  /** Send the initial header for this target. Pins when supported. */
   async initialize(nowMs = Date.now()): Promise<void> {
     const text = renderSessionHeaderText(this.headerData(), nowMs);
-    for (const target of this.session.targets) {
-      await this.sendForTarget(target, text);
-    }
+    await this.sendForTarget(text);
   }
 
   /** Re-render header (edit if id known, else create). */
   async refresh(nowMs = Date.now()): Promise<void> {
     const text = renderSessionHeaderText(this.headerData(), nowMs);
-    for (const target of this.session.targets) {
-      const key = targetKey(target);
-      const prev = this.lastTextByTarget.get(key);
-      if (prev === text) continue;
-      const id = this.session.sessionHeaderMsgIds.get(key);
-      if (id && this.capabilities.editMessage) {
-        try {
-          await this.adapter.edit(id, target.chatId, text);
-          this.lastTextByTarget.set(key, text);
-          continue;
-        } catch { /* fall through to re-send */ }
-      }
-      await this.sendForTarget(target, text);
+    const target = this.target;
+    const key = targetKey(target);
+    if (this.lastText === text) return;
+    const id = this.session.sessionHeaderMsgIds.get(key);
+    if (id && this.capabilities.editMessage) {
+      try {
+        await this.adapter.edit(id, target.chatId, text);
+        this.lastText = text;
+        return;
+      } catch { /* fall through to re-send */ }
     }
+    await this.sendForTarget(text);
   }
 
-  /** Delete header messages (called on session stop). */
+  /** Delete header message (called on session stop). */
   async teardown(): Promise<void> {
-    for (const target of this.session.targets) {
-      const key = targetKey(target);
-      const id = this.session.sessionHeaderMsgIds.get(key);
-      if (!id) continue;
-      try { await this.adapter.delete(id, target.chatId); } catch { /* isolate */ }
-      this.session.sessionHeaderMsgIds.delete(key);
-    }
-    this.lastTextByTarget.clear();
+    const target = this.target;
+    const key = targetKey(target);
+    const id = this.session.sessionHeaderMsgIds.get(key);
+    if (!id) return;
+    try { await this.adapter.delete(id, target.chatId); } catch { /* isolate */ }
+    this.session.sessionHeaderMsgIds.delete(key);
+    this.lastText = undefined;
   }
 
   private headerData(): SessionHeaderData {
@@ -99,7 +98,8 @@ export class SessionHeaderRenderer {
     };
   }
 
-  private async sendForTarget(target: RenderTarget, text: string): Promise<void> {
+  private async sendForTarget(text: string): Promise<void> {
+    const target = this.target;
     const key = targetKey(target);
     const id = await this.adapter.send({
       chatId: target.chatId,
@@ -108,7 +108,7 @@ export class SessionHeaderRenderer {
       silent: true,
     });
     this.session.sessionHeaderMsgIds.set(key, id);
-    this.lastTextByTarget.set(key, text);
+    this.lastText = text;
     if (this.capabilities.pinMessage) {
       try { await this.adapter.pin(id, target.chatId); } catch { /* isolate */ }
     }

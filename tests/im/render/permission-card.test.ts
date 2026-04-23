@@ -68,7 +68,8 @@ describe('permission-card', () => {
   it('renderer sends card on pending, edits on resolve', async () => {
     const adapter = new FakeAdapter('telegram');
     const state = makeState();
-    const r = new PermissionCardRenderer({ adapter, capabilities: CAPABILITIES.telegram, session: state });
+    const target = state.targets[0]!;
+    const r = new PermissionCardRenderer({ adapter, capabilities: CAPABILITIES.telegram, session: state, target });
     const req = makeReq('generic');
     await r.onPending(req);
     expect(adapter.byKind('send')).toHaveLength(1);
@@ -80,8 +81,24 @@ describe('permission-card', () => {
   it('skips elicitation category (routed elsewhere)', async () => {
     const adapter = new FakeAdapter('telegram');
     const state = makeState();
-    const r = new PermissionCardRenderer({ adapter, capabilities: CAPABILITIES.telegram, session: state });
+    const target = state.targets[0]!;
+    const r = new PermissionCardRenderer({ adapter, capabilities: CAPABILITIES.telegram, session: state, target });
     await r.onPending(makeReq('elicitation'));
     expect(adapter.calls).toHaveLength(0);
+  });
+
+  it('mirror target omits inline buttons and appends "Respond from primary" tail', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const state = newSessionRenderState({
+      sessionId: 's1', shortAlias: 'abcd',
+      workspaceId: 'w1', workspaceName: 'ws',
+      targets: [{ channelType: 'telegram', chatId: '20', role: 'mirror' }],
+    });
+    const target = state.targets[0]!;
+    const r = new PermissionCardRenderer({ adapter, capabilities: CAPABILITIES.telegram, session: state, target });
+    await r.onPending(makeReq('generic'));
+    const send = adapter.byKind('send')[0]!;
+    expect(send.args.replyMarkup).toBeUndefined();
+    expect(String(send.args.text)).toContain('Respond from primary chat');
   });
 });

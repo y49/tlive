@@ -10,9 +10,11 @@
 
 import type {
   PlatformAdapter, OutboundMessage, OutboundAttachment, InboundEvent, ReplyMarkup,
+  FormField,
 } from '../types.js';
 import type { ChannelType } from '../../workspace/bindings.js';
 import { buildInlineCard } from './renderer.js';
+import { buildFormCard } from './form.js';
 import { sendFeishuAttachment, downloadFeishuAttachment } from './attachment.js';
 
 export interface FeishuAdapterOptions {
@@ -103,6 +105,32 @@ export class FeishuAdapter implements PlatformAdapter {
 
   async setReaction(_messageId: string, _chatId: string, _emoji: string | null): Promise<void> {
     throw new Error('FeishuAdapter: native reactions unsupported — renderer must fall back');
+  }
+
+  /**
+   * Send a Feishu elicitation form card (interactive card with a `form`
+   * element). Used by ElicitationFormRenderer for form-mode requests; the
+   * generic `send` path goes through buildInlineCard which does not know
+   * how to emit form elements.
+   */
+  async sendFormCard(
+    chatId: string,
+    spec: { title: string; fields: FormField[]; submitId: string; threadId?: string },
+  ): Promise<string> {
+    const card = buildFormCard(spec.title, spec.fields, spec.submitId);
+    const content = JSON.stringify(card);
+    const c = this.mustClient() as {
+      im: { v1: { message: { create: (args: unknown) => Promise<{ data?: { message_id?: string } }> } } };
+    };
+    const res = await c.im.v1.message.create({
+      params: { receive_id_type: 'chat_id' },
+      data: {
+        receive_id: chatId,
+        msg_type: 'interactive',
+        content,
+      },
+    });
+    return res.data?.message_id ?? '';
   }
 
   async sendAttachment(

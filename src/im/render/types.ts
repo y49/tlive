@@ -98,6 +98,15 @@ export interface SessionRenderState {
 export interface RendererDeps {
   adapter: PlatformAdapter;
   capabilities: ChannelCapabilities;
+  /**
+   * The specific RenderTarget this renderer instance is bound to.
+   *
+   * v1.0 — per T6 review fix for the N×M fan-out bug: each renderer owns
+   * exactly one target and operates on it alone. SessionFrontend constructs
+   * one ChannelRenderers bundle per workspace binding and dispatches each
+   * event to every channel's renderer once.
+   */
+  target: RenderTarget;
 }
 
 /** Category → template selector input. */

@@ -8,9 +8,9 @@
 //
 // Platform targeting: on each session, we resolve the workspace's bindings
 // via WorkspaceManager.partitionBindings, pair each ChannelType with the
-// registered PlatformAdapter, and instantiate one renderer-set per (session,
-// primary/mirror chat). Mirrors render read-only copies; only primaries
-// carry interactive buttons.
+// registered PlatformAdapter, and instantiate one renderer-set per binding
+// (renderer-per-target — fixes the N×M fan-out bug from T6 review). Mirrors
+// render read-only copies; only primaries carry interactive buttons.
 
 import type { SessionManager } from '../session/manager.js';
 import type { SessionLike } from '../session/types.js';
@@ -28,6 +28,7 @@ import {
   newTurnRenderState,
   type RenderTarget,
   type TurnRenderState,
+  targetKey,
 } from './render/types.js';
 import { ReactionTracker } from './render/reaction-tracker.js';
 import { SessionHeaderRenderer } from './render/session-header.js';
@@ -40,9 +41,9 @@ import { AttachmentPreviewRenderer } from './render/attachment-preview.js';
 import { QueueHintRenderer } from './render/queue-hint.js';
 
 /**
- * A renderer set lives per (session, target-channel). All renderers in a set
- * share the same `session` SessionRenderState; the set's adapter is the
- * one for that channel only.
+ * A renderer set lives per (session, binding). All renderers in a set share
+ * the same session-level SessionRenderState. The set's adapter is the one
+ * for that channel only; every renderer inside operates on `target` alone.
  */
 interface ChannelRenderers {
   channelType: ChannelType;
@@ -75,6 +76,15 @@ export interface SessionFrontendOptions {
   elicitationBroker?: ElicitationBroker;
   /** Map of registered adapters keyed by channelType. */
   adapters: Partial<Record<ChannelType, PlatformAdapter>>;
+}
+
+/**
+ * TypeScript exhaustiveness helper. Placing `assertNever(ev)` at the end of
+ * a discriminated-union switch forces a compile error if a new kind is
+ * added without a corresponding case.
+ */
+function assertNever(_x: never): void {
+  /* nothing at runtime; `_x` should be unreachable */
 }
 
 export class SessionFrontend {
@@ -170,7 +180,7 @@ export class SessionFrontend {
       const adapter = this.opts.adapters[target.channelType];
       if (!adapter) continue;
       const caps = capabilitiesOf(target.channelType);
-      const deps = { adapter, capabilities: caps };
+      const deps = { adapter, capabilities: caps, target };
       const channel: ChannelRenderers = {
         channelType: target.channelType,
         adapter,
@@ -189,9 +199,9 @@ export class SessionFrontend {
       channels.push(channel);
     }
 
-    // Initialize session header exactly once (shared state).
-    if (channels[0]) {
-      try { await channels[0].header.initialize(); } catch { /* isolate */ }
+    // Initialize session header for every channel (each owns its own msg id).
+    for (const c of channels) {
+      try { await c.header.initialize(); } catch { /* isolate */ }
     }
 
     const unsubscribeEvent = session.onEvent((ev) => {
@@ -211,11 +221,12 @@ export class SessionFrontend {
     if (!entry) return;
     this.sessions.delete(sessionId);
     try { entry.unsubscribeEvent(); } catch { /* isolate */ }
-    const first = entry.channels[0];
-    if (first) {
-      try { await first.todo.teardown(); } catch { /* isolate */ }
-      try { await first.header.teardown(); } catch { /* isolate */ }
-      try { await first.activity.teardown(); } catch { /* isolate */ }
+    // Teardown each channel's renderers (timers, pinned messages, etc.).
+    for (const c of entry.channels) {
+      try { await c.todo.teardown(); } catch { /* isolate */ }
+      try { await c.header.teardown(); } catch { /* isolate */ }
+      try { await c.activity.teardown(); } catch { /* isolate */ }
+      try { await c.agent.teardown(); } catch { /* isolate */ }
     }
   }
 
@@ -228,7 +239,6 @@ export class SessionFrontend {
     const state = channels[0]?.session;
     if (!state) return;
 
-    // Global state updates.
     switch (ev.kind) {
       case 'turn_start': {
         state.turn = newTurnRenderState(ev.turnId, ev.at, 0);
@@ -236,7 +246,8 @@ export class SessionFrontend {
         return;
       }
       case 'turn_end': {
-        state.costUsd = (state.costUsd ?? 0); // tracked via usage elsewhere; kept.
+        // Accumulate cost so the session header reflects true running total.
+        state.costUsd = (state.costUsd ?? 0) + (ev.costUsd ?? 0);
         for (const c of channels) { await c.activity.onEvent(ev); await c.agent.onEvent(ev); }
         for (const c of channels) { await c.header.refresh(); }
         state.turn = undefined;
@@ -333,12 +344,44 @@ export class SessionFrontend {
         await this.detachSession(sessionId);
         return;
       }
-      case 'runtime_error':
-      default:
-        // Unhandled events still drive the activity sticky so the timer updates.
+      case 'runtime_error': {
+        // Still flush the activity sticky so the user sees any fault banner.
         if (state.turn) {
           for (const c of channels) { await c.activity.onEvent(ev); }
         }
+        return;
+      }
+      // Known noop kinds — these events are consumed elsewhere in the pipeline
+      // (runtime, brokers, cost tracker) and have no direct UI in T6.
+      case 'heartbeat':
+      case 'thinking_delta':
+      case 'thinking_end':
+      case 'subagent_event':
+      case 'file_changed':
+      case 'ask_user_question_requested':
+      case 'ask_user_question_resolved':
+      case 'elicitation_requested':
+      case 'elicitation_resolved':
+      case 'permission_requested':
+      case 'permission_resolved':
+      case 'pre_compact':
+      case 'post_compact':
+      case 'prewarm_tick':
+      case 'api_throttle':
+      case 'api_resumed':
+      case 'rewind_files':
+      case 'session_forked':
+      case 'session_renamed':
+      case 'mcp_status_change':
+      case 'plugin_reloaded':
+      case 'hook_generic':
+        return;
+      default:
+        // Compile-time exhaustiveness: if a new NotificationEvent kind is added,
+        // TypeScript will complain here. At runtime we just log-and-noop.
+        assertNever(ev);
+        // eslint-disable-next-line no-console
+        console.debug('[SessionFrontend] unhandled event', (ev as { kind: string }).kind);
         return;
     }
   }
@@ -371,7 +414,7 @@ export class SessionFrontend {
           replyMarkup: effective,
         });
         const state = c.session;
-        const key = `${target.channelType}:${target.chatId}${target.threadId ? ':' + target.threadId : ''}`;
+        const key = targetKey(target);
         let perTarget = state.pendingAskMsgIds.get(key);
         if (!perTarget) { perTarget = new Map(); state.pendingAskMsgIds.set(key, perTarget); }
         perTarget.set(ev.request.id, msgId);
@@ -380,7 +423,7 @@ export class SessionFrontend {
       // resolved
       for (const c of entry.channels) {
         const target = c.target;
-        const key = `${target.channelType}:${target.chatId}${target.threadId ? ':' + target.threadId : ''}`;
+        const key = targetKey(target);
         const msgId = c.session.pendingAskMsgIds.get(key)?.get(ev.requestId);
         if (!msgId) continue;
         try {

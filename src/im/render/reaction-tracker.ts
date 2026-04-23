@@ -9,7 +9,7 @@
 // message containing the emoji and track that id so we can delete/edit it on
 // subsequent state changes, keeping the channel clean.
 
-import type { RendererDeps, SessionRenderState } from './types.js';
+import type { RendererDeps, SessionRenderState, RenderTarget } from './types.js';
 
 export type ReactionPhase = 'received' | 'processing' | 'done_ok' | 'done_err';
 
@@ -32,6 +32,7 @@ export class ReactionTracker {
   private readonly adapter: ReactionTrackerOptions['adapter'];
   private readonly capabilities: ReactionTrackerOptions['capabilities'];
   private readonly session: SessionRenderState;
+  private readonly target: RenderTarget;
   /** Fallback reply-message ids keyed by inbound messageId. */
   private readonly fallbackMsgIds = new Map<string, string>();
 
@@ -39,6 +40,8 @@ export class ReactionTracker {
     this.adapter = opts.adapter;
     this.capabilities = opts.capabilities;
     this.session = opts.session;
+    this.target = opts.target;
+    void this.target;
   }
 
   async setPhase(

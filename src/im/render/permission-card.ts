@@ -10,6 +10,9 @@
 // Card lifecycle:
 //   pending(ev) → render create, map requestId → msgId.
 //   resolved(decision) → edit to "resolved" banner, clear inline buttons.
+//
+// v1.0 — renderer-per-target. Mirrors omit interactive buttons and append a
+// "Respond from primary chat" footer.
 
 import type { PermissionRequest } from '../../runtime/types.js';
 import type { PermissionDecision } from '../../runtime/types.js';
@@ -120,56 +123,55 @@ export class PermissionCardRenderer {
   private readonly adapter: PermissionCardRendererOptions['adapter'];
   private readonly capabilities: PermissionCardRendererOptions['capabilities'];
   private readonly session: SessionRenderState;
+  private readonly target: RenderTarget;
 
   constructor(opts: PermissionCardRendererOptions) {
     this.adapter = opts.adapter;
     this.capabilities = opts.capabilities;
     this.session = opts.session;
+    this.target = opts.target;
   }
 
   async onPending(req: PermissionRequest): Promise<void> {
     if (req.category === 'elicitation') return; // Routed to ElicitationFormRenderer.
     const text = renderPermissionCard(req);
     const markup = permissionButtons(req.id);
-    for (const target of this.session.targets) {
-      await this.sendForTarget(target, req.id, text, markup);
-    }
+    await this.sendForTarget(req.id, text, markup);
   }
 
   async onResolved(requestId: string, decision: PermissionDecision, resolvedByUserId?: string): Promise<void> {
     const banner = renderResolvedBanner(decision, resolvedByUserId);
-    for (const target of this.session.targets) {
-      const key = targetKey(target);
-      const perTarget = this.session.pendingPermissionMsgIds.get(key);
-      const msgId = perTarget?.get(requestId);
-      if (!msgId) continue;
-      if (this.capabilities.editMessage) {
-        // Append banner + strip buttons.
-        try {
-          await this.adapter.edit(msgId, target.chatId, banner, { type: 'inline_keyboard', buttons: [] });
-        } catch { /* isolate */ }
-      } else {
-        try {
-          await this.adapter.send({
-            chatId: target.chatId,
-            threadId: target.threadId,
-            text: banner,
-            replyToMessageId: msgId,
-            silent: true,
-          });
-        } catch { /* isolate */ }
-      }
-      perTarget!.delete(requestId);
-      if (perTarget!.size === 0) this.session.pendingPermissionMsgIds.delete(key);
+    const target = this.target;
+    const key = targetKey(target);
+    const perTarget = this.session.pendingPermissionMsgIds.get(key);
+    const msgId = perTarget?.get(requestId);
+    if (!msgId) return;
+    if (this.capabilities.editMessage) {
+      // Append banner + strip buttons.
+      try {
+        await this.adapter.edit(msgId, target.chatId, banner, { type: 'inline_keyboard', buttons: [] });
+      } catch { /* isolate */ }
+    } else {
+      try {
+        await this.adapter.send({
+          chatId: target.chatId,
+          threadId: target.threadId,
+          text: banner,
+          replyToMessageId: msgId,
+          silent: true,
+        });
+      } catch { /* isolate */ }
     }
+    perTarget!.delete(requestId);
+    if (perTarget!.size === 0) this.session.pendingPermissionMsgIds.delete(key);
   }
 
   private async sendForTarget(
-    target: RenderTarget,
     requestId: string,
     text: string,
     markup: ReplyMarkup,
   ): Promise<void> {
+    const target = this.target;
     const effectiveMarkup = target.role === 'primary' ? markup : undefined;
     const mirrorTail = target.role === 'mirror' ? `\n(Respond from primary chat)` : '';
     const sent = await this.adapter.send({

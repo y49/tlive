@@ -29,7 +29,8 @@ describe('SessionHeaderRenderer', () => {
   it('initialize sends + pins on a pinning platform', async () => {
     const adapter = new FakeAdapter('telegram');
     const state = makeState();
-    const r = new SessionHeaderRenderer({ adapter, capabilities: CAPABILITIES.telegram, session: state });
+    const target = state.targets[0]!;
+    const r = new SessionHeaderRenderer({ adapter, capabilities: CAPABILITIES.telegram, session: state, target });
     await r.initialize();
     expect(adapter.byKind('send')).toHaveLength(1);
     expect(adapter.byKind('pin')).toHaveLength(1);
@@ -38,7 +39,8 @@ describe('SessionHeaderRenderer', () => {
   it('refresh edits the existing message when text changes', async () => {
     const adapter = new FakeAdapter('telegram');
     const state = makeState();
-    const r = new SessionHeaderRenderer({ adapter, capabilities: CAPABILITIES.telegram, session: state });
+    const target = state.targets[0]!;
+    const r = new SessionHeaderRenderer({ adapter, capabilities: CAPABILITIES.telegram, session: state, target });
     await r.initialize();
     state.costUsd = 0.99;
     await r.refresh();
@@ -48,7 +50,8 @@ describe('SessionHeaderRenderer', () => {
   it('refresh skips when text unchanged', async () => {
     const adapter = new FakeAdapter('telegram');
     const state = makeState();
-    const r = new SessionHeaderRenderer({ adapter, capabilities: CAPABILITIES.telegram, session: state });
+    const target = state.targets[0]!;
+    const r = new SessionHeaderRenderer({ adapter, capabilities: CAPABILITIES.telegram, session: state, target });
     await r.initialize();
     await r.refresh();
     expect(adapter.byKind('edit')).toHaveLength(0);

@@ -9,11 +9,21 @@
 //
 // Scope: this renderer produces the outbound card. T7's CommandRouter handles
 // the inbound `form_submit` event and calls ElicitationBroker.resolve().
+//
+// v1.0 — renderer-per-target. Form mode dispatches per-platform:
+//   Feishu : calls FeishuAdapter.sendFormCard(...) directly (Feishu's form
+//            card can't be emitted through buildInlineCard).
+//   Discord: stashes the modal spec into DiscordAdapter.pendingModals and
+//            sends a "Open form" button; T7 CallbackRouter shows the modal
+//            inside the button interaction.
+//   Telegram: forceReply sequence (existing path).
 
 import type { ElicitationRequest } from '../../runtime/types.js';
 import type { RendererDeps, SessionRenderState, RenderTarget } from './types.js';
 import { targetKey } from './types.js';
-import type { FormField, ReplyMarkup } from '../../platform/types.js';
+import type { FormField, InlineButton, ReplyMarkup } from '../../platform/types.js';
+import type { FeishuAdapter } from '../../platform/feishu/adapter.js';
+import type { DiscordAdapter } from '../../platform/discord/adapter.js';
 
 export interface ElicitationFormRendererOptions extends RendererDeps {
   session: SessionRenderState;
@@ -85,61 +95,145 @@ export function buildElicitationMarkup(
   };
 }
 
+/**
+ * Type guard: duck-typed detection of FeishuAdapter's `sendFormCard`. We
+ * don't `instanceof` because tests pass fake adapters.
+ */
+function asFeishuAdapter(
+  adapter: unknown,
+): { sendFormCard: FeishuAdapter['sendFormCard'] } | null {
+  if (typeof adapter !== 'object' || adapter === null) return null;
+  const sf = (adapter as { sendFormCard?: unknown }).sendFormCard;
+  if (typeof sf !== 'function') return null;
+  return adapter as { sendFormCard: FeishuAdapter['sendFormCard'] };
+}
+
+/**
+ * Type guard: duck-typed detection of DiscordAdapter's `pendingModals`.
+ */
+function asDiscordAdapter(
+  adapter: unknown,
+): { pendingModals: DiscordAdapter['pendingModals'] } | null {
+  if (typeof adapter !== 'object' || adapter === null) return null;
+  const pm = (adapter as { pendingModals?: unknown }).pendingModals;
+  if (!pm || typeof (pm as { set?: unknown }).set !== 'function') return null;
+  return adapter as { pendingModals: DiscordAdapter['pendingModals'] };
+}
+
 export class ElicitationFormRenderer {
   private readonly adapter: ElicitationFormRendererOptions['adapter'];
   private readonly capabilities: ElicitationFormRendererOptions['capabilities'];
   private readonly session: SessionRenderState;
+  private readonly target: RenderTarget;
 
   constructor(opts: ElicitationFormRendererOptions) {
     this.adapter = opts.adapter;
     this.capabilities = opts.capabilities;
     this.session = opts.session;
+    this.target = opts.target;
   }
 
   async onPending(req: ElicitationRequest): Promise<void> {
     const text = renderElicitationText(req);
-    const markup = buildElicitationMarkup(req, this.capabilities.modalForm);
-    for (const target of this.session.targets) {
-      await this.sendForTarget(target, req.id, text, markup);
-    }
+    await this.sendForTarget(req, text);
   }
 
   async onResolved(requestId: string, action: 'accept' | 'decline'): Promise<void> {
     const banner = action === 'accept' ? '✅ Submitted' : '❌ Declined';
-    for (const target of this.session.targets) {
-      const key = targetKey(target);
-      const perTarget = this.session.pendingElicitationMsgIds.get(key);
-      const msgId = perTarget?.get(requestId);
-      if (!msgId) continue;
-      if (this.capabilities.editMessage) {
-        try {
-          await this.adapter.edit(msgId, target.chatId, banner, { type: 'inline_keyboard', buttons: [] });
-        } catch { /* isolate */ }
-      }
-      perTarget!.delete(requestId);
-      if (perTarget!.size === 0) this.session.pendingElicitationMsgIds.delete(key);
+    const target = this.target;
+    const key = targetKey(target);
+    const perTarget = this.session.pendingElicitationMsgIds.get(key);
+    const msgId = perTarget?.get(requestId);
+    if (!msgId) return;
+    if (this.capabilities.editMessage) {
+      try {
+        await this.adapter.edit(msgId, target.chatId, banner, { type: 'inline_keyboard', buttons: [] });
+      } catch { /* isolate */ }
     }
+    perTarget!.delete(requestId);
+    if (perTarget!.size === 0) this.session.pendingElicitationMsgIds.delete(key);
   }
 
   private async sendForTarget(
-    target: RenderTarget,
-    requestId: string,
+    req: ElicitationRequest,
     text: string,
-    markup: ReplyMarkup,
   ): Promise<void> {
-    const effective = target.role === 'primary' ? markup : undefined;
+    const target = this.target;
+    const key = targetKey(target);
+
+    // Mirrors always get a read-only echo.
+    if (target.role === 'mirror') {
+      const sent = await this.adapter.send({
+        chatId: target.chatId,
+        threadId: target.threadId,
+        text,
+      });
+      this.recordMsgId(key, req.id, sent);
+      return;
+    }
+
+    // Form mode on platforms with modalForm capability takes platform-
+    // specific routing; all other modes use the generic markup.
+    if (req.mode === 'form' && this.capabilities.modalForm) {
+      if (target.channelType === 'feishu') {
+        const f = asFeishuAdapter(this.adapter);
+        if (f) {
+          const fields = schemaToFields(req.schema);
+          const sent = await f.sendFormCard(target.chatId, {
+            title: req.mcpServerName,
+            fields,
+            submitId: req.id,
+            threadId: target.threadId,
+          });
+          this.recordMsgId(key, req.id, sent);
+          return;
+        }
+      } else if (target.channelType === 'discord') {
+        const d = asDiscordAdapter(this.adapter);
+        if (d) {
+          const fields = schemaToFields(req.schema);
+          // Store modal spec for T7 CallbackRouter to show on interaction.
+          d.pendingModals.set(req.id, {
+            title: req.mcpServerName,
+            fields,
+            createdAt: Date.now(),
+          } as unknown as { title: string; fields: unknown[] });
+          const openMarkup: ReplyMarkup = {
+            type: 'inline_keyboard',
+            buttons: [[
+              { text: '📝 Open form', callbackData: `elic:open:${req.id}`, style: 'primary' } satisfies InlineButton,
+              { text: '❌ Cancel', callbackData: `elic:decline:${req.id}`, style: 'danger' },
+            ]],
+          };
+          const sent = await this.adapter.send({
+            chatId: target.chatId,
+            threadId: target.threadId,
+            text,
+            replyMarkup: openMarkup,
+          });
+          this.recordMsgId(key, req.id, sent);
+          return;
+        }
+      }
+    }
+
+    // Generic path (confirm / url-auth / Telegram forceReply form / fallback).
+    const markup = buildElicitationMarkup(req, this.capabilities.modalForm);
     const sent = await this.adapter.send({
       chatId: target.chatId,
       threadId: target.threadId,
       text,
-      replyMarkup: effective,
+      replyMarkup: markup,
     });
-    const key = targetKey(target);
+    this.recordMsgId(key, req.id, sent);
+  }
+
+  private recordMsgId(key: string, requestId: string, msgId: string): void {
     let perTarget = this.session.pendingElicitationMsgIds.get(key);
     if (!perTarget) {
       perTarget = new Map();
       this.session.pendingElicitationMsgIds.set(key, perTarget);
     }
-    perTarget.set(requestId, sent);
+    perTarget.set(requestId, msgId);
   }
 }

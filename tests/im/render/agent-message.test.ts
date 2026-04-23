@@ -13,8 +13,9 @@ function setup() {
   });
   state.turn = newTurnRenderState('t1', 1_000_000, 0);
   let now = 1_000_000;
+  const target = state.targets[0]!;
   const r = new AgentMessageRenderer({
-    adapter, capabilities: CAPABILITIES.telegram, session: state,
+    adapter, capabilities: CAPABILITIES.telegram, session: state, target,
     clock: () => now,
   });
   return { adapter, state, r };

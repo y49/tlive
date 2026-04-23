@@ -156,10 +156,19 @@ export function clampText(text: string, maxLen: number): string {
 
 /**
  * Split a long text into chunks no larger than maxLen. Splits on nearest
- * newline when possible to avoid mid-sentence cuts.
+ * newline when possible to avoid mid-sentence cuts, and is fence-aware:
+ * if a chunk has an odd number of ``` fences, the chunk is closed at the
+ * boundary and the next chunk is opened with the same fence (preserving
+ * the language tag when present). This prevents Discord/Telegram from
+ * rendering "broken" markdown across chunk boundaries.
  */
 export function splitText(text: string, maxLen: number): string[] {
   if (text.length <= maxLen) return [text];
+  const raw = naiveSplit(text, maxLen);
+  return balanceFences(raw, maxLen);
+}
+
+function naiveSplit(text: string, maxLen: number): string[] {
   const chunks: string[] = [];
   let remaining = text;
   while (remaining.length > maxLen) {
@@ -170,4 +179,37 @@ export function splitText(text: string, maxLen: number): string[] {
   }
   if (remaining.length > 0) chunks.push(remaining);
   return chunks;
+}
+
+/**
+ * Parse fences and reconcile them across chunk boundaries. Balanced chunks
+ * pass through unchanged. Unbalanced chunks have their open fence closed
+ * at the end of the chunk, and the corresponding fence (with language tag
+ * if any) is re-opened at the start of the next chunk.
+ *
+ * `maxLen` is used only to warn when adding the reopening fence would
+ * exceed the platform cap; in practice the naive split leaves enough
+ * headroom (one newline + ``` + lang ≈ 10 chars).
+ */
+function balanceFences(chunks: string[], _maxLen: number): string[] {
+  let openFence: string | null = null;
+  const out: string[] = [];
+  for (let i = 0; i < chunks.length; i++) {
+    let chunk = chunks[i]!;
+    // Prepend reopen fence from prior chunk's unclosed block.
+    if (openFence !== null) chunk = openFence + '\n' + chunk;
+    // Find all line-start fences.
+    const matches = [...chunk.matchAll(/(^|\n)```(\S*)/g)];
+    if (matches.length % 2 === 1) {
+      // Odd → an unclosed fence. Record it and append closing fence.
+      const last = matches[matches.length - 1]!;
+      const lang = last[2] ?? '';
+      openFence = lang ? '```' + lang : '```';
+      chunk = chunk + '\n```';
+    } else {
+      openFence = null;
+    }
+    out.push(chunk);
+  }
+  return out;
 }

@@ -27,7 +27,8 @@ describe('attachment-preview', () => {
   it('renderer uploads attachment via adapter', async () => {
     const adapter = new FakeAdapter('telegram');
     const state = makeState();
-    const r = new AttachmentPreviewRenderer({ adapter, capabilities: CAPABILITIES.telegram, session: state });
+    const target = state.targets[0]!;
+    const r = new AttachmentPreviewRenderer({ adapter, capabilities: CAPABILITIES.telegram, session: state, target });
     await r.onProduced({
       attachmentId: 'a1', name: 'out.md', mime: 'text/markdown', sizeBytes: 100, path: '/tmp/out.md',
     });

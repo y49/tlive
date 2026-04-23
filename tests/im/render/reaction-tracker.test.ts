@@ -15,8 +15,10 @@ function makeState() {
 describe('ReactionTracker', () => {
   it('uses native reaction on Telegram', async () => {
     const adapter = new FakeAdapter('telegram');
+    const state = makeState();
+    const target = state.targets[0]!;
     const tr = new ReactionTracker({
-      adapter, capabilities: CAPABILITIES.telegram, session: makeState(),
+      adapter, capabilities: CAPABILITIES.telegram, session: state, target,
     });
     await tr.setPhase({ chatId: '100', messageId: 'm42' }, 'received');
     expect(adapter.byKind('setReaction')).toHaveLength(1);
@@ -25,8 +27,10 @@ describe('ReactionTracker', () => {
 
   it('falls back to reply-message on Feishu', async () => {
     const adapter = new FakeAdapter('feishu');
+    const state = makeState();
+    const target = state.targets[0]!;
     const tr = new ReactionTracker({
-      adapter, capabilities: CAPABILITIES.feishu, session: makeState(),
+      adapter, capabilities: CAPABILITIES.feishu, session: state, target,
     });
     await tr.setPhase({ chatId: '100', messageId: 'f1' }, 'received');
     expect(adapter.byKind('send')).toHaveLength(1);
@@ -36,8 +40,10 @@ describe('ReactionTracker', () => {
 
   it('edits existing fallback message on subsequent phase', async () => {
     const adapter = new FakeAdapter('feishu');
+    const state = makeState();
+    const target = state.targets[0]!;
     const tr = new ReactionTracker({
-      adapter, capabilities: CAPABILITIES.feishu, session: makeState(),
+      adapter, capabilities: CAPABILITIES.feishu, session: state, target,
     });
     await tr.setPhase({ chatId: '100', messageId: 'f1' }, 'received');
     await tr.setPhase({ chatId: '100', messageId: 'f1' }, 'processing');

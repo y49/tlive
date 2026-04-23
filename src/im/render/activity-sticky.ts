@@ -10,6 +10,9 @@
 // after the previous flush; phase transitions (turn_start, turn_end,
 // tool_use_start→finished, parallel_tool_batch_end) force an immediate
 // flush so perceived responsiveness stays high.
+//
+// v1.0 — renderer-per-target. Each ActivityStickyRenderer instance serves
+// exactly one RenderTarget. SessionFrontend constructs one per binding.
 
 import type { NotificationEvent } from '../../runtime/events.js';
 import type { RendererDeps, SessionRenderState, TurnRenderState, RenderTarget } from './types.js';
@@ -36,13 +39,22 @@ export class ActivityStickyRenderer {
   private readonly adapter: ActivityStickyRendererOptions['adapter'];
   private readonly capabilities: ActivityStickyRendererOptions['capabilities'];
   private readonly session: SessionRenderState;
+  private readonly target: RenderTarget;
   private readonly clock: () => number;
   private readonly timers: { setTimeout: typeof setTimeout; clearTimeout: typeof clearTimeout };
+  /** Per-target flush timer. Stored here (not on TurnRenderState) because
+   *  there is one ActivityStickyRenderer per target. */
+  private flushTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Per-target "last text rendered" so identical re-renders are skipped. */
+  private lastText: string | undefined;
+  /** Per-target last edit time for throttle bookkeeping. */
+  private lastEditMs = 0;
 
   constructor(opts: ActivityStickyRendererOptions) {
     this.adapter = opts.adapter;
     this.capabilities = opts.capabilities;
     this.session = opts.session;
+    this.target = opts.target;
     this.clock = opts.clock ?? (() => Date.now());
     this.timers = opts.timers ?? { setTimeout, clearTimeout };
   }
@@ -75,20 +87,18 @@ export class ActivityStickyRenderer {
   async flush(): Promise<void> {
     const turn = this.session.turn;
     if (!turn) return;
-    if (turn.activityFlushTimer) {
-      this.timers.clearTimeout(turn.activityFlushTimer);
-      turn.activityFlushTimer = undefined;
+    if (this.flushTimer) {
+      this.timers.clearTimeout(this.flushTimer);
+      this.flushTimer = undefined;
     }
     await this.render(true);
   }
 
   /** Remove the activity sticky (called on turn teardown / session stop). */
   async teardown(): Promise<void> {
-    const turn = this.session.turn;
-    if (!turn) return;
-    if (turn.activityFlushTimer) {
-      this.timers.clearTimeout(turn.activityFlushTimer);
-      turn.activityFlushTimer = undefined;
+    if (this.flushTimer) {
+      this.timers.clearTimeout(this.flushTimer);
+      this.flushTimer = undefined;
     }
   }
 
@@ -98,44 +108,40 @@ export class ActivityStickyRenderer {
     const turn = this.session.turn;
     if (!turn) return;
     const now = this.clock();
-    const sinceLast = now - turn.activityLastEditMs;
+    const sinceLast = now - this.lastEditMs;
 
     if (!force && sinceLast < ACTIVITY_EDIT_THROTTLE_MS) {
       // Defer. Schedule (or keep) a flush timer to enforce eventual render.
-      if (!turn.activityFlushTimer) {
+      if (!this.flushTimer) {
         const delay = ACTIVITY_EDIT_THROTTLE_MS - sinceLast;
-        turn.activityFlushTimer = this.timers.setTimeout(() => {
-          turn.activityFlushTimer = undefined;
+        this.flushTimer = this.timers.setTimeout(() => {
+          this.flushTimer = undefined;
           void this.render(true).catch(() => { /* isolate */ });
         }, delay);
       }
       return;
     }
 
-    if (turn.activityFlushTimer) {
-      this.timers.clearTimeout(turn.activityFlushTimer);
-      turn.activityFlushTimer = undefined;
+    if (this.flushTimer) {
+      this.timers.clearTimeout(this.flushTimer);
+      this.flushTimer = undefined;
     }
 
     const text = this.buildText(turn);
-    if (text === turn.activityLastText) return;
+    if (text === this.lastText) return;
     const markup = this.buildMarkup(turn);
 
-    // First render: create per-primary-target only (mirrors get a copy but
-    // without interactive buttons).
-    for (const target of this.session.targets) {
-      await this.renderForTarget(target, turn, text, markup);
-    }
-    turn.activityLastText = text;
-    turn.activityLastEditMs = now;
+    await this.renderForTarget(turn, text, markup);
+    this.lastText = text;
+    this.lastEditMs = now;
   }
 
   private async renderForTarget(
-    target: RenderTarget,
     turn: TurnRenderState,
     text: string,
     markup: ReplyMarkup | undefined,
   ): Promise<void> {
+    const target = this.target;
     const msgId = this.activityMsgIdFor(turn, target);
     const effectiveMarkup = target.role === 'primary' ? markup : undefined;
     if (msgId && this.capabilities.editMessage) {
