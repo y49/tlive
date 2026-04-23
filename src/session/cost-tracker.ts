@@ -1,24 +1,7 @@
 // src/session/cost-tracker.ts
-import type { UsageStats } from '../runtime/events.js';
+//
+// Legacy re-export shim. The canonical location is src/cost/tracker.ts; T8
+// deletes this file together with the bridge tree. New code should import
+// from '../cost/tracker.js' directly.
 
-export class CostTracker {
-  private state: UsageStats = {
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    cacheCreationTokens: 0,
-    costUsd: 0,
-  };
-
-  add(u: UsageStats): void {
-    this.state = {
-      inputTokens: this.state.inputTokens + u.inputTokens,
-      outputTokens: this.state.outputTokens + u.outputTokens,
-      cacheReadTokens: (this.state.cacheReadTokens ?? 0) + (u.cacheReadTokens ?? 0),
-      cacheCreationTokens: (this.state.cacheCreationTokens ?? 0) + (u.cacheCreationTokens ?? 0),
-      costUsd: this.state.costUsd + u.costUsd,
-    };
-  }
-
-  snapshot(): UsageStats { return { ...this.state }; }
-}
+export { CostTracker } from '../cost/tracker.js';

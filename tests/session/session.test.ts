@@ -95,10 +95,14 @@ describe('Session', () => {
   it('snapshot reflects status, cost, and pending permissions', async () => {
     await env.session.start({});
     env.runtime.emitUsage({ inputTokens: 10, outputTokens: 5, costUsd: 0.01 });
-    const snap = env.session.snapshot();
-    expect(snap.cost.inputTokens).toBe(10);
-    expect(snap.status).toBe('active');
-    expect(snap.pendingPermissionIds).toEqual([]);
+    // New v1.0 snapshot() returns SessionInfo with AgentStatus (phase-keyed);
+    // legacy SessionSnapshot shape is available via snapshotLegacy().
+    const info = env.session.snapshot();
+    expect(info.cost.inputTokens).toBe(10);
+    expect(info.status.phase).toBe('idle');
+    const legacy = env.session.snapshotLegacy();
+    expect(legacy.status).toBe('active');
+    expect(legacy.pendingPermissionIds).toEqual([]);
   });
 
   it('subscribe receives event / status / permission / usage', async () => {

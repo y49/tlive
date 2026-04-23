@@ -1,13 +1,29 @@
 // src/session/manager.ts
+//
+// v1.0 unified SessionManager (spec §4.4). Orchestrates LocalSession +
+// RemoteSession under a single indexable map keyed by sdkSessionId, with
+// short-alias prefix lookup for IM/CLI `/s <prefix>` commands.
+//
+// Backward-compatibility: keeps the v0.x `create` / `resume` / `list` /
+// `hydrateFromDisk` / `subscribe` / `subscribeToSession` API for the bridge
+// layer until T8 deletes it. New call sites should prefer `createLocal` /
+// `resumeLocal` / `registerRemote` / `getByPrefix`.
 
 import { randomUUID } from 'node:crypto';
 import type { AgentProvider, AgentRuntime, PermissionMode } from '../runtime/types.js';
 import { SessionContext } from './context.js';
-import { Session, type SessionEventListener } from './session.js';
+import { LocalSession } from './local-session.js';
+import type { SessionEventListener as LegacySessionEventListener } from './local-session.js';
+import { RemoteSession, type RemoteSessionInit } from './remote-session.js';
+import type { SessionLike, SessionInfo } from './types.js';
 import type { SessionPersistence, SessionSnapshot } from './persistence.js';
 import type { PermissionBroker } from './permission-broker.js';
+import { resolveByPrefix } from '../util/short-id.js';
+import { WarmRuntimePool } from './warm-pool.js';
 
-export interface CreateSessionOptions {
+// ---- Options -------------------------------------------------------------
+
+export interface CreateLocalSessionOptions {
   workspaceId: string;
   workspaceName?: string;
   provider: AgentProvider;
@@ -16,28 +32,46 @@ export interface CreateSessionOptions {
   permissionMode?: PermissionMode;
   model?: string;
   effort?: 'low' | 'medium' | 'high' | 'max';
+  maxBudgetUsd?: number;
   source: 'cli' | 'im';
 }
+
+/** Back-compat alias — existing bridge IPC handler uses this name. */
+export type CreateSessionOptions = CreateLocalSessionOptions;
+
+export interface RegisterRemoteSessionOptions extends RemoteSessionInit {}
 
 export type RuntimeFactory = (provider: AgentProvider) => AgentRuntime;
 
 export type ManagerEventListener = (ev:
-  | { kind: 'created'; session: Session }
+  | { kind: 'created'; session: LocalSession }
+  | { kind: 'resumed'; session: LocalSession }
+  | { kind: 'registered'; session: RemoteSession }
   | { kind: 'stopped'; sessionId: string }
-  | { kind: 'resumed'; session: Session }
 ) => void;
 
+export interface SessionManagerDeps {
+  persistence: SessionPersistence;
+  broker: PermissionBroker;
+  runtimeFactory: RuntimeFactory;
+  /** Optional warm pool. When provided, stopped LocalSessions park runtimes here. */
+  warmPool?: WarmRuntimePool;
+}
+
+// ---- Manager -------------------------------------------------------------
+
 export class SessionManager {
-  private sessions = new Map<string, Session>();
+  private sessions = new Map<string, SessionLike>();
   private listeners = new Set<ManagerEventListener>();
+  private readonly warmPool: WarmRuntimePool | null;
 
-  constructor(private readonly deps: {
-    persistence: SessionPersistence;
-    broker: PermissionBroker;
-    runtimeFactory: RuntimeFactory;
-  }) {}
+  constructor(private readonly deps: SessionManagerDeps) {
+    this.warmPool = deps.warmPool ?? null;
+  }
 
-  async create(opts: CreateSessionOptions): Promise<Session> {
+  // ---- New v1.0 API --------------------------------------------------------
+
+  async createLocal(opts: CreateLocalSessionOptions): Promise<LocalSession> {
     const id = randomUUID();
     const ctx = SessionContext.create({
       sessionId: id,
@@ -46,8 +80,14 @@ export class SessionManager {
       workspaceName: opts.workspaceName,
       provider: opts.provider,
     });
-    const runtime = this.deps.runtimeFactory(opts.provider);
-    const session = new Session({ ctx, runtime, persistence: this.deps.persistence, broker: this.deps.broker });
+    const runtime = this.pluckOrBuildRuntime(opts.provider, opts.workspaceId);
+    const session = new LocalSession({
+      ctx,
+      runtime,
+      persistence: this.deps.persistence,
+      broker: this.deps.broker,
+      maxBudgetUsd: opts.maxBudgetUsd,
+    });
     this.sessions.set(id, session);
     await session.start({
       model: opts.model,
@@ -59,54 +99,74 @@ export class SessionManager {
     return session;
   }
 
-  get(id: string): Session | undefined { return this.sessions.get(id); }
+  async resumeLocal(id: string): Promise<LocalSession | null> {
+    const existing = this.sessions.get(id);
+    if (existing && existing.kind === 'local') return existing as LocalSession;
+    const snap = await this.deps.persistence.loadSnapshot(id);
+    if (!snap) return null;
+    const ctx = new SessionContext(snap.ctx);
+    const runtime = this.pluckOrBuildRuntime(snap.ctx.provider, snap.ctx.workspaceId);
+    const session = new LocalSession({
+      ctx,
+      runtime,
+      persistence: this.deps.persistence,
+      broker: this.deps.broker,
+    });
+    this.sessions.set(id, session);
+    await session.start({});
+    this.emit({ kind: 'resumed', session });
+    return session;
+  }
 
-  list(): SessionSnapshot[] {
-    return [...this.sessions.values()].map((s) => s.snapshot());
+  registerRemote(opts: RegisterRemoteSessionOptions): RemoteSession {
+    if (this.sessions.has(opts.sdkSessionId)) {
+      const existing = this.sessions.get(opts.sdkSessionId)!;
+      if (existing.kind === 'remote') return existing as RemoteSession;
+      throw new Error(`registerRemote: id ${opts.sdkSessionId} already taken by a local session`);
+    }
+    const session = new RemoteSession(opts);
+    this.sessions.set(opts.sdkSessionId, session);
+    this.emit({ kind: 'registered', session });
+    return session;
+  }
+
+  /**
+   * Return type is the concrete LocalSession | RemoteSession union (not the
+   * narrower SessionLike) so callers can access legacy LocalSession methods
+   * like `.sendInput` + `.context` without casting. T8 tightens this to
+   * SessionLike once bridge is gone.
+   */
+  get(id: string): LocalSession | RemoteSession | undefined {
+    return this.sessions.get(id) as LocalSession | RemoteSession | undefined;
+  }
+
+  /** Resolve a user-typed short alias (≥4 hex) against live sessions. */
+  getByPrefix(prefix: string): { resolved: SessionLike | null; ambiguous: SessionLike[] } {
+    return resolveByPrefix([...this.sessions.values()], prefix, (s) => s.id);
+  }
+
+  listInfo(kind?: 'local' | 'remote'): SessionInfo[] {
+    return [...this.sessions.values()]
+      .filter((s) => !kind || s.kind === kind)
+      .map((s) => s.snapshot());
+  }
+
+  async stopAll(): Promise<void> {
+    const ids = [...this.sessions.keys()];
+    await Promise.all(ids.map((id) => this.stop(id).catch(() => { /* isolate */ })));
+    if (this.warmPool) await this.warmPool.drain();
   }
 
   async stop(id: string): Promise<void> {
     const s = this.sessions.get(id);
     if (!s) return;
-    await s.stop();
+    if (s.kind === 'local') {
+      await (s as LocalSession).stop();
+    } else {
+      (s as RemoteSession).onDisconnect('manager_stop');
+    }
     this.sessions.delete(id);
     this.emit({ kind: 'stopped', sessionId: id });
-  }
-
-  /**
-   * Stop every live session in parallel. Used by the daemon's SIGTERM/SIGINT
-   * shutdown path so runtimes get a chance to drain and persist idle-state
-   * snapshots before the process exits. Individual stop() failures are swallowed
-   * so one misbehaving session can't block the rest.
-   */
-  async stopAll(): Promise<void> {
-    const ids = [...this.sessions.keys()];
-    await Promise.all(ids.map((id) => this.stop(id).catch(() => { /* isolate */ })));
-  }
-
-  /**
-   * Load persisted snapshots from disk at daemon startup. Does NOT restart runtimes.
-   * User must explicitly resume.
-   */
-  async hydrateFromDisk(): Promise<SessionSnapshot[]> {
-    return this.deps.persistence.listSnapshots();
-  }
-
-  /**
-   * Resume a previously-persisted session by creating a fresh runtime and
-   * passing the old sessionId so the SDK picks up its cached thread.
-   */
-  async resume(id: string): Promise<Session | null> {
-    if (this.sessions.has(id)) return this.sessions.get(id) ?? null;
-    const snap = await this.deps.persistence.loadSnapshot(id);
-    if (!snap) return null;
-    const ctx = new SessionContext(snap.ctx);
-    const runtime = this.deps.runtimeFactory(snap.ctx.provider);
-    const session = new Session({ ctx, runtime, persistence: this.deps.persistence, broker: this.deps.broker });
-    this.sessions.set(id, session);
-    await session.start({ /* no initialPrompt on resume */ });
-    this.emit({ kind: 'resumed', session });
-    return session;
   }
 
   subscribe(listener: ManagerEventListener): () => void {
@@ -114,10 +174,45 @@ export class SessionManager {
     return () => this.listeners.delete(listener);
   }
 
-  /** Convenience: forward a session's events to a listener. */
-  subscribeToSession(id: string, listener: SessionEventListener): (() => void) | null {
+  // ---- Legacy v0.x API (bridge + old tests) --------------------------------
+
+  /** Alias for createLocal; throws on remote-only deployments. */
+  async create(opts: CreateLocalSessionOptions): Promise<LocalSession> {
+    return this.createLocal(opts);
+  }
+
+  /** Alias for resumeLocal. Returns null for unknown ids (preserves v0 semantics). */
+  async resume(id: string): Promise<LocalSession | null> {
+    return this.resumeLocal(id);
+  }
+
+  /** Legacy list → SessionSnapshot[] for IPC compatibility. */
+  list(): SessionSnapshot[] {
+    return [...this.sessions.values()]
+      .filter((s): s is LocalSession => s.kind === 'local')
+      .map((s) => s.snapshotLegacy());
+  }
+
+  /** Hydrate persisted snapshots from disk without starting runtimes. */
+  async hydrateFromDisk(): Promise<SessionSnapshot[]> {
+    return this.deps.persistence.listSnapshots();
+  }
+
+  /** Forward a session's legacy subscribe() to `listener`. */
+  subscribeToSession(id: string, listener: LegacySessionEventListener): (() => void) | null {
     const s = this.sessions.get(id);
-    return s ? s.subscribe(listener) : null;
+    if (!s || s.kind !== 'local') return null;
+    return (s as LocalSession).subscribe(listener);
+  }
+
+  // ---- Internal ------------------------------------------------------------
+
+  private pluckOrBuildRuntime(provider: AgentProvider, workspaceId: string): AgentRuntime {
+    if (this.warmPool) {
+      const warm = this.warmPool.pluck(provider, workspaceId);
+      if (warm) return warm;
+    }
+    return this.deps.runtimeFactory(provider);
   }
 
   private emit(ev: Parameters<ManagerEventListener>[0]): void {
