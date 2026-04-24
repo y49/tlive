@@ -28,7 +28,12 @@ export async function main(): Promise<DaemonHandle> {
   return daemon;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Auto-run only when this module is the *direct* entry point. A basename
+// check prevents false positives when main.ts is bundled into another entry
+// (e.g. src/cli/start.ts → dist/src/tlive-start.mjs); `import.meta.url` of
+// the bundled module coincides with process.argv[1] because esbuild inlines
+// the URL, so a plain URL-equality guard would fire twice.
+if (process.argv[1]?.endsWith('tlive-daemon.mjs')) {
   main().catch((err) => {
     process.stderr.write(`tlive daemon failed: ${(err as Error).stack ?? err}\n`);
     process.exit(1);

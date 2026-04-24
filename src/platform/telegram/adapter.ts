@@ -23,6 +23,14 @@ export interface TelegramAdapterOptions {
   bot?: Bot;
   /** Disable @grammyjs/runner startup (tests drive inbound manually). */
   skipRunner?: boolean;
+  /**
+   * Called when the grammy runner's background task rejects (e.g., a
+   * Telegram 409 "terminated by other getUpdates request"). Default: log
+   * to stderr. The adapter does NOT re-throw, so a transport-level error
+   * will not crash the daemon — the operator sees the diagnostic and can
+   * stop the conflicting instance.
+   */
+  onRunnerError?: (err: unknown) => void;
 }
 
 export class TelegramAdapter implements PlatformAdapter {
@@ -40,7 +48,29 @@ export class TelegramAdapter implements PlatformAdapter {
 
   async start(): Promise<void> {
     if (this.runner || this.options.skipRunner) return;
-    this.runner = run(this.bot);
+    const runner = run(this.bot);
+    this.runner = runner;
+    // The runner's background polling task rejects on transport errors
+    // (most commonly 409 Conflict when a second instance shares the same
+    // bot token). If nothing catches the promise, it escalates to an
+    // unhandled rejection and Node 25 exits the daemon. Attach a handler
+    // that reports the error and clears the runner handle so `stop()`
+    // stays idempotent.
+    // `runner.task()` returns `Promise<void> | undefined`; it's undefined
+    // between batches. Poll it each tick a promise exists and attach a
+    // catch so a rejection can't escalate to an unhandled-rejection crash.
+    const attachCatch = (): void => {
+      const task = runner.task();
+      if (!task) return;
+      void task.catch((err) => {
+        if (this.runner === runner) this.runner = null;
+        const handler = this.options.onRunnerError ?? ((e) => {
+          process.stderr.write(`[telegram] runner error: ${(e as Error)?.message ?? e}\n`);
+        });
+        try { handler(err); } catch { /* isolate */ }
+      });
+    };
+    attachCatch();
   }
 
   async stop(): Promise<void> {
