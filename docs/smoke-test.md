@@ -10,7 +10,7 @@ see**, and **how to diagnose** if it fails.
 
 ## Prerequisites
 
-- Node.js 20+, npm.
+- Node.js 20+, npm or pnpm.
 - `claude` and `codex` CLIs installed locally (`which claude`, `which codex`).
 - At least one configured IM bot (Telegram is easiest for smoke; see
   [setup-telegram.md](setup-telegram.md)).
@@ -18,7 +18,35 @@ see**, and **how to diagnose** if it fails.
   `tlive setup` git-aware path).
 - Optional: a second chat (channel/group) for the multi-chat mirror step.
 
-Clear any prior state:
+### Install the local build as a global `tlive` command
+
+The smoke test exercises the **post-publish user flow**, not a dev-loop
+invocation. That means running the real `tlive` bin, not `node scripts/cli.js`.
+Use `npm link` to symlink this checkout into your global `bin/`:
+
+```bash
+# from the repo root
+pnpm install         # or npm install
+npm run build        # produces dist/src/tlive-*.mjs
+
+npm link             # symlinks ./scripts/cli.js → $(npm prefix -g)/bin/tlive
+
+which tlive          # should point to the global link
+tlive --help         # dispatcher works end-to-end
+```
+
+This is the closest local approximation to `npm install -g tlive`. It also
+catches path-resolution bugs in `scripts/cli.js` that only surface when the
+bin is called from elsewhere on disk (the dispatcher resolves
+`dist/src/tlive-*.mjs` relative to the link target, not the caller's cwd).
+
+When you're done smoke-testing, tear it back down:
+
+```bash
+npm unlink -g tlive  # or: npm rm -g tlive
+```
+
+### Clear any prior state
 
 ```bash
 rm -rf ~/.tlive ~/.claude/skills/tlive
