@@ -284,10 +284,12 @@ async function checkMcpRegistry(findings: Finding[], home: string): Promise<void
 }
 
 async function checkRecentErrors(findings: Finding[], home: string): Promise<void> {
+  // Only scan the v1.0 daemon log. `~/.tlive/logs/bridge.log` is a v0.x
+  // artifact that may linger from a prior install; its error counts are
+  // not representative of the v1.0 daemon's health.
   const candidates = [
     join(home, 'daemon.log'),
     join(home, 'logs', 'daemon.log'),
-    join(home, 'logs', 'bridge.log'),
   ];
   const path = candidates.find(existsSync);
   if (!path) {

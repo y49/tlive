@@ -227,15 +227,18 @@ async function waitForSocket(path, totalMs) {
 // ---------------------------------------------------------------------------
 
 if (command === 'start') {
+  // Do NOT fall through to the generic DISPATCH runEntry — the async
+  // detach scheduler lets sync control flow continue, and without this
+  // guard `tlive start` would ALSO fire foreground tlive-start.mjs.
   startDaemonDetached(args).catch((err) => {
     process.stderr.write(`tlive start failed: ${err?.stack ?? err}\n`);
     process.exit(1);
   });
-}
-
-const target = DISPATCH[command];
-if (target) {
-  runEntry(target, args);
+} else {
+  const target = DISPATCH[command];
+  if (target) {
+    runEntry(target, args);
+  }
 }
 
 // Typo hint
