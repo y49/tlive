@@ -517,50 +517,36 @@ switch (command) {
     break;
   }
 
+  case 'install-integrations': {
+    const entry = join(PACKAGE_ROOT, 'dist', 'src', 'tlive-install-integrations.mjs');
+    if (!existsSync(entry)) {
+      console.error(`ERROR: ${entry} not found. Run: npm run build`);
+      process.exit(1);
+    }
+    const r = spawnSync(process.execPath, [entry, ...args], { stdio: 'inherit' });
+    process.exit(r.status ?? 0);
+  }
+
   case 'install': {
+    // Legacy alias — forward to install-integrations for the `skills` subcommand.
     const sub = args[0];
     if (sub === 'skills') {
       const target = args.includes('--codex') ? 'codex' : 'claude';
-      const skillSrc = join(PACKAGE_ROOT, 'SKILL.md');
-
-      if (!existsSync(skillSrc)) {
-        console.error('SKILL.md not found. Try reinstalling: npm install -g tlive');
+      const entry = join(PACKAGE_ROOT, 'dist', 'src', 'tlive-install-integrations.mjs');
+      if (!existsSync(entry)) {
+        console.error(`ERROR: ${entry} not found. Run: npm run build`);
         process.exit(1);
       }
-
-      // Install SKILL.md
-      const skillDir = target === 'codex'
-        ? join(homedir(), '.codex', 'skills', 'tlive')
-        : join(homedir(), '.claude', 'commands');
-      mkdirSync(skillDir, { recursive: true });
-
-      const skillDest = target === 'codex'
-        ? join(skillDir, 'SKILL.md')
-        : join(skillDir, 'tlive.md');
-      copyFileSync(skillSrc, skillDest);
-      console.log(`Skill installed: ${skillDest}`);
-
-      // Sync reference docs to ~/.tlive/docs/
-      const docsDir = join(TLIVE_HOME, 'docs');
-      mkdirSync(docsDir, { recursive: true });
-      const refsDir = join(PACKAGE_ROOT, 'references');
-      for (const doc of ['setup-guides.md', 'token-validation.md', 'troubleshooting.md']) {
-        const refSrc = join(refsDir, doc);
-        const dest = join(docsDir, doc);
-        if (existsSync(refSrc)) {
-          copyFileSync(refSrc, dest);
-        }
-      }
-      console.log(`Reference docs synced: ${docsDir}`);
-    } else {
-      console.log('Usage: tlive install skills [--codex]');
+      const r = spawnSync(process.execPath, [entry, target], { stdio: 'inherit' });
+      process.exit(r.status ?? 0);
     }
+    console.log('Usage: tlive install-integrations [claude|codex|all]');
     break;
   }
 
   default: {
     // Check for typos of known commands before forwarding to Go Core
-    const known = ['setup', 'start', 'stop-daemon', 'status', 'daemon-logs', 'hooks', 'doctor', 'install', 'help', 'version', 'update', 'claude', 'codex', 'list', 'stop', 'logs', 'resume'];
+    const known = ['setup', 'start', 'stop-daemon', 'status', 'daemon-logs', 'hooks', 'doctor', 'install', 'install-integrations', 'help', 'version', 'update', 'claude', 'codex', 'list', 'stop', 'logs', 'resume'];
     const similar = known.find(k => {
       if (Math.abs(k.length - command.length) > 2) return false;
       let diff = 0;
