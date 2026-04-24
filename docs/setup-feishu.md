@@ -1,50 +1,48 @@
-# Feishu / Lark Setup Guide
+# Feishu / Lark Setup Guide (v1.0)
 
 [Back to Getting Started](getting-started.md)
 
-This guide walks you through creating a Feishu (or Lark) custom app and connecting it to tlive. Feishu requires a few more steps than other platforms — you'll need to create an app, configure permissions, set up event subscriptions, and get admin approval. Don't worry, this guide covers every step in detail.
+This guide walks you through creating a Feishu (or Lark) custom app and
+wiring it into tlive v1.0. Feishu's setup has more steps than other
+platforms — you create an app, add permissions, subscribe to events,
+publish a version, and get workspace-admin approval. Once done, the bot
+supports interactive cards, forms, and topic-per-session on new-style
+groups.
 
-## What You'll Need
+**Changed in v1.0:** config is `~/.tlive/config.json` (JSON). `tlive setup`
+is the recommended way to populate the `channels.feishu` block.
 
-- A Feishu account (or Lark account for the international version)
-- Admin access to create apps, or a workspace admin who can approve your app
-- ~10 minutes
+## What you'll need
 
-## Step 1: Create a Custom App
+- A Feishu account (or Lark for the international edition).
+- Admin permission to create / approve custom apps (or an admin who can
+  approve).
+- ~15 minutes.
 
-1. Go to the Feishu Open Platform developer console:
+## Step 1 — Create a custom app
+
+1. Go to the developer console:
    - **Feishu (China):** https://open.feishu.cn/app
    - **Lark (International):** https://open.larksuite.com/app
-2. Sign in with your Feishu/Lark account
-3. Click **Create Custom App**
-4. Fill in the details:
-   - **App Name:** Something like "tlive" or "Terminal Bot"
-   - **Description:** A short description, e.g. "Terminal session bridge for tlive"
-5. Click **Create**
+2. Sign in.
+3. Click **Create Custom App**.
+4. Fill in:
+   - **App Name** — e.g. "tlive".
+   - **Description** — e.g. "tlive daemon bridge".
+5. Click **Create**.
 
-<!-- TODO: screenshot of "Create Custom App" button and form -->
+## Step 2 — Grab credentials
 
-> **Note:** If you don't see the "Create Custom App" button, your workspace admin may have restricted app creation. Ask your admin to either create the app for you or grant you developer permissions.
+1. On the app page, go to **Credentials & Basic Info**.
+2. Copy:
+   - **App ID** — starts with `cli_`.
+   - **App Secret** — long alphanumeric string.
 
-## Step 2: Get Your Credentials
+Keep the secret private.
 
-1. After creating the app, you'll land on the app's overview page
-2. Go to **Credentials & Basic Info** in the left sidebar
-3. You'll see two values:
-   - **App ID** — looks like `cli_xxxxxxxxxxxxxxxx`
-   - **App Secret** — a longer alphanumeric string
-4. Copy both values and save them somewhere safe — you'll need them in Step 6
+## Step 3 — Add permissions (batch import)
 
-<!-- TODO: screenshot of Credentials & Basic Info page with App ID and App Secret highlighted -->
-
-> **Tip:** Keep your App Secret private. Anyone with the App ID and Secret can act as your bot.
-
-## Step 3: Add Permissions
-
-Your app needs permission to send and receive messages.
-
-1. In the left sidebar, go to **Permissions & Scopes**
-2. Click **Batch import**, then paste the following JSON to add all required permissions at once:
+In **Permissions & Scopes**, click **Batch import** and paste:
 
 ```json
 {
@@ -64,142 +62,149 @@ Your app needs permission to send and receive messages.
 }
 ```
 
-**Permission details:**
+### v1.0 permission rationale (spec §10.3)
 
-| Permission | Description | Necessity |
-|---|---|---|
-| `im:message` | Send and receive messages | Required |
-| `im:message:send_as_bot` | Send messages as a bot | Required |
-| `im:chat:readonly` | Read basic chat info | Required |
-| `im:message:readonly` | Read message content | Required |
-| `im:message.p2p_msg:readonly` | Read P2P messages | Required |
-| `im:message.group_at_msg:readonly` | Read group @bot messages | Recommended |
-| `cardkit:card:read` | Read card info | Recommended |
-| `cardkit:card:write` | CardKit streaming cards | Recommended |
-| `im:resource` | Upload images and files | Optional |
+| Scope | Why |
+|---|---|
+| `im:message`, `im:message:send_as_bot` | Send bot replies. |
+| `im:message:readonly`, `im:message.p2p_msg:readonly`, `im:message.group_at_msg:readonly` | Read incoming messages. |
+| `im:chat:readonly` | Resolve chat metadata for session binding. |
+| `cardkit:card:read`, `cardkit:card:write` | Interactive cards (permission cards, session header, activity sticky, form cards). |
+| `im:resource` | Upload / download attachments (inbound images from user, outbound files produced by Claude). |
 
-3. Confirm all permissions appear in the list
+All are required for the full UX. Missing `cardkit:card:write` disables
+edit-in-place for stickies and falls back to append-only rendering.
 
-> **Tip:** Using batch import adds all permissions at once — no need to search for each one individually.
+## Step 4 — Configure events (WebSocket)
 
-## Step 4: Configure Event Subscriptions
+In **Events & Callbacks**:
 
-This step tells Feishu to notify tlive when someone messages the bot.
+1. Under **Event Subscriptions**, click **Add Event** and add:
+   - `im.message.receive_v1` — incoming messages.
+   - `card.action.trigger` — button clicks on interactive cards.
+2. Under **Callback Mode**, choose **Long Connection (WebSocket)**.
+   Do **not** choose HTTP callback; tlive uses WebSocket so you don't
+   need a public URL.
 
-1. In the left sidebar, go to **Events & Callbacks**
-2. Under **Event Subscriptions**, click **Add Event**
-3. Add the following events:
-   - `im.message.receive_v1` (receive messages)
-   - `card.action.trigger` (card button interaction callback)
-4. Now set the **callback mode**:
-   - Select **Long Connection (WebSocket)**
-   - Do **NOT** select HTTP callback — tlive uses WebSocket mode so you don't need to expose a public URL
+> WebSocket mode is the only supported transport in v1.0 — the daemon
+> pushes outbound from your machine, so no firewall or TLS setup
+> required.
 
-<!-- TODO: screenshot of Events & Callbacks page showing Long Connection selected -->
+## Step 5 — Publish & get admin approval
 
-> **Why WebSocket?** With Long Connection mode, tlive connects outward to Feishu's servers. This means you don't need a public IP, a domain name, or any firewall changes. It just works from anywhere.
+1. Left sidebar → **App Release** (or **Version Management**).
+2. **Create Version**:
+   - **Version**: `1.0.0`.
+   - **Release notes**: any short description.
+   - **Availability**: choose users/departments or "All employees".
+3. **Submit for Review**.
+4. A workspace admin approves the app:
+   - Feishu: https://feishu.cn/admin
+   - Lark: https://larksuite.com/admin
+   - Find your app in **App Review** or **Workspace Apps**, click **Approve**.
 
-## Step 5: Publish and Get Admin Approval
+If you're your own admin, approve immediately.
 
-Feishu apps aren't active until they're published and approved by a workspace admin.
+## Step 6 — Run `tlive setup`
 
-1. In the left sidebar, go to **App Release** (or **Version Management**)
-2. Click **Create Version**
-3. Fill in:
-   - **Version Number:** e.g. `1.0.0`
-   - **Update Notes:** e.g. "Initial release — terminal session bridge"
-   - **Availability:** Choose which users/departments can use the app, or select "All employees"
-4. Click **Save** and then **Submit for Review**
-5. A workspace admin needs to approve the app:
-   - The admin goes to the **Feishu Admin Console** (https://feishu.cn/admin or https://larksuite.com/admin)
-   - Navigate to **App Review** or **Workspace Apps**
-   - Find your app and click **Approve**
-
-<!-- TODO: screenshot of Create Version page -->
-<!-- TODO: screenshot of admin approval in Admin Console -->
-
-> **If you are the admin:** You can approve it yourself in the Admin Console immediately after submitting.
-
-> **If you're not the admin:** Let your admin know you've submitted the app. They'll see a notification in the Admin Console.
-
-## Step 6: Configure tlive
-
-You have three options:
-
-**Option A — Interactive setup:**
 ```bash
 tlive setup
 ```
-Select Feishu when prompted, then paste your App ID and App Secret.
 
-**Option B — AI-guided setup (recommended):**
+Pick **Feishu** when prompted. Paste:
+
+- App ID.
+- App Secret.
+- (Optional) Allowed user Open IDs (`ou_…`).
+
+The wizard writes `~/.tlive/config.json`:
+
+```json
+{
+  "channels": {
+    "feishu": {
+      "appId": "cli_xxxxxxxxxxxxxxxx",
+      "appSecret": "…",
+      "allowedUsers": ["ou_xxxxxxxxxxxxxxxx"],
+      "lark": false
+    }
+  }
+}
 ```
-/tlive setup
+
+Fields per spec §10.3:
+
+| Field | Type | Purpose |
+|---|---|---|
+| `appId` | string | From developer console. |
+| `appSecret` | string | From developer console. |
+| `lark` | boolean | `true` to use `open.larksuite.com` endpoints. |
+| `allowedUsers` | string[] | Open ID whitelist (optional). |
+| `topicPerSession` | boolean | Use new-style group topics as session threads (default `true` when supported). |
+
+Secure the file:
+
+```bash
+chmod 600 ~/.tlive/config.json
 ```
-Run this inside Claude Code for a guided experience.
 
-**Option C — Manual configuration:**
+## Step 7 — Start + verify
 
-Edit `~/.tlive/config.env`:
-```env
-TL_ENABLED_CHANNELS=feishu
-TL_FS_APP_ID=cli_xxxxxxxxxxxxxxxx
-TL_FS_APP_SECRET=your-app-secret
-TL_FS_ALLOWED_USERS=ou_xxxxxxxxxxxxxxxx
+```bash
+tlive start
+tlive doctor
 ```
 
-The `TL_FS_ALLOWED_USERS` field is optional. If set, only the listed user Open IDs can interact with the bot. Leave it empty to allow anyone in your workspace.
+The Feishu probe calls
+`auth/v3/tenant_access_token/internal`. Code `0` = credentials valid.
 
-> **Finding a user's Open ID:** When someone messages your bot, tlive logs their Open ID. You can also find Open IDs through the Feishu Admin Console under user management, or via the [Feishu API](https://open.feishu.cn/document/server-docs/contact-v3/user/get).
+Open Feishu, search for the app name — the bot should appear under
+**Bots** / **Apps**. DM it `hello`.
 
-## Step 7: Verify
+Expected: a 👁️ ack (where supported — Feishu has no reaction API, so tlive
+falls back to a dedicated reply message with just "👁️"), a session header
+card, and a streaming agent response rendered as card updates.
 
-1. Start the bridge:
-   ```bash
-   tlive start
-   ```
-   Or run `/tlive` in Claude Code.
+---
 
-2. Open Feishu and find your bot:
-   - Search for the app name you chose in Step 1
-   - Or go to your contact list — the bot should appear under **Bots** or **Apps**
-3. Send the bot a direct message (e.g. "hello")
-4. You should see a response in an interactive card — if so, you're all set!
+## v1.0 platform requirements (spec §10.3)
 
-<!-- TODO: screenshot of successful bot interaction in Feishu -->
+- **Event transport.** WebSocket (long connection) only.
+- **No reaction API.** 👁️ ack is rendered as a distinct bot message per
+  spec §7.3. ReactionTracker treats this as the fallback path.
+- **Interactive card markup.** `renderer.ts` emits card blocks (markdown,
+  actions, columns, fields); schema v2.
+- **Form cards.** Elicitation uses native form card blocks (`form` element
+  type) submitted via `card.action.trigger`.
+- **Attachments.** `upload_image` / `upload_file` for outbound, image/file
+  keys embedded in the card or sent as standalone messages.
+- **Topics (new-style groups).** When supported, each session gets its own
+  topic thread. Falls back to main chat when not supported.
 
-> **Can't find the bot?** The app must be published and approved (Step 5) before it appears as a bot in Feishu. If you just submitted for approval, wait for the admin to approve it.
+## Lark (international)
 
-## Lark (International Version)
+Everything is identical except:
 
-If you use Lark instead of Feishu, everything works the same. The only differences:
+- Developer portal: https://open.larksuite.com/app
+- Admin console: https://larksuite.com/admin
+- Set `lark: true` in the config block.
 
-- Use https://open.larksuite.com/app for the developer console
-- Use https://larksuite.com/admin for the admin console
-- The UI may be in English by default
+All scopes, event names, and API shapes are the same.
 
-All environment variable names, permissions, and event names are identical.
+---
 
 ## Troubleshooting
 
-**"App not approved" / bot not visible**
-- The app must be published (Step 5) and approved by a workspace admin before it becomes active
-- Check the Admin Console for pending approvals
+- **"App not approved" / bot doesn't appear in Feishu.** You haven't
+  published a version, or the admin hasn't approved it.
+- **No events received.** You chose HTTP callback instead of
+  Long Connection — switch it.
+- **"Permission denied" errors.** A scope was added after the last
+  release — create a new version and get it re-approved.
+- **"Invalid App ID" / "Invalid App Secret".** Typos, or you copied from
+  the wrong app.
+- **Bot replies in Feishu but nothing in tlive logs.** `channels.feishu`
+  missing from `config.json`, or `tlive start` wasn't run after config
+  edit.
 
-**No events received / bot doesn't respond**
-- Make sure you selected **Long Connection (WebSocket)** in Step 4, not HTTP callback
-- Verify that both `im.message.receive_v1` and `card.action.trigger` events are added
-- Check that `TL_FS_APP_ID` and `TL_FS_APP_SECRET` are correct (no extra spaces)
-
-**Permission denied errors**
-- Confirm all permissions from the batch import in Step 3 appear in the permission list
-- Permissions take effect after the app is published and approved — if you added permissions later, create a new version and get it re-approved
-
-**"Invalid App ID" or "Invalid App Secret"**
-- Double-check you copied the full values from Step 2
-- Make sure you're using the credentials from the correct app (if you created multiple)
-- Run `tlive doctor` to check your configuration
-
-**Bot responds in Feishu but not in tlive**
-- Make sure `TL_ENABLED_CHANNELS` includes `feishu`
-- Check the tlive logs for connection errors
+Back to [Getting Started](getting-started.md) · [IM command reference](commands.md).

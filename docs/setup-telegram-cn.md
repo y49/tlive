@@ -1,172 +1,176 @@
-# Telegram 配置指南
+# Telegram 配置指南（v1.0）
 
 [返回入门指南](getting-started-cn.md)
 
-本指南将带你一步步创建 Telegram 机器人，并将其连接到 tlive，从而在 Telegram 中与终端会话进行交互。
+本指南带你创建 Telegram 机器人并将其接入 tlive v1.0。完成后你就能通过
+私聊（或群组 / 话题群组）使用完整的 45 条 IM 命令。
+
+**v1.0 变更说明：** 配置文件已由 `config.env` 迁移为
+`~/.tlive/config.json`，由 `tlive setup` 向导写入，为首选方式。直接手写
+JSON 仍可行，但向导是推荐路径。
 
 ## 前置条件
 
-- 一个 Telegram 账号
-- 大约 5 分钟时间
+- Telegram 账号。
+- 约 5 分钟。
+- （可选，用于"一会话一话题"）一个把机器人设为管理员的**话题群组
+  (forum group)**。
 
-## 第一步：创建机器人
+## 第一步 —— 通过 @BotFather 创建机器人
 
-1. 打开 Telegram，搜索 **@BotFather**
-2. 发送 `/newbot`
-3. 设置**显示名称**（如「我的 tlive 机器人」）和**用户名**（必须以 `bot` 结尾，如 `my_tlive_bot`）
-4. BotFather 会回复一个 Token，类似 `7823456789:AAF-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
-5. 复制**完整的 Token**，后续步骤会用到
+1. 在 Telegram 搜索 **@BotFather**，发送 `/newbot`。
+2. 设置**显示名**（例如「我的 tlive bot」）。
+3. 设置**用户名** —— 必须以 `bot` 结尾（如 `my_tlive_bot`）。
+4. BotFather 会回一个 Token，形如
+   `7823456789:AAF-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`。
+5. 复制完整 Token，并妥善保管。
 
-<!-- TODO: screenshot of BotFather conversation -->
+推荐 BotFather 设置：
 
-> **提示：** Token 相当于机器人的密码，请妥善保管，不要泄露给他人。
+| `/setprivacy` | Disable | 让机器人能读到群消息（群组/话题群组必需）。 |
 
-## 第二步：获取 Chat ID
+> tlive 启动时通过 `setMyCommands` 自动注册命令菜单，无需手动
+> `/setcommands`（参见规范 §10.1 `bot-commands.ts`）。
 
-Chat ID 用于告诉 tlive 往哪里发消息。
+## 第二步 —— 获取 Chat ID
 
-1. 搜索你刚创建的机器人用户名，点击 **Start** 开始对话
-2. 随便发一条消息（比如「你好」）
-3. 在浏览器中打开以下地址（把 `YOUR_TOKEN` 替换成第一步拿到的 Token）：
-   ```
+tlive 需要知道要把消息发到哪个聊天。
+
+1. 在 Telegram 搜索机器人用户名，点 **Start** 开始对话。
+2. 发一条任意消息（如 `hello`）。
+3. 浏览器打开（把 `YOUR_TOKEN` 换成 Token）：
+   ```text
    https://api.telegram.org/botYOUR_TOKEN/getUpdates
    ```
-4. 在返回的 JSON 中找到 `"chat":{"id":123456789,...}`，这串数字就是你的 Chat ID
-5. 如果是**群聊**，Chat ID 会是负数（如 `-1001234567890`）
+4. 在 JSON 中找 `"chat":{"id":123456789,...}` —— 那串数字就是你的 Chat ID。
+5. **群聊/话题群**的 Chat ID 是负数，如 `-1001234567890`。
 
-<!-- TODO: screenshot of getUpdates JSON response -->
+## 第三步 —— （可选）白名单用户 ID
 
-> **注意：** 必须先给机器人发一条消息，再打开上面的链接，否则返回结果为空。
+若不想让任何搜到机器人的人都能用，用 user ID 过滤。
 
-## 第三步（可选）：获取用户 ID
+1. 搜索 **@userinfobot**，随便发一条消息。
+2. 它会回复你的数字 Telegram user ID。
+3. 收集所有需要授权的用户 ID。
 
-如果你想限制谁能使用这个机器人，需要获取对应的 Telegram 用户 ID。
+> 建议：至少设置 `chatId` 或 `allowedUsers` 之一。
 
-1. 在 Telegram 中搜索 **@userinfobot**，开始对话
-2. 它会回复你的用户 ID（如 `123456789`）
-3. 需要允许多个用户的话，对每个人重复操作，最后用英文逗号分隔填入
+## 第四步 —— 运行 `tlive setup`
 
-> **安全建议：** 建议至少设置 Chat ID 或用户白名单中的一项。如果都不设置，任何人找到你的机器人都能与之交互。
-
-## 第四步：配置 tlive
-
-有三种方式可供选择：
-
-**方式 A — 交互式配置：**
 ```bash
 tlive setup
 ```
-按提示选择 Telegram，然后粘贴 Token 和 Chat ID。
 
-**方式 B — AI 引导配置（推荐）：**
-```
-/tlive setup
-```
-在 Claude Code 中运行此命令，获得 AI 引导的配置体验。
+在询问 channel 时选择 **Telegram**，依次粘贴：
 
-**方式 C — 手动编辑配置文件：**
+- Bot token。
+- Chat ID（留空则允许任意授权用户私聊）。
+- 授权用户 ID（逗号分隔）。
 
-编辑 `~/.tlive/config.env`：
-```env
-TL_ENABLED_CHANNELS=telegram
-TL_TG_BOT_TOKEN=your-token
-TL_TG_CHAT_ID=your-chat-id
-TL_TG_ALLOWED_USERS=user-id-1,user-id-2
-```
+向导会把如下配置写入 `~/.tlive/config.json`：
 
-## 第五步：验证
-
-1. 启动 bridge：
-   ```bash
-   tlive start
-   ```
-   或者在 Claude Code 中运行 `/tlive`。
-
-2. 在 Telegram 里给机器人发一条消息
-3. 如果收到回复，说明配置成功！
-
-<!-- TODO: screenshot of successful interaction -->
-
-## 推荐的机器人设置
-
-向 **@BotFather** 发送以下命令：
-
-| 命令 | 设置 | 作用 |
-|------|------|------|
-| `/setprivacy` | 选择你的机器人 → `Disable` | 让机器人能读取群聊中的消息 |
-
-> **注意：** 不再需要手动 `/setcommands` —— tlive 启动时会自动注册命令菜单（`/new`、`/status`、`/help` 等）。
-
-## 功能与配置
-
-### 群组 @提及过滤
-
-在群聊中，机器人默认只响应 **@提及** 消息，避免对群内每条消息都做出回应。
-
-```env
-TL_TG_REQUIRE_MENTION=true    # 默认：只响应 @机器人
-TL_TG_REQUIRE_MENTION=false   # 响应群内所有消息
+```json
+{
+  "channels": {
+    "telegram": {
+      "token": "7823456789:AAF-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "chatId": "123456789",
+      "allowedUsers": ["123456789"],
+      "requireMention": true
+    }
+  }
+}
 ```
 
-回复机器人消息时无需 @提及。
+后续可以手动编辑。字段说明（规范 §10.1）：
 
-### 配对模式
+| 字段 | 类型 | 作用 |
+|---|---|---|
+| `token` | string | BotFather 给的 bot token。 |
+| `chatId` | string \| string[] | 限定特定 chat（负数 = 群组）。 |
+| `allowedUsers` | string[] | 用户白名单。 |
+| `requireMention` | boolean | 群里是否要求 @机器人（默认 `true`）。 |
+| `webhook` | object | 见下文"Webhook 模式"，不填则走长轮询。 |
+| `proxy` | string | `http://`、`https://`、`socks4://`、`socks5://`。 |
 
-如果没有设置 `TL_TG_ALLOWED_USERS`，机器人会进入**配对模式**：
+保护配置权限：
 
-1. 陌生用户发消息 → 机器人回复 6 位配对码
-2. 管理员在任意已授权渠道运行 `/approve <code>`
-3. 该用户获得授权，可以正常交互
-
-使用 `/pairings` 查看待审批列表。配对码 1 小时后过期。
-
-### 论坛话题 (Topics)
-
-机器人支持 Telegram 论坛式群组的话题功能，消息会自动路由到正确的话题中。
-
-### Webhook 模式（可选）
-
-默认使用长轮询。如需切换为 webhook（适用于生产环境）：
-
-```env
-TL_TG_WEBHOOK_URL=https://your-domain.com/telegram-webhook
-TL_TG_WEBHOOK_SECRET=你的随机密钥
-TL_TG_WEBHOOK_PORT=8443
+```bash
+chmod 600 ~/.tlive/config.json
 ```
 
-### 链接预览
+## 第五步 —— 启动与验证
 
-默认禁用链接预览以保持消息简洁。如需启用：
-```env
-TL_TG_DISABLE_LINK_PREVIEW=false
+```bash
+tlive start
+tlive doctor
 ```
 
-### 代理
+doctor 输出里 Telegram 探测会调用 `getMe`，✅ 意味着 token 有效、网络可达。
 
-如果所在地区无法访问 `api.telegram.org`：
-```env
-TL_TG_PROXY=socks5://127.0.0.1:1080
+在 Telegram 里给机器人发 `hello`。你应该看到 👁️ 反应、置顶的会话头
+消息，以及流式回复。
+
+---
+
+## v1.0 平台要求（规范 §10.1）
+
+- **传输层：** 默认长轮询；可选 webhook。
+- **MarkdownV2 转义：** `src/platform/telegram/renderer.ts` 会自动转义
+  `_`、`*`、`[`、`]`、`(`、`)`、`~`、`` ` ``、`>`、`#`、`+`、`-`、`=`、
+  `|`、`{`、`}`、`.`、`!`。日常使用无需关心，只需要知道 agent 输出
+  里的 `_foo_` 不会被意外识别为斜体。
+- **话题群组（可选，推荐用于"一会话一话题"体验）：** 机器人在话题群组
+  内为管理员时，每个会话单独开一个 topic。不用话题群组时所有会话走
+  主话题。
+- **Emoji 反应：** 有表情反应权限时会对用户消息打 👁️。
+- **Inline 键盘：** 用于权限卡按钮（Allow / Deny / Always / Learn）。
+- **forceReply：** 用于 elicitation 表单 —— 每次一个问题，汇总答案。
+
+## Webhook 模式（可选）
+
+生产环境建议 webhook：
+
+```json
+{
+  "channels": {
+    "telegram": {
+      "token": "…",
+      "webhook": {
+        "url": "https://your-domain.com/telegram-webhook",
+        "secret": "random-hex-string",
+        "port": 8443
+      }
+    }
+  }
+}
 ```
+
+守护进程在指定端口暴露 webhook；TLS 终止由你来做（nginx / Caddy /
+fly.io 网关均可）。
+
+## 代理
+
+```json
+{
+  "channels": {
+    "telegram": { "token": "…", "proxy": "socks5://127.0.0.1:1080" }
+  }
+}
+```
+
+支持：`http://`、`https://`、`socks4://`、`socks5://`。
+
+---
 
 ## 常见问题
 
-**机器人没有响应**
-- 仔细检查 Token 是否正确（注意有没有多余的空格或遗漏的字符）
-- 运行 `tlive doctor` 检查配置是否正常
+- **私聊可以但群里不回复。** BotFather 里把 `/setprivacy` 关掉；若
+  `requireMention: true`，发群消息时需要 `@yourbot …`。
+- **启动时 "Unauthorized"。** Token 可能被重置，复制最新的。
+- **`getUpdates` 返回空。** 先给机器人发条消息，再刷新该链接。
+- **权限卡按钮点了没反应。** 见
+  [references/troubleshooting.md](../references/troubleshooting.md)
+  的 "Permission card buttons not working" 一节。
 
-**Chat ID 不对**
-- 确认你先给机器人发了消息，再刷新 `getUpdates` 链接
-- 如果是群聊，确认机器人已被添加到群里
-
-**出现「Unauthorized」错误**
-- Token 可能已经在 BotFather 中被重新生成了，回去复制最新的 Token
-- 每次重置 Token 后，旧 Token 会立即失效
-
-**机器人在群聊中不响应**
-- 检查隐私模式是否已禁用：BotFather → `/setprivacy` → Disable
-- 更改隐私设置后，需要将机器人从群组中移除再重新添加
-- 如果 `TL_TG_REQUIRE_MENTION=true`（默认），需要 @提及 机器人
-
-**启动时出现权限警告**
-- 这是正常的信息提示。机器人启动时会检测自身权限，并对潜在问题发出警告
-- 常见警告："Group Privacy not disabled" — 参考上方说明
+返回 [入门指南](getting-started-cn.md) · [IM 命令参考](commands.md)。

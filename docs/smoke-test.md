@@ -1,119 +1,321 @@
-# tlive v1.0 Manual Smoke Test
+# tlive v1.0 Manual Test Checklist
 
-Run this before tagging a release. All 13 steps must pass.
+This is the v1.0 release-verification walkthrough — run it end-to-end on a
+clean machine (or at least a clean `~/.tlive/`) before tagging. It covers
+the **live-environment DoD items** from spec §22 that can't be asserted in
+unit tests.
+
+All 15 steps must pass. Each step shows: **what to do**, **what you should
+see**, and **how to diagnose** if it fails.
 
 ## Prerequisites
 
-- Telegram / Discord / Feishu bot configured in `~/.tlive/config.env`.
-- Node.js 20+, pnpm or npm.
-- For Codex scenarios: `codex` CLI installed (`which codex`) and `OPENAI_API_KEY` set.
-- `TL_WORKSPACES=smoke1:/tmp/smoke1,smoke2:/tmp/smoke2` in config; directories created.
-- On Telegram: a **forum group** where the bot is admin (for topic support).
+- Node.js 20+, npm.
+- `claude` and `codex` CLIs installed locally (`which claude`, `which codex`).
+- At least one configured IM bot (Telegram is easiest for smoke; see
+  [setup-telegram.md](setup-telegram.md)).
+- A throwaway workspace at `/tmp/tlive-smoke` with a git remote (for the
+  `tlive setup` git-aware path).
+- Optional: a second chat (channel/group) for the multi-chat mirror step.
+
+Clear any prior state:
+
+```bash
+rm -rf ~/.tlive ~/.claude/skills/tlive
+mkdir -p /tmp/tlive-smoke && cd /tmp/tlive-smoke && git init . && \
+  git remote add origin git@github.com:example/smoke.git
+```
+
+---
 
 ## Steps
 
-### 1. Bridge starts cleanly
+### 1. Daemon starts cleanly
 
 ```bash
+tlive setup                   # walk through wizard, paste Telegram token
+tlive install-integrations
 tlive start
 tlive status
 ```
 
-Expected: Bridge is running. Logs mention `Workspaces registered: N (smoke1, smoke2, <cwd-basename>)` — the list includes the two pre-configured entries plus one auto-registered default (named after `basename(cwd)`, e.g. `tlive` if bridge was started in the tlive repo).
+**Expected.** `tlive status` reports `daemon: running`, workspace
+`tlive-smoke` registered, 0 active sessions, PID matches
+`~/.tlive/daemon.pid`, socket at `~/.tlive/daemon.sock` exists.
 
-### 2. `/workspaces` lists pre-configured entries + the auto-registered default
+**If it fails.** Check `tlive daemon-logs 200` for the crash trace. Common
+cause: stale PID/socket from a previous run — remove them and retry.
 
-In IM (any configured platform), send `/workspaces`.
-
-Expected: at least three entries — `smoke1`, `smoke2`, and one auto-registered default. All idle at this point.
-
-If the bridge's cwd matches a pre-configured `TL_WORKSPACES` entry (e.g. `smoke1:/tmp/smoke1` and you ran `cd /tmp/smoke1 && tlive start`), the default is deduped by path and only the pre-configured entries appear.
-
-### 3. `/open smoke1` creates a topic/thread
-
-Send `/open smoke1`.
-
-Expected (Telegram forum): A new forum topic named `smoke1` is created; bridge confirmation message appears in that topic.
-Expected (Discord): A new thread named `smoke1` is created.
-Expected (Feishu): The confirmation card header is prefixed `[smoke1]`.
-
-### 4. Conversational turn with reasoning + agent reply
-
-In the smoke1 topic, send: `What files are in this directory?`
-
-Expected:
-- Status line message shows "🧠 Thinking..." then updates to other phases.
-- At verbose=0 (default), no activity_text or reasoning_summary arrives — just status line + permission (if agent asks to list files).
-- Turn summary card lands at end.
-
-### 5. Bump to verbose=1 and retry
-
-Send `/verbose 1`. Then send `List files and describe what this looks like.`
-
-Expected: reasoning_summary, activity_text (agent reply), turn card, file_change_list (if any) all arrive.
-
-### 6. Trigger permission — verify context + buttons
-
-Ask agent to run a command that requires approval (e.g., `Run "ls -la"`).
-
-Expected permission notification includes:
-- Tool name + input
-- "Why" (agent's reasoning summary)
-- Turn context (recent tools)
-- 4 buttons: Allow / Allow always / Deny / Stop session
-
-### 7. Tap Stop session
-
-Expected: Session terminates cleanly. Status line updates to `done` with duration. Workspace `smoke1` is now idle in `/workspaces`.
-
-### 8. Switch workspaces
-
-Send `/open smoke2`.
-
-Expected: Switches to smoke2 topic/thread. smoke1 remains in `/workspaces` list as idle.
-
-### 9. Per-workspace preferences
-
-In smoke1 topic: `/model opus` → check `/settings` shows model=opus.
-In smoke2 topic: `/model haiku` → check `/settings` shows model=haiku.
-
-Expected: each workspace independently holds its model value. `/settings` in smoke1 still shows `opus`.
-
-### 10. Long content split
-
-Ask agent for a long response (e.g., `Explain TypeScript generics in detail with 10 examples.`).
-
-Expected: if response exceeds platform limit, it's split into `1/N`, `2/N`, etc. First piece includes a web terminal URL.
-
-### 11. Bridge restart preserves workspaces
+### 2. `tlive doctor` — all-green
 
 ```bash
-tlive stop
+tlive doctor
+```
+
+**Expected.** Every check is `✅`:
+- config schema valid
+- daemon reachable on socket
+- at least one channel authenticated (Telegram `getMe` OK)
+- warm pool initialised
+- MCP self server boots
+- `claude --version` ≥ expected; `codex --version` ≥ expected
+
+**If it fails.** The failing section includes a remediation hint. For
+per-platform auth failures, use the platform guide.
+
+### 3. First session — lazy-resume-or-create
+
+Open the bot's DM in IM. Send **any plain text**, e.g.:
+
+```text
+what's in this directory?
+```
+
+**Expected.** Within ~1s:
+- 👁️ reaction on your message.
+- Session header message appears, pinned if the platform supports.
+- Activity sticky evolves: `🧠 thinking…` → `🔧 LS /tmp/tlive-smoke` → streamed reply.
+- No permission card (LS is allowlisted by default).
+
+**If it fails.** `tlive daemon-logs --follow` while resending. A common
+issue is `workdir` mismatch — the daemon's cwd when `tlive start` ran
+drives workspace default.
+
+### 4. Permission flow — `tool_use`
+
+In the same IM chat:
+
+```text
+please run `npm test` here
+```
+
+**Expected.** A **permission card** arrives:
+- Category: exec.
+- Shell block with syntax-highlighted `npm test`.
+- "Why" summary.
+- Buttons: Allow / Deny / Always / 💡 Learn.
+
+Click **Allow**. The activity sticky switches to `🔧 Bash(npm test)` and
+streams the command output. On completion: `✅ done`, cost badge updates.
+
+**If it fails.** Check the card's metadata with the callback_data inspector
+(`tlive daemon-logs | grep CallbackRouter`). Stale cards across daemon
+restarts trigger the §13.4 recovery flow — expected behaviour.
+
+### 5. Elicitation form
+
+Requires a configured MCP tool with `sampling` or an input schema. If one
+isn't set up, you can use the bundled `ask-user-question` prompt:
+
+```text
+use the ask-user-question tool to collect my name and favourite language
+```
+
+**Expected.** The platform renders its native form:
+- **Telegram**: forceReply sequence — one question per reply message.
+- **Discord**: Modal popup with two fields.
+- **Feishu**: interactive card with form blocks.
+
+Submit values; they reach the tool call as structured output.
+
+### 6. Mid-session runtime adjustments
+
+Inside the active session, send:
+
+```text
+/model opus
+/mode safe-yolo
+/effort high
+```
+
+**Expected.** For each command:
+- A brief `✅ model → opus` confirmation.
+- Session header badge updates (`🤖 opus`, mode indicator, etc.).
+- Next turn uses the new setting.
+
+### 7. `/sessions` + `/resume`
+
+```text
+/sessions
+```
+
+**Expected.** Paginated list (8/page). Each row: alias · title · last
+activity · cost · ⚡/❄ cache indicator.
+
+Archive the current session (`/archive <alias>`), create a new one
+(`/new just a quick note`), then:
+
+```text
+/resume <first-alias>
+```
+
+**Expected.** The daemon restores the jsonl through `SessionManager.resumeLocal(sdkId)`,
+`workspace.activeSessionId` flips to the resumed session, header + sticky
+reappear. Send a plain message — it continues the prior conversation.
+
+### 8. `/cost` — per-session + workspace
+
+```text
+/cost
+/cost today
+/cost week
+```
+
+**Expected.** Each invocation returns a table:
+- Per-session USD breakdown (input / output / cache read / cache write).
+- Workspace subtotal.
+- Agent-type breakdown (Claude / Codex).
+
+**Changed in v1.0:** cost accumulates correctly across resumes (the T6 bug
+where `turn_end` usage was lost on resume is fixed).
+
+### 9. Multi-chat mirror
+
+Using `/pairings` (admin), add a second chat as a mirror:
+
+```text
+/mirror add mirror      # in the secondary chat
+```
+
+Trigger a tool in the primary chat that would emit a permission card.
+
+**Expected.**
+- Primary: card with clickable buttons.
+- Mirror: same card rendered, but **buttons disabled** ("ghosted").
+- Tool result / streaming reply appears in both.
+
+### 10. Companion mode
+
+Configure `~/.claude/settings.json` as in
+[getting-started.md §Mode B](getting-started.md#mode-b--companion-mode-local-cli--mcp).
+
+Locally:
+
+```bash
+cd /tmp/tlive-smoke
+claude
+# (inside Claude's TUI)
+please run `ls -la`
+```
+
+**Expected.**
+- Local Claude TUI *pauses* (no local permission prompt).
+- IM receives the permission card tagged `💻 remote from local claude`.
+- Click Allow in IM. Local Claude unblocks and runs `ls -la`.
+- `/sessions` in IM lists the remote session with the 💻 badge.
+
+### 11. Handoff roundtrip
+
+Inside a Daemon-mode session in IM:
+
+```text
+/handoff-to-me
+```
+
+**Expected.** IM posts
+`📲 handed off to you — claude --resume <alias>`. Locally:
+
+```bash
+claude --resume <alias>
+```
+
+Claude picks up conversation. In local Claude run:
+
+```text
+/tlive takeback <alias>
+```
+
+**Expected.** Local claude exits cleanly; IM resumes rendering; the next
+IM message drives the same session.
+
+### 12. Scheduled task
+
+```text
+/schedule create daily 09:00 "summarise yesterday's commits"
+/schedule list
+```
+
+Advance the cron manually (set your system clock forward, or use the test
+endpoint over the IPC socket — see `src/mcp/self/cron.ts` for the debug
+entry if compiled with `TLIVE_CRON_DEBUG=1`).
+
+**Expected.** At fire time IM receives a fresh session with the scheduled
+prompt, runs the turn, and posts the result as a normal agent reply.
+
+### 13. MCP federation
+
+```text
+/mcp install github
+/mcp list
+```
+
+**Expected.** `/mcp list` shows `tlive-self` + `github` with connection
+status. Tools from github appear under `github.*` prefix. Invoke one:
+
+```text
+please list my open github PRs
+```
+
+Claude calls `github.listPullRequests`; result streams back.
+
+### 14. Policy learning
+
+Trigger a permission request (e.g. `please run "ls"`), click **💡 Learn**
+on the card. Acknowledge the "remember this" prompt.
+
+Next turn, send `please run "ls src/"`.
+
+**Expected.** No permission card — the pattern `Bash(ls *)` matched the
+learned policy, the tool runs straight away. `/perm list` shows the new
+entry.
+
+### 15. Daemon reboot resilience
+
+While a session is mid-turn (agent is `🧠 thinking`):
+
+```bash
+tlive stop-daemon
 tlive start
 ```
 
-Send `/workspaces`.
+**Expected.**
+- `tlive status` reports `daemon: running` again.
+- §13.2 auto-resume picks up `workspace.activeSessionId` (marked
+  `running` + `lastActivityAt < 24h`) and resumes via
+  `SessionManager.resumeLocal(sdkId)`.
+- IM posts an informational note: `"session <alias> auto-resumed"`.
+- Session continues where it left off on next user input.
 
-Expected: both smoke1 and smoke2 still listed. Topics/threads still work (send a message in smoke1 topic — agent responds in the same topic).
+---
 
-### 12. Scanner path (local PTY mode)
+## CI-style checklist
 
-In a separate terminal: `tlive codex`. In the bot IM, send `/open sandbox /tmp/smoke-scan`.
-
-Expected: `tlive codex` PTY writes .jsonl to `~/.codex/sessions/`. Scanner picks it up; IM gets notifications (activity_text, activity_tool) — but no reasoning_summary or file_change_list (expected — .jsonl is encrypted).
-
-### 13. Clean shutdown
-
-`Ctrl+C` in `tlive codex`. Run `tlive stop`.
-
-Expected: Both processes exit cleanly. `~/.tlive/workspaces.json` persisted and valid JSON.
+```text
+[ ]  1. tlive start + tlive status — clean
+[ ]  2. tlive doctor — all ✅
+[ ]  3. First session: lazy-resume-or-create
+[ ]  4. tool_use permission — Allow flow
+[ ]  5. Elicitation form — platform-native render
+[ ]  6. /model /mode /effort — mid-session switch visible in header
+[ ]  7. /sessions paginated, /resume works
+[ ]  8. /cost — session + workspace totals
+[ ]  9. Multi-chat mirror — buttons disabled on mirror
+[ ] 10. Companion mode — IM approval unblocks local claude
+[ ] 11. Handoff roundtrip — daemon → local → daemon
+[ ] 12. Scheduled task fires
+[ ] 13. MCP federation — install github, invoke
+[ ] 14. Policy learning — next match auto-resolves
+[ ] 15. Daemon reboot — selective auto-resume
+```
 
 ## Pass criteria
 
-All 13 steps behave as expected. No crashes. No "Unknown event type" warnings except ones logged for known-limit scenarios.
+All 15 boxes ticked. No `Unknown event type` warnings in
+`tlive daemon-logs 500` other than ones already filed in the backlog.
 
 ## If something fails
 
-1. `tlive logs 200` for bridge errors.
-2. `tlive doctor` for environment diagnostics.
-3. File an issue with: failing step, `tlive version`, `codex --version`, log excerpts.
+1. `tlive daemon-logs 500` for the failing window.
+2. `tlive doctor` for env diagnostics.
+3. File an issue with the step number, the failure output, `tlive version`,
+   `claude --version`, `codex --version`.

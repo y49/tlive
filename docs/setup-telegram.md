@@ -1,179 +1,185 @@
-# Telegram Setup Guide
+# Telegram Setup Guide (v1.0)
 
 [Back to Getting Started](getting-started.md)
 
-This guide walks you through creating a Telegram bot and connecting it to tlive so you can interact with your terminal sessions from Telegram.
+This guide walks you through creating a Telegram bot and wiring it into
+tlive v1.0. The result is a bot you can DM (or add to a group / forum
+group) from which the full 45-command IM surface is available.
 
-## What You'll Need
+**Changed in v1.0:** config is `~/.tlive/config.json` (not `config.env`),
+and the `tlive setup` wizard writes it for you. The hand-written env-var
+approach still exists, but the wizard is canonical.
 
-- A Telegram account
-- ~5 minutes
+## What you'll need
 
-## Step 1: Create a Bot
+- A Telegram account.
+- ~5 minutes.
+- (Optional, for topic-per-session UX) a **forum group** where your bot is
+  admin.
 
-1. Open Telegram and search for **@BotFather**
-2. Send `/newbot`
-3. Choose a **display name** (e.g. "My tlive Bot") and a **username** (must end in `bot`, e.g. `my_tlive_bot`)
-4. BotFather will reply with a token like `7823456789:AAF-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
-5. Copy the **full token** — you'll need it in Step 4
+## Step 1 — Create a bot with @BotFather
 
-<!-- TODO: screenshot of BotFather conversation -->
+1. Open Telegram, search for **@BotFather**, send `/newbot`.
+2. Choose a **display name** (e.g. "My tlive bot").
+3. Choose a **username** — must end in `bot` (e.g. `my_tlive_bot`).
+4. BotFather replies with a **bot token** like
+   `7823456789:AAF-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`.
+5. Copy the full token. Keep it secret.
 
-> **Tip:** Keep your token secret. Anyone with the token can control your bot.
+Recommended BotFather settings:
 
-## Step 2: Get Your Chat ID
+| `/setprivacy` | Disable | Lets the bot read group messages (needed for group / forum use). |
 
-Your Chat ID tells tlive where to send messages.
+> The `/setcommands` registration is handled automatically by tlive at boot
+> via `setMyCommands` (see spec §10.1 `bot-commands.ts`).
 
-1. Open a chat with your new bot (search for its username and tap **Start**)
-2. Send any message (e.g. "hello")
-3. Open this URL in your browser (replace `YOUR_TOKEN` with the token from Step 1):
-   ```
+## Step 2 — Find your chat ID
+
+Needed so tlive knows which chat to bind to.
+
+1. In Telegram, start a chat with your bot and tap **Start**.
+2. Send any message (e.g. `hello`).
+3. Open in a browser (replacing `YOUR_TOKEN`):
+   ```text
    https://api.telegram.org/botYOUR_TOKEN/getUpdates
    ```
-4. In the JSON response, look for `"chat":{"id":123456789,...}` — that number is your Chat ID
-5. For **group chats**, the Chat ID is negative (e.g. `-1001234567890`)
+4. In the JSON, find `"chat":{"id":123456789,...}` — that's your chat ID.
+5. **Group/forum chats** have negative IDs like `-1001234567890`.
 
-<!-- TODO: screenshot of getUpdates JSON response -->
+## Step 3 — (Optional) Allowed user IDs
 
-> **Important:** You must send a message to the bot *before* opening the URL, otherwise the response will be empty.
+If you don't want anyone who finds the bot to use it, restrict by user.
 
-## Step 3 (Optional): Get User IDs
+1. Search for **@userinfobot** and send it any message.
+2. It replies with your numeric Telegram user ID.
+3. Collect IDs for every allowed user.
 
-If you want to restrict who can use the bot, you'll need Telegram User IDs.
+> Recommended: always set at least one of `chatId` or `allowedUsers`.
 
-1. Search for **@userinfobot** on Telegram and start a chat
-2. It will reply with your User ID (e.g. `123456789`)
-3. Repeat for each person you want to allow — you'll enter them as comma-separated values
+## Step 4 — Run `tlive setup`
 
-> **Security note:** Setting at least a Chat ID or Allowed User IDs is recommended. Without them, anyone who finds your bot can interact with it.
-
-## Step 4: Configure tlive
-
-You have three options:
-
-**Option A — Interactive setup:**
 ```bash
 tlive setup
 ```
-Select Telegram when prompted, then paste your token and Chat ID.
 
-**Option B — AI-guided setup (recommended):**
-```
-/tlive setup
-```
-Run this inside Claude Code for a guided experience.
+When prompted for a channel, pick **Telegram** and paste:
 
-**Option C — Manual configuration:**
+- Bot token.
+- Chat ID (or leave blank to allow any chat that an allowed user DMs from).
+- Allowed user IDs (comma-separated).
 
-Edit `~/.tlive/config.env`:
-```env
-TL_ENABLED_CHANNELS=telegram
-TL_TG_BOT_TOKEN=your-token
-TL_TG_CHAT_ID=your-chat-id
-TL_TG_ALLOWED_USERS=user-id-1,user-id-2
-```
+The wizard writes `~/.tlive/config.json` with a block like:
 
-## Step 5: Verify
-
-1. Start the bridge:
-   ```bash
-   tlive start
-   ```
-   Or run `/tlive` in Claude Code.
-
-2. Send a message to your bot in Telegram
-3. You should see a response — if so, you're all set!
-
-<!-- TODO: screenshot of successful interaction -->
-
-## Recommended Bot Settings
-
-Send each command to **@BotFather**:
-
-| Command | Setting | Why |
-|---------|---------|-----|
-| `/setprivacy` | Select your bot → `Disable` | Lets the bot read messages in group chats |
-
-> **Note:** The `/setcommands` step is no longer needed — tlive automatically registers commands (`/new`, `/status`, `/help`, etc.) to the Telegram menu on startup.
-
-## Features & Configuration
-
-### Group @Mention Filtering
-
-In group chats, the bot only responds when **@mentioned** (default behavior). This prevents it from responding to every message in the group.
-
-```env
-TL_TG_REQUIRE_MENTION=true    # default: only respond to @bot
-TL_TG_REQUIRE_MENTION=false   # respond to all messages in group
+```json
+{
+  "channels": {
+    "telegram": {
+      "token": "7823456789:AAF-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "chatId": "123456789",
+      "allowedUsers": ["123456789"],
+      "requireMention": true
+    }
+  }
+}
 ```
 
-Replies to bot messages also work without `@mention`.
+You can edit the file by hand afterwards. Fields per spec §10.1:
 
-### Pairing Mode
+| Field | Type | Purpose |
+|---|---|---|
+| `token` | string | Bot token from BotFather. |
+| `chatId` | string \| string[] | Restrict to specific chat(s). Negative IDs = groups. |
+| `allowedUsers` | string[] | Whitelist of user IDs. |
+| `requireMention` | boolean | In groups, only respond when @mentioned (default `true`). |
+| `webhook` | object | See "Webhook mode" below. Omit for long-polling. |
+| `proxy` | string | `http://`, `https://`, `socks4://`, `socks5://`. |
 
-If `TL_TG_ALLOWED_USERS` is not set, the bot enters **pairing mode**:
+Secure the file:
 
-1. An unknown user sends a message → bot replies with a 6-digit pairing code
-2. An admin (from any authorized channel) runs `/approve <code>`
-3. The user is approved and can now interact with the bot
-
-Use `/pairings` to list pending pairing requests. Codes expire after 1 hour.
-
-### Forum Topics
-
-The bot supports Telegram forum-style groups with topics. Messages are routed to the correct topic automatically.
-
-### Webhook Mode (Optional)
-
-By default, the bot uses long-polling. For production environments, you can switch to webhooks:
-
-```env
-TL_TG_WEBHOOK_URL=https://your-domain.com/telegram-webhook
-TL_TG_WEBHOOK_SECRET=your-random-secret
-TL_TG_WEBHOOK_PORT=8443
+```bash
+chmod 600 ~/.tlive/config.json
 ```
 
-### Link Preview
+## Step 5 — Start + verify
 
-Link previews are disabled by default to keep messages clean. To enable:
-```env
-TL_TG_DISABLE_LINK_PREVIEW=false
+```bash
+tlive start
+tlive doctor
 ```
 
-### Proxy
+In doctor output, the Telegram probe calls `getMe` — a ✅ there means the
+token is valid and tlive can reach the API.
 
-If `api.telegram.org` is blocked in your region, set a global proxy (applies to both Telegram and Discord):
-```env
-TL_PROXY=http://127.0.0.1:7890
+Then in Telegram: DM the bot `hello`. You should see the 👁️ reaction, a
+pinned session header, and a streamed reply.
+
+---
+
+## v1.0 platform requirements (spec §10.1)
+
+- **Transport.** Long-polling by default; webhook optional.
+- **MarkdownV2 escaping.** `src/platform/telegram/renderer.ts` escapes
+  special characters (`_`, `*`, `[`, `]`, `(`, `)`, `~`, `` ` ``, `>`,
+  `#`, `+`, `-`, `=`, `|`, `{`, `}`, `.`, `!`). You generally don't
+  care unless you're writing a plugin; just know that agent output
+  containing `_foo_` won't italicise accidentally.
+- **Forum groups (optional, recommended for topic-per-session).** In a
+  Telegram forum group where the bot is admin, each session opens its own
+  topic. Disable the forum feature to route all sessions into the main
+  thread.
+- **Emoji reactions.** Supported for `👁️` acknowledgement via
+  `setMessageReaction` when the bot has reaction permission.
+- **Inline keyboards.** Used for permission-card buttons (Allow / Deny /
+  Always / Learn).
+- **forceReply.** Used for elicitation form rendering — one question per
+  bot message, answers aggregated.
+
+## Webhook mode (optional)
+
+For production, avoid long-polling overhead:
+
+```json
+{
+  "channels": {
+    "telegram": {
+      "token": "…",
+      "webhook": {
+        "url": "https://your-domain.com/telegram-webhook",
+        "secret": "random-hex-string",
+        "port": 8443
+      }
+    }
+  }
+}
 ```
 
-Or set a Telegram-specific proxy (overrides the global one):
-```env
-TL_TG_PROXY=socks5://127.0.0.1:1080
+The daemon exposes the webhook endpoint on the given port. TLS
+termination is on you (nginx / Caddy / fly.io proxy).
+
+## Proxy
+
+```json
+{
+  "channels": {
+    "telegram": { "token": "…", "proxy": "socks5://127.0.0.1:1080" }
+  }
+}
 ```
 
-Supported protocols: `http://`, `https://`, `socks4://`, `socks5://`.
+Supported: `http://`, `https://`, `socks4://`, `socks5://`.
+
+---
 
 ## Troubleshooting
 
-**Bot not responding**
-- Double-check that the token is correct (no extra spaces or missing characters)
-- Run `tlive doctor` to check your configuration
+- **Bot responds in DM but not in groups.** Disable privacy via BotFather
+  (`/setprivacy` → your bot → Disable). If `requireMention: true` you must
+  `@yourbot <message>`.
+- **"Unauthorized" at boot.** Token regenerated — copy the current one.
+- **Empty `getUpdates` response.** Send a message to the bot first, then
+  refresh.
+- **Permission-card button clicks do nothing.** See
+  [references/troubleshooting.md](../references/troubleshooting.md)
+  ("Permission card buttons not working").
 
-**Wrong Chat ID**
-- Make sure you sent a message to the bot *first*, then refresh the `getUpdates` URL
-- If using a group, make sure the bot has been added to the group
-
-**"Unauthorized" error**
-- Your token may have been regenerated in BotFather — go back and copy the latest one
-- Each time you reset the token, the old one stops working immediately
-
-**Bot doesn't respond in groups**
-- Check that Privacy Mode is disabled: BotFather → `/setprivacy` → Disable
-- After changing privacy, remove and re-add the bot to the group
-- If `TL_TG_REQUIRE_MENTION=true` (default), you need to @mention the bot
-
-**Bot shows warning about permissions on startup**
-- This is informational. The bot probes its capabilities at startup and warns about potential issues
-- Common warning: "Group Privacy not disabled" — see above
+Back to [Getting Started](getting-started.md) · [IM command reference](commands.md).
