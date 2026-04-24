@@ -25,6 +25,8 @@ import type { ElicitationBroker } from '../permission/elicitation-broker.js';
 import type { CostRollupStore } from '../cost/rollups.js';
 import type { McpRegistry } from '../mcp/registry.js';
 import type { PolicyStore } from '../permission/policy-store.js';
+import type { SessionPersistence } from '../session/persistence.js';
+import type { AttachmentStore } from '../attachment/store.js';
 
 export interface CommandContext {
   /** The inbound event that carried the command text. */
@@ -42,6 +44,10 @@ export interface CommandContext {
   rollupStore?: CostRollupStore;
   /** Optional registry for `/mcp` subcommands. */
   mcpRegistry?: McpRegistry;
+  /** Optional persistence for /export + /search reading jsonl history. */
+  persistence?: SessionPersistence;
+  /** Optional attachment store for /attach-last. */
+  attachments?: AttachmentStore;
   /** Reply text back to the user; T9 wires this to the resolved adapter. */
   reply: (text: string, opts?: { replyMarkup?: ReplyMarkup }) => Promise<void>;
 }

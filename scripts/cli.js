@@ -15,8 +15,12 @@ const isWindows = process.platform === 'win32';
 const TLIVE_HOME = join(homedir(), '.tlive');
 const RUNTIME_DIR = join(TLIVE_HOME, 'runtime');
 const LOG_DIR = join(TLIVE_HOME, 'logs');
-const BRIDGE_PID = join(RUNTIME_DIR, 'bridge.pid');
-const BRIDGE_ENTRY = join(PACKAGE_ROOT, 'bridge', 'dist', 'main.mjs');
+// v1.0 paths — daemon.pid lives directly in ~/.tlive for parity with
+// src/daemon/bootstrap.ts writePidFile(). Legacy bridge.pid in runtime/
+// is tolerated but never written.
+const DAEMON_PID = join(TLIVE_HOME, 'daemon.pid');
+const BRIDGE_PID = DAEMON_PID; // alias for existing call sites in this file
+const BRIDGE_ENTRY = join(PACKAGE_ROOT, 'dist', 'src', 'tlive-daemon.mjs');
 const CONFIG_FILE = join(TLIVE_HOME, 'config.env');
 
 function getVersion() {
@@ -90,8 +94,8 @@ function daemonStart() {
   }
 
   if (!existsSync(BRIDGE_ENTRY)) {
-    console.error('ERROR: Bridge not built.');
-    console.error(`Build: cd ${join(PACKAGE_ROOT, 'bridge')} && npm install && npm run build`);
+    console.error('ERROR: tlive daemon not built.');
+    console.error(`Build: cd ${PACKAGE_ROOT} && npm install && npm run build`);
     process.exit(1);
   }
 
@@ -125,31 +129,36 @@ function daemonStart() {
 }
 
 function daemonStop() {
+  // Prefer the v1 IPC client when built; fall back to PID-file SIGTERM.
+  const stopEntry = join(PACKAGE_ROOT, 'dist', 'src', 'tlive-stop-daemon.mjs');
+  if (existsSync(stopEntry)) {
+    const r = spawnSync(process.execPath, [stopEntry], { stdio: 'inherit' });
+    if (r.status) process.exit(r.status);
+    return;
+  }
   const pid = getBridgePid();
   if (pid) {
-    console.log(`Stopping Bridge (PID ${pid})...`);
+    console.log(`Stopping daemon (PID ${pid})...`);
     try { process.kill(pid); } catch {}
     try { unlinkSync(BRIDGE_PID); } catch {}
-    console.log('Bridge stopped.');
+    console.log('Daemon stopped.');
   } else {
-    console.log('Bridge is not running.');
-    // Clean up stale pid file
+    console.log('Daemon is not running.');
     try { unlinkSync(BRIDGE_PID); } catch {}
   }
 }
 
 async function daemonStatus() {
-  console.log('=== TLive Status ===');
-
-  const config = loadConfigEnv();
-  const runtime = process.env.TL_RUNTIME || config.TL_RUNTIME || 'claude';
-  const pid = getBridgePid();
-
-  if (pid) {
-    console.log(`Bridge:       running (PID ${pid}, runtime: ${runtime})`);
-  } else {
-    console.log('Bridge:       not running');
+  // Prefer the v1 IPC client when built; fall back to PID-file check.
+  const statusEntry = join(PACKAGE_ROOT, 'dist', 'src', 'tlive-status.mjs');
+  if (existsSync(statusEntry)) {
+    const r = spawnSync(process.execPath, [statusEntry], { stdio: 'inherit' });
+    if (r.status) process.exit(r.status);
+    return;
   }
+  console.log('=== TLive Status ===');
+  const pid = getBridgePid();
+  console.log(pid ? `Daemon:       running (PID ${pid})` : 'Daemon:       not running');
 }
 
 function daemonLogs(n = 50) {
@@ -408,12 +417,14 @@ if (SESSION_SUBCOMMANDS.has(command)) {
 switch (command) {
 
   case 'setup': {
-    const setupEntry = join(PACKAGE_ROOT, 'bridge', 'dist', 'setup.mjs');
+    // TODO(T11): replace with `dist/src/tlive-setup.mjs` when the T11 setup
+    // wizard lands. Keeping the path here so the CLI stays usable for now.
+    const setupEntry = join(PACKAGE_ROOT, 'dist', 'src', 'tlive-setup.mjs');
     if (existsSync(setupEntry)) {
       const r = spawnSync(process.execPath, [setupEntry], { stdio: 'inherit' });
       if (r.status) process.exit(r.status);
     } else {
-      console.error('Setup wizard not found. Try reinstalling: npm install -g tlive');
+      console.error('Setup wizard not yet shipped (T11). Edit ~/.tlive/config.json directly.');
     }
     break;
   }

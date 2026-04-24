@@ -1,12 +1,23 @@
 import { describe, it, expect, vi } from 'vitest';
 
-vi.mock('../../src/cli/ipc-client-lite.js', () => ({
+vi.mock('../../src/ipc/client.js', () => ({
   ensureDaemonRunning: vi.fn(async () => {}),
-  sendRequest: vi.fn(async () => ({
-    type: 'session_list', payload: { sessions: [
-      { id: 'a', ctx: { provider: 'claude', workdir: '/x' }, status: 'active',
-        cost: { costUsd: 0.01, inputTokens: 0, outputTokens: 0, durationMs: 0 } },
-    ] },
+  request: vi.fn(async () => ({
+    kind: 'session.list',
+    sessions: [
+      {
+        sdkSessionId: 'sid-a',
+        shortAlias: 'aaaa',
+        workspaceId: 'ws-1',
+        workspaceName: 'proj',
+        workdir: '/x',
+        provider: 'claude',
+        kind: 'local',
+        status: 'active',
+        lastActivityAt: '2026-04-22T00:00:00Z',
+        costUsd: 0.01,
+      },
+    ],
   })),
 }));
 
@@ -23,15 +34,15 @@ describe('listCommand', () => {
     expect(joined).toContain('0.0100');
   });
 
-  it('prints "(no active sessions)" when empty', async () => {
-    const { sendRequest } = await import('../../src/cli/ipc-client-lite.js');
-    (sendRequest as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      type: 'session_list', payload: { sessions: [] },
+  it('prints "(no sessions)" when empty', async () => {
+    const { request } = await import('../../src/ipc/client.js');
+    (request as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      kind: 'session.list', sessions: [],
     });
     const out: string[] = [];
     const write = vi.spyOn(process.stdout, 'write').mockImplementation((s: unknown) => { out.push(String(s)); return true; });
     await listCommand();
     write.mockRestore();
-    expect(out.join('')).toContain('(no active sessions)');
+    expect(out.join('')).toContain('(no sessions)');
   });
 });

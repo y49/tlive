@@ -60,10 +60,11 @@ const cliEntries = [
   'logs',
   // MCP subsystem
   'mcp',
-  // Daemon lifecycle — these are added in later tasks (T9/T11)
+  // Daemon lifecycle (T9)
   'start',
   'stop-daemon',
   'status',
+  // T11-owned CLI files (built when present)
   'doctor',
   'setup',
   'version',

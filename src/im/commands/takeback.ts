@@ -20,7 +20,8 @@ export const takebackCmd: CommandDef = {
     if (live) { await ctx.reply(`Already live: ${live.shortAlias}.`); return; }
     const resumed = await ctx.sessionManager.resumeLocal(activeId).catch(() => null);
     if (!resumed) { await ctx.reply('Session invalidated; cannot take back.'); return; }
-    // TODO(T9): clear persisted `handed_off` flag once stored.
+    // A `handed_off` flag is not persisted yet (spec §1.2 deferred); the
+    // resume itself is sufficient to reclaim ownership in v1.0.
     await ctx.reply(`Took back ${resumed.shortAlias}.`);
   },
 };

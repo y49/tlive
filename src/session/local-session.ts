@@ -232,6 +232,12 @@ export class LocalSession implements SessionLike {
     await this.runtime.sendInput(text);
   }
 
+  /** Increase the session budget cap by `extraUsd`; used by budget-override
+   *  button flow (CallbackRouter). */
+  extendBudget(extraUsd: number): void {
+    this.budgetGuard.extend(extraUsd);
+  }
+
   async interrupt(): Promise<void> {
     if (this.legacyStatus === 'stopped') return;
     // Reject every pending request (permission / ask / elicitation) so any

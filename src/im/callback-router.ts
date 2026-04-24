@@ -58,8 +58,7 @@ export interface CallbackRouterDeps {
   /**
    * Optional per-workspace PolicyStore resolver. When wired, `perm:learn`
    * persists a derived PolicyRule for auto-resolution of future equivalent
-   * requests. TODO(T9): daemon bootstrap wires a real provider; tests pass
-   * a fake.
+   * requests. Daemon bootstrap wires a real provider; tests pass a fake.
    */
   policyStoreFor?: (workspaceId: string) => PolicyStore | Promise<PolicyStore>;
   /**
@@ -86,7 +85,7 @@ export interface CallbackContext {
   channelType: ChannelType;
   /**
    * Optional adapters map for direct stale-card edits. Overrides
-   * `deps.adapters` when provided. TODO(T9): daemon wires at bootstrap.
+   * `deps.adapters` when provided. Daemon wires at bootstrap.
    */
   adapters?: Map<ChannelType, PlatformAdapter>;
 }
@@ -387,11 +386,7 @@ export class CallbackRouter {
       await this.editStaleCard(ctx, 'invalidated');
       return { kind: 'stale', action: 'invalidated' };
     }
-    // BudgetGuard is not publicly exposed on LocalSession. Expose a setter
-    // here via the well-known `any` — TODO(T9) add a proper `extendBudget`
-    // method on LocalSession.
-    const maybe = session as unknown as { budgetGuard?: { extend: (u: number) => void } };
-    maybe.budgetGuard?.extend(usd);
+    (session as unknown as { extendBudget?: (u: number) => void }).extendBudget?.(usd);
     return { kind: 'handled', action: `budget:override:+${usd}` };
   }
 

@@ -7,8 +7,8 @@
 /**
  * Strip characters that can escape the target directory or break path
  * handling on common filesystems. Current policy: POSIX-focused (Linux/macOS
- * daemon runtime); Windows chars <>|?*" are NOT stripped — TODO(T9) if the
- * daemon expands to native Windows.
+ * daemon runtime); Windows chars <>|?*" are NOT stripped — deferred
+ * until the daemon explicitly supports native Windows builds.
  *
  * Also caps length at 200 bytes to stay well under the ext4 255-byte cap
  * (timestamp/id prefixes added by callers push the final filename closer to
