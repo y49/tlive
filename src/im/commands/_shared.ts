@@ -35,10 +35,19 @@ export async function activeLocalSession(ctx: CommandContext): Promise<LocalSess
 /**
  * Resolve a session by short-alias prefix, with nice ambiguity message on
  * miss. Returns `null` when unresolvable and replies to the user.
+ *
+ * Options:
+ * - `includeStopped` — when true, on a live-prefix miss (no ambiguous live
+ *   matches) the caller is expected to attempt a meta-backed resume; the
+ *   helper suppresses the "no match" reply and returns null silently so the
+ *   caller can take over. Ambiguous live matches still short-circuit with a
+ *   candidate-list reply (a stopped resume on an ambiguous prefix would be
+ *   misleading).
  */
 export async function resolveSessionArg(
   ctx: CommandContext,
   prefix: string,
+  opts: { includeStopped?: boolean } = {},
 ): Promise<LocalSession | RemoteSession | null> {
   if (!prefix) { await ctx.reply('Missing session alias argument.'); return null; }
   const res = ctx.sessionManager.getByPrefix(prefix);
@@ -46,9 +55,14 @@ export async function resolveSessionArg(
   if (res.ambiguous.length > 1) {
     const ids = res.ambiguous.map((s) => s.shortAlias).join(', ');
     await ctx.reply(`Ambiguous prefix '${prefix}'. Matches: ${ids}`);
-  } else {
-    await ctx.reply(`No session matches prefix '${prefix}'.`);
+    return null;
   }
+  if (opts.includeStopped) {
+    // Caller (e.g. /resume) will try resumeLocal against stopped meta; skip
+    // the "no match" reply so the caller owns the failure path.
+    return null;
+  }
+  await ctx.reply(`No session matches prefix '${prefix}'.`);
   return null;
 }
 

@@ -7,6 +7,9 @@ import type { AskUserQuestionBroker } from '../../src/permission/ask-broker.js';
 import type { ElicitationBroker } from '../../src/permission/elicitation-broker.js';
 import type { SessionManager } from '../../src/session/manager.js';
 import type { LocalSession } from '../../src/session/local-session.js';
+import type { PermissionRequest } from '../../src/runtime/types.js';
+import type { PolicyStore, PolicyRule } from '../../src/permission/policy-store.js';
+import type { PlatformAdapter } from '../../src/platform/types.js';
 
 function fakeBrokerCalls() {
   const calls: Array<{ name: string; args: unknown[] }> = [];
@@ -181,5 +184,201 @@ describe('CallbackRouter', () => {
   it('unknown kind → unknown', async () => {
     const out = await router.route({ data: 'nope:whatever', userId: 'u', chatId: 'c', channelType: 'telegram' });
     expect(out.kind).toBe('unknown');
+  });
+});
+
+describe('CallbackRouter perm:learn policy persistence', () => {
+  it('persists PolicyRule with exec command pattern on perm:learn', async () => {
+    const policyAdd: Array<Parameters<PolicyStore['add']>> = [];
+    const store: Pick<PolicyStore, 'add'> = {
+      async add(pattern, decision, scope, createdBy) {
+        policyAdd.push([pattern, decision, scope, createdBy]);
+        return { id: 'pol-1', pattern, decision, scope, createdBy, createdAt: '' } as PolicyRule;
+      },
+    };
+    const execReq: PermissionRequest = {
+      id: 'req-exec-1',
+      category: 'exec',
+      toolName: 'Bash',
+      toolInput: { command: 'npm install lodash' },
+      resolve: () => undefined,
+    };
+    const brokers = fakeBrokerCalls();
+    (brokers.permissionBroker as unknown as { pendingFor: (s: string) => unknown[] }).pendingFor =
+      (sid: string) => sid === 'sess-live' ? [execReq] : [];
+    const sm = fakeSM(true);
+    // fakeSM.get returns a live session for 'sess-live' — add workspaceId for
+    // persistLearnedPolicy to find.
+    (sm.get as unknown as (id: string) => unknown) = (id: string) =>
+      id === 'sess-live'
+        ? ({ id, kind: 'local', workspaceId: 'ws-42' } as unknown)
+        : null;
+
+    const router = new CallbackRouter({
+      sessionManager: sm,
+      permissionBroker: brokers.permissionBroker,
+      askBroker: brokers.askBroker,
+      elicitationBroker: brokers.elicitationBroker,
+      policyStoreFor: () => store as PolicyStore,
+    });
+
+    const out = await router.route({
+      data: 'perm:learn:sess:req-exec-1', userId: 'u-admin', chatId: 'c',
+      channelType: 'telegram',
+    });
+
+    expect(out.kind).toBe('handled');
+    expect((out as { action: string }).action).toBe('perm:learn:learn');
+    // broker.resolve called with allow_always
+    const resolveCall = brokers.calls.find((c) => c.name === 'perm.resolve');
+    expect(resolveCall?.args[2]).toBe('allow_always');
+    // policyStore.add called with exec pattern
+    expect(policyAdd).toHaveLength(1);
+    const [pattern, decision, scope, createdBy] = policyAdd[0]!;
+    expect(pattern).toEqual({ toolName: 'Bash', inputMatch: { command: 'npm(*)' } });
+    expect(decision).toBe('allow');
+    expect(scope).toBe('workspace');
+    expect(createdBy).toBe('u-admin');
+  });
+
+  it('persists toolName-only pattern for non-exec categories', async () => {
+    const policyAdd: Array<Parameters<PolicyStore['add']>> = [];
+    const store: Pick<PolicyStore, 'add'> = {
+      async add(pattern, decision, scope, createdBy) {
+        policyAdd.push([pattern, decision, scope, createdBy]);
+        return { id: 'pol-2', pattern, decision, scope, createdBy, createdAt: '' } as PolicyRule;
+      },
+    };
+    const editReq: PermissionRequest = {
+      id: 'req-edit-1',
+      category: 'file-edit',
+      toolName: 'Edit',
+      toolInput: { file_path: '/tmp/a', old_string: 'x', new_string: 'y' },
+      resolve: () => undefined,
+    };
+    const brokers = fakeBrokerCalls();
+    (brokers.permissionBroker as unknown as { pendingFor: (s: string) => unknown[] }).pendingFor =
+      (sid: string) => sid === 'sess-live' ? [editReq] : [];
+    const sm = fakeSM(true);
+    (sm.get as unknown as (id: string) => unknown) = (id: string) =>
+      id === 'sess-live'
+        ? ({ id, kind: 'local', workspaceId: 'ws-7' } as unknown)
+        : null;
+
+    const router = new CallbackRouter({
+      sessionManager: sm,
+      permissionBroker: brokers.permissionBroker,
+      askBroker: brokers.askBroker,
+      elicitationBroker: brokers.elicitationBroker,
+      policyStoreFor: () => store as PolicyStore,
+    });
+
+    await router.route({
+      data: 'perm:learn:sess:req-edit-1', userId: 'u', chatId: 'c',
+      channelType: 'telegram',
+    });
+
+    expect(policyAdd).toHaveLength(1);
+    expect(policyAdd[0]![0]).toEqual({ toolName: 'Edit' });
+  });
+
+  it('still resolves when policyStoreFor is not wired (T9 fallback)', async () => {
+    const brokers = fakeBrokerCalls();
+    const sm = fakeSM(true);
+    const router = new CallbackRouter({
+      sessionManager: sm,
+      permissionBroker: brokers.permissionBroker,
+      askBroker: brokers.askBroker,
+      elicitationBroker: brokers.elicitationBroker,
+      // no policyStoreFor
+    });
+    const out = await router.route({
+      data: 'perm:learn:sess:r1', userId: 'u', chatId: 'c', channelType: 'telegram',
+    });
+    expect(out.kind).toBe('handled');
+    expect(brokers.calls.find((c) => c.name === 'perm.resolve')?.args[2]).toBe('allow_always');
+  });
+});
+
+describe('CallbackRouter stale-card edits', () => {
+  function fakeAdapter(): { adapter: PlatformAdapter; edits: Array<{ messageId: string; chatId: string; text?: string }> } {
+    const edits: Array<{ messageId: string; chatId: string; text?: string }> = [];
+    const adapter = {
+      channelType: 'telegram',
+      async start() {},
+      async stop() {},
+      async send() { return 'm'; },
+      async edit(messageId: string, chatId: string, text?: string) {
+        edits.push({ messageId, chatId, text });
+      },
+      async delete() {},
+      async pin() {},
+      async setReaction() {},
+      async sendAttachment() { return 'm'; },
+      async downloadAttachment() { return Buffer.from(''); },
+      onInbound: () => () => undefined,
+    } as unknown as PlatformAdapter;
+    return { adapter, edits };
+  }
+
+  it('edits stale card to "invalidated" when session resolves to nothing', async () => {
+    const sm = fakeSM(false, false); // no live, no prefix match, no resume
+    const brokers = fakeBrokerCalls();
+    const { adapter, edits } = fakeAdapter();
+    const adapters = new Map<'telegram' | 'discord' | 'feishu', PlatformAdapter>([['telegram', adapter]]);
+    const router = new CallbackRouter({
+      sessionManager: sm,
+      permissionBroker: brokers.permissionBroker,
+      askBroker: brokers.askBroker,
+      elicitationBroker: brokers.elicitationBroker,
+    });
+    const out = await router.route({
+      data: 'perm:allow:gone:r1', userId: 'u', chatId: 'c-99', messageId: 'msg-42',
+      channelType: 'telegram', adapters,
+    });
+    expect(out.kind).toBe('stale');
+    expect((out as { action: string }).action).toBe('invalidated');
+    expect(edits).toHaveLength(1);
+    expect(edits[0]?.messageId).toBe('msg-42');
+    expect(edits[0]?.chatId).toBe('c-99');
+    expect(edits[0]?.text).toMatch(/invalidated/i);
+  });
+
+  it('edits stale card to "already resolved" when broker.resolve returns false', async () => {
+    const sm = fakeSM(true);
+    const brokers = fakeBrokerCalls();
+    (brokers.permissionBroker as unknown as { resolve: (...a: unknown[]) => boolean }).resolve =
+      (...a: unknown[]) => { brokers.calls.push({ name: 'perm.resolve', args: a }); return false; };
+    const { adapter, edits } = fakeAdapter();
+    const adapters = new Map<'telegram' | 'discord' | 'feishu', PlatformAdapter>([['telegram', adapter]]);
+    const router = new CallbackRouter({
+      sessionManager: sm,
+      permissionBroker: brokers.permissionBroker,
+      askBroker: brokers.askBroker,
+      elicitationBroker: brokers.elicitationBroker,
+    });
+    const out = await router.route({
+      data: 'perm:allow:sess:r1', userId: 'u', chatId: 'c', messageId: 'msg-7',
+      channelType: 'telegram', adapters,
+    });
+    expect(out.kind).toBe('stale');
+    expect((out as { action: string }).action).toBe('already_resolved');
+    expect(edits).toHaveLength(1);
+    expect(edits[0]?.text).toMatch(/already resolved/i);
+  });
+
+  it('no-ops cleanly when messageId/adapters absent', async () => {
+    const sm = fakeSM(false, false);
+    const brokers = fakeBrokerCalls();
+    const router = new CallbackRouter({
+      sessionManager: sm,
+      permissionBroker: brokers.permissionBroker,
+      askBroker: brokers.askBroker,
+      elicitationBroker: brokers.elicitationBroker,
+    });
+    const out = await router.route({
+      data: 'perm:allow:gone:r1', userId: 'u', chatId: 'c', channelType: 'telegram',
+    });
+    expect(out.kind).toBe('stale');
   });
 });

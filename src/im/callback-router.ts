@@ -18,6 +18,19 @@
 // not currently live in the SessionManager, we walk the spec §13.4 stale-
 // permission recovery path: if meta exists, attempt resume and edit the
 // stale card to an informational message; else edit to "session invalidated".
+// When `ctx.adapters` + `ctx.messageId` are wired, the router performs the
+// stale-card edit directly via `adapters[channelType].edit(...)` so the old
+// card reflects the outcome even if no subsequent broker event fires.
+//
+// `perm:learn` semantics: resolves the current request as `allow_always` AND
+// (when `policyStoreFor` is wired) persists a matching PolicyRule so future
+// equivalent requests auto-resolve. Pattern derivation:
+//  - exec tools: `{ toolName, inputMatch: { command: `${firstToken}(*)` } }`
+//    (first whitespace-split token of `input.command`, star-globbed).
+//  - other categories: `{ toolName }` only.
+// Policy persistence is a side effect — the broker.resolve call still fires
+// unconditionally, so a missing `policyStoreFor` (T9 not yet wired) still
+// resolves the current request.
 //
 // Short-alias prefix resolution: sid may be either the full sdkSessionId or
 // a short alias prefix (SessionManager.getByPrefix).
@@ -28,7 +41,9 @@ import type { AskUserQuestionBroker } from '../permission/ask-broker.js';
 import type { ElicitationBroker } from '../permission/elicitation-broker.js';
 import type { LocalSession } from '../session/local-session.js';
 import type { PlatformAdapter } from '../platform/types.js';
-import type { PermissionDecision } from '../runtime/types.js';
+import type { PermissionDecision, PermissionRequest } from '../runtime/types.js';
+import type { PolicyStore } from '../permission/policy-store.js';
+import type { ChannelType } from '../workspace/bindings.js';
 
 export interface CallbackRouterDeps {
   sessionManager: SessionManager;
@@ -39,7 +54,14 @@ export interface CallbackRouterDeps {
    * Optional adapters map for `elic:open:` (Discord modal) and for stale-
    * card edits. T9 wires this; tests pass stubs.
    */
-  adapters?: Partial<Record<import('../workspace/bindings.js').ChannelType, PlatformAdapter>>;
+  adapters?: Partial<Record<ChannelType, PlatformAdapter>>;
+  /**
+   * Optional per-workspace PolicyStore resolver. When wired, `perm:learn`
+   * persists a derived PolicyRule for auto-resolution of future equivalent
+   * requests. TODO(T9): daemon bootstrap wires a real provider; tests pass
+   * a fake.
+   */
+  policyStoreFor?: (workspaceId: string) => PolicyStore | Promise<PolicyStore>;
   /**
    * Optional callback invoked when Discord needs to show a pending modal
    * for an elicitation. The real wiring requires a raw Discord Interaction
@@ -61,7 +83,12 @@ export interface CallbackContext {
   /** Message id holding the stale button, for spec §13.4 edits. */
   messageId?: string;
   /** Platform that delivered the click. */
-  channelType: import('../workspace/bindings.js').ChannelType;
+  channelType: ChannelType;
+  /**
+   * Optional adapters map for direct stale-card edits. Overrides
+   * `deps.adapters` when provided. TODO(T9): daemon wires at bootstrap.
+   */
+  adapters?: Map<ChannelType, PlatformAdapter>;
 }
 
 export type CallbackOutcome =
@@ -125,15 +152,72 @@ export class CallbackRouter {
     if (!sid) {
       return this.handleStaleSession(sidRaw, ctx);
     }
+
+    // For `learn` we need the original request to derive the PolicyRule
+    // pattern; snapshot it before resolve() removes it from the broker.
+    let pendingReq: PermissionRequest | undefined;
+    if (decision.learn) {
+      pendingReq = this.deps.permissionBroker.pendingFor(sid).find((r) => r.id === reqId);
+    }
+
     const ok = this.deps.permissionBroker.resolve(sid, reqId, decision.decision, ctx.userId);
     if (!ok) {
       // Pending not found — may have already been resolved by another operator.
+      await this.editStaleCard(ctx, 'already_resolved');
       return { kind: 'stale', action: 'already_resolved' };
     }
+
+    if (decision.learn && pendingReq) {
+      await this.persistLearnedPolicy(sid, pendingReq, ctx.userId);
+    }
+
     return {
       kind: 'handled',
       action: `perm:${verb}` + (decision.learn ? ':learn' : ''),
     };
+  }
+
+  /**
+   * Persist a PolicyRule derived from `req` so future equivalent requests
+   * auto-resolve. Best-effort: a missing `policyStoreFor` or a store error
+   * is swallowed — the current request is already resolved as allow_always
+   * by the caller, and learn is additive persistence only.
+   */
+  private async persistLearnedPolicy(
+    sid: string,
+    req: PermissionRequest,
+    userId: string,
+  ): Promise<void> {
+    const provider = this.deps.policyStoreFor;
+    if (!provider) return;
+    const session = this.deps.sessionManager.get(sid);
+    const workspaceId = session?.workspaceId;
+    if (!workspaceId) return;
+    try {
+      const store = await provider(workspaceId);
+      const pattern = derivePolicyPattern(req);
+      await store.add(pattern, 'allow', 'workspace', userId);
+    } catch {
+      /* policy persistence is best-effort; don't fail the click */
+    }
+  }
+
+  /**
+   * Spec §13.4 — when a card is stale (session invalidated or request already
+   * resolved), edit the old card in-place so the user sees the outcome. No-op
+   * when adapters/messageId aren't wired; swallows adapter errors.
+   */
+  private async editStaleCard(
+    ctx: CallbackContext,
+    action: 'invalidated' | 'already_resolved',
+  ): Promise<void> {
+    if (!ctx.messageId) return;
+    const adapter = ctx.adapters?.get(ctx.channelType) ?? this.deps.adapters?.[ctx.channelType];
+    if (!adapter) return;
+    const text = action === 'invalidated'
+      ? 'Session invalidated — this card is no longer actionable.'
+      : 'Already resolved — a newer card is above.';
+    await adapter.edit(ctx.messageId, ctx.chatId, text).catch(() => undefined);
   }
 
   // ---- AskUserQuestion ---------------------------------------------------
@@ -163,12 +247,19 @@ export class CallbackRouter {
     if (!sid) return this.handleStaleSession(sidRaw ?? '', ctx);
 
     const req = this.deps.askBroker.pendingFor(sid).find((r) => r.id === reqId);
-    if (!req) return { kind: 'stale', action: 'already_resolved' };
+    if (!req) {
+      await this.editStaleCard(ctx, 'already_resolved');
+      return { kind: 'stale', action: 'already_resolved' };
+    }
     const chosen = req.options[optIdx];
     if (!chosen) return { kind: 'unknown', reason: 'ask:idx-out-of-range' };
 
     const ok = this.deps.askBroker.resolve(sid, reqId, [chosen], ctx.userId);
-    return ok ? { kind: 'handled', action: 'ask:resolved' } : { kind: 'stale', action: 'already_resolved' };
+    if (!ok) {
+      await this.editStaleCard(ctx, 'already_resolved');
+      return { kind: 'stale', action: 'already_resolved' };
+    }
+    return { kind: 'handled', action: 'ask:resolved' };
   }
 
   // ---- Elicitation -------------------------------------------------------
@@ -205,7 +296,11 @@ export class CallbackRouter {
         { action: 'accept', content: {} },
         ctx.userId,
       );
-      return ok ? { kind: 'handled', action: 'elic:submit' } : { kind: 'stale', action: 'already_resolved' };
+      if (!ok) {
+        await this.editStaleCard(ctx, 'already_resolved');
+        return { kind: 'stale', action: 'already_resolved' };
+      }
+      return { kind: 'handled', action: 'elic:submit' };
     }
     if (verb === 'cancel') {
       const ok = this.deps.elicitationBroker.resolve(
@@ -214,21 +309,31 @@ export class CallbackRouter {
         { action: 'decline' },
         ctx.userId,
       );
-      return ok ? { kind: 'handled', action: 'elic:cancel' } : { kind: 'stale', action: 'already_resolved' };
+      if (!ok) {
+        await this.editStaleCard(ctx, 'already_resolved');
+        return { kind: 'stale', action: 'already_resolved' };
+      }
+      return { kind: 'handled', action: 'elic:cancel' };
     }
     return { kind: 'unknown', reason: `elic:bad-verb:${verb}` };
   }
 
   // ---- Suggestion -------------------------------------------------------
 
-  private async handleSuggest(parts: string[], _ctx: CallbackContext): Promise<CallbackOutcome> {
+  private async handleSuggest(parts: string[], ctx: CallbackContext): Promise<CallbackOutcome> {
     // suggest:<sid>:<suggestionId>  OR  suggest:<sid>:<text...>
     const [sidRaw, ...rest] = parts;
     if (!sidRaw || rest.length === 0) return { kind: 'unknown', reason: 'suggest:malformed' };
     const sid = this.resolveSid(sidRaw);
-    if (!sid) return { kind: 'stale', action: 'invalidated' };
+    if (!sid) {
+      await this.editStaleCard(ctx, 'invalidated');
+      return { kind: 'stale', action: 'invalidated' };
+    }
     const session = this.deps.sessionManager.get(sid);
-    if (!session || session.kind !== 'local') return { kind: 'stale', action: 'invalidated' };
+    if (!session || session.kind !== 'local') {
+      await this.editStaleCard(ctx, 'invalidated');
+      return { kind: 'stale', action: 'invalidated' };
+    }
     const text = rest.join(':');
     try { await (session as LocalSession).sendInput(text, 'im'); }
     catch { return { kind: 'unknown', reason: 'suggest:sendInput-failed' }; }
@@ -237,7 +342,7 @@ export class CallbackRouter {
 
   // ---- Queue ------------------------------------------------------------
 
-  private async handleQueue(parts: string[], _ctx: CallbackContext): Promise<CallbackOutcome> {
+  private async handleQueue(parts: string[], ctx: CallbackContext): Promise<CallbackOutcome> {
     // queue:cancel:<sid>:<itemId>
     const [verb, sidRaw, ...rest] = parts;
     if (verb !== 'cancel' || !sidRaw || rest.length === 0) {
@@ -245,16 +350,26 @@ export class CallbackRouter {
     }
     const itemId = rest.join(':');
     const sid = this.resolveSid(sidRaw);
-    if (!sid) return { kind: 'stale', action: 'invalidated' };
+    if (!sid) {
+      await this.editStaleCard(ctx, 'invalidated');
+      return { kind: 'stale', action: 'invalidated' };
+    }
     const session = this.deps.sessionManager.get(sid);
-    if (!session || session.kind !== 'local') return { kind: 'stale', action: 'invalidated' };
+    if (!session || session.kind !== 'local') {
+      await this.editStaleCard(ctx, 'invalidated');
+      return { kind: 'stale', action: 'invalidated' };
+    }
     const ok = (session as LocalSession).queue.cancel(itemId);
-    return ok ? { kind: 'handled', action: 'queue:cancel' } : { kind: 'stale', action: 'already_resolved' };
+    if (!ok) {
+      await this.editStaleCard(ctx, 'already_resolved');
+      return { kind: 'stale', action: 'already_resolved' };
+    }
+    return { kind: 'handled', action: 'queue:cancel' };
   }
 
   // ---- Budget -----------------------------------------------------------
 
-  private async handleBudget(parts: string[], _ctx: CallbackContext): Promise<CallbackOutcome> {
+  private async handleBudget(parts: string[], ctx: CallbackContext): Promise<CallbackOutcome> {
     // budget:override:<sid>:<usd>
     const [verb, sidRaw, usdRaw] = parts;
     if (verb !== 'override' || !sidRaw || !usdRaw) {
@@ -263,9 +378,15 @@ export class CallbackRouter {
     const usd = Number(usdRaw);
     if (!Number.isFinite(usd) || usd <= 0) return { kind: 'unknown', reason: 'budget:bad-usd' };
     const sid = this.resolveSid(sidRaw);
-    if (!sid) return { kind: 'stale', action: 'invalidated' };
+    if (!sid) {
+      await this.editStaleCard(ctx, 'invalidated');
+      return { kind: 'stale', action: 'invalidated' };
+    }
     const session = this.deps.sessionManager.get(sid);
-    if (!session || session.kind !== 'local') return { kind: 'stale', action: 'invalidated' };
+    if (!session || session.kind !== 'local') {
+      await this.editStaleCard(ctx, 'invalidated');
+      return { kind: 'stale', action: 'invalidated' };
+    }
     // BudgetGuard is not publicly exposed on LocalSession. Expose a setter
     // here via the well-known `any` — TODO(T9) add a proper `extendBudget`
     // method on LocalSession.
@@ -314,17 +435,41 @@ export class CallbackRouter {
 
   /**
    * Spec §13.4 stale-permission recovery. Try to resume; if no meta, the
-   * card is invalidated. Router only reports the outcome — the renderer
-   * (session-header or permission-card) edits the button card accordingly
-   * when it observes the subsequent broker event or session resume event.
+   * card is invalidated. On `invalidated` we also edit the old card via
+   * adapters so the user sees the outcome even without a subsequent broker
+   * event. On `resumed_waiting` the renderer will eventually replace the
+   * card once the pending request re-issues.
    */
-  private async handleStaleSession(sidRaw: string, _ctx: CallbackContext): Promise<CallbackOutcome> {
-    if (!sidRaw) return { kind: 'stale', action: 'invalidated' };
+  private async handleStaleSession(sidRaw: string, ctx: CallbackContext): Promise<CallbackOutcome> {
+    if (!sidRaw) {
+      await this.editStaleCard(ctx, 'invalidated');
+      return { kind: 'stale', action: 'invalidated' };
+    }
     const resumed = await this.deps.sessionManager.resumeLocal(sidRaw).catch(() => null);
-    return resumed
-      ? { kind: 'stale', action: 'resumed_waiting' }
-      : { kind: 'stale', action: 'invalidated' };
+    if (resumed) return { kind: 'stale', action: 'resumed_waiting' };
+    await this.editStaleCard(ctx, 'invalidated');
+    return { kind: 'stale', action: 'invalidated' };
   }
+}
+
+/**
+ * Derive a PolicyRule pattern from a PermissionRequest for `perm:learn`.
+ * Exec tools get the leading command token globbed (e.g. `npm(*)`) so
+ * future `npm install`, `npm test`, etc. auto-resolve. Everything else
+ * falls back to toolName-only.
+ */
+function derivePolicyPattern(
+  req: PermissionRequest,
+): { toolName?: string; inputMatch?: Record<string, unknown> } {
+  if (req.category === 'exec') {
+    const input = (req.toolInput ?? {}) as { command?: unknown };
+    const cmd = typeof input.command === 'string' ? input.command : '';
+    const firstToken = cmd.split(/\s+/).filter((s) => s.length > 0)[0];
+    if (firstToken) {
+      return { toolName: req.toolName, inputMatch: { command: `${firstToken}(*)` } };
+    }
+  }
+  return { toolName: req.toolName };
 }
 
 function permVerbToDecision(verb: string): { decision: PermissionDecision; learn?: boolean } | null {

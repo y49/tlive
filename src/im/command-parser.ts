@@ -138,18 +138,3 @@ export function parseFlags(args: string[]): { flags: Record<string, string | boo
   return { flags, positional };
 }
 
-/**
- * Resolve a user-typed short alias against live sessions. Returns a
- * SessionLike pair `{ resolved, ambiguous }` — exactly the shape
- * `SessionManager.getByPrefix` already returns.
- */
-export function resolveSessionPrefix(
-  ctx: CommandContext,
-  prefix: string,
-): { resolved: ReturnType<SessionManager['get']> | null; ambiguous: Array<ReturnType<SessionManager['get']>> } {
-  const res = ctx.sessionManager.getByPrefix(prefix);
-  return {
-    resolved: (res.resolved as ReturnType<SessionManager['get']>) ?? null,
-    ambiguous: res.ambiguous as Array<ReturnType<SessionManager['get']>>,
-  };
-}

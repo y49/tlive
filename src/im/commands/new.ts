@@ -16,7 +16,16 @@ export const newCmd: CommandDef = {
     if (!ws) { await ctx.reply('No workspace bound to this chat.'); return; }
 
     const { flags, positional } = parseFlags(args);
-    const prompt = positional.join(' ').trim() || undefined;
+    let promptRaw = positional.join(' ').trim();
+    // Strip one pair of balanced outer quotes (single or double) so
+    // `/new "hello world"` yields `hello world` as the prompt text.
+    if (
+      (promptRaw.startsWith('"') && promptRaw.endsWith('"')) ||
+      (promptRaw.startsWith("'") && promptRaw.endsWith("'"))
+    ) {
+      if (promptRaw.length >= 2) promptRaw = promptRaw.slice(1, -1);
+    }
+    const prompt = promptRaw || undefined;
     const model = typeof flags.model === 'string' ? flags.model : ws.defaults.model;
     const effort = typeof flags.effort === 'string' ? flags.effort as 'low' | 'medium' | 'high' | 'max' : ws.defaults.effort;
     const ephemeral = flags.ephemeral === true;

@@ -25,4 +25,25 @@ describe('/new', () => {
     await newCmd.run(ctx, ['hi']);
     expect(replies[0]).toMatch(/No workspace/);
   });
+
+  it('strips balanced outer double quotes from the prompt', async () => {
+    const { ctx, sessionCalls } = buildCtx();
+    await newCmd.run(ctx, ['"hello', 'world"']);
+    const call = sessionCalls.find((c) => c.method === 'createLocal');
+    expect((call!.args[0] as { initialPrompt?: string }).initialPrompt).toBe('hello world');
+  });
+
+  it('strips balanced outer single quotes from the prompt', async () => {
+    const { ctx, sessionCalls } = buildCtx();
+    await newCmd.run(ctx, ["'single", "quoted'"]);
+    const call = sessionCalls.find((c) => c.method === 'createLocal');
+    expect((call!.args[0] as { initialPrompt?: string }).initialPrompt).toBe('single quoted');
+  });
+
+  it('leaves unbalanced quotes alone', async () => {
+    const { ctx, sessionCalls } = buildCtx();
+    await newCmd.run(ctx, ['"unbalanced']);
+    const call = sessionCalls.find((c) => c.method === 'createLocal');
+    expect((call!.args[0] as { initialPrompt?: string }).initialPrompt).toBe('"unbalanced');
+  });
 });
