@@ -155,12 +155,20 @@ if (LEGACY_REMOVED[command] !== undefined) {
 // `tlive start` — detach to background (the Unix daemon convention)
 // ---------------------------------------------------------------------------
 
+function defaultSocketPath(home) {
+  // POSIX: filesystem path; Windows: Node's named-pipe syntax. Both are
+  // consumable by the same `net` API on their respective platforms.
+  return process.platform === 'win32'
+    ? '\\\\.\\pipe\\tlive-daemon'
+    : join(home, 'daemon.sock');
+}
+
 async function startDaemonDetached(argv) {
   const foreground = argv.includes('--foreground') || argv.includes('-F');
 
   // Short-circuit: if a daemon is already up on the socket, report it.
   const home = process.env.TLIVE_HOME || join(homedir(), '.tlive');
-  const sockPath = join(home, 'daemon.sock');
+  const sockPath = process.env.TLIVE_SOCKET_PATH || defaultSocketPath(home);
   if (await socketReady(sockPath, 200)) {
     process.stdout.write(`tlive daemon already running (socket ${sockPath})\n`);
     process.exit(0);
@@ -181,10 +189,15 @@ async function startDaemonDetached(argv) {
   mkdirSync(home, { recursive: true });
   const logPath = join(home, 'daemon.log');
   const logFd = openSync(logPath, 'a');
+  // `detached: true` semantics differ per platform:
+  //   - POSIX: child becomes its own session leader (setsid), parent can exit.
+  //   - Windows: without `windowsHide` this opens a visible console window
+  //     for the daemon. We want a fully background process, so hide it.
   const child = spawn(process.execPath, [entry], {
     detached: true,
     stdio: ['ignore', logFd, logFd],
     env: process.env,
+    windowsHide: true,
   });
   child.unref();
 

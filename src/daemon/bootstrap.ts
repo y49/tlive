@@ -398,7 +398,12 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
   await writePidFile(home).catch(() => undefined);
 
   // --- IPC server --------------------------------------------------------
-  const ipcPath = cfg.daemon?.socketPath ?? join(home, 'daemon.sock');
+  // Default transport: unix-domain socket on POSIX, Windows named pipe
+  // on win32. `cfg.daemon.socketPath` overrides on either platform.
+  const defaultIpcPath = process.platform === 'win32'
+    ? '\\\\.\\pipe\\tlive-daemon'
+    : join(home, 'daemon.sock');
+  const ipcPath = cfg.daemon?.socketPath ?? defaultIpcPath;
   const dispatcher = buildIpcDispatcher({
     sessions,
     workspaces,

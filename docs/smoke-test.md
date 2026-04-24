@@ -46,6 +46,26 @@ When you're done smoke-testing, tear it back down:
 npm unlink -g tlive  # or: npm rm -g tlive
 ```
 
+### Platform notes
+
+This checklist assumes a POSIX shell (Linux / macOS). Windows adaptations:
+
+- **IPC transport.** v1.0 picks the right shape per platform automatically:
+  POSIX uses a unix-domain socket at `~/.tlive/daemon.sock`; Windows uses
+  a named pipe at `\\.\pipe\tlive-daemon`. Override via `$TLIVE_SOCKET_PATH`
+  or `daemon.socketPath` in config if you need a custom endpoint.
+- **`npm link`** works on Windows but may need Developer Mode or admin for
+  symlinks; `npm config get prefix` must be on `$PATH`.
+- **Shell commands below** (`rm -rf`, `mkdir -p`, `cat <<'EOF'`) — on
+  Windows PowerShell use `Remove-Item -Recurse -Force`, `New-Item -ItemType Directory`,
+  and here-strings. Cmd.exe users should run from Git Bash or WSL.
+- **Handoff scripts** (`~/.claude/skills/tlive/scripts/{handoff,takeback}.sh`)
+  are bash-only. On Windows, use the equivalent `tlive` CLI operations
+  directly (a `.cmd` / `.ps1` shim is not shipped in v1.0 — tracked for a
+  future release).
+- **Daemon spawn** uses `windowsHide: true`, so `tlive start` on Windows
+  won't pop up a visible console window — the daemon runs fully detached.
+
 ### Clear any prior state
 
 ```bash

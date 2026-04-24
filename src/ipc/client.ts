@@ -22,7 +22,15 @@ import {
   type Envelope, type IpcRequest, type IpcResponse, encodeFrame, createLineFramer,
 } from './protocol.js';
 
-export const DEFAULT_SOCKET_PATH = join(homedir(), '.tlive', 'daemon.sock');
+/**
+ * Default IPC endpoint. On POSIX (Linux/macOS) this is a filesystem path
+ * used as a unix-domain socket. On Windows Node's `net` module requires a
+ * named-pipe path (`\\.\pipe\<name>`) for the same IPC semantics; we pick
+ * the right shape per platform so users don't have to configure it.
+ */
+export const DEFAULT_SOCKET_PATH = process.platform === 'win32'
+  ? '\\\\.\\pipe\\tlive-daemon'
+  : join(homedir(), '.tlive', 'daemon.sock');
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 export interface IpcClientOptions {
