@@ -9,8 +9,8 @@
 //   - lazyResumeOrCreate — Mode A plain-text IM flow (spec §6.1 step 3)
 //   - per-workspace defaults, budget, mcpServers
 //
-// Reimplemented from scratch (does NOT import from bridge/). Legacy
-// WorkspaceManager in bridge/ stays alive until T8 for the v0 IM path.
+// Reimplemented from scratch for v1.0. The v0.x `bridge/` tree is gone
+// (deleted in T8); this is now the sole WorkspaceManager in the codebase.
 
 import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';

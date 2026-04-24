@@ -154,8 +154,8 @@ export class PermissionBroker {
   }
 
   /**
-   * Deny every pending request across all sessions (daemon shutdown). Used
-   * by bridge/main.ts at SIGTERM. Removed when bridge goes away in T8.
+   * Deny every pending request across all sessions. Called by the v1.0
+   * daemon at SIGTERM during orderly shutdown.
    */
   denyAll(): void {
     for (const sessionId of [...this.pending.keys()]) {
