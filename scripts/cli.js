@@ -23,10 +23,12 @@
 // `handoff`, `takeback`, `hooks` — have been removed. Users drive sessions
 // via IM / MCP now.
 
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, openSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import net from 'node:net';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = join(__dirname, '..');
@@ -86,7 +88,8 @@ const HELP_TEXT = `tlive v${getVersion()} — MCP-native agent fabric for IM
 Usage: tlive <command> [args]
 
 Daemon management:
-  tlive start                      Start the daemon (uses ~/.tlive/config.json)
+  tlive start [--foreground|-F]    Start the daemon (detaches by default;
+                                   -F keeps it in the foreground for debug)
   tlive stop-daemon                Stop the daemon gracefully
   tlive status                     Daemon + session snapshot
   tlive doctor                     Structured health checks
@@ -149,8 +152,86 @@ if (LEGACY_REMOVED[command] !== undefined) {
 }
 
 // ---------------------------------------------------------------------------
+// `tlive start` — detach to background (the Unix daemon convention)
+// ---------------------------------------------------------------------------
+
+async function startDaemonDetached(argv) {
+  const foreground = argv.includes('--foreground') || argv.includes('-F');
+
+  // Short-circuit: if a daemon is already up on the socket, report it.
+  const home = process.env.TLIVE_HOME || join(homedir(), '.tlive');
+  const sockPath = join(home, 'daemon.sock');
+  if (await socketReady(sockPath, 200)) {
+    process.stdout.write(`tlive daemon already running (socket ${sockPath})\n`);
+    process.exit(0);
+  }
+
+  if (foreground) {
+    // Debug mode: run in the current terminal, operator uses Ctrl-C.
+    runEntry('start', argv.filter((a) => a !== '--foreground' && a !== '-F'));
+    return;
+  }
+
+  // Detached: spawn tlive-daemon.mjs with stdio redirected to a log file.
+  const entry = entryFor('daemon');
+  if (!existsSync(entry)) {
+    process.stderr.write(`tlive: ${entry} not found. Run: npm run build\n`);
+    process.exit(1);
+  }
+  mkdirSync(home, { recursive: true });
+  const logPath = join(home, 'daemon.log');
+  const logFd = openSync(logPath, 'a');
+  const child = spawn(process.execPath, [entry], {
+    detached: true,
+    stdio: ['ignore', logFd, logFd],
+    env: process.env,
+  });
+  child.unref();
+
+  // Wait up to ~5s for the daemon to bind its socket before returning.
+  const ready = await waitForSocket(sockPath, 5000);
+  if (!ready) {
+    process.stderr.write(
+      `tlive: daemon did not come up within 5s (log: ${logPath}).\n` +
+      `Check \`tlive daemon-logs 200\` or tail ${logPath}.\n`,
+    );
+    process.exit(1);
+  }
+  process.stdout.write(
+    `tlive daemon started (pid ${child.pid}, socket ${sockPath}, log ${logPath})\n`,
+  );
+  process.exit(0);
+}
+
+function socketReady(path, timeoutMs) {
+  return new Promise((resolve) => {
+    const sock = net.createConnection(path);
+    const timer = setTimeout(() => { sock.destroy(); resolve(false); }, timeoutMs);
+    sock.once('connect', () => { clearTimeout(timer); sock.end(); resolve(true); });
+    sock.once('error', () => { clearTimeout(timer); resolve(false); });
+  });
+}
+
+async function waitForSocket(path, totalMs) {
+  const stepMs = 100;
+  const deadline = Date.now() + totalMs;
+  while (Date.now() < deadline) {
+    if (await socketReady(path, 200)) return true;
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
+
+if (command === 'start') {
+  startDaemonDetached(args).catch((err) => {
+    process.stderr.write(`tlive start failed: ${err?.stack ?? err}\n`);
+    process.exit(1);
+  });
+}
 
 const target = DISPATCH[command];
 if (target) {
