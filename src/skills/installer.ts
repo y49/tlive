@@ -156,10 +156,6 @@ async function copyTree(src: string, dest: string, log: (s: string) => void): Pr
         await walk(srcPath, destPath);
       } else if (entry.isFile()) {
         await fs.copyFile(srcPath, destPath);
-        // Preserve executable bit for shell scripts.
-        if (entry.name.endsWith('.sh')) {
-          await fs.chmod(destPath, 0o755).catch(() => undefined);
-        }
         written.push(destPath);
         log(`wrote ${destPath}`);
       }

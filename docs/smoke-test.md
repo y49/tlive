@@ -59,10 +59,10 @@ This checklist assumes a POSIX shell (Linux / macOS). Windows adaptations:
 - **Shell commands below** (`rm -rf`, `mkdir -p`, `cat <<'EOF'`) — on
   Windows PowerShell use `Remove-Item -Recurse -Force`, `New-Item -ItemType Directory`,
   and here-strings. Cmd.exe users should run from Git Bash or WSL.
-- **Handoff scripts** (`~/.claude/skills/tlive/scripts/{handoff,takeback}.sh`)
-  are bash-only. On Windows, use the equivalent `tlive` CLI operations
-  directly (a `.cmd` / `.ps1` shim is not shipped in v1.0 — tracked for a
-  future release).
+- **Handoff.** The Claude skill's `/tlive handoff` / `/tlive takeback`
+  subcommands dispatch to the `tlive` CLI (Node, cross-platform) — no
+  shell scripts are shipped. `tlive handoff <alias>` and `tlive takeback
+  <sdkSessionId>` also work directly from any terminal.
 - **Daemon spawn** uses `windowsHide: true`, so `tlive start` on Windows
   won't pop up a visible console window — the daemon runs fully detached.
 

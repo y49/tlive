@@ -28,13 +28,15 @@ describe('skills installer', () => {
   });
   afterEach(() => { rmSync(work, { recursive: true, force: true }); });
 
-  it('installClaude copies SKILL.md + command + scripts and patches settings.json', async () => {
+  it('installClaude copies SKILL.md + command and patches settings.json', async () => {
     const result = await installClaude({ destRoot: claudeRoot });
-    expect(result.filesWritten.length).toBeGreaterThanOrEqual(4);
+    expect(result.filesWritten.length).toBeGreaterThanOrEqual(2);
     expect(existsSync(join(claudeRoot, 'skills', 'tlive', 'SKILL.md'))).toBe(true);
     expect(existsSync(join(claudeRoot, 'skills', 'tlive', 'commands', 'tlive.md'))).toBe(true);
-    expect(existsSync(join(claudeRoot, 'skills', 'tlive', 'scripts', 'handoff.sh'))).toBe(true);
-    expect(existsSync(join(claudeRoot, 'skills', 'tlive', 'scripts', 'takeback.sh'))).toBe(true);
+    // Shell scripts were removed in favor of the cross-platform `tlive`
+    // CLI — verify the scripts/ dir is NOT populated.
+    expect(existsSync(join(claudeRoot, 'skills', 'tlive', 'scripts', 'handoff.sh'))).toBe(false);
+    expect(existsSync(join(claudeRoot, 'skills', 'tlive', 'scripts', 'takeback.sh'))).toBe(false);
 
     const settingsPath = join(claudeRoot, 'settings.json');
     expect(result.configPatched).toBe(settingsPath);

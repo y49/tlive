@@ -5,30 +5,34 @@ description: Drive tlive daemon operations (handoff, takeback, status) from Clau
 Usage:
 
 - `/tlive` — show available subcommands.
-- `/tlive status` — show this session's daemon relationship.
-- `/tlive handoff` — daemon releases current session; local claude continues.
-- `/tlive takeback <alias>` — daemon takes over a session; local claude exits.
+- `/tlive status` — show daemon state and live sessions.
+- `/tlive handoff <alias>` — daemon releases the session; local claude
+  continues it via `claude --resume <sdkSessionId>`.
+- `/tlive takeback <sdkSessionId>` — daemon re-adopts a locally-driven
+  session. Exit the local `claude --resume` first so there is no jsonl-
+  writer contention.
 
 # Implementation
 
-Dispatch on the first argument ($1 after `/tlive`):
+Run the matching `tlive` CLI directly — it's a cross-platform Node binary
+and speaks to the daemon over the same IPC endpoint the skill would
+otherwise hand-roll. Dispatch on the first argument after `/tlive`:
 
-- no argument → print the usage block above.
-- `status` → run `~/.claude/skills/tlive/scripts/status.sh` (falls back to
-  `tlive status` when absent).
-- `handoff` → run `~/.claude/skills/tlive/scripts/handoff.sh` with the current
-  session's short alias (if detectable via `$CLAUDE_SESSION_ID`, otherwise
-  the script reads it from `tlive list`).
-- `takeback` → run `~/.claude/skills/tlive/scripts/takeback.sh $2`, then
-  suggest the user exits local claude so the daemon owns the session.
+- no argument → print the Usage block above.
+- `status`   → `tlive status`
+- `handoff`  → `tlive handoff $2`
+- `takeback` → `tlive takeback $2`
 
-Scripts talk to the daemon via its unix socket at
-`${TLIVE_DAEMON_SOCK:-$HOME/.tlive/daemon.sock}`. They assume `curl` is
-available; if it isn't, fall back to `tlive handoff-to-me` / `tlive takeback`
-CLI commands once those land.
+The daemon endpoint is resolved by the CLI:
+
+- POSIX: `${TLIVE_SOCKET_PATH:-$HOME/.tlive/daemon.sock}`
+- Windows: `${TLIVE_SOCKET_PATH:-\\.\pipe\tlive-daemon}`
+
+No bash scripts are required — the `tlive` CLI ships with
+`npm install -g tlive` and works on Linux, macOS, and Windows.
 
 # Examples
 
-- User says "hand this off to the Telegram bot" → `/tlive handoff`.
-- User says "take back workspace abc" → `/tlive takeback abc`.
+- User says "hand this off to the Telegram bot" → `/tlive handoff a1b2c3d4`.
+- User says "take back this session" → `/tlive takeback <full-sdkSessionId>`.
 - User asks "is this session owned by the daemon?" → `/tlive status`.

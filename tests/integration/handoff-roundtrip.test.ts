@@ -3,9 +3,10 @@
 // End-to-end verification of the Mode A ↔ Mode B handoff flow:
 //   1. Boot a minimal IPC server wired to a real SessionManager + persistence.
 //   2. Seed a live session, bind it as the workspace's activeSessionId.
-//   3. Call `handoff.release` through the IPC client (simulating the Claude
-//      skill's `scripts/handoff.sh`) and verify the runtime is stopped +
-//      the session drops from the live map.
+//   3. Call `handoff.release` through the IPC client (simulating `tlive
+//      handoff <alias>` / the Claude skill's `/tlive handoff` dispatch)
+//      and verify the runtime is stopped + the session drops from the
+//      live map.
 //   4. Call `handoff.take` and verify a fresh LocalSession appears with the
 //      *same* sdkSessionId (native jsonl compatibility).
 //   5. Assert the workspace's activeSessionId invariant — a single writer

@@ -20,8 +20,9 @@
 //   tlive mcp                    -> tlive-mcp.mjs
 //
 // Legacy (v0.x) commands — `claude`, `codex`, `resume`, `install-hooks`,
-// `handoff`, `takeback`, `hooks` — have been removed. Users drive sessions
-// via IM / MCP now.
+// `hooks` — have been removed. Users drive sessions via IM / MCP now.
+// `handoff` and `takeback` are v1.0 commands (thin IPC wrappers, see
+// src/cli/handoff.ts + takeback.ts).
 
 import { spawnSync, spawn } from 'node:child_process';
 import { join, dirname } from 'node:path';
@@ -57,6 +58,8 @@ const DISPATCH = {
   logs: 'logs',
   'install-integrations': 'install-integrations',
   mcp: 'mcp',
+  handoff: 'handoff',
+  takeback: 'takeback',
 };
 
 function getVersion() {
@@ -100,6 +103,10 @@ Sessions (runtime slots in the daemon):
   tlive stop <alias>               Force-kill one runtime slot
   tlive logs <alias> [--follow]    Tail a session's NotificationEvent stream
 
+Handoff (daemon ↔ local claude/codex):
+  tlive handoff <alias>            Release to local claude --resume <sdkId>
+  tlive takeback <sdkId>           Daemon re-adopts a locally-driven session
+
 Wizards:
   tlive setup                      Git-aware first-time / add-workspace wizard
   tlive install-integrations [all|claude|codex]
@@ -134,8 +141,6 @@ const LEGACY_REMOVED = {
   claude: 'Drive Claude sessions via IM, `claude` CLI directly, or via MCP. See README.',
   codex: 'Drive Codex sessions via IM, `codex` CLI directly, or via MCP. See README.',
   resume: 'Use IM `/resume <alias>`, or `claude --resume <sdkSessionId>` in a terminal.',
-  handoff: 'Use the Claude skill `scripts/handoff.sh` or IM `/handoff`. See README.',
-  takeback: 'Use the Claude skill `scripts/takeback.sh` or IM `/takeback`. See README.',
   'install-hooks': 'Hooks bridge removed. Use `tlive install-integrations`.',
   hooks: 'Hooks bridge removed. Use MCP permissions via `mcp__tlive__approve`.',
   install: (() => {

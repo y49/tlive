@@ -58,6 +58,8 @@ const cliEntries = [
   'list',
   'stop',
   'logs',
+  'handoff',
+  'takeback',
   // MCP subsystem
   'mcp',
   // Daemon lifecycle (T9)

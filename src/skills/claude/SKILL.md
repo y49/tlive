@@ -65,15 +65,18 @@ Call these with `mcp__tlive__<tool>` once the user has run
 
 ## `/tlive` slash command
 
-The `/tlive` slash command shells out to scripts under
-`~/.claude/skills/tlive/scripts/`:
+The `/tlive` slash command invokes the cross-platform `tlive` Node CLI
+(no shell scripts). Dispatch:
 
 ```
 /tlive                       show available subcommands
-/tlive status                show this session's daemon relationship
-/tlive handoff               daemon releases current session to local claude
-/tlive takeback <alias>      daemon takes over a session
+/tlive status                -> tlive status
+/tlive handoff <alias>       -> tlive handoff <alias>
+/tlive takeback <sdkId>      -> tlive takeback <sdkId>
 ```
+
+The daemon endpoint is resolved automatically (unix socket on Linux/macOS,
+named pipe on Windows), so the same slash command works on every platform.
 
 ## Output convention for IM
 
