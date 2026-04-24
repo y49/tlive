@@ -47,6 +47,25 @@ describe('migration (pure)', () => {
     expect(isLegacyConfig({ jsonValue: { foo: 1 }, defaultWorkdir: '/x' })).toBe(true);
     expect(isLegacyConfig({ jsonValue: { version: '1' }, defaultWorkdir: '/x' })).toBe(false);
   });
+
+  it('falls back to defaultWorkdir when TL_DEFAULT_WORKDIR is empty string', () => {
+    // Regression: legacy setup wizard commonly wrote `TL_DEFAULT_WORKDIR=`
+    // with an empty value. `??` treated it as present and produced an empty
+    // workdir that failed schema validation. Empty strings must fall through.
+    const { config } = migrateToV1({
+      envText: 'TL_DEFAULT_WORKDIR=\nTL_TG_BOT_TOKEN=abc',
+      defaultWorkdir: '/home/u/proj',
+    });
+    expect(config.workspaces[0]!.workdir).toBe('/home/u/proj');
+  });
+
+  it('trims whitespace-only TL_DEFAULT_WORKDIR', () => {
+    const { config } = migrateToV1({
+      envText: 'TL_DEFAULT_WORKDIR=   \nTL_TG_BOT_TOKEN=abc',
+      defaultWorkdir: '/home/u/proj',
+    });
+    expect(config.workspaces[0]!.workdir).toBe('/home/u/proj');
+  });
 });
 
 describe('loadConfig (migration roundtrip)', () => {

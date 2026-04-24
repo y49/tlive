@@ -80,9 +80,16 @@ export function migrateToV1(input: MigrationInput): { config: TliveConfigV1; rep
   const legacy = (input.jsonValue ?? {}) as Record<string, unknown>;
   const report: MigrationReport = { dropped: [], warnings: [], migrated: true };
 
+  // `??` fall-through isn't enough here: legacy env files commonly have
+  // `TL_DEFAULT_WORKDIR=` (empty string) when the v0.x setup wizard skipped
+  // it. Treat empty strings as missing so we reach `input.defaultWorkdir`
+  // (the caller-provided cwd) rather than synthesizing a bad workspace.
+  const envWorkdir = (env.TL_DEFAULT_WORKDIR ?? '').trim();
+  const legacyWorkdir = typeof legacy.defaultWorkdir === 'string' ? legacy.defaultWorkdir.trim() : '';
+  const resolvedWorkdir = envWorkdir || legacyWorkdir || input.defaultWorkdir;
   const workspace: WorkspaceConfigEntry = {
-    name: input.defaultWorkspaceName ?? input.defaultWorkdir.split('/').pop() ?? 'workspace',
-    workdir: (env.TL_DEFAULT_WORKDIR ?? (legacy.defaultWorkdir as string) ?? input.defaultWorkdir),
+    name: input.defaultWorkspaceName ?? resolvedWorkdir.split('/').pop() ?? 'workspace',
+    workdir: resolvedWorkdir,
     defaults: {
       provider: normalizeProvider(env.TL_RUNTIME ?? (legacy.runtime as string)),
     },
