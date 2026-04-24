@@ -15,3 +15,6 @@ bridge/dist/
 /tlive
 /tlive-*
 docs/plans/
+
+# Runtime/dev state
+.claude/
