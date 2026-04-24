@@ -1,4 +1,4 @@
-# tlive
+# tlive v1.0
 
 [![npm version](https://img.shields.io/npm/v/tlive)](https://www.npmjs.com/package/tlive)
 [![CI](https://github.com/y49/tlive/actions/workflows/ci.yml/badge.svg)](https://github.com/y49/tlive/actions/workflows/ci.yml)
@@ -6,312 +6,161 @@
 
 [English](README.md)
 
-**Terminal Live** — 从 Telegram、Discord、飞书监控和操控 AI 编码工具（Claude Code、Codex）。
+> **IM 原生的 agent 织网，基于 MCP。**
+> 一次安装，所有 agent 都获得 session memory、IM 通知、远程审批、多 agent
+> 编排、定时任务,以及联邦化的 MCP 注册表。用 Telegram、Discord 或飞书驱动
+> Claude Code 和 Codex，完全不开终端——或者继续在终端里用 claude / codex,
+> 通过 MCP 把权限审批转到手机上。
 
-三大功能，按需组合：
+## 三种使用方式
 
-| 功能 | 说明 | 访问方式 |
-|------|------|---------|
-| **Web 终端** | `tlive <cmd>` — 包装任何命令，手机浏览器访问 | 浏览器 / 手机 |
-| **IM 桥接** | `/tlive` — 在手机上与 Claude Code 双向对话 | Telegram / Discord / 飞书 |
-| **Hook 审批** | 在手机上审批 Claude Code 工具权限 | Telegram / Discord / 飞书 |
-
-<!-- TODO: 添加演示截图/GIF -->
-<!-- ![tlive 演示](docs/images/demo.gif) -->
+- **Daemon 模式** —— IM 就是你唯一的界面。`tlive start`、打开你的 bot、发消息。
+  Claude / Codex 在 tlive daemon 里运行。
+- **Companion 模式** —— 继续在本地用 `claude` / `codex`。在配置里加上
+  `permissionPromptToolName: "mcp__tlive__approve"` —— 离开电脑时所有权限
+  请求都推到 IM 等你审批。
+- **Handoff 切换** —— 在手机 IM 里开始,到了笔记本前接着干。
+  `claude --resume <alias>` 无缝续上。或者在终端里跑 `/tlive takeback`
+  把控制权交回 IM。
 
 ## 快速开始
 
 ```bash
-# 1. 安装
 npm install -g tlive
 
-# 2. 配置 IM 平台（交互式引导）
-tlive setup
-
-# 3. 注册 hooks + Claude Code 技能
-tlive install skills
-
-# 4. 在 Claude Code 中启动桥接
-/tlive
+tlive setup                  # git 感知的向导:workspace + IM token
+tlive install-integrations   # 装 Claude skill + Codex prompt + MCP 入口
+tlive start                  # 启动 daemon
+tlive doctor                 # 结构化健康检查
 ```
 
-> **推荐：** 在 Claude Code 中运行 `/tlive setup`，AI 会一步步引导你完成配置。
+## 从 v0.x 升级
 
-平台配置指南：[Telegram](docs/setup-telegram-cn.md) · [Discord](docs/setup-discord-cn.md) · [飞书](docs/setup-feishu-cn.md) · [完整入门指南](docs/getting-started-cn.md)
+v1.0 是完整重写。v0.x 的 PTY 包装、jsonl 扫描器、web 终端、hooks bridge
+全部移除。IM 是唯一的交互界面,MCP 是程序化入口。
 
-## Web 终端
+如果你以前把 tlive 当作"带 IM 通知的 Claude Code 终端包装"在用:v1.0 不兼容。
+锁在 `tlive@0.8.x`,或者直接用原生 Claude Code / Codex CLI。
 
-包装长时间运行的命令，手机浏览器远程访问。
+首次运行时 `tlive setup` 会把你的 `~/.tlive/config.env` 迁移成
+`~/.tlive/config.json`;旧文件会备份到 `~/.tlive/config.v0-backup.env`
+(或 `.v0-backup.json`)。
 
-```bash
-tlive claude                  # 包装 Claude Code
-tlive python train.py         # 包装训练脚本
-tlive npm run build           # 包装构建
-```
+## 亮点
 
-```
-$ tlive claude --model opus
+- **45 条 IM 斜杠命令** —— session 运行时的 `/model` / `/mode` / `/perm`,
+  加上 `/rewind` / `/fork` / `/budget` / `/cost` / `/status`,动态拉取的
+  `/models` / `/agents`。完整列表见 `docs/commands.md`。
+- **8 锚点消息 UX** —— 表情 ack、session 头、活动粘滞、流式 agent 回复、
+  4 种权限卡片、elicitation 表单、todo 粘滞、附件。
+- **多模态** —— 从 IM 发图片和文件,Claude 直接读。Claude 在 workspace 里
+  创建文件 → IM 收到下载链接。
+- **MCP 联邦** —— 在 agent 配置里加一条 `tlive-self`,每个 agent 都能访问
+  你的 session 历史、memory、通知,以及任何你注册的下游 MCP server。
+- **Sampling、Resources (`tlive://…`)、Prompts (`/prompts tlive-*`)** ——
+  tlive 是完整的 MCP 公民,不只是一个工具 namespace。
+- **Warm runtime pool + cache 感知的 pre-warm** —— session 启动从 ~500ms
+  降到 ~50ms,Anthropic 的 5 分钟 prompt cache 在空闲间隙保持热态。
+- **定时任务** —— `/schedule daily 9am tlive-daily-standup`,session 自己跑。
+- **跨 agent 流水线** —— `/pipeline run plan-impl-review "refactor auth"`
+  串起 Claude 规划 → Codex 实现 → Claude 审阅。
+- **每个 session 一个 thread** —— Telegram / Discord / 飞书上自动开线程。
+- **多聊天镜像** —— primary chat 拿交互按钮,mirrors 只读渲染,互不污染。
+- **审批策略学习** —— 点权限卡片的 "Learn",下次同类请求自动解析。
+- **100% 原生 jsonl 兼容** —— 任何 tlive 驱动的 session 都能用
+  `claude --resume <sdkSessionId>` 接管。
 
-  TLive Web UI:
-    Local:   http://localhost:4590?token=abc123
-    Network: http://192.168.1.100:4590?token=abc123
-  Session: claude (ID: a1b2c3)
-```
-
-多会话共享仪表盘。Daemon 自动启动，空闲 15 分钟自动退出。
-
-<!-- TODO: 添加 Web 终端截图 -->
-<!-- ![Web 终端](docs/images/web-terminal.png) -->
-
-## IM 桥接
-
-手机上与 Claude Code 对话。发起新任务，获取实时流式响应和工具可视化。
-
-```
-你 (Telegram):    "修复 auth.ts 里的登录 bug"
-
-TLive:  ● Read(auth.ts)
-        ● Grep("validateToken" in src/)
-        ● Edit(auth.ts)
-        ├  Applied
-        ● Bash(npm test)
-        ├  All 42 tests passed
-        ━━━━━━━━━━━━━━━━━━
-        Fixed the login bug. The token validation
-        was missing the expiry check...
-        📊 12.3k/8.1k tok | $0.08 | 2m 34s
-```
-
-**详细度控制：** `/verbose 0|1` — 安静（仅最终回复）/ 终端卡片（工具调用 + 结果 + 回复）。
-
-<!-- TODO: 添加 IM 桥接截图 -->
-<!-- ![IM 桥接](docs/images/im-bridge.png) -->
-
-## Hook 审批
-
-在手机上审批 Claude Code 工具权限。再也不会被 `[y/N]` 提示卡住。
+## CLI 命令面
 
 ```
-你在终端正常运行 Claude Code（不需要任何包装）
-  │
-  ├── Claude 想执行一个命令
-  │   → Hook 触发 → Go Core 接收 → Bridge 发送到手机：
-  │
-  │   🔒 需要权限
-  │   工具: Bash
-  │   ┌──────────────────────────┐
-  │   │ rm -rf node_modules &&   │
-  │   │ npm install              │
-  │   └──────────────────────────┘
-  │   [✅ 允许] [✅ 允许 Bash(npm *)] [❌ 拒绝]
-  │
-  ├── 你点 [允许] → Claude Code 继续
-  │
-  └── 离开电脑。Claude 继续工作。
-      只有需要审批时手机才会响。
+Daemon
+  tlive start                      启动 daemon
+  tlive stop-daemon                优雅停止
+  tlive status                     daemon + session 快照
+  tlive doctor                     结构化健康检查
+  tlive daemon-logs [N] [-f]       滚动 daemon 日志
+
+Sessions
+  tlive list                       活跃 runtime 槽
+  tlive stop <alias>               强杀一个 session
+  tlive logs <alias> [-f]          滚动 NotificationEvent 流
+
+向导
+  tlive setup                      git 感知的配置向导
+  tlive install-integrations [all|claude|codex]
+                                   安装 Claude skill / Codex prompt
+
+MCP
+  tlive mcp                        stdio MCP 服务器(供 Claude / Codex 调用)
+
+Meta
+  tlive version
+  tlive update
 ```
 
-**安全设计：**
-- 超时默认**拒绝**（不是允许）
-- 审批前显示具体工具名和命令内容
-- Hook 脚本先检查 Go Core 是否运行 — 没运行则直接放行（零影响）
-- 适用于任何 Claude Code 会话，不需要包装器
-
-**坐在电脑旁时暂停：**
-
-```bash
-tlive hooks pause              # 自动放行
-tlive hooks resume             # 恢复 IM 审批
-```
-
-<!-- TODO: 添加 Hook 审批截图 -->
-<!-- ![Hook 审批](docs/images/hook-approval.png) -->
-
-## 支持平台
-
-| | Telegram | Discord | 飞书 |
-|---|----------|---------|------|
-| IM 桥接 | ✅ | ✅ | ✅ |
-| Hook 审批 | ✅ | ✅ | ✅ |
-| 流式响应 | 编辑消息 | 编辑消息 | CardKit v2 |
-| 工具可视化 | ✅ | ✅ | ✅ |
-| 输入状态 | ✅ | ✅ | — |
-| 权限按钮 | 内联键盘 | Button 组件 | 互动卡片 |
-| 内容脱敏 | ✅ | ✅ | ✅ |
-| 多引擎 (Claude/Codex) | ✅ | ✅ | ✅ |
-| 分级权限按钮 | ✅ | ✅ | ✅ |
-
-## 命令
-
-### CLI
-
-```bash
-tlive <cmd>                # Web 终端
-tlive setup                # 配置 IM 平台
-tlive install skills       # 注册 hooks + Claude Code 技能
-tlive start                # 启动 Bridge 守护进程
-tlive stop                 # 停止守护进程
-tlive status               # 查看状态
-tlive logs [N]             # 查看最近 N 行日志
-tlive doctor               # 运行诊断
-tlive hooks                # 查看 Hook 状态
-tlive hooks pause          # 暂停 Hook（自动放行）
-tlive hooks resume         # 恢复 Hook（IM 审批）
-```
-
-### Claude Code 技能
-
-```
-/tlive                     # 启动 IM Bridge
-/tlive setup               # AI 引导配置
-/tlive stop                # 停止 Bridge
-/tlive status              # 查看状态
-/tlive doctor              # 诊断
-
-/runtime claude|codex          # 切换 AI 引擎
-/perm on|off                   # 权限提示
-/effort low|medium|high|max    # 思考深度
-/stop                          # 中断执行
-/verbose 0|1                   # 详细度
-/new                           # 新对话
-/sessions                      # 列出会话
-/session <n>                   # 切换会话
-/hooks pause|resume            # 切换 Hook 审批
-/help                          # 显示所有命令
-```
+聊天、prompts、运行时切换、预算 —— 一律通过 IM 命令或 MCP 工具调用。CLI
+只管 daemon 本身。
 
 ## 配置
 
-统一配置文件 `~/.tlive/config.env`（由 `tlive setup` 创建）：
+配置文件位于 `~/.tlive/config.json`:
 
-```env
-TL_PORT=4590
-TL_TOKEN=自动生成
-TL_HOST=0.0.0.0
-TL_PUBLIC_URL=https://example.com
-
-TL_ENABLED_CHANNELS=telegram,discord
-TL_TG_BOT_TOKEN=...
-TL_TG_CHAT_ID=...
-TL_DC_BOT_TOKEN=...
-TL_FS_APP_ID=...
-TL_FS_APP_SECRET=...
-
-# 代理（适用于无法直连 Telegram/Discord 的地区）
-# TL_PROXY=http://127.0.0.1:7890
+```json
+{
+  "version": "1",
+  "workspaces": [
+    { "id": "ws-…", "name": "tlive", "workdir": "/home/me/tlive",
+      "gitRemote": "git@github.com:…", "defaults": { "provider": "claude" } }
+  ],
+  "channels": {
+    "telegram": { "token": "…" },
+    "discord":  { "token": "…" },
+    "feishu":   { "appId": "…", "appSecret": "…" }
+  },
+  "permissions": { "allowedUsers": ["…"], "defaults": { "fs_write": "ask" } },
+  "schedules":   [ /* cron 任务 */ ],
+  "mcpRegistry": { /* 下游 MCP servers */ }
+}
 ```
 
-完整配置项参见 [config.env.example](config.env.example)。
-
-### 远程访问（frp / 内网穿透）
-
-通过 frpc、Cloudflare Tunnel、ngrok 等从外网访问 web terminal：
-
-1. 将本地 `4590` 端口（或你的 `TL_PORT`）通过隧道转发
-2. 设置 `TL_PUBLIC_URL` 为隧道域名：
-   ```env
-   TL_PUBLIC_URL=https://your-domain.com
-   ```
-   IM 消息中的 web terminal 链接会自动使用该域名，而非局域网 IP。
-
-**安全提示：** 隧道会暴露完整的终端访问权限，务必确保：
-- `TL_TOKEN` 已设置（`tlive setup` 会自动生成）— 所有请求需携带此 token
-- 已配置 IM 用户白名单（`TL_TG_ALLOWED_USERS`、`TL_DC_ALLOWED_USERS` 等）
-- 隧道侧使用 HTTPS（frps / Cloudflare 会自动处理）
+`tlive setup` 以交互方式编辑它,daemon 启动时校验 schema。
 
 ## 架构
 
-```
-                    ┌──────────────────────┐
-                    │   Claude Code (本地)  │
-                    │                      │
-                    │  PreToolUse Hook ────────────┐
-                    │  Notification Hook ──────────┤
-                    └──────────────────────┘       │
-                                                   ▼
-┌─ Go Core (tlive) ───────────────────────────────────────────┐
-│                                                              │
-│  ┌──────────┐  ┌──────────────┐  ┌────────────────────────┐│
-│  │ PTY 管理  │  │ Web UI      │  │ Hook 管理器            ││
-│  │ (包装    │  │ (仪表盘 +   │  │ (接收 hooks,           ││
-│  │  命令)   │  │  xterm.js)   │  │  长轮询, 解析)         ││
-│  └──────────┘  └──────────────┘  └────────────────────────┘│
-│                                                              │
-│  HTTP API + WebSocket                                        │
-└──────────────────────────┬───────────────────────────────────┘
-                           │ Bridge 轮询 /api/hooks/pending
-                           ▼
-┌─ Node.js Bridge ────────────────────────────────────────────┐
-│                                                              │
-│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐ │
-│  │Claude/Codex │  │ Telegram     │  │ Hook 轮询          │ │
-│  │ SDK         │  │ Discord      │  │ (转发到 IM,        │ │
-│  │             │  │ 飞书         │  │  点击后解析)        │ │
-│  └─────────────┘  └──────────────┘  └────────────────────┘ │
-└──────────────────────────────────────────────────────────────┘
-                           │
-                           ▼
-                    ┌──────────────┐
-                    │  你的手机     │
-                    │  (IM 应用)   │
-                    └──────────────┘
-```
+一图概览:
+
+- **Daemon** (`src/daemon/`) —— 长驻 Node 进程,持有本地 Claude / Codex
+  runtime,路由 MCP,向 IM adapter 分发。
+- **Runtime** (`src/runtime/`) —— 单一 `AgentRuntime` 接口;Claude 基于
+  `@anthropic-ai/claude-agent-sdk`,Codex 基于 `codex app-server`。
+- **Session** (`src/session/`) —— LocalSession (daemon 自持 runtime) +
+  RemoteSession (MCP 驱动),由 `SessionLike` 统一。
+- **Permission / Attachment** (`src/permission/`, `src/attachment/`) —— 4
+  类权限,策略学习,双向附件。
+- **MCP** (`src/mcp/`) —— tlive-self server、下游联邦、cron、跨 agent
+  orchestrator、内置 servers。
+- **IM** (`src/im/`, `src/platform/`) —— SessionFrontend + 12 个 renderer +
+  Telegram / Discord / 飞书 adapter。
+
+v1.0 完整设计见 `docs/superpowers/specs/2026-04-22-t14b-full-cutover-design.md`。
 
 ## 开发
 
 ```bash
-# Go Core
-cd core && go build -o tlive ./cmd/tlive/ && go test ./...
-
-# Bridge
-cd bridge && npm install && npm run build && npm test
+git clone https://github.com/y49/tlive
+cd tlive
+npm install
+npm run typecheck
+npm test
+npm run build
 ```
 
-### 项目结构
+## License
 
-```
-tlive/
-├── SKILL.md                # Claude Code / Codex 技能
-├── config.env.example
-├── core/                   # Go → tlive 二进制
-│   ├── cmd/tlive/          # CLI（Web 终端、停止、配置、安装）
-│   ├── internal/
-│   │   ├── daemon/         # HTTP 服务器、会话、Hook 管理器
-│   │   ├── server/         # WebSocket 处理
-│   │   ├── session/        # 会话状态 + 输出缓冲
-│   │   ├── hub/            # 广播中心
-│   │   └── pty/            # PTY（Unix + Windows ConPTY）
-│   └── web/                # 内嵌 Web UI
-├── bridge/                 # Node.js → Bridge 守护进程
-│   └── src/
-│       ├── providers/      # Claude SDK + Codex SDK providers
-│       ├── messages/       # Zod schemas, canonical events, adapters
-│       ├── channels/       # Telegram、Discord、飞书适配器
-│       ├── engine/         # 会话状态、权限、命令、渲染器
-│       ├── permissions/    # 权限网关 + 代理
-│       ├── delivery/       # 分块、重试、限速
-│       └── markdown/       # 各平台渲染
-├── scripts/
-│   ├── cli.js              # CLI 入口 + 进程管理
-│   ├── hook-handler.mjs    # PermissionRequest hook → Go Core
-│   ├── notify-handler.mjs  # Notification hook → Go Core
-│   ├── stop-handler.mjs    # Stop hook → Go Core
-│   └── statusline.mjs      # Claude Code 状态行
-├── package.json            # npm: tlive
-└── docker-compose.yml
-```
+MIT。详见 [LICENSE](LICENSE)。
 
-## 安全
+## Contributing
 
-- 默认绑定 `0.0.0.0`（局域网可访问，手机扫码直连）
-- 自动生成认证 token
-- Hook 超时默认**拒绝**（不是允许）
-- IM 用户白名单
-- IM 消息中自动脱敏 API key、token、密码和私钥
-- 日志自动脱敏
-- 配置文件 `chmod 600`
-- Claude CLI 子进程环境隔离
-
-## 许可证
-
-MIT
+见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+</content>
+</invoke>
