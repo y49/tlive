@@ -11,12 +11,8 @@
     "scripts/build.mjs",
     "scripts/postinstall.js",
     "scripts/preuninstall.js",
-    "scripts/statusline.mjs",
-    "scripts/statusline.sh",
-    "scripts/doctor.sh",
     "dist/src/",
     "src/",
-    "SKILL.md",
     "references/",
     "config.env.example"
   ],
