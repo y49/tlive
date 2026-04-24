@@ -8,6 +8,7 @@
   },
   "files": [
     "scripts/cli.js",
+    "scripts/build.mjs",
     "scripts/postinstall.js",
     "scripts/preuninstall.js",
     "scripts/statusline.mjs",
@@ -15,25 +16,19 @@
     "scripts/doctor.sh",
     "dist/src/",
     "src/",
-    "bridge/dist/",
-    "bridge/package.json",
     "SKILL.md",
     "references/",
     "config.env.example"
   ],
   "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "ci": "npm run typecheck && npm test && npm run build",
     "postinstall": "node scripts/postinstall.js",
     "preuninstall": "node scripts/preuninstall.js",
-    "prepublishOnly": "npm run test:all && npm run build:all",
-    "build": "cd bridge && npm run build",
-    "build:src": "npx esbuild src/cli/claude.ts src/cli/codex.ts src/cli/list.ts src/cli/stop.ts src/cli/logs.ts src/cli/resume.ts src/cli/mcp.ts --bundle --platform=node --target=node20 --format=esm --outdir=dist/src --out-extension:.js=.mjs --external:node-pty --external:ws --external:@anthropic-ai/claude-agent-sdk --external:@modelcontextprotocol/sdk --entry-names=tlive-[name]",
-    "build:all": "npm run build && npm run build:src",
-    "dev": "cd bridge && npm run dev",
-    "test": "cd bridge && npm test",
-    "test:src": "npx vitest run --config vitest.config.src.ts",
-    "test:all": "npm run test && npm run test:src",
-    "typecheck": "npx tsc --noEmit -p bridge/tsconfig.json && npx tsc --noEmit -p tsconfig.src.json",
-    "ci": "npm run typecheck && npm run test:all && npm run build:all"
+    "prepublishOnly": "npm run ci"
   },
   "keywords": [
     "terminal",
@@ -69,6 +64,7 @@
   "devDependencies": {
     "@types/node": "^25.5.2",
     "@types/ws": "^8.18.1",
+    "esbuild": "^0.27.7",
     "typescript": "^6.0.2",
     "vitest": "^4.1.3"
   },
