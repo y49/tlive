@@ -2,27 +2,30 @@
 // tlive CLI dispatcher — v1.0.
 //
 // Thin shim around the built `dist/src/tlive-<name>.mjs` subcommands. See
-// `docs/superpowers/specs/2026-04-22-t14b-full-cutover-design.md` §12 for
+// `docs/superpowers/specs/2026-04-24-cli-surface-cleanup-design.md` for
 // the canonical surface. Dispatch table:
 //
-//   tlive start                  -> tlive-start.mjs
-//   tlive stop-daemon            -> tlive-stop-daemon.mjs
-//   tlive status                 -> tlive-status.mjs
-//   tlive doctor                 -> tlive-doctor.mjs
-//   tlive setup                  -> tlive-setup.mjs
-//   tlive version                -> tlive-version.mjs
-//   tlive update                 -> tlive-update.mjs
-//   tlive daemon-logs [N]        -> tlive-daemon-logs.mjs
-//   tlive list                   -> tlive-list.mjs
-//   tlive stop <alias>           -> tlive-stop.mjs
-//   tlive logs [-f] <alias>      -> tlive-logs.mjs
-//   tlive install-integrations   -> tlive-install-integrations.mjs
-//   tlive mcp                    -> tlive-mcp.mjs
+//   Daemon lifecycle:
+//     tlive start [-F|--foreground] -> tlive-start.mjs
+//     tlive stop                    -> tlive-stop.mjs (daemon shutdown)
+//     tlive status                  -> tlive-status.mjs
+//     tlive doctor                  -> tlive-doctor.mjs
+//     tlive daemon-logs [N] [-f]    -> tlive-daemon-logs.mjs
 //
-// Legacy (v0.x) commands — `claude`, `codex`, `resume`, `install-hooks`,
-// `hooks` — have been removed. Users drive sessions via IM / MCP now.
-// `handoff` and `takeback` are v1.0 commands (thin IPC wrappers, see
-// src/cli/handoff.ts + takeback.ts).
+//   Handoff:
+//     tlive handoff <alias>         -> tlive-handoff.mjs
+//     tlive takeback <sdkId>        -> tlive-takeback.mjs
+//
+//   MCP / wizards / meta:
+//     tlive mcp                     -> tlive-mcp.mjs
+//     tlive setup                   -> tlive-setup.mjs
+//     tlive install-integrations    -> tlive-install-integrations.mjs
+//     tlive version                 -> tlive-version.mjs
+//     tlive update                  -> tlive-update.mjs
+//
+// Removed in this release: `list`, `logs <alias>`, `stop <alias>`,
+// `stop-daemon`. Session-level interaction lives in IM now (see
+// `docs/commands.md`). `stop-daemon` was renamed to `stop`.
 
 import { spawnSync, spawn } from 'node:child_process';
 import { join, dirname } from 'node:path';
@@ -45,21 +48,21 @@ const [,, command, ...args] = process.argv;
  * `dist/src/tlive-<entry>.mjs` produced by `scripts/build.mjs`.
  */
 const DISPATCH = {
+  // `start` is dispatched ahead of this table (see the if/else chain at
+  // the bottom of the file); the entry stays here so it participates in
+  // the typo-suggestion KNOWN set below.
   start: 'start',
-  'stop-daemon': 'stop-daemon',
+  stop: 'stop',
   status: 'status',
   doctor: 'doctor',
-  setup: 'setup',
-  version: 'version',
-  update: 'update',
   'daemon-logs': 'daemon-logs',
-  list: 'list',
-  stop: 'stop',
-  logs: 'logs',
-  'install-integrations': 'install-integrations',
-  mcp: 'mcp',
   handoff: 'handoff',
   takeback: 'takeback',
+  mcp: 'mcp',
+  setup: 'setup',
+  'install-integrations': 'install-integrations',
+  version: 'version',
+  update: 'update',
 };
 
 function getVersion() {
@@ -90,22 +93,17 @@ const HELP_TEXT = `tlive v${getVersion()} — MCP-native agent fabric for IM
 
 Usage: tlive <command> [args]
 
-Daemon management:
+Daemon lifecycle:
   tlive start [--foreground|-F]    Start the daemon (detaches by default;
                                    -F keeps it in the foreground for debug)
-  tlive stop-daemon                Stop the daemon gracefully
+  tlive stop                       Stop the daemon gracefully
   tlive status                     Daemon + session snapshot
   tlive doctor                     Structured health checks
   tlive daemon-logs [N] [--follow] Tail the daemon log
 
-Sessions (runtime slots in the daemon):
-  tlive list                       Show live runtime slots
-  tlive stop <alias>               Force-kill one runtime slot
-  tlive logs <alias> [--follow]    Tail a session's NotificationEvent stream
-
-Handoff (daemon ↔ local claude/codex):
-  tlive handoff <alias>            Release to local claude --resume <sdkId>
-  tlive takeback <sdkId>           Daemon re-adopts a locally-driven session
+Handoff (daemon <-> local claude/codex):
+  tlive handoff <alias>            Release a session to local claude --resume
+  tlive takeback <sdkSessionId>    Daemon re-adopts a locally-driven session
 
 Wizards:
   tlive setup                      Git-aware first-time / add-workspace wizard
@@ -119,8 +117,8 @@ Meta:
   tlive version                    Print version and optional update hint
   tlive update                     npm install -g tlive@latest
 
-Chat / sessions are driven via IM (Telegram / Discord / Feishu) or via MCP
-(Companion mode). The CLI only manages the daemon.
+Chat, session management, permissions — all driven via IM (Telegram /
+Discord / Feishu) or via MCP. The CLI only manages the daemon.
 `;
 
 if (!command || command === '-h' || command === '--help' || command === 'help') {
@@ -143,6 +141,9 @@ const LEGACY_REMOVED = {
   resume: 'Use IM `/resume <alias>`, or `claude --resume <sdkSessionId>` in a terminal.',
   'install-hooks': 'Hooks bridge removed. Use `tlive install-integrations`.',
   hooks: 'Hooks bridge removed. Use MCP permissions via `mcp__tlive__approve`.',
+  list: 'Use IM `/sessions` to list runtime slots. The CLI no longer manages sessions.',
+  logs: 'Use `tlive daemon-logs [--follow]` (grep by alias if needed). Per-session CLI logs were removed in v1.0.',
+  'stop-daemon': 'Renamed to `tlive stop` — `start` and `stop` now target the daemon symmetrically.',
   install: (() => {
     const sub = args[0];
     if (sub === 'skills') return 'Use `tlive install-integrations` (all|claude|codex).';
@@ -243,6 +244,16 @@ async function waitForSocket(path, totalMs) {
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
+
+// `tlive stop` used to take a session alias; in v1.0 it means daemon-stop.
+// Reject extra args up-front with a clear hint pointing at IM.
+if (command === 'stop' && args.length > 0) {
+  process.stderr.write(
+    'tlive stop no longer accepts a session argument.\n' +
+    'Use IM `/kill` to terminate a specific session.\n',
+  );
+  process.exit(2);
+}
 
 if (command === 'start') {
   // Do NOT fall through to the typo block below — the async detach scheduler

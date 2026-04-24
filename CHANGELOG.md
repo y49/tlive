@@ -16,6 +16,13 @@ exposed over MCP as a first-class citizen.
   `tlive resume` CLI commands.
 - Config schema migrated automatically; backup stored at
   `~/.tlive/config.v0-backup.json` (or `.v0-backup.env`).
+- CLI session commands removed: `tlive list`, `tlive stop <alias>`,
+  `tlive logs <alias>`. Session-level interaction now lives in IM
+  (`/sessions`, `/kill`) or `tlive daemon-logs` for debug streams.
+  This aligns the shipped CLI with the `docs/commands.md` contract that
+  the CLI manages only the daemon.
+- `tlive stop-daemon` renamed to `tlive stop` for Unix `start`/`stop`
+  symmetry. Legacy names print a one-line migration hint and exit 2.
 
 ### Added
 - Daemon mode, Companion mode, Handoff flow.

@@ -75,17 +75,16 @@ On first run, `tlive setup` migrates your `~/.tlive/config.env` into
 ## CLI surface
 
 ```
-Daemon
+Daemon lifecycle
   tlive start                      Start the daemon
-  tlive stop-daemon                Stop gracefully
+  tlive stop                       Stop gracefully
   tlive status                     Daemon + session snapshot
   tlive doctor                     Structured health check
   tlive daemon-logs [N] [-f]       Tail the daemon log
 
-Sessions
-  tlive list                       Live runtime slots
-  tlive stop <alias>               Force-kill a slot
-  tlive logs <alias> [-f]          Tail NotificationEvent stream
+Handoff
+  tlive handoff  <alias>           Release to local claude --resume
+  tlive takeback <sdkSessionId>    Daemon re-adopts a local session
 
 Wizards
   tlive setup                      Git-aware config wizard

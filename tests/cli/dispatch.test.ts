@@ -11,6 +11,7 @@ function runCli(args: string[], env: NodeJS.ProcessEnv = {}) {
   return spawnSync(process.execPath, [CLI, ...args], {
     encoding: 'utf-8',
     env: { ...process.env, ...env },
+    timeout: 6000,
   });
 }
 
@@ -43,5 +44,35 @@ describe('tlive CLI dispatch', () => {
     expect(r.stderr).not.toContain('unknown command');
     expect(r.stdout).toContain('already running');
     expect(r.status).toBe(0);
+  });
+
+  it('tlive list prints migration hint pointing at /sessions', () => {
+    const r = runCli(['list']);
+    expect(r.stderr).toContain('/sessions');
+    expect(r.status).toBe(2);
+  });
+
+  it('tlive logs prints migration hint pointing at daemon-logs', () => {
+    const r = runCli(['logs', 'some-alias']);
+    expect(r.stderr).toContain('daemon-logs');
+    expect(r.status).toBe(2);
+  });
+
+  it('tlive stop-daemon prints rename hint pointing at tlive stop', () => {
+    const r = runCli(['stop-daemon']);
+    expect(r.stderr).toContain('Renamed to `tlive stop`');
+    expect(r.status).toBe(2);
+  });
+
+  it('tlive stop with extra arg prints /kill hint', () => {
+    const r = runCli(['stop', 'some-alias']);
+    expect(r.stderr).toContain('/kill');
+    expect(r.status).toBe(2);
+  });
+
+  it('unknown typo still triggers a Did-you-mean suggestion', () => {
+    const r = runCli(['statuz']);
+    expect(r.stderr).toContain('Did you mean: tlive status');
+    expect(r.status).toBe(1);
   });
 });

@@ -322,7 +322,7 @@ entry.
 While a session is mid-turn (agent is `🧠 thinking`):
 
 ```bash
-tlive stop-daemon
+tlive stop
 tlive start
 ```
 

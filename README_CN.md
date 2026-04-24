@@ -73,17 +73,16 @@ v1.0 是完整重写。v0.x 的 PTY 包装、jsonl 扫描器、web 终端、hook
 ## CLI 命令面
 
 ```
-Daemon
+Daemon 生命周期
   tlive start                      启动 daemon
-  tlive stop-daemon                优雅停止
+  tlive stop                       优雅停止
   tlive status                     daemon + session 快照
   tlive doctor                     结构化健康检查
   tlive daemon-logs [N] [-f]       滚动 daemon 日志
 
-Sessions
-  tlive list                       活跃 runtime 槽
-  tlive stop <alias>               强杀一个 session
-  tlive logs <alias> [-f]          滚动 NotificationEvent 流
+Handoff
+  tlive handoff  <alias>           交给本地 claude --resume
+  tlive takeback <sdkSessionId>    daemon 收回一个本地驱动的会话
 
 向导
   tlive setup                      git 感知的配置向导

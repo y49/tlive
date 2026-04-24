@@ -1,28 +1,51 @@
-// src/cli/stop.ts — `tlive stop <alias>`
+// src/cli/stop.ts — `tlive stop`
 //
-// Stops a session by short-alias prefix or full sdkSessionId via the
-// daemon's v1 IPC `session.stop` request. Idempotent — targeting a session
-// that's already stopped returns `error` with a clear message.
+// Requests an orderly daemon shutdown via IPC. Falls back to SIGTERM on the
+// PID file when the socket is unreachable. Never force-kills; operators can
+// use `kill -9` if needed.
 
-import { request, ensureDaemonRunning } from '../ipc/client.js';
+import { request, getSocketPath } from '../ipc/client.js';
+import { existsSync, readFileSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 
-export async function stopCommand(alias: string | undefined): Promise<void> {
-  if (!alias) {
-    process.stderr.write('usage: tlive stop <session-alias>\n');
-    process.exit(2);
+export async function stopCommand(): Promise<void> {
+  const sock = getSocketPath();
+  if (existsSync(sock)) {
+    try {
+      const resp = await request({ kind: 'daemon.stop' }, { timeoutMs: 4000 });
+      if (resp.kind === 'daemon.stopped') {
+        process.stdout.write('tlive daemon: shutdown requested\n');
+        return;
+      }
+      if (resp.kind === 'error') {
+        process.stderr.write(`error: ${resp.message}\n`);
+      }
+    } catch (err) {
+      process.stderr.write(`ipc stop failed (${(err as Error).message}); trying SIGTERM\n`);
+    }
   }
-  await ensureDaemonRunning();
-  const resp = await request({ kind: 'session.stop', alias });
-  if (resp.kind === 'session.stopped') {
-    process.stdout.write(`stopped ${resp.sdkSessionId}\n`);
+
+  const pidFile = join(homedir(), '.tlive', 'daemon.pid');
+  if (!existsSync(pidFile)) {
+    process.stdout.write('tlive daemon: not running\n');
     return;
   }
-  if (resp.kind === 'error') {
-    process.stderr.write(`error: ${resp.message}\n`);
+  const pid = parseInt(readFileSync(pidFile, 'utf-8').trim(), 10);
+  if (!Number.isFinite(pid)) {
+    process.stderr.write('daemon.pid is corrupt; removing\n');
+    try { unlinkSync(pidFile); } catch { /* ignore */ }
+    return;
+  }
+  try {
+    process.kill(pid, 'SIGTERM');
+    process.stdout.write(`tlive daemon: SIGTERM sent to pid ${pid}\n`);
+  } catch (err) {
+    process.stderr.write(`kill failed: ${(err as Error).message}\n`);
     process.exit(1);
   }
-  process.stderr.write(`error: unexpected response ${resp.kind}\n`);
-  process.exit(1);
 }
 
-if (process.argv[1]?.endsWith('tlive-stop.mjs')) { await stopCommand(process.argv[2]); }
+if (process.argv[1]?.endsWith('tlive-stop.mjs')) {
+  await stopCommand();
+}

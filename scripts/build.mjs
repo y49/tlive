@@ -54,25 +54,22 @@ if (daemonOk) console.log('built dist/src/tlive-daemon.mjs');
 
 // CLI entries — each is a user-facing subcommand dispatched by scripts/cli.js
 const cliEntries = [
-  // Session control (IPC-backed)
-  'list',
+  // Daemon lifecycle
+  'start',
   'stop',
-  'logs',
+  'status',
+  'doctor',
+  'daemon-logs',
+  // Handoff
   'handoff',
   'takeback',
   // MCP subsystem
   'mcp',
-  // Daemon lifecycle (T9)
-  'start',
-  'stop-daemon',
-  'status',
-  // T11-owned CLI files (built when present)
-  'doctor',
+  // Wizards / meta
   'setup',
+  'install-integrations',
   'version',
   'update',
-  'daemon-logs',
-  'install-integrations',
 ];
 
 for (const name of cliEntries) {
