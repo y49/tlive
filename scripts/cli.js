@@ -245,32 +245,29 @@ async function waitForSocket(path, totalMs) {
 // ---------------------------------------------------------------------------
 
 if (command === 'start') {
-  // Do NOT fall through to the generic DISPATCH runEntry — the async
-  // detach scheduler lets sync control flow continue, and without this
-  // guard `tlive start` would ALSO fire foreground tlive-start.mjs.
+  // Do NOT fall through to the typo block below — the async detach scheduler
+  // lets sync control flow continue, and without this guard `tlive start`
+  // would also hit `process.exit(1)` in the unknown-command branch before
+  // the detached daemon comes up.
   startDaemonDetached(args).catch((err) => {
     process.stderr.write(`tlive start failed: ${err?.stack ?? err}\n`);
     process.exit(1);
   });
+} else if (DISPATCH[command]) {
+  runEntry(DISPATCH[command], args);
 } else {
-  const target = DISPATCH[command];
-  if (target) {
-    runEntry(target, args);
-  }
+  // Typo hint for unknown commands
+  const KNOWN = Object.keys(DISPATCH);
+  const similar = KNOWN.find((k) => {
+    if (Math.abs(k.length - command.length) > 2) return false;
+    let diff = 0;
+    for (let i = 0; i < Math.max(k.length, command.length); i++) {
+      if (k[i] !== command[i]) diff++;
+    }
+    return diff <= 2 && diff > 0;
+  });
+  process.stderr.write(`tlive: unknown command \`${command}\`\n`);
+  if (similar) process.stderr.write(`Did you mean: tlive ${similar}?\n`);
+  else process.stderr.write('Run: tlive --help\n');
+  process.exit(1);
 }
-
-// Typo hint
-const KNOWN = Object.keys(DISPATCH);
-const similar = KNOWN.find((k) => {
-  if (Math.abs(k.length - command.length) > 2) return false;
-  let diff = 0;
-  for (let i = 0; i < Math.max(k.length, command.length); i++) {
-    if (k[i] !== command[i]) diff++;
-  }
-  return diff <= 2 && diff > 0;
-});
-
-process.stderr.write(`tlive: unknown command \`${command}\`\n`);
-if (similar) process.stderr.write(`Did you mean: tlive ${similar}?\n`);
-else process.stderr.write('Run: tlive --help\n');
-process.exit(1);
