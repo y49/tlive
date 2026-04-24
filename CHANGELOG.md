@@ -2,55 +2,60 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.0.0](https://github.com/y49/tlive/compare/v0.8.0...v1.0.0) (2026-04-16)
+## 1.0.0 - 2026-04-22
 
-First stable release. Pure-Node architecture, Codex dual-path, workspace-first IM.
+tlive v1.0 — the MCP-native agent fabric for IM. Complete rewrite; the new
+architecture positions the daemon as a protocol translator, session truth
+lives in the native Claude / Codex jsonl files, and every capability is
+exposed over MCP as a first-class citizen.
 
-### Breaking Changes
+### Breaking changes
+- Complete rewrite. v0.x PTY / jsonl scanner / web terminal / hooks bridge
+  removed.
+- IM is the only interactive surface. No more `tlive claude` / `tlive codex` /
+  `tlive resume` CLI commands.
+- Config schema migrated automatically; backup stored at
+  `~/.tlive/config.v0-backup.json` (or `.v0-backup.env`).
 
-- **Removed `tlive-core` Go binary.** Bridge daemon runs entirely in Node now (`tlive start`).
-- **Removed Docker images.** Local daemon mode is the supported deployment.
-- **Removed Claude Code hook installation.** Hooks no longer wired up; runtime adapter pattern replaces them.
-- **Workspace-first IM model.** `/new`, `/sessions`, `/session <n>`, and `/cd` removed. Replaced by `/workspaces`, `/open <name|path>`, `/stop`. Per-chat state migrates to per-workspace state automatically on first `/open`.
+### Added
+- Daemon mode, Companion mode, Handoff flow.
+- 45 IM commands, 8 message anchors, 4 permission-card categories.
+- Multimodal input + outbound attachment.
+- `tlive-self` MCP server with 20+ tools, sampling, resources, prompts,
+  federation.
+- Scheduled tasks (cron from IM), cross-agent pipelines, approval policy
+  learning.
+- Warm runtime pool, cache-aware prewarm, idle auto-stop, selective
+  auto-resume on startup.
+- Thread-per-session on Telegram / Discord / Feishu.
+- Multi-chat mirror, multi-user roles.
+- Git-aware workspace setup, comprehensive `tlive doctor`.
 
-### New Features
+### Removed
+- `bridge/` directory (folded into `src/`).
+- PTY, jsonl scanner, web terminal, hooks bridge, session discovery.
+- Legacy `tlive claude` / `tlive codex` / `tlive resume` / `tlive handoff` /
+  `tlive takeback` / `tlive install-hooks` CLI commands.
+- IM commands `/menu`, `/end`, `/approve`, `/runtime`, `/pairings` (replaced
+  by narrower equivalents).
 
-- **Workspace concept.** First-class IM entity with its own topic/thread/tag, preferences, and session lifecycle. Persisted to `~/.tlive/workspaces.json`.
-- **Pre-configured workspaces.** `TL_WORKSPACES=name:path,name:path` in config for common projects.
-- **Workdir whitelist.** `TL_WORKSPACES_ALLOWED` prefix check; optional safety.
-- **Telegram forum topics / Discord threads / Feishu card tags.** Multi-workspace visual separation.
-- **Status line.** Edit-in-place session HUD: thinking → reading → editing → awaiting approval → done.
-- **Turn summary card.** Consolidates reasoning + tools + agent reply after each turn.
-- **Permission context.** Approval prompts include the agent's reasoning and recent tool calls.
-- **Stop session button.** Fourth button on every permission prompt for instant session termination.
-- **Codex dual-path.** SDK path surfaces reasoning content, file change lists, and todos to IM. Scanner path works for local-PTY users (within OpenAI's .jsonl encryption limits).
-- **Verbose 0/1/2.** Redesigned: Quiet (permissions + results), Normal (adds content summaries), Full (every tool call). Default: 0.
-- **Per-workspace preferences.** Model, effort, perm, approval, sandbox, verbose all workspace-scoped.
-- **`/approval` / `/sandbox` commands.** Codex-specific approval policy and sandbox mode, per workspace.
-- **Long content splitting.** Auto-chunks messages exceeding platform limits with "full in web terminal" link.
-- **Tool-use aggregation.** Consecutive `activity_tool` events in a 3-second window collapse into one summary.
+### Migration
+- Run `tlive setup` once; the wizard detects your v0.x `~/.tlive/config.env`
+  and rewrites `~/.tlive/config.json` (backup at `config.v0-backup.env`).
+- Run `tlive install-integrations all` to wire the Claude skill + Codex
+  prompt + `tlive-self` MCP entry. This replaces `tlive install skills` /
+  `tlive install-hooks`.
+- Users who depended on the terminal wrapper / PTY path should pin to
+  `tlive@0.8.x` or use `claude` / `codex` directly — `tlive-self` still
+  gives them remote approval and session memory via MCP.
 
-### Improvements
+## 1.0.0-pre - 2026-04-16 (unreleased internal tag)
 
-- `ProviderAdapter` interface added methods: `normalizeSessionEvent`, `findLastSession`, `extractThinkingEvents`, optional `capabilities`.
-- `BaseSessionScanner` abstraction lets Claude and Codex share scan/watch/dedup plumbing.
-- Flavor registry (`bridge/src/flavors.ts`) is the single source of truth for runtime metadata.
-- `SessionManager` accepts an optional `scannerFactory` for flavor injection.
-
-### Known Limitations
-
-- `.jsonl` scanner path cannot see reasoning content or structured file diffs (OpenAI's on-disk encryption).
-- Codex `app-server` mode (full unified-diff + streamed reasoning delta) is not implemented. Planned for 1.1.
-- Telegram multi-workspace requires forum-enabled supergroups; non-forum falls back to tag-mode.
-- Long-lived bridges accumulate `processedKeys` / `cursors` in session scanners. Planned for 1.x cleanup.
-
-### Migration from 0.x
-
-- Config in `~/.tlive/config.env` is backward compatible.
-- If you scripted around `tlive-core` binary → switch to `tlive start` + `tlive claude` / `tlive codex`.
-- If you used Docker → run local daemon via `tlive start`.
-- First `/open` after upgrade auto-creates a workspace from your current chat's state.
-- See `docs/smoke-test.md` for post-upgrade verification.
+Initial 1.0 preview — pure-Node architecture, Codex dual-path, workspace-
+first IM. Superseded by the 2026-04-22 rewrite above; never published to
+npm. Key features that carried forward: workspace concept, per-workspace
+preferences, status line, turn summary card, permission context, verbose
+0/1/2.
 
 ## [0.8.0](https://github.com/y49/tlive/compare/v0.7.4...v0.8.0) (2026-04-06)
 
