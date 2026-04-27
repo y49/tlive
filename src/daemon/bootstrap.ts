@@ -575,7 +575,19 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
       await deps.adapter.send({
         chatId: ev.chatId,
         threadId: ev.threadId,
-        text: 'No workspace bound to this chat. Use /workspace add.',
+        text: [
+          "This chat isn't bound to any workspace yet.",
+          '',
+          "If you're the admin:",
+          '  • Send /bind to attach me to your workspace',
+          '  • Multiple workspaces? Use /bind <name>',
+          '',
+          "Not sure if you're the admin?",
+          '  • Send /whoami to see what I know about you',
+          '  • Or pre-configure ~/.tlive/config.json with',
+          '    workspaces[].adminUserId and channels.<platform>.chatId,',
+          "    then restart the daemon — I'll auto-bind on next start.",
+        ].join('\n'),
       }).catch(() => undefined);
       return;
     }

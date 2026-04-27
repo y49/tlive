@@ -10,4 +10,11 @@ describe('/whoami', () => {
     expect(replies[0]).toContain('observer');
     expect(replies[0]).toContain('test-ws');
   });
+
+  it('shows unbound hint and lists workspaces when chat is not bound', async () => {
+    const { ctx, replies } = buildCtx({ workspace: null });
+    await whoamiCmd.run(ctx, []);
+    expect(replies.join('\n')).toMatch(/not bound to a workspace/);
+    expect(replies.join('\n')).toMatch(/Use.*bind/);
+  });
 });

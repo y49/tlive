@@ -23,7 +23,10 @@ export function workspaceForChat(ctx: CommandContext): Workspace | null {
  */
 export async function activeLocalSession(ctx: CommandContext): Promise<LocalSession | null> {
   const ws = workspaceForChat(ctx);
-  if (!ws) { await ctx.reply('No workspace bound to this chat. Use `/new` to start one.'); return null; }
+  if (!ws) {
+    await ctx.reply('This chat is not bound to a workspace. Send `/bind` (admin) to attach, or `/whoami` for guidance.');
+    return null;
+  }
   const activeId = ws.activeSessionId;
   if (!activeId) { await ctx.reply('No active session for this workspace.'); return null; }
   const session = ctx.sessionManager.get(activeId);

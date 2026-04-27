@@ -48,6 +48,7 @@ import { mcpCmd } from './mcp.js';
 import { workspaceCmd } from './workspace.js';
 import { pairingsCmd } from './pairings.js';
 import { mirrorCmd } from './mirror.js';
+import { bindCmd } from './bind.js';
 import { grantCmd } from './grant.js';
 
 // Handoff / companion
@@ -72,7 +73,7 @@ export const ALL_COMMANDS = [
   searchCmd, exportCmd, timeTravelCmd, rewindCmd, costCmd, whoamiCmd,
   modelCmd, modeCmd, effortCmd, permCmd, thinkingCmd, verboseCmd, budgetCmd, prewarmCmd, cancelQueuedCmd, stopTaskCmd,
   statusCmd, modelsCmd, agentsCmd, pluginsCmd, mcpCmd,
-  workspaceCmd, pairingsCmd, mirrorCmd, grantCmd,
+  workspaceCmd, pairingsCmd, mirrorCmd, bindCmd, grantCmd,
   handoffToMeCmd, companionCmd,
   agentCmd, skillCmd,
   revokeCmd, attachLastCmd,

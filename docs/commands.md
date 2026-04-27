@@ -97,13 +97,14 @@ mention menu). The rest are discoverable via `/help`.
 
 ---
 
-## Workspace / multi-chat (4)
+## Workspace / multi-chat (5)
 
 | Command | Syntax | Role | Description |
 |---|---|---|---|
 | `/workspace` | `/workspace [show\|set-default\|system-prompt "<text>"]` | admin | Edit per-workspace fields. `set-default` pins this workspace for plain-text messages in this chat. |
-| `/pairings` | `/pairings` | admin | List which chats are bound to which workspaces (replaces v0.x pending-pairings flow). |
+| `/bind` | `/bind [<workspace-name>]` | admin | Bind the current chat to a workspace as `primary`. With no args, binds to the only workspace this user admins. |
 | `/mirror` | `/mirror [add primary\|add mirror\|remove\|list]` | admin | Multi-chat: primary chat has interactive buttons; mirrors see read-only renders. |
+| `/pairings` | `/pairings` | admin | List which chats are bound to which workspaces (replaces v0.x pending-pairings flow). |
 | `/grant` | `/grant <user> <admin\|operator\|observer>` | admin | Assign a role to a user in this workspace. |
 
 ---

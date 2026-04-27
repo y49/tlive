@@ -129,8 +129,13 @@ export function buildCtx(spec: FakeCtxSpec = {}): FakeCtxResult {
   const workspaceManager = {
     findByChat(ct: ChannelType, cid: string) {
       workspaceCalls.push({ method: 'findByChat', args: [ct, cid] });
-      return workspace;
+      if (!workspace) return undefined;
+      const matched = workspace.bindings.some(
+        (b) => b.channelType === ct && b.chatId === cid,
+      );
+      return matched ? workspace : undefined;
     },
+    list() { workspaceCalls.push({ method: 'list', args: [] }); return workspace ? [workspace] : []; },
     get(id: string) { workspaceCalls.push({ method: 'get', args: [id] }); return workspace; },
     getRole(wsId: string, u: string) { workspaceCalls.push({ method: 'getRole', args: [wsId, u] }); return workspace?.roles[u] ?? workspace?.defaultRole ?? 'observer'; },
     setRole(wsId: string, u: string, role: string) { workspaceCalls.push({ method: 'setRole', args: [wsId, u, role] }); if (workspace) workspace.roles[u] = role as never; },

@@ -23,7 +23,7 @@ describe('/new', () => {
   it('replies when no workspace bound', async () => {
     const { ctx, replies } = buildCtx({ workspace: null });
     await newCmd.run(ctx, ['hi']);
-    expect(replies[0]).toMatch(/No workspace/);
+    expect(replies[0]).toMatch(/not bound to a workspace/);
   });
 
   it('strips balanced outer double quotes from the prompt', async () => {

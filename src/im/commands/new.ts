@@ -13,7 +13,10 @@ export const newCmd: CommandDef = {
   description: 'Create a new session',
   async run(ctx, args) {
     const ws = workspaceForChat(ctx);
-    if (!ws) { await ctx.reply('No workspace bound to this chat.'); return; }
+    if (!ws) {
+      await ctx.reply('This chat is not bound to a workspace. Send `/bind` (admin) to attach, or `/whoami` for guidance.');
+      return;
+    }
 
     const { flags, positional } = parseFlags(args);
     let promptRaw = positional.join(' ').trim();
