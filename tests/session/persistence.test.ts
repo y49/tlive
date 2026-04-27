@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionPersistence, type SessionSnapshot } from '../../src/session/persistence.js';
@@ -77,5 +77,21 @@ describe('SessionPersistence', () => {
     expect(await p.loadSnapshot('s1')).toBeNull();
     expect(await p.loadHistory('s1')).toEqual([]);
     await p.removeSession('s1'); // must not throw
+  });
+
+  it('saveSnapshot tolerates concurrent writes to the same session id', async () => {
+    // Five concurrent saves must all rename successfully (the hex-suffix tmp
+    // path introduced in T2 avoids EEXIST / torn writes on the same .tmp file).
+    const saves = Array.from({ length: 5 }, (_, i) =>
+      p.saveSnapshot(makeSnap('sess-conc', { lastActivityAt: Date.now() + i })),
+    );
+    await Promise.all(saves);
+    // Final state must be one of the 5 snapshots — just check it is readable.
+    const loaded = await p.loadSnapshot('sess-conc');
+    expect(loaded).not.toBeNull();
+    expect(loaded?.id).toBe('sess-conc');
+    // No leftover .tmp files in the root directory.
+    const files = await readdir(root);
+    expect(files.filter((f) => f.includes('.tmp'))).toHaveLength(0);
   });
 });

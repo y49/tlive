@@ -5,9 +5,9 @@
 // short-alias prefix lookup for IM/CLI `/s <prefix>` commands.
 //
 // Backward-compatibility: keeps the v0.x `create` / `resume` / `list` /
-// `hydrateFromDisk` / `subscribe` API for the bridge layer until T8 deletes
-// it. New call sites should prefer `createLocal` / `resumeLocal` /
-// `registerRemote` / `getByPrefix`.
+// `hydrateFromDisk` API for the bridge layer until T8 deletes it. New call
+// sites should prefer `createLocal` / `resumeLocal` / `registerRemote` /
+// `getByPrefix`. `subscribe(ManagerEventListener)` is canonical post-T2.
 
 import { randomUUID } from 'node:crypto';
 import type { AgentProvider, AgentRuntime, PermissionMode } from '../runtime/types.js';
