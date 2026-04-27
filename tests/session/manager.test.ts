@@ -53,8 +53,9 @@ describe('SessionManager', () => {
   it('hydrateFromDisk returns persisted snapshots without restarting runtimes', async () => {
     const s = await env.mgr.create({ workspaceId: 'ws', provider: 'claude', workdir: '/a', source: 'cli' });
     const idBefore = s.id;
-    // Yield to let the fire-and-forget saveSnapshot in attachSink() flush to disk.
-    await new Promise((r) => setTimeout(r, 20));
+    // Flush in-flight tracked saves so the snapshot is durably on disk before
+    // the second manager reads it.
+    await s.flushPendingPersistence();
     // New manager pointed at same disk
     const persistence2 = new SessionPersistence(env.root);
     await persistence2.init();
@@ -69,9 +70,9 @@ describe('SessionManager', () => {
 
   it('resume rebuilds an idle session', async () => {
     const s = await env.mgr.create({ workspaceId: 'ws', provider: 'claude', workdir: '/a', source: 'cli' });
-    // Yield to let the fire-and-forget saveSnapshot in attachSink() flush to disk
-    // before we overwrite the snapshot with status=idle (avoids .tmp rename race).
-    await new Promise((r) => setTimeout(r, 20));
+    // Flush in-flight tracked saves before overwriting the snapshot so
+    // stop() drain does not clobber the idle status we write next.
+    await s.flushPendingPersistence();
     // Force a snapshot with status=idle on disk using the legacy shape (ctx required by loadSnapshot).
     await env.persistence.saveSnapshot({ ...s.snapshotLegacy(), status: 'idle' });
     await env.mgr.stop(s.id);

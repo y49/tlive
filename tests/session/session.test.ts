@@ -25,7 +25,7 @@ describe('Session', () => {
   let env: Awaited<ReturnType<typeof setup>>;
   beforeEach(async () => { env = await setup(); });
   afterEach(async () => {
-    await new Promise((r) => setTimeout(r, 20));
+    await env.session.stop().catch(() => undefined);
     await rm(env.root, { recursive: true, force: true });
   });
 

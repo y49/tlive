@@ -87,6 +87,7 @@ export class LocalSession implements SessionLike {
   private readonly budgetGuard: BudgetGuard;
   private detached = false;
   private phase: LifecyclePhase = 'constructed';
+  private readonly pendingSaves = new Set<Promise<void>>();
   get lifecyclePhase(): LifecyclePhase { return this.phase; }
 
   private history: NotificationEvent[] = [];
@@ -218,7 +219,7 @@ export class LocalSession implements SessionLike {
     });
     this.setLegacyStatus('active');
     this.setAgentStatus({ phase: 'idle', queuedInputs: this.queue.size() });
-    void this.saveSnapshot();
+    this.trackedSave();
     this.phase = 'running';
   }
 
@@ -266,6 +267,11 @@ export class LocalSession implements SessionLike {
     this.setLegacyStatus('stopped');
     this.setAgentStatus({ phase: 'stopped' });
     await this.saveSnapshot();
+    // Drain any in-flight tracked saves so callers awaiting stop() observe a
+    // durably-persisted session. Each pendingSave already swallows its error.
+    if (this.pendingSaves.size > 0) {
+      await Promise.all([...this.pendingSaves]);
+    }
     this.phase = 'terminated';
   }
 
@@ -295,7 +301,7 @@ export class LocalSession implements SessionLike {
     this.setAgentStatus({ phase: 'stopped' });
     // Snapshot is best-effort; detach must not await disk I/O to keep pool
     // transfer cheap. Persistence failures surface via their own logger.
-    void this.saveSnapshot().catch(() => undefined);
+    this.trackedSave();
     this.phase = 'terminated';
     return this.runtime;
   }
@@ -381,7 +387,7 @@ export class LocalSession implements SessionLike {
     // Legacy status mirror for bridge
     if (event.kind === 'session_complete' || event.kind === 'runtime_error') {
       this.setLegacyStatus('idle');
-      void this.saveSnapshot();
+      this.trackedSave();
     }
 
     // Budget guard runs after cost update so totalCost is current
@@ -410,7 +416,7 @@ export class LocalSession implements SessionLike {
 
   private handleUsage(u: UsageStats): void {
     this.cost.add(u);
-    void this.saveSnapshot();
+    this.trackedSave();
   }
 
   // ---- Synthesis helpers ---------------------------------------------------
@@ -446,6 +452,23 @@ export class LocalSession implements SessionLike {
   private async saveSnapshot(): Promise<void> {
     try { await this.persistence.saveSnapshot(this.snapshotLegacy()); }
     catch { /* surface via logger upstream */ }
+  }
+
+  /** Fire-and-forget save with in-flight tracking so stop()/flushPendingPersistence
+   *  can await durable completion. */
+  private trackedSave(): void {
+    const p = this.persistence.saveSnapshot(this.snapshotLegacy())
+      .catch(() => undefined);
+    this.pendingSaves.add(p);
+    void p.finally(() => this.pendingSaves.delete(p));
+  }
+
+  /** Test helper / external flush: await any in-flight tracked saveSnapshot
+   *  calls. Production code should prefer stop() — this exists to support
+   *  deterministic teardown in tests where the session is not yet stopping. */
+  async flushPendingPersistence(): Promise<void> {
+    if (this.pendingSaves.size === 0) return;
+    await Promise.all([...this.pendingSaves]);
   }
 }
 

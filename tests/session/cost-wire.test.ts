@@ -45,7 +45,7 @@ describe('LocalSession -> CostRollupStore', () => {
   let env: Awaited<ReturnType<typeof setup>>;
   afterEach(async () => {
     if (env) {
-      await new Promise((r) => setTimeout(r, 20));
+      await env.session.stop().catch(() => undefined);
       await rm(env.root, { recursive: true, force: true });
     }
   });

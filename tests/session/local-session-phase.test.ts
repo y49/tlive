@@ -29,9 +29,6 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'tlive-phase-'));
 });
 afterEach(async () => {
-  // Brief yield so any fire-and-forget saveSnapshot calls in attachSink()
-  // complete before we delete the temp directory.
-  await new Promise((r) => setTimeout(r, 20));
   await rm(root, { recursive: true, force: true });
 });
 

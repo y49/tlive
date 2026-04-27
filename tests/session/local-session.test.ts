@@ -31,9 +31,7 @@ describe('LocalSession', () => {
   let env: Awaited<ReturnType<typeof setup>>;
   beforeEach(async () => { env = await setup(); });
   afterEach(async () => {
-    // Yield so any fire-and-forget saveSnapshot calls (from attachSink) complete
-    // before the temp directory is deleted.
-    await new Promise((r) => setTimeout(r, 20));
+    await env.session.stop().catch(() => undefined);
     await rm(env.root, { recursive: true, force: true });
   });
 
@@ -171,8 +169,6 @@ describe('LocalSession', () => {
       expect(kinds).toEqual(['resolved']);
       expect(brokerEvents[0].autoResolvedBy).toMatch(/^pol-/);
     } finally {
-      // Brief yield so the fire-and-forget saveSnapshot from attachSink() completes.
-      await new Promise((r) => setTimeout(r, 20));
       await rm(root, { recursive: true, force: true });
     }
   });
@@ -195,7 +191,7 @@ describe('LocalSession', () => {
     if (local.session.status.phase === 'errored') {
       expect(local.session.status.code).toBe('budget_exceeded');
     }
-    await new Promise((r) => setTimeout(r, 20));
+    await local.session.flushPendingPersistence();
     await rm(local.root, { recursive: true, force: true });
   });
 });
