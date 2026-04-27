@@ -99,7 +99,7 @@ export class SessionManager {
       workspaceName: opts.workspaceName,
       provider: opts.provider,
     });
-    const runtime = this.pluckOrBuildRuntime(opts.provider, opts.workspaceId);
+    const runtime = this.deps.runtimeFactory(opts.provider);
     const session = new LocalSession({
       ctx,
       runtime,
@@ -128,7 +128,7 @@ export class SessionManager {
     const snap = await this.deps.persistence.loadSnapshot(id);
     if (!snap) return null;
     const ctx = new SessionContext(snap.ctx);
-    const runtime = this.pluckOrBuildRuntime(snap.ctx.provider, snap.ctx.workspaceId);
+    const runtime = this.deps.runtimeFactory(snap.ctx.provider);
     const session = new LocalSession({
       ctx,
       runtime,
@@ -138,7 +138,7 @@ export class SessionManager {
       elicitationBroker: this.deps.elicitationBroker,
       rollupStore: this.rollupStore ?? undefined,
     });
-    await session.prepare({});
+    await session.prepare({ resumeSessionId: id });
     this.sessions.set(id, session);
     this.emit({ kind: 'resumed', session });
     session.attachSink();
@@ -234,19 +234,6 @@ export class SessionManager {
   }
 
   // ---- Internal ------------------------------------------------------------
-
-  private pluckOrBuildRuntime(provider: AgentProvider, workspaceId: string): AgentRuntime {
-    // T3 scope: warm-pool infrastructure is wired but reuse is deferred until
-    // AgentRuntime.reset() exists (real runtimes reject a second start()).
-    // stop() never parks, so pluck() is always null in production — the
-    // factory path is always taken. Kept as a placeholder so a future task
-    // can re-enable pooling by restoring the detach+park path in stop().
-    if (this.warmPool) {
-      const warm = this.warmPool.pluck(provider, workspaceId);
-      if (warm) return warm;
-    }
-    return this.deps.runtimeFactory(provider);
-  }
 
   private emit(ev: Parameters<ManagerEventListener>[0]): void {
     for (const l of this.listeners) { try { l(ev); } catch { /* isolate */ } }

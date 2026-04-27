@@ -85,6 +85,20 @@ describe('SessionManager', () => {
     expect(await env.mgr.resume('nope')).toBeNull();
   });
 
+  it('createLocal calls prepare → emit("created") → attachSink in order', async () => {
+    const events: string[] = [];
+    env.mgr.subscribe((ev) => {
+      if (ev.kind === 'created') events.push('emit:created');
+    });
+    await env.mgr.createLocal({
+      workspaceId: 'ws-order', provider: 'claude', workdir: '/tmp', source: 'cli',
+    });
+    const r = env.runtimes[env.runtimes.length - 1]!;
+    expect(r.prepareCalls).toBe(1);
+    expect(r.attachCalls).toBe(1);
+    expect(events).toContain('emit:created');
+  });
+
   it('stopAll stops every live session', async () => {
     const a = await env.mgr.create({ workspaceId: 'ws', provider: 'claude', workdir: '/a', source: 'cli' });
     const b = await env.mgr.create({ workspaceId: 'ws', provider: 'claude', workdir: '/b', source: 'cli' });

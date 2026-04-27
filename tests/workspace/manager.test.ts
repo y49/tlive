@@ -1,7 +1,14 @@
 // tests/workspace/manager.test.ts
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { WorkspaceManager, WorkspaceConflictError, type LazyResumeDeps } from '../../src/workspace/manager.js';
+import { SessionManager } from '../../src/session/manager.js';
+import { SessionPersistence } from '../../src/session/persistence.js';
+import { PermissionBroker } from '../../src/permission/broker.js';
+import { FakeRuntime } from '../session/fake-runtime.js';
 import type { SessionLike } from '../../src/session/types.js';
 
 function fakeSession(id: string): SessionLike {
@@ -183,5 +190,79 @@ describe('WorkspaceManager.claimAdmin', () => {
   it('throws on non-existent workspace', () => {
     const wm = new WorkspaceManager();
     expect(() => wm.claimAdmin('nope', 'user-42')).toThrow(/not found/);
+  });
+});
+
+describe('WorkspaceManager.lazyResumeOrCreate resume passes sessionId to runtime.prepare', () => {
+  let root: string;
+  let persistence: SessionPersistence;
+  let broker: PermissionBroker;
+  let runtimes: FakeRuntime[];
+  let sessionMgr: SessionManager;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'tlive-wsmgr-'));
+    persistence = new SessionPersistence(root);
+    await persistence.init();
+    broker = new PermissionBroker();
+    runtimes = [];
+    sessionMgr = new SessionManager({
+      persistence,
+      broker,
+      runtimeFactory: (provider) => {
+        const r = new FakeRuntime(provider);
+        runtimes.push(r);
+        return r;
+      },
+    });
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('lazyResumeOrCreate resume branch passes session id to runtime.prepare', async () => {
+    // Create a session so a snapshot lands on disk.
+    const original = await sessionMgr.createLocal({
+      workspaceId: 'ws-resume', provider: 'claude', workdir: '/tmp', source: 'cli',
+    });
+    const sid = original.id;
+
+    // Flush pending saves and force snapshot to idle so resumeLocal accepts it.
+    await original.flushPendingPersistence();
+    await persistence.saveSnapshot({ ...original.snapshotLegacy(), status: 'idle' });
+    await sessionMgr.stop(sid);
+
+    // Wire a fresh SessionManager pointing to the same disk so it can resume.
+    const runtimes2: FakeRuntime[] = [];
+    const sessionMgr2 = new SessionManager({
+      persistence,
+      broker,
+      runtimeFactory: (provider) => {
+        const r = new FakeRuntime(provider);
+        runtimes2.push(r);
+        return r;
+      },
+    });
+
+    // Set up WorkspaceManager with the session pre-bound as active.
+    const wm = new WorkspaceManager();
+    const ws = wm.create({ name: 'test-ws', workdir: '/tmp' });
+    wm.bindActiveSession(ws.id, sid);
+
+    const deps: LazyResumeDeps = {
+      isLive: () => false,
+      resume: (id) => sessionMgr2.resumeLocal(id),
+      sendInput: async () => { /* no-op */ },
+      createLocal: async () => { throw new Error('should not create'); },
+    };
+
+    const out = await wm.lazyResumeOrCreate(ws.id, 'hello', 'im', deps);
+    expect(out.action).toBe('resumed');
+    expect(out.session.id).toBe(sid);
+
+    // The runtime created by resumeLocal must have received the session id.
+    expect(runtimes2).toHaveLength(1);
+    expect(runtimes2[0]!.resumeRequestedFor).toBe(sid);
   });
 });
