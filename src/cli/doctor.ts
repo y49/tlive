@@ -5,7 +5,8 @@
 // Sections checked:
 //   - daemon         running? pid + uptime via IPC `daemon.status`
 //   - config         ~/.tlive/config.json present + parseable (schema validate)
-//   - anthropic      ANTHROPIC_API_KEY / OPENAI_API_KEY env presence (no network)
+//   - anthropic      env keys OR Claude OAuth (~/.claude/.credentials.json) present
+//   - openai         env keys OR Codex OAuth (~/.codex/auth.json) present
 //   - platforms      telegram / discord / feishu tokens configured
 //   - jsonl          ~/.claude/projects + ~/.codex/sessions writability
 //   - disk           free space on $HOME partition
@@ -131,21 +132,42 @@ async function checkConfig(findings: Finding[], home: string): Promise<{
   return { raw: parse.value };
 }
 
-function checkEnvKeys(findings: Finding[]): void {
-  const hasAnthropic = Boolean(process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY);
-  const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
-  const hasCodexAuth = existsSync(join(homedir(), '.codex', 'auth.json'));
+export interface CheckEnvKeysOptions {
+  env?: NodeJS.ProcessEnv;
+  claudeHome?: string;
+  codexHome?: string;
+}
 
-  if (hasAnthropic) {
+export function checkEnvKeys(findings: Finding[], opts: CheckEnvKeysOptions = {}): void {
+  const env = opts.env ?? process.env;
+  const claudeHome = opts.claudeHome ?? join(homedir(), '.claude');
+  const codexHome = opts.codexHome ?? join(homedir(), '.codex');
+
+  const hasAnthropicKey = Boolean(env.ANTHROPIC_API_KEY || env.CLAUDE_API_KEY);
+  const hasClaudeOAuthEnv = Boolean(env.CLAUDE_CODE_OAUTH_TOKEN);
+  const hasClaudeOAuthFile = existsSync(join(claudeHome, '.credentials.json'));
+
+  if (hasAnthropicKey) {
     findings.push({ section: 'anthropic', level: 'ok', message: 'ANTHROPIC_API_KEY set' });
+  } else if (hasClaudeOAuthEnv) {
+    findings.push({ section: 'anthropic', level: 'ok', message: 'CLAUDE_CODE_OAUTH_TOKEN set' });
+  } else if (hasClaudeOAuthFile) {
+    findings.push({
+      section: 'anthropic',
+      level: 'ok',
+      message: 'Claude OAuth credentials present (~/.claude/.credentials.json)',
+    });
   } else {
     findings.push({
       section: 'anthropic',
       level: 'warn',
-      message: 'ANTHROPIC_API_KEY not in env',
-      hint: 'Claude runtime will not work without it. Export in your shell rc.',
+      message: 'no Claude credentials found',
+      hint: 'Run `claude login`, or export ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN.',
     });
   }
+
+  const hasOpenAI = Boolean(env.OPENAI_API_KEY);
+  const hasCodexAuth = existsSync(join(codexHome, 'auth.json'));
   if (hasOpenAI || hasCodexAuth) {
     findings.push({
       section: 'openai',
