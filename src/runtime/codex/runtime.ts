@@ -9,7 +9,7 @@ import { spawn, execFile as nodeExecFile } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import type {
-  AgentRuntime, AgentRuntimeOptions, AgentRuntimeStartResult,
+  AgentRuntime, AgentRuntimeOptions, AgentRuntimePrepareResult, EventSink,
   PermissionRequest, AskUserQuestionRequest, ElicitationRequest,
   SendInputOptions, PermissionMode, McpServerConfig, McpSetServersResult,
   McpServerStatus, ContextUsage, AccountInfo, SlashCommandInfo, ModelInfo,
@@ -69,13 +69,15 @@ const FORWARDED_METHODS = [
 export class CodexAppServerRuntime implements AgentRuntime {
   readonly provider = 'codex' as const;
 
-  private readonly eventCbs = new Set<(e: NotificationEvent) => void>();
-  private readonly permCbs = new Set<(r: PermissionRequest) => void>();
-  private readonly askCbs = new Set<(r: AskUserQuestionRequest) => void>();
-  private readonly elicitCbs = new Set<(r: ElicitationRequest) => void>();
-  private readonly usageCbs = new Set<(u: UsageStats) => void>();
+  // Stash for events fired before attachSink runs; flushed to sink in order.
+  private stashEvents: NotificationEvent[] = [];
+  private stashUsages: UsageStats[] = [];
+  private stashPerm: PermissionRequest[] = [];
+  private stashAsk: AskUserQuestionRequest[] = [];
+  private stashElicit: ElicitationRequest[] = [];
+  private sink: EventSink | null = null;
 
-  private started = false;
+  private prepared = false;
   private closed = false;
   private transport: StdioJsonlTransport | null = null;
   private client: CodexAppServerClient | null = null;
@@ -97,9 +99,9 @@ export class CodexAppServerRuntime implements AgentRuntime {
     return _availabilityCache;
   }
 
-  async start(opts: AgentRuntimeOptions): Promise<AgentRuntimeStartResult> {
-    if (this.started) throw new Error('runtime already started');
-    this.started = true;
+  async prepare(opts: AgentRuntimeOptions): Promise<AgentRuntimePrepareResult> {
+    if (this.prepared) throw new Error('runtime already prepared');
+    this.prepared = true;
     if (opts.signal.aborted) { this.closed = true; throw new Error('aborted'); }
     opts.signal.addEventListener('abort', () => { void this.stop(); }, { once: true });
 
@@ -111,7 +113,7 @@ export class CodexAppServerRuntime implements AgentRuntime {
     const client = new CodexAppServerClient(transport);
     this.client = client;
 
-    // Event/usage fanout via the adapter.
+    // Event/usage fanout via the adapter — routes to stash or sink.
     for (const method of FORWARDED_METHODS) {
       client.onNotification(method, (params) => {
         if (method === 'turn/started') {
@@ -123,15 +125,15 @@ export class CodexAppServerRuntime implements AgentRuntime {
           this.activeTurnId = null;
         }
         const frame = eventAdapter.handle(method, params);
-        for (const e of frame.events) for (const cb of this.eventCbs) cb(e);
-        if (frame.usage) for (const cb of this.usageCbs) cb(frame.usage);
+        for (const e of frame.events) this.fireEvent(e);
+        if (frame.usage) this.fireUsage(frame.usage);
       });
     }
 
     // Approval handlers — each produces a categorized PermissionRequest.
     const approvalCtx = {
       sdkSessionId: () => this.threadId,
-      emitRequest: (r: PermissionRequest) => { for (const cb of this.permCbs) cb(r); },
+      emitRequest: (r: PermissionRequest) => { this.firePermissionRequest(r); },
     };
     const execApproval = makeExecApprovalHandler(approvalCtx);
     const fileApproval = makeFileChangeApprovalHandler(approvalCtx);
@@ -162,18 +164,16 @@ export class CodexAppServerRuntime implements AgentRuntime {
         call_id: itemId,
         ...p,
       });
-      // Codex permissions approval expects { permissions, scope } — for now return
-      // an empty permission set and mark the scope from the user decision.
       if (result.outcome === 'denied') return { permissions: {}, scope: 'turn' };
       const scope = result.outcome === 'approved_for_session' ? 'session' : 'turn';
       return { permissions: {}, scope };
     });
-    // Elicitation passthrough (T2 will wire the real flow).
+    // Elicitation passthrough.
     client.onMcpElicitation(async () => ({ action: 'decline', content: null }));
 
     transport.onExit(({ code }) => {
       if (code !== 0 && !this.closed) {
-        for (const cb of this.eventCbs) cb({
+        this.fireEvent({
           kind: 'runtime_error',
           severity: 'fatal',
           code: 'codex_app_server_exit',
@@ -189,12 +189,13 @@ export class CodexAppServerRuntime implements AgentRuntime {
         capabilities: { experimentalApi: false },
       });
 
-      if (opts.resumeSdkSessionId) {
+      if (opts.resumeSdkSessionId ?? opts.resumeSessionId) {
+        const resumeId = (opts.resumeSdkSessionId ?? opts.resumeSessionId)!;
         const resumeResult = await client.request<
           { threadId: string; cwd?: string; model?: string; persistExtendedHistory: boolean },
           { thread: { id: string } }
         >('thread/resume', {
-          threadId: opts.resumeSdkSessionId,
+          threadId: resumeId,
           cwd: opts.workdir,
           model: opts.model,
           persistExtendedHistory: false,
@@ -222,16 +223,13 @@ export class CodexAppServerRuntime implements AgentRuntime {
       const message = err instanceof Error ? err.message : String(err);
       const alreadyClosing = this.closed;
       this.closed = true;
-      for (const cb of this.eventCbs) {
-        try {
-          cb({
-            kind: 'runtime_error',
-            severity: 'fatal',
-            code: 'codex_start_failed',
-            message,
-          });
-        } catch { /* ignore */ }
-      }
+      this.prepared = false;
+      this.fireEvent({
+        kind: 'runtime_error',
+        severity: 'fatal',
+        code: 'codex_start_failed',
+        message,
+      });
       if (!alreadyClosing) {
         if (this.client) {
           try { await this.client.close(); } catch { /* ignore */ }
@@ -241,6 +239,22 @@ export class CodexAppServerRuntime implements AgentRuntime {
       }
       throw err;
     }
+  }
+
+  attachSink(sink: EventSink): void {
+    if (!this.prepared) throw new Error('attachSink before prepare');
+    if (this.sink) throw new Error('attachSink already called');
+    this.sink = sink;
+    // Synchronous flush of stashed signals (order: events, usages, perm, ask, elicit).
+    for (const e of this.stashEvents) sink.onEvent(e);
+    for (const u of this.stashUsages) sink.onUsage(u);
+    for (const r of this.stashPerm) sink.onPermissionRequest(r);
+    for (const a of this.stashAsk) sink.onAskUserQuestion(a);
+    for (const e of this.stashElicit) sink.onElicitation(e);
+    this.stashEvents = []; this.stashUsages = [];
+    this.stashPerm = []; this.stashAsk = []; this.stashElicit = [];
+    // No background consumer loop to start for Codex — notifications arrive
+    // via client.onNotification callbacks (push-based, not pull-based).
   }
 
   async sendInput(text: string, opts?: SendInputOptions): Promise<void> {
@@ -361,15 +375,23 @@ export class CodexAppServerRuntime implements AgentRuntime {
     throw new UnsupportedByRuntimeError('codex', 'toggleMcpServer');
   }
 
-  // ---- Subscriptions -----------------------------------------------------
-
-  onEvent(cb: (e: NotificationEvent) => void) { this.eventCbs.add(cb); return () => { this.eventCbs.delete(cb); }; }
-  onPermissionRequest(cb: (r: PermissionRequest) => void) { this.permCbs.add(cb); return () => { this.permCbs.delete(cb); }; }
-  onAskUserQuestion(cb: (r: AskUserQuestionRequest) => void) { this.askCbs.add(cb); return () => { this.askCbs.delete(cb); }; }
-  onElicitation(cb: (r: ElicitationRequest) => void) { this.elicitCbs.add(cb); return () => { this.elicitCbs.delete(cb); }; }
-  onUsage(cb: (u: UsageStats) => void) { this.usageCbs.add(cb); return () => { this.usageCbs.delete(cb); }; }
-
   // ---- private -----------------------------------------------------------
+
+  private fireEvent(e: NotificationEvent): void {
+    if (this.sink) this.sink.onEvent(e); else this.stashEvents.push(e);
+  }
+  private fireUsage(u: UsageStats): void {
+    if (this.sink) this.sink.onUsage(u); else this.stashUsages.push(u);
+  }
+  private firePermissionRequest(r: PermissionRequest): void {
+    if (this.sink) this.sink.onPermissionRequest(r); else this.stashPerm.push(r);
+  }
+  private fireAsk(r: AskUserQuestionRequest): void {
+    if (this.sink) this.sink.onAskUserQuestion(r); else this.stashAsk.push(r);
+  }
+  private fireElicitation(r: ElicitationRequest): void {
+    if (this.sink) this.sink.onElicitation(r); else this.stashElicit.push(r);
+  }
 
   private async turnStart(text: string, effort?: string, model?: string): Promise<void> {
     if (!this.client || !this.threadId) throw new Error('runtime not initialized');

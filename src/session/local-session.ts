@@ -203,24 +203,22 @@ export class LocalSession implements SessionLike {
   // ---- Lifecycle ------------------------------------------------------------
 
   async start(opts: Omit<AgentRuntimeOptions, 'workdir' | 'signal'> = {}): Promise<void> {
-    this.unsubscribers.push(this.runtime.onEvent((e) => this.handleEvent(e)));
-    this.unsubscribers.push(this.runtime.onPermissionRequest((req) => this.handlePermission(req)));
-    this.unsubscribers.push(this.runtime.onAskUserQuestion((req) => this.handleAsk(req)));
-    this.unsubscribers.push(this.runtime.onElicitation((req) => this.handleElicitation(req)));
-    this.unsubscribers.push(this.runtime.onUsage((u) => this.handleUsage(u)));
-    await this.runtime.start({
+    // TASK1-temp: this is a transitional shape; Task 2 splits start() into prepare()/attachSink()
+    await this.runtime.prepare({
       ...opts,
       workdir: this.ctx.snapshot.workdir,
       signal: this.abortCtrl.signal,
     });
-    // Test FakeRuntime assigns sdkSessionId via its start() return; real SDK
-    // runtimes echo back the same id the caller passed (or a fresh one on
-    // first create). Either way this session's own `id` is already the
-    // ground truth — the SessionManager synchronized them at construction.
+    this.runtime.attachSink({
+      onEvent: (e) => this.handleEvent(e),
+      onUsage: (u) => this.handleUsage(u),
+      onPermissionRequest: (r) => this.handlePermission(r),
+      onAskUserQuestion: (r) => this.handleAsk(r),
+      onElicitation: (r) => this.handleElicitation(r),
+    });
     this._isReady = true;
     for (const cb of this.sessionIdReadyListeners) { try { cb(this.id); } catch { /* isolate */ } }
     this.sessionIdReadyListeners.clear();
-
     this.setLegacyStatus('active');
     this.setAgentStatus({ phase: 'idle', queuedInputs: this.queue.size() });
     await this.saveSnapshot();

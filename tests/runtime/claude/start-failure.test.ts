@@ -1,9 +1,9 @@
 // tests/runtime/claude/start-failure.test.ts
 //
-// Regression guard for ClaudeSdkRuntime.start() cleanup path: if the query
+// Regression guard for ClaudeSdkRuntime.prepare() cleanup path: if the query
 // stream errors before the `system/init` message arrives, the partially
-// spawned Query must be closed and `started` reset so a retry is possible.
-// Without this, a failed start() leaked the SDK subprocess and left the
+// spawned Query must be closed and `prepared` reset so a retry is possible.
+// Without this, a failed prepare() leaked the SDK subprocess and left the
 // runtime un-recoverable.
 
 import { describe, it, expect } from 'vitest';
@@ -25,8 +25,8 @@ function makeThrowingFake(err: Error): FakeHandle {
   return { query: fake, closeCalls: () => closeCalls };
 }
 
-describe('ClaudeSdkRuntime start() failure cleanup', () => {
-  it('closes the Query and resets started flag if init stream throws', async () => {
+describe('ClaudeSdkRuntime prepare() failure cleanup', () => {
+  it('closes the Query and resets prepared flag if init stream throws', async () => {
     const handle = makeThrowingFake(new Error('simulated stream failure'));
     const rt = new ClaudeSdkRuntime({
       query: (() => handle.query) as never,
@@ -34,18 +34,18 @@ describe('ClaudeSdkRuntime start() failure cleanup', () => {
     const ctrl = new AbortController();
 
     await expect(
-      rt.start({ workdir: '/tmp', signal: ctrl.signal }),
+      rt.prepare({ workdir: '/tmp', signal: ctrl.signal }),
     ).rejects.toThrow(/simulated stream failure/);
 
     expect(handle.closeCalls()).toBe(1);
     // Internal state: queryIter should be null so the control face treats the
-    // runtime as not-yet-started (UnsupportedByRuntimeError on calls).
-    const internal = rt as unknown as { queryIter: Query | null; started: boolean };
+    // runtime as not-yet-prepared (UnsupportedByRuntimeError on calls).
+    const internal = rt as unknown as { queryIter: Query | null; prepared: boolean };
     expect(internal.queryIter).toBeNull();
-    expect(internal.started).toBe(false);
+    expect(internal.prepared).toBe(false);
   });
 
-  it('is recoverable: a second start() on the same runtime does not throw "already started"', async () => {
+  it('is recoverable: a second prepare() on the same runtime does not throw "already prepared"', async () => {
     const firstHandle = makeThrowingFake(new Error('first attempt fail'));
     const rt = new ClaudeSdkRuntime({
       query: (() => firstHandle.query) as never,
@@ -53,16 +53,16 @@ describe('ClaudeSdkRuntime start() failure cleanup', () => {
     const ctrl = new AbortController();
 
     await expect(
-      rt.start({ workdir: '/tmp', signal: ctrl.signal }),
+      rt.prepare({ workdir: '/tmp', signal: ctrl.signal }),
     ).rejects.toThrow(/first attempt fail/);
 
     // Swap the queryFn to a second fake and try again — must not hit the
-    // "runtime already started" guard.
+    // "runtime already prepared" guard.
     const secondHandle = makeThrowingFake(new Error('second attempt fail'));
     (rt as unknown as { queryFn: () => Query }).queryFn = () => secondHandle.query;
 
     await expect(
-      rt.start({ workdir: '/tmp', signal: ctrl.signal }),
+      rt.prepare({ workdir: '/tmp', signal: ctrl.signal }),
     ).rejects.toThrow(/second attempt fail/);
     expect(secondHandle.closeCalls()).toBe(1);
   });
@@ -85,14 +85,14 @@ describe('ClaudeSdkRuntime start() failure cleanup', () => {
     const ctrl = new AbortController();
     const rt = new ClaudeSdkRuntime({
       query: (() => {
-        // Abort mid-start — after queryIter assignment, before firstInitMessage.
+        // Abort mid-prepare — after queryIter assignment, before firstInitMessage.
         ctrl.abort();
         return neverYielding;
       }) as never,
     });
 
     await expect(
-      rt.start({ workdir: '/tmp', signal: ctrl.signal }),
+      rt.prepare({ workdir: '/tmp', signal: ctrl.signal }),
     ).rejects.toThrow(/aborted/);
     // `close()` must be called at least once (once from abort listener's
     // stop() call, and once from the catch block — either way it fired).

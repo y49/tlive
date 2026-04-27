@@ -67,6 +67,9 @@ export interface McpServerConfig {
 export interface AgentRuntimeOptions {
   workdir: string;
   resumeSdkSessionId?: string;
+  /** When set, runtime resumes this SDK session id instead of creating a new
+   *  one. Symmetry with create path; used by SessionManager.resumeLocal. */
+  resumeSessionId?: string;
   initialPrompt?: string;
   model?: string;
   effort?: Effort;
@@ -83,7 +86,18 @@ export interface AgentRuntimeOptions {
   signal: AbortSignal;
 }
 
-export interface AgentRuntimeStartResult {
+/** Single sink that receives every signal a runtime emits. Replaces the
+ *  five separate onX callbacks. Installed by `AgentRuntime.attachSink`. */
+export interface EventSink {
+  onEvent(e: NotificationEvent): void;
+  onUsage(u: UsageStats): void;
+  onPermissionRequest(r: PermissionRequest): void;
+  onAskUserQuestion(r: AskUserQuestionRequest): void;
+  onElicitation(r: ElicitationRequest): void;
+}
+
+export interface AgentRuntimePrepareResult {
+  /** SDK-side session id. Same value the runtime later echoes through events. */
   sdkSessionId: string;
 }
 
@@ -148,8 +162,13 @@ export interface RewindResult {
 export interface AgentRuntime {
   readonly provider: AgentProvider;
 
-  // Lifecycle
-  start(opts: AgentRuntimeOptions): Promise<AgentRuntimeStartResult>;
+  // Lifecycle (two-phase readiness gate; see spec §4.1).
+  // prepare(): build query iter, capture sdkSessionId, stash any events the
+  //            SDK fires before init resolves. Does NOT consume the iter.
+  // attachSink(): install single sink, synchronously flush stash, then start
+  //               background consumer. Throws if called twice or before prepare.
+  prepare(opts: AgentRuntimeOptions): Promise<AgentRuntimePrepareResult>;
+  attachSink(sink: EventSink): void;
   stop(): Promise<void>;
 
   // Input / control
@@ -178,11 +197,4 @@ export interface AgentRuntime {
   setMcpServers(servers: Record<string, McpServerConfig>): Promise<McpSetServersResult>;
   reconnectMcpServer(name: string): Promise<void>;
   toggleMcpServer(name: string, enabled: boolean): Promise<void>;
-
-  // Event subscriptions
-  onEvent(cb: (e: NotificationEvent) => void): () => void;
-  onPermissionRequest(cb: (r: PermissionRequest) => void): () => void;
-  onAskUserQuestion(cb: (r: AskUserQuestionRequest) => void): () => void;
-  onElicitation(cb: (r: ElicitationRequest) => void): () => void;
-  onUsage(cb: (u: UsageStats) => void): () => void;
 }

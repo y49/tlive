@@ -1,11 +1,11 @@
 // tests/session/fake-runtime.ts
 //
-// Minimal in-memory AgentRuntime stand-in for Session unit tests. Control-face
-// methods throw UnsupportedByRuntimeError (the tests in this folder don't
-// exercise them); runtime-level subscriptions + lifecycle are fully functional.
+// Minimal in-memory AgentRuntime stand-in for Session unit tests. Implements
+// the new prepare/attachSink contract; control-face methods throw
+// UnsupportedByRuntimeError.
 
 import type {
-  AgentRuntime, AgentRuntimeOptions, AgentRuntimeStartResult,
+  AgentRuntime, AgentRuntimeOptions, AgentRuntimePrepareResult, EventSink,
   PermissionRequest, AskUserQuestionRequest, ElicitationRequest,
   SendInputOptions, PermissionMode, McpServerConfig, McpSetServersResult,
   McpServerStatus, ContextUsage, AccountInfo, SlashCommandInfo, ModelInfo,
@@ -16,31 +16,53 @@ import { UnsupportedByRuntimeError } from '../../src/runtime/abstractions.js';
 
 export class FakeRuntime implements AgentRuntime {
   readonly provider: 'claude' | 'codex';
-  startCalls = 0;
+  prepareCalls = 0;
+  attachCalls = 0;
   inputs: string[] = [];
   stopCalls = 0;
-  started = false;
-  private eventCbs = new Set<(e: NotificationEvent) => void>();
-  private permCbs = new Set<(r: PermissionRequest) => void>();
-  private askCbs = new Set<(r: AskUserQuestionRequest) => void>();
-  private elicitCbs = new Set<(r: ElicitationRequest) => void>();
-  private usageCbs = new Set<(u: UsageStats) => void>();
+  prepared = false;
+  resumeRequestedFor: string | null = null;
+
+  // Test helpers — pre-injected events fire at the appropriate phase.
+  private preparePending: Array<
+    | { kind: 'event'; e: NotificationEvent }
+    | { kind: 'usage'; u: UsageStats }
+    | { kind: 'perm'; r: PermissionRequest }
+    | { kind: 'ask'; r: AskUserQuestionRequest }
+    | { kind: 'elicit'; r: ElicitationRequest }
+  > = [];
+  private sink: EventSink | null = null;
 
   constructor(provider: 'claude' | 'codex' = 'claude') { this.provider = provider; }
 
-  async start(_opts: AgentRuntimeOptions): Promise<AgentRuntimeStartResult> {
-    // Production runtimes reject second start(); warm-pool reuse deferred
-    // until AgentRuntime.reset() lands (see T9+). Mirroring that invariant
-    // here keeps tests honest about the real-world constraint.
-    if (this.started) throw new Error('runtime already started');
-    this.started = true;
-    this.startCalls++;
-    return { sdkSessionId: `fake-${this.startCalls}` };
+  async prepare(opts: AgentRuntimeOptions): Promise<AgentRuntimePrepareResult> {
+    if (this.prepared) throw new Error('runtime already prepared');
+    this.prepared = true;
+    this.prepareCalls++;
+    this.resumeRequestedFor = opts.resumeSessionId ?? null;
+    return { sdkSessionId: opts.resumeSessionId ?? `fake-${this.prepareCalls}` };
   }
-  async sendInput(text: string, _opts?: SendInputOptions): Promise<void> { this.inputs.push(text); }
-  async stop(): Promise<void> { this.stopCalls++; this.started = false; }
 
-  // Control face — tests don't exercise these; throw so misuse is loud.
+  attachSink(sink: EventSink): void {
+    if (!this.prepared) throw new Error('attachSink before prepare');
+    if (this.sink) throw new Error('attachSink already called');
+    this.sink = sink;
+    this.attachCalls++;
+    // Flush pending in injection order.
+    for (const p of this.preparePending) {
+      if (p.kind === 'event') sink.onEvent(p.e);
+      else if (p.kind === 'usage') sink.onUsage(p.u);
+      else if (p.kind === 'perm') sink.onPermissionRequest(p.r);
+      else if (p.kind === 'ask') sink.onAskUserQuestion(p.r);
+      else sink.onElicitation(p.r);
+    }
+    this.preparePending = [];
+  }
+
+  async sendInput(text: string, _opts?: SendInputOptions): Promise<void> { this.inputs.push(text); }
+  async stop(): Promise<void> { this.stopCalls++; this.prepared = false; this.sink = null; }
+
+  // Control face — tests don't exercise these.
   async interrupt(): Promise<void> { throw new UnsupportedByRuntimeError(this.provider, 'interrupt'); }
   async setModel(_model?: string): Promise<void> { throw new UnsupportedByRuntimeError(this.provider, 'setModel'); }
   async setPermissionMode(_mode: PermissionMode): Promise<void> { throw new UnsupportedByRuntimeError(this.provider, 'setPermissionMode'); }
@@ -62,16 +84,18 @@ export class FakeRuntime implements AgentRuntime {
   async reconnectMcpServer(_n: string): Promise<void> { throw new UnsupportedByRuntimeError(this.provider, 'reconnectMcpServer'); }
   async toggleMcpServer(_n: string, _e: boolean): Promise<void> { throw new UnsupportedByRuntimeError(this.provider, 'toggleMcpServer'); }
 
-  onEvent(cb: (e: NotificationEvent) => void) { this.eventCbs.add(cb); return () => { this.eventCbs.delete(cb); }; }
-  onPermissionRequest(cb: (r: PermissionRequest) => void) { this.permCbs.add(cb); return () => { this.permCbs.delete(cb); }; }
-  onAskUserQuestion(cb: (r: AskUserQuestionRequest) => void) { this.askCbs.add(cb); return () => { this.askCbs.delete(cb); }; }
-  onElicitation(cb: (r: ElicitationRequest) => void) { this.elicitCbs.add(cb); return () => { this.elicitCbs.delete(cb); }; }
-  onUsage(cb: (u: UsageStats) => void) { this.usageCbs.add(cb); return () => { this.usageCbs.delete(cb); }; }
+  // Test helpers — fire after attachSink (sink path), or stash for prepare-window.
+  emitEvent(e: NotificationEvent) { if (this.sink) this.sink.onEvent(e); else this.preparePending.push({ kind: 'event', e }); }
+  emitUsage(u: UsageStats) { if (this.sink) this.sink.onUsage(u); else this.preparePending.push({ kind: 'usage', u }); }
+  emitPermission(r: PermissionRequest) { if (this.sink) this.sink.onPermissionRequest(r); else this.preparePending.push({ kind: 'perm', r }); }
+  emitAsk(r: AskUserQuestionRequest) { if (this.sink) this.sink.onAskUserQuestion(r); else this.preparePending.push({ kind: 'ask', r }); }
+  emitElicitation(r: ElicitationRequest) { if (this.sink) this.sink.onElicitation(r); else this.preparePending.push({ kind: 'elicit', r }); }
 
-  // Test helpers
-  emitEvent(e: NotificationEvent) { for (const cb of this.eventCbs) cb(e); }
-  emitPermission(r: PermissionRequest) { for (const cb of this.permCbs) cb(r); }
-  emitUsage(u: UsageStats) { for (const cb of this.usageCbs) cb(u); }
-  emitAsk(r: AskUserQuestionRequest) { for (const cb of this.askCbs) cb(r); }
-  emitElicitation(r: ElicitationRequest) { for (const cb of this.elicitCbs) cb(r); }
+  /** Test helper — inject before attachSink so sink flush picks it up. */
+  injectInPrepareWindow(e: NotificationEvent): void { this.preparePending.push({ kind: 'event', e }); }
+
+  // Backward-compat aliases for tests that still reference old names.
+  // Remove these once all tests are updated in this same task.
+  get started(): boolean { return this.prepared; }
+  get startCalls(): number { return this.prepareCalls; }
 }

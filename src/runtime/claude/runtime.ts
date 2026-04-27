@@ -8,7 +8,7 @@
 import { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import type { Query } from '@anthropic-ai/claude-agent-sdk';
 import type {
-  AgentRuntime, AgentRuntimeOptions, AgentRuntimeStartResult,
+  AgentRuntime, AgentRuntimeOptions, AgentRuntimePrepareResult, EventSink,
   PermissionRequest, AskUserQuestionRequest, ElicitationRequest,
   SendInputOptions, PermissionMode,
   McpServerConfig,
@@ -33,13 +33,16 @@ export class ClaudeSdkRuntime implements AgentRuntime {
   readonly provider = 'claude' as const;
 
   private readonly adapter = new ClaudeEventAdapter();
-  private readonly eventCbs = new Set<(e: NotificationEvent) => void>();
-  private readonly permCbs = new Set<(r: PermissionRequest) => void>();
-  private readonly askCbs = new Set<(r: AskUserQuestionRequest) => void>();
-  private readonly elicitCbs = new Set<(r: ElicitationRequest) => void>();
-  private readonly usageCbs = new Set<(u: UsageStats) => void>();
 
-  private started = false;
+  // Stash for events fired before attachSink runs; flushed to sink in order.
+  private stashEvents: NotificationEvent[] = [];
+  private stashUsages: UsageStats[] = [];
+  private stashPerm: PermissionRequest[] = [];
+  private stashAsk: AskUserQuestionRequest[] = [];
+  private stashElicit: ElicitationRequest[] = [];
+  private sink: EventSink | null = null;
+
+  private prepared = false;
   private closed = false;
   private messageQueue: QueueEntry[] = [];
   private messageWaiter: ((msg: QueueEntry | null) => void) | null = null;
@@ -52,9 +55,9 @@ export class ClaudeSdkRuntime implements AgentRuntime {
     this.queryFn = deps.query ?? sdkQuery;
   }
 
-  async start(opts: AgentRuntimeOptions): Promise<AgentRuntimeStartResult> {
-    if (this.started) throw new Error('runtime already started');
-    this.started = true;
+  async prepare(opts: AgentRuntimeOptions): Promise<AgentRuntimePrepareResult> {
+    if (this.prepared) throw new Error('runtime already prepared');
+    this.prepared = true;
     if (opts.signal.aborted) { this.closed = true; throw new Error('aborted'); }
     opts.signal.addEventListener('abort', () => { void this.stop(); }, { once: true });
 
@@ -62,12 +65,12 @@ export class ClaudeSdkRuntime implements AgentRuntime {
 
     const canUseTool = makeCanUseTool({
       sdkSessionId: () => this.sdkSessionId,
-      emitRequest: (r) => { for (const cb of this.permCbs) cb(r); },
+      emitRequest: (r) => this.firePermissionRequest(r),
       categorize: categorizeClaudeToolUse,
     });
     const onElicitation = makeOnElicitation({
       sdkSessionId: () => this.sdkSessionId,
-      emitRequest: (r) => { for (const cb of this.elicitCbs) cb(r); },
+      emitRequest: (r) => this.fireElicitation(r),
     });
 
     const self = this;
@@ -92,10 +95,6 @@ export class ClaudeSdkRuntime implements AgentRuntime {
     const options = buildClaudeOptions(opts, canUseTool, onElicitation);
     this.queryIter = this.queryFn({ prompt: prompts(), options });
 
-    // Wait for init event to capture sdkSessionId, then spawn background consumer.
-    // If the stream errors or aborts before `system/init` arrives, the partially
-    // spawned SDK subprocess must be closed and `started` reset so a retry is
-    // possible. Mirrors the Codex runtime's try/catch around initialize().
     const iter = this.queryIter;
     let sessionId: string;
     try {
@@ -106,11 +105,25 @@ export class ClaudeSdkRuntime implements AgentRuntime {
     } catch (err) {
       try { this.queryIter?.close?.(); } catch { /* ignore */ }
       this.queryIter = null;
-      this.started = false;
+      this.prepared = false;
       throw err;
     }
-    void this.consume(iter);
     return { sdkSessionId: sessionId };
+  }
+
+  attachSink(sink: EventSink): void {
+    if (!this.prepared) throw new Error('attachSink before prepare');
+    if (this.sink) throw new Error('attachSink already called');
+    this.sink = sink;
+    // Synchronous flush of stashed signals (order: events, usages, perm, ask, elicit).
+    for (const e of this.stashEvents) sink.onEvent(e);
+    for (const u of this.stashUsages) sink.onUsage(u);
+    for (const r of this.stashPerm) sink.onPermissionRequest(r);
+    for (const a of this.stashAsk) sink.onAskUserQuestion(a);
+    for (const e of this.stashElicit) sink.onElicitation(e);
+    this.stashEvents = []; this.stashUsages = [];
+    this.stashPerm = []; this.stashAsk = []; this.stashElicit = [];
+    if (this.queryIter) void this.consume(this.queryIter);
   }
 
   async sendInput(text: string, opts?: SendInputOptions): Promise<void> {
@@ -134,7 +147,7 @@ export class ClaudeSdkRuntime implements AgentRuntime {
     }
   }
 
-  // Control-face delegations
+  // Control-face delegations (unchanged)
   interrupt() { return this.control.interrupt(); }
   setModel(model?: string) { return this.control.setModel(model); }
   setPermissionMode(mode: PermissionMode) { return this.control.setPermissionMode(mode); }
@@ -157,13 +170,6 @@ export class ClaudeSdkRuntime implements AgentRuntime {
   reconnectMcpServer(n: string) { return this.control.reconnectMcpServer(n); }
   toggleMcpServer(n: string, e: boolean) { return this.control.toggleMcpServer(n, e); }
 
-  // Event subscriptions
-  onEvent(cb: (e: NotificationEvent) => void) { this.eventCbs.add(cb); return () => { this.eventCbs.delete(cb); }; }
-  onPermissionRequest(cb: (r: PermissionRequest) => void) { this.permCbs.add(cb); return () => { this.permCbs.delete(cb); }; }
-  onAskUserQuestion(cb: (r: AskUserQuestionRequest) => void) { this.askCbs.add(cb); return () => { this.askCbs.delete(cb); }; }
-  onElicitation(cb: (r: ElicitationRequest) => void) { this.elicitCbs.add(cb); return () => { this.elicitCbs.delete(cb); }; }
-  onUsage(cb: (u: UsageStats) => void) { this.usageCbs.add(cb); return () => { this.usageCbs.delete(cb); }; }
-
   // ---- private ------------------------------------------------------------
 
   private nextMessage(): Promise<QueueEntry | null> {
@@ -178,6 +184,7 @@ export class ClaudeSdkRuntime implements AgentRuntime {
       const frame = this.adapter.adapt(msg as { type: string });
       for (const e of frame.events) this.fireEvent(e);
       if (frame.usage) this.fireUsage(frame.usage);
+      if (frame.askUserQuestion) this.fireAsk(frame.askUserQuestion);
       if (msg.type === 'system' && (msg as { subtype?: string }).subtype === 'init' && typeof msg.session_id === 'string') {
         return { session_id: msg.session_id };
       }
@@ -193,7 +200,7 @@ export class ClaudeSdkRuntime implements AgentRuntime {
         const frame = this.adapter.adapt(msg as { type: string });
         for (const e of frame.events) this.fireEvent(e);
         if (frame.usage) this.fireUsage(frame.usage);
-        if (frame.askUserQuestion) for (const cb of this.askCbs) cb(frame.askUserQuestion);
+        if (frame.askUserQuestion) this.fireAsk(frame.askUserQuestion);
       }
     } catch (err) {
       errored = true;
@@ -208,6 +215,19 @@ export class ClaudeSdkRuntime implements AgentRuntime {
     }
   }
 
-  private fireEvent(e: NotificationEvent): void { for (const cb of this.eventCbs) cb(e); }
-  private fireUsage(u: UsageStats): void { for (const cb of this.usageCbs) cb(u); }
+  private fireEvent(e: NotificationEvent): void {
+    if (this.sink) this.sink.onEvent(e); else this.stashEvents.push(e);
+  }
+  private fireUsage(u: UsageStats): void {
+    if (this.sink) this.sink.onUsage(u); else this.stashUsages.push(u);
+  }
+  private firePermissionRequest(r: PermissionRequest): void {
+    if (this.sink) this.sink.onPermissionRequest(r); else this.stashPerm.push(r);
+  }
+  private fireAsk(r: AskUserQuestionRequest): void {
+    if (this.sink) this.sink.onAskUserQuestion(r); else this.stashAsk.push(r);
+  }
+  private fireElicitation(r: ElicitationRequest): void {
+    if (this.sink) this.sink.onElicitation(r); else this.stashElicit.push(r);
+  }
 }
