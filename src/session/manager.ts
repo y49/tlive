@@ -5,15 +5,14 @@
 // short-alias prefix lookup for IM/CLI `/s <prefix>` commands.
 //
 // Backward-compatibility: keeps the v0.x `create` / `resume` / `list` /
-// `hydrateFromDisk` / `subscribe` / `subscribeToSession` API for the bridge
-// layer until T8 deletes it. New call sites should prefer `createLocal` /
-// `resumeLocal` / `registerRemote` / `getByPrefix`.
+// `hydrateFromDisk` / `subscribe` API for the bridge layer until T8 deletes
+// it. New call sites should prefer `createLocal` / `resumeLocal` /
+// `registerRemote` / `getByPrefix`.
 
 import { randomUUID } from 'node:crypto';
 import type { AgentProvider, AgentRuntime, PermissionMode } from '../runtime/types.js';
 import { SessionContext } from './context.js';
 import { LocalSession } from './local-session.js';
-import type { SessionEventListener as LegacySessionEventListener } from './local-session.js';
 import { RemoteSession, type RemoteSessionInit } from './remote-session.js';
 import type { SessionLike, SessionInfo } from './types.js';
 import type { SessionPersistence, SessionSnapshot } from './persistence.js';
@@ -111,14 +110,15 @@ export class SessionManager {
       maxBudgetUsd: opts.maxBudgetUsd,
       rollupStore: this.rollupStore ?? undefined,
     });
-    this.sessions.set(id, session);
-    await session.start({
+    await session.prepare({
       model: opts.model,
       effort: opts.effort,
       permissionMode: opts.permissionMode,
       initialPrompt: opts.initialPrompt,
     });
+    this.sessions.set(id, session);
     this.emit({ kind: 'created', session });
+    session.attachSink();
     return session;
   }
 
@@ -138,9 +138,10 @@ export class SessionManager {
       elicitationBroker: this.deps.elicitationBroker,
       rollupStore: this.rollupStore ?? undefined,
     });
+    await session.prepare({});
     this.sessions.set(id, session);
-    await session.start({});
     this.emit({ kind: 'resumed', session });
+    session.attachSink();
     return session;
   }
 
@@ -230,13 +231,6 @@ export class SessionManager {
   /** Hydrate persisted snapshots from disk without starting runtimes. */
   async hydrateFromDisk(): Promise<SessionSnapshot[]> {
     return this.deps.persistence.listSnapshots();
-  }
-
-  /** Forward a session's legacy subscribe() to `listener`. */
-  subscribeToSession(id: string, listener: LegacySessionEventListener): (() => void) | null {
-    const s = this.sessions.get(id);
-    if (!s || s.kind !== 'local') return null;
-    return (s as LocalSession).subscribe(listener);
   }
 
   // ---- Internal ------------------------------------------------------------

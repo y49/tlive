@@ -18,6 +18,7 @@ import { mkdir, writeFile, readFile, appendFile, readdir, unlink, stat, rename }
 import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { randomBytes } from 'node:crypto';
 import type {
   AgentProvider, PermissionRequest, AskUserQuestionRequest, ElicitationRequest,
 } from '../runtime/types.js';
@@ -128,7 +129,10 @@ export class SessionPersistence {
   }
 
   async saveSnapshot(snap: SessionSnapshot): Promise<void> {
-    const tmp = this.metaPath(snap.id) + '.tmp';
+    // Use a unique tmp suffix so concurrent saves to the same session id
+    // don't race on the same .tmp path (e.g., fire-and-forget from
+    // attachSink + an explicit test write both happening in the same tick).
+    const tmp = this.metaPath(snap.id) + '.' + randomBytes(4).toString('hex') + '.tmp';
     await writeFile(tmp, JSON.stringify(snap, null, 2), 'utf-8');
     await rename(tmp, this.metaPath(snap.id));
   }

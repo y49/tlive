@@ -131,7 +131,7 @@ describe('integration: handoff roundtrip', () => {
     expect(env.runtimes.length).toBeGreaterThan(1);
     const runtimeAfter = env.runtimes[env.runtimes.length - 1]!;
     expect(runtimeAfter).not.toBe(runtimeBefore);
-    expect(runtimeAfter.started).toBe(true);
+    expect(runtimeAfter.prepared).toBe(true);
   });
 
   it('handoff.release surfaces an error for an unknown alias', async () => {

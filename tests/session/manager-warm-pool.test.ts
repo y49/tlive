@@ -57,9 +57,9 @@ describe('SessionManager stop -> factory (no warm-pool reuse in T3)', () => {
     expect(env.runtimes).toHaveLength(2);
     const secondRuntime = env.runtimes[1];
     expect(secondRuntime).not.toBe(firstRuntime);
-    // Each runtime's start() ran exactly once (the production invariant).
-    expect(firstRuntime.startCalls).toBe(1);
-    expect(secondRuntime.startCalls).toBe(1);
+    // Each runtime's prepare() ran exactly once (the production invariant).
+    expect(firstRuntime.prepareCalls).toBe(1);
+    expect(secondRuntime.prepareCalls).toBe(1);
   });
 
   it('stopAll stops every live session runtime; pool is empty', async () => {
@@ -88,9 +88,9 @@ describe('WarmRuntimePool scaffolding (unit — usable when T9 re-enables poolin
     const plucked = pool.pluck('claude', 'ws-X');
     expect(plucked).toBe(r);
     expect(pool.size()).toBe(0);
-    // Pool does not call start() itself — the would-be consumer does,
+    // Pool does not call prepare() itself — the would-be consumer does,
     // which is why reuse stays disabled until runtime.reset() exists.
-    expect(r.startCalls).toBe(0);
+    expect(r.prepareCalls).toBe(0);
     expect(r.stopCalls).toBe(0);
   });
 });

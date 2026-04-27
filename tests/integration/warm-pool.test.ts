@@ -62,7 +62,7 @@ describe('integration: warm-pool (v1.0 — factory always)', () => {
     });
     expect(env.runtimes.length).toBe(2);
     expect(env.runtimes[1]).not.toBe(env.runtimes[0]);
-    expect(env.runtimes[1]!.startCalls).toBe(1);
+    expect(env.runtimes[1]!.prepareCalls).toBe(1);
     // Second session got a different sdkSessionId.
     expect(second.id).not.toBe(first.id);
   });

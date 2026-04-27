@@ -9,6 +9,5 @@ export {
   LocalSession as Session,
   LocalSession,
   type SessionInit,
-  type SessionEventListener,
   type SessionStatus,
 } from './local-session.js';

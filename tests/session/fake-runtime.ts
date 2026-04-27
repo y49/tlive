@@ -93,9 +93,4 @@ export class FakeRuntime implements AgentRuntime {
 
   /** Test helper — inject before attachSink so sink flush picks it up. */
   injectInPrepareWindow(e: NotificationEvent): void { this.preparePending.push({ kind: 'event', e }); }
-
-  // Backward-compat aliases for tests that still reference old names.
-  // Remove these once all tests are updated in this same task.
-  get started(): boolean { return this.prepared; }
-  get startCalls(): number { return this.prepareCalls; }
 }

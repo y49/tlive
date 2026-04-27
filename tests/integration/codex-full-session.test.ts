@@ -61,7 +61,7 @@ describe('integration: codex-full-session', () => {
 
     const runtime = env.runtimes[0]!;
     expect(runtime.provider).toBe('codex');
-    expect(runtime.started).toBe(true);
+    expect(runtime.prepared).toBe(true);
 
     await session.sendInput('add pagination to the list view', 'im');
     expect(runtime.inputs).toEqual(['add pagination to the list view']);

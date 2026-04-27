@@ -69,7 +69,7 @@ describe('integration: claude-full-session', () => {
     });
 
     const runtime = env.runtimes[0]!;
-    expect(runtime.started).toBe(true);
+    expect(runtime.prepared).toBe(true);
 
     // --- User turn (sendInput) ---
     await session.sendInput('build the user auth flow', 'im');

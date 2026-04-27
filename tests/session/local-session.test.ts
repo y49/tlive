@@ -40,24 +40,25 @@ describe('LocalSession', () => {
     expect(env.session.kind).toBe('local');
   });
 
-  it('start() marks isReady and fires onSessionIdReady', async () => {
+  it('prepare() marks isReady and fires onSessionIdReady', async () => {
     const heard: string[] = [];
     env.session.onSessionIdReady((id) => heard.push(id));
     expect(env.session.isReady).toBe(false);
-    await env.session.start({});
+    await env.session.prepare({});
     expect(env.session.isReady).toBe(true);
     expect(heard).toEqual([env.session.id]);
   });
 
   it('onSessionIdReady called post-ready fires synchronously', async () => {
-    await env.session.start({});
+    await env.session.prepare({});
     const heard: string[] = [];
     env.session.onSessionIdReady((id) => heard.push(id));
     expect(heard).toEqual([env.session.id]);
   });
 
   it('snapshot() returns SessionInfo with phase-keyed AgentStatus', async () => {
-    await env.session.start({});
+    await env.session.prepare({});
+    env.session.attachSink();
     const info = env.session.snapshot();
     expect(info.kind).toBe('local');
     expect(info.shortAlias).toBe('12345678');
@@ -65,7 +66,8 @@ describe('LocalSession', () => {
   });
 
   it('turn_end folds cost into CostTracker', async () => {
-    await env.session.start({});
+    await env.session.prepare({});
+    env.session.attachSink();
     const e: NotificationEvent = { kind: 'turn_end', turnId: 't1', durationMs: 10, costUsd: 0.05, tokensIn: 100, tokensOut: 50 };
     env.runtime.emitEvent(e);
     expect(env.session.cost.totalCost).toBe(0.05);
@@ -73,7 +75,8 @@ describe('LocalSession', () => {
   });
 
   it('turn_start then turn_end transitions status thinking → idle', async () => {
-    await env.session.start({});
+    await env.session.prepare({});
+    env.session.attachSink();
     env.runtime.emitEvent({ kind: 'turn_start', turnId: 't1', userInputPreview: 'hi', at: 1 });
     expect(env.session.status.phase).toBe('thinking');
     env.runtime.emitEvent({ kind: 'turn_end', turnId: 't1', durationMs: 1, costUsd: 0, tokensIn: 0, tokensOut: 0 });
@@ -81,22 +84,27 @@ describe('LocalSession', () => {
   });
 
   it('assistant_text marks cache warmth', async () => {
-    await env.session.start({});
+    await env.session.prepare({});
+    env.session.attachSink();
     env.runtime.emitEvent({ kind: 'assistant_text', turnId: 't1', text: 'hi', complete: true });
     expect(env.session.cacheWarmth.isWarm()).toBe(true);
   });
 
-  it('subscribeEvents fans out both event and status_change', async () => {
-    const kinds: string[] = [];
-    env.session.subscribeEvents((ev) => kinds.push(ev.kind));
-    await env.session.start({});
+  it('onEvent + onStatusChange fan out both event and status', async () => {
+    const eventKinds: string[] = [];
+    const statusPhases: string[] = [];
+    env.session.onEvent((e) => eventKinds.push(e.kind));
+    env.session.onStatusChange((s) => statusPhases.push(s.phase));
+    await env.session.prepare({});
+    env.session.attachSink();
     env.runtime.emitEvent({ kind: 'heartbeat', elapsedMs: 1 });
-    expect(kinds).toContain('event');
-    expect(kinds).toContain('status_change');
+    expect(eventKinds).toContain('heartbeat');
+    expect(statusPhases.length).toBeGreaterThan(0);
   });
 
   it('interrupt rejects pending permissions and transitions to interrupted', async () => {
-    await env.session.start({});
+    await env.session.prepare({});
+    env.session.attachSink();
     env.runtime.emitPermission({
       id: '12345678-aaaa-bbbb-cccc-dddddddddddd:tu1',
       toolName: 'Bash', toolInput: {}, category: 'exec',
@@ -109,7 +117,8 @@ describe('LocalSession', () => {
 
   it('BudgetGuard fires interrupt + runtime_error when cap exceeded', async () => {
     const { session, runtime } = await setup({ maxBudgetUsd: 0.02 });
-    await session.start({});
+    await session.prepare({});
+    session.attachSink();
     const errors: string[] = [];
     session.onEvent((e) => { if (e.kind === 'runtime_error') errors.push(e.code); });
     runtime.emitEvent({ kind: 'turn_end', turnId: 't1', durationMs: 1, costUsd: 0.03, tokensIn: 1, tokensOut: 1 });
@@ -117,7 +126,7 @@ describe('LocalSession', () => {
     expect(session.status.phase).toBe('errored');
   });
 
-  it('auto-resolved permission (policy match) does NOT emit legacy pending event', async () => {
+  it('auto-resolved permission (policy match) does NOT create a pending broker entry', async () => {
     // Fresh setup so we can install a PolicyStore-backed broker.
     const root = await mkdtemp(join(tmpdir(), 'tlive-local-policy-'));
     try {
@@ -135,12 +144,8 @@ describe('LocalSession', () => {
         provider: 'claude',
       });
       const session = new LocalSession({ ctx, runtime, persistence, broker });
-      await session.start({});
-
-      // Legacy subscriber — should NOT see a 'permission' event when the
-      // broker auto-resolves via the PolicyStore rule above.
-      const legacyKinds: string[] = [];
-      session.subscribe((ev) => legacyKinds.push(ev.kind));
+      await session.prepare({});
+      session.attachSink();
 
       // Runtime emits a matching permission request.
       const resolveSpy = ((): ((d: any) => void) => {
@@ -160,10 +165,6 @@ describe('LocalSession', () => {
       const kinds = brokerEvents.map((e) => e.kind);
       expect(kinds).toEqual(['resolved']);
       expect(brokerEvents[0].autoResolvedBy).toMatch(/^pol-/);
-
-      // LocalSession legacy listener must NOT have seen a 'permission' event —
-      // req.resolve already fired, so emitting pending would be dishonest.
-      expect(legacyKinds).not.toContain('permission');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -175,7 +176,8 @@ describe('LocalSession', () => {
     // LocalSession swallows, so once the awaited interrupt resolves we still
     // need to see phase='errored' (not overwritten with 'interrupted').
     const local = await setup({ maxBudgetUsd: 0.01 });
-    await local.session.start({});
+    await local.session.prepare({});
+    local.session.attachSink();
     local.runtime.emitEvent({
       kind: 'turn_end', turnId: 't1', durationMs: 1,
       costUsd: 0.05, tokensIn: 1, tokensOut: 1,

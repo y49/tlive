@@ -1,11 +1,9 @@
 // src/session/local-session.ts
 //
-// LocalSession — v1.0 daemon-owned session wrapping an AgentRuntime. Extends
-// the previous T1/T2 Session class with the new SessionLike surface
-// (shortAlias, onSessionIdReady broadcast, onStatusChange via the pure
-// `transition()` folder, snapshot() → SessionInfo). Backward-compatible with
-// the v0.x bridge callers: the class is re-exported as `Session` from
-// `session.ts` so existing imports keep working until T8 deletes the bridge.
+// LocalSession — v1.0 daemon-owned session wrapping an AgentRuntime. Exposes
+// the new SessionLike surface (shortAlias, onSessionIdReady broadcast,
+// onStatusChange via the pure `transition()` folder, snapshot() → SessionInfo)
+// and uses the prepare/attachSink lifecycle protocol.
 
 import type {
   AgentRuntime, AgentRuntimeOptions, AgentProvider, PermissionRequest,
@@ -20,23 +18,17 @@ import type { ElicitationBroker } from '../permission/elicitation-broker.js';
 import { CostTracker } from '../cost/tracker.js';
 import type { AgentStatus } from './status.js';
 import { transition } from './status.js';
-import type { SessionInfo, SessionLike, SessionEventListener as SessionLikeListener } from './types.js';
+import type { SessionInfo, SessionLike } from './types.js';
 import { shortId } from '../util/short-id.js';
 import { InputQueue } from './input-queue.js';
 import { CacheWarmth } from './cache-warmth.js';
 import { BudgetGuard } from './budget-guard.js';
 import { CostRollupStore, dateKeyOf } from '../cost/rollups.js';
 
+type LifecyclePhase = 'constructed' | 'prepared' | 'running' | 'terminated';
+
 /** Legacy status used by bridge + v0.x tests. */
 export type SessionStatus = 'starting' | 'active' | 'idle' | 'stopped';
-
-/** Legacy event listener signature (bridge-compatible). */
-export type SessionEventListener = (ev:
-  | { kind: 'event'; event: NotificationEvent }
-  | { kind: 'status'; status: SessionStatus }
-  | { kind: 'permission'; request: PermissionRequest }
-  | { kind: 'usage'; usage: UsageStats }
-) => void;
 
 export interface SessionInit {
   ctx: SessionContext;
@@ -60,10 +52,9 @@ export interface SessionInit {
 
 /**
  * LocalSession — the concrete implementation of SessionLike for the Daemon
- * mode. Keeps the legacy v0.x shape for bridge compatibility (id, context,
- * subscribe(listener), getStatus(), snapshot() → SessionSnapshot) while
- * exposing the new SessionLike API (shortAlias, onEvent/onStatusChange/
- * onSessionIdReady, sessionInfo via snapshotInfo()).
+ * mode. Exposes the new v1.0 API (shortAlias, onEvent/onStatusChange/
+ * onSessionIdReady, snapshot() → SessionInfo) and uses the 4-phase lifecycle
+ * state machine (constructed → prepared → running → terminated).
  *
  * Scope boundary: PermissionBroker shape is unchanged from T1/T2. T4 splits
  * it into category-specific brokers; at that point this class will swap
@@ -90,12 +81,13 @@ export class LocalSession implements SessionLike {
   private readonly elicitationBroker: ElicitationBroker | null;
   private readonly rollupStore: CostRollupStore | null;
   private readonly unsubscribers: Array<() => void> = [];
-  private readonly legacyListeners = new Set<SessionEventListener>();
   private readonly eventListeners = new Set<(e: NotificationEvent) => void>();
   private readonly statusListeners = new Set<(s: AgentStatus) => void>();
   private readonly sessionIdReadyListeners = new Set<(id: string) => void>();
   private readonly budgetGuard: BudgetGuard;
   private detached = false;
+  private phase: LifecyclePhase = 'constructed';
+  get lifecyclePhase(): LifecyclePhase { return this.phase; }
 
   private history: NotificationEvent[] = [];
   private legacyStatus: SessionStatus = 'starting';
@@ -202,13 +194,21 @@ export class LocalSession implements SessionLike {
 
   // ---- Lifecycle ------------------------------------------------------------
 
-  async start(opts: Omit<AgentRuntimeOptions, 'workdir' | 'signal'> = {}): Promise<void> {
-    // TASK1-temp: this is a transitional shape; Task 2 splits start() into prepare()/attachSink()
+  async prepare(opts: Omit<AgentRuntimeOptions, 'workdir' | 'signal'> = {}): Promise<void> {
+    if (this.phase !== 'constructed') throw new Error(`prepare from ${this.phase}`);
     await this.runtime.prepare({
       ...opts,
       workdir: this.ctx.snapshot.workdir,
       signal: this.abortCtrl.signal,
     });
+    this._isReady = true;
+    for (const cb of this.sessionIdReadyListeners) { try { cb(this.id); } catch { /* isolate */ } }
+    this.sessionIdReadyListeners.clear();
+    this.phase = 'prepared';
+  }
+
+  attachSink(): void {
+    if (this.phase !== 'prepared') throw new Error(`attachSink from ${this.phase}`);
     this.runtime.attachSink({
       onEvent: (e) => this.handleEvent(e),
       onUsage: (u) => this.handleUsage(u),
@@ -216,12 +216,10 @@ export class LocalSession implements SessionLike {
       onAskUserQuestion: (r) => this.handleAsk(r),
       onElicitation: (r) => this.handleElicitation(r),
     });
-    this._isReady = true;
-    for (const cb of this.sessionIdReadyListeners) { try { cb(this.id); } catch { /* isolate */ } }
-    this.sessionIdReadyListeners.clear();
     this.setLegacyStatus('active');
     this.setAgentStatus({ phase: 'idle', queuedInputs: this.queue.size() });
-    await this.saveSnapshot();
+    void this.saveSnapshot();
+    this.phase = 'running';
   }
 
   async sendInput(text: string, _source: 'im' | 'cli' = 'cli'): Promise<void> {
@@ -268,6 +266,7 @@ export class LocalSession implements SessionLike {
     this.setLegacyStatus('stopped');
     this.setAgentStatus({ phase: 'stopped' });
     await this.saveSnapshot();
+    this.phase = 'terminated';
   }
 
   /**
@@ -297,6 +296,7 @@ export class LocalSession implements SessionLike {
     // Snapshot is best-effort; detach must not await disk I/O to keep pool
     // transfer cheap. Persistence failures surface via their own logger.
     void this.saveSnapshot().catch(() => undefined);
+    this.phase = 'terminated';
     return this.runtime;
   }
 
@@ -337,21 +337,6 @@ export class LocalSession implements SessionLike {
     await this.runtime.toggleMcpServer(name, enabled);
   }
 
-  // ---- Subscription API -----------------------------------------------------
-
-  /** Legacy combined subscribe — bridge + v0 tests use this. */
-  subscribe(listener: SessionEventListener): () => void {
-    this.legacyListeners.add(listener);
-    return () => this.legacyListeners.delete(listener);
-  }
-
-  /** SessionLike-style unified subscribe — used by T6 IM frontend. */
-  subscribeEvents(listener: SessionLikeListener): () => void {
-    const a = this.onEvent((event) => listener({ kind: 'event', event }));
-    const b = this.onStatusChange((status) => listener({ kind: 'status_change', status }));
-    return () => { a(); b(); };
-  }
-
   // ---- Internal event handling ---------------------------------------------
 
   private handleEvent(event: NotificationEvent): void {
@@ -359,7 +344,6 @@ export class LocalSession implements SessionLike {
     this.history.push(event);
     void this.persistence.appendEvent(this.id, event).catch(() => { /* surface via logger */ });
     this.emitEvent(event);
-    this.emitLegacy({ kind: 'event', event });
 
     // Fold into AgentStatus
     const next = transition(this.agentStatus, event);
@@ -411,8 +395,7 @@ export class LocalSession implements SessionLike {
     // listener sees it — that's deliberate (§5.4 of the spec). In that case
     // broker.issue returns false and we must NOT emit the legacy "pending
     // permission" event, because req.resolve() has already fired.
-    const wasPending = this.broker.issue(this.id, this.workspaceId, req);
-    if (wasPending) this.emitLegacy({ kind: 'permission', request: req });
+    this.broker.issue(this.id, this.workspaceId, req);
   }
 
   private handleAsk(req: AskUserQuestionRequest): void {
@@ -427,7 +410,6 @@ export class LocalSession implements SessionLike {
 
   private handleUsage(u: UsageStats): void {
     this.cost.add(u);
-    this.emitLegacy({ kind: 'usage', usage: u });
     void this.saveSnapshot();
   }
 
@@ -437,7 +419,6 @@ export class LocalSession implements SessionLike {
   private injectEvent(event: NotificationEvent): void {
     this.history.push(event);
     this.emitEvent(event);
-    this.emitLegacy({ kind: 'event', event });
     const next = transition(this.agentStatus, event);
     if (next !== this.agentStatus) this.setAgentStatus(next);
   }
@@ -446,7 +427,6 @@ export class LocalSession implements SessionLike {
     if (this.legacyStatus === s) return;
     if (this.legacyStatus === 'stopped') return;  // terminal
     this.legacyStatus = s;
-    this.emitLegacy({ kind: 'status', status: s });
   }
 
   private setAgentStatus(next: AgentStatus): void {
@@ -459,9 +439,6 @@ export class LocalSession implements SessionLike {
   }
   private emitStatusChange(s: AgentStatus): void {
     for (const l of this.statusListeners) { try { l(s); } catch { /* isolate */ } }
-  }
-  private emitLegacy(ev: Parameters<SessionEventListener>[0]): void {
-    for (const l of this.legacyListeners) { try { l(ev); } catch { /* isolate */ } }
   }
 
   private touch(): void { this.lastActivityAt = Date.now(); }

@@ -26,14 +26,16 @@ describe('Session', () => {
   beforeEach(async () => { env = await setup(); });
   afterEach(async () => { await rm(env.root, { recursive: true, force: true }); });
 
-  it('start() wires listeners, calls runtime.start, and transitions to active', async () => {
-    await env.session.start({});
-    expect(env.runtime.started).toBe(true);
+  it('prepare() + attachSink() wires listeners and transitions to active', async () => {
+    await env.session.prepare({});
+    env.session.attachSink();
+    expect(env.runtime.prepared).toBe(true);
     expect(env.session.getStatus()).toBe('active');
   });
 
   it('events from runtime are appended to history and persisted', async () => {
-    await env.session.start({});
+    await env.session.prepare({});
+    env.session.attachSink();
     const e: NotificationEvent = { kind: 'assistant_text', turnId: 't1', text: 'hi', complete: true };
     env.runtime.emitEvent(e);
     expect(env.session.getHistory()).toEqual([e]);
@@ -43,25 +45,29 @@ describe('Session', () => {
   });
 
   it('session_complete transitions status to idle', async () => {
-    await env.session.start({});
+    await env.session.prepare({});
+    env.session.attachSink();
     env.runtime.emitEvent({ kind: 'session_complete', reason: 'normal', summary: 'done' });
     expect(env.session.getStatus()).toBe('idle');
   });
 
   it('sendInput forwards to runtime', async () => {
-    await env.session.start({});
+    await env.session.prepare({});
+    env.session.attachSink();
     await env.session.sendInput('hello', 'im');
     expect(env.runtime.inputs).toEqual(['hello']);
   });
 
   it('sendInput throws after stop', async () => {
-    await env.session.start({});
+    await env.session.prepare({});
+    env.session.attachSink();
     await env.session.stop();
     await expect(env.session.sendInput('x', 'im')).rejects.toThrow(/stopped/);
   });
 
   it('handlePermission preserves the runtime-provided id verbatim', async () => {
-    await env.session.start({});
+    await env.session.prepare({});
+    env.session.attachSink();
     env.runtime.emitPermission({
       id: 's1:tu1:inner:42', toolName: 'Bash', toolInput: {},
       category: 'exec', resolve: vi.fn(),
@@ -73,7 +79,8 @@ describe('Session', () => {
   });
 
   it('setStatus guard: session_complete after stop does not flip status back to idle', async () => {
-    await env.session.start({});
+    await env.session.prepare({});
+    env.session.attachSink();
     await env.session.stop();
     // Simulate a late runtime event (unsubscribe should already block this in
     // practice; the guard is belt-and-suspenders for real SDK teardown races).
@@ -82,7 +89,8 @@ describe('Session', () => {
   });
 
   it('stop() aborts, unsubscribes, denies pending permissions, stops runtime', async () => {
-    await env.session.start({});
+    await env.session.prepare({});
+    env.session.attachSink();
     env.runtime.emitPermission({
       id: 's1:tu1', toolName: 'Bash', toolInput: {},
       category: 'exec', resolve: vi.fn(),
@@ -94,7 +102,8 @@ describe('Session', () => {
   });
 
   it('snapshot reflects status, cost, and pending permissions', async () => {
-    await env.session.start({});
+    await env.session.prepare({});
+    env.session.attachSink();
     env.runtime.emitUsage({ inputTokens: 10, outputTokens: 5, costUsd: 0.01 });
     // New v1.0 snapshot() returns SessionInfo with AgentStatus (phase-keyed);
     // legacy SessionSnapshot shape is available via snapshotLegacy().
@@ -106,14 +115,13 @@ describe('Session', () => {
     expect(legacy.pendingPermissionIds).toEqual([]);
   });
 
-  it('subscribe receives event / status / permission / usage', async () => {
+  it('onEvent receives events from runtime', async () => {
     const log: string[] = [];
-    env.session.subscribe((ev) => log.push(ev.kind));
-    await env.session.start({});
+    env.session.onEvent((e) => log.push(e.kind));
+    await env.session.prepare({});
+    env.session.attachSink();
     env.runtime.emitEvent({ kind: 'heartbeat', elapsedMs: 5 });
     env.runtime.emitUsage({ inputTokens: 1, outputTokens: 1, costUsd: 0 });
-    expect(log).toContain('status');
-    expect(log).toContain('event');
-    expect(log).toContain('usage');
+    expect(log).toContain('heartbeat');
   });
 });

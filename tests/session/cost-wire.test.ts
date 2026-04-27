@@ -48,7 +48,7 @@ describe('LocalSession -> CostRollupStore', () => {
   it('turn_end appends a RollupDelta with matching fields', async () => {
     const store = new RecordingRollupStore();
     env = await setup({ rollupStore: store });
-    await env.session.start({});
+    await env.session.prepare({}); env.session.attachSink();
     env.runtime.emitEvent({
       kind: 'turn_end', turnId: 't1', durationMs: 10,
       costUsd: 0.12, tokensIn: 500, tokensOut: 200,
@@ -69,7 +69,7 @@ describe('LocalSession -> CostRollupStore', () => {
 
   it('no-ops silently when rollupStore is undefined', async () => {
     env = await setup();
-    await env.session.start({});
+    await env.session.prepare({}); env.session.attachSink();
     // Must not throw.
     env.runtime.emitEvent({
       kind: 'turn_end', turnId: 't1', durationMs: 10,
@@ -85,7 +85,7 @@ describe('LocalSession -> CostRollupStore', () => {
     }
     const store = new FlakyStore();
     env = await setup({ rollupStore: store });
-    await env.session.start({});
+    await env.session.prepare({}); env.session.attachSink();
     // Emitting the event must not throw synchronously, and the cost tracker
     // still folds the event.
     expect(() => env.runtime.emitEvent({

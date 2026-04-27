@@ -101,8 +101,8 @@ describe('integration: scheduled-tasks', () => {
     const tickPromise = engine.tick(targetMs);
 
     // Wait until cron has created the session and subscribed to its events.
-    // The sequence is: factory -> session.start() -> emit('created') ->
-    // cron subscribes session.onEvent. By polling on createdSessionIds we
+    // The sequence is: factory -> prepare() -> emit('created') -> attachSink()
+    // -> cron subscribes session.onEvent. By polling on createdSessionIds we
     // know the emit fired, and cron subscribes synchronously right after.
     const deadline = Date.now() + 2000;
     while (createdSessionIds.length === 0 && Date.now() < deadline) {
