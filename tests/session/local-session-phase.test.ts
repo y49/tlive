@@ -12,8 +12,9 @@ import { PermissionBroker } from '../../src/permission/broker.js';
 import { FakeRuntime } from './fake-runtime.js';
 
 let root: string;
+let session: LocalSession | null = null;
 
-async function newSession() {
+async function newSession(): Promise<LocalSession> {
   const ctx = SessionContext.create({
     sessionId: 'sess-ph-1', workdir: '/tmp', workspaceId: 'ws-1', workspaceName: 'ws',
     provider: 'claude',
@@ -22,13 +23,29 @@ async function newSession() {
   const persistence = new SessionPersistence(root);
   await persistence.init();
   const broker = new PermissionBroker();
-  return new LocalSession({ ctx, runtime, persistence, broker });
+  const s = new LocalSession({ ctx, runtime, persistence, broker });
+  session = s;
+  return s;
 }
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'tlive-phase-'));
+  session = null;
 });
 afterEach(async () => {
+  // Drain any in-flight trackedSave from attachSink before nuking root.
+  // stop() awaits pendingSaves; flushPendingPersistence() is safe for all
+  // phases (including 'constructed'/'prepared' where no save was fired).
+  if (session) {
+    const phase = session.lifecyclePhase;
+    if (phase === 'running') {
+      await session.stop().catch(() => undefined);
+    } else if (phase !== 'terminated') {
+      // 'constructed' or 'prepared': no trackedSave fired yet, but call
+      // flush defensively so any future-phase changes stay race-free.
+      await session.flushPendingPersistence().catch(() => undefined);
+    }
+  }
   await rm(root, { recursive: true, force: true });
 });
 
