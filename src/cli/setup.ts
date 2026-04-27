@@ -68,6 +68,18 @@ function nowId(prefix: string): string {
   return `${prefix}-${randomBytes(4).toString('hex')}`;
 }
 
+/**
+ * Derive a default admin user id from a Telegram chatId.
+ * Telegram uses positive ids for DMs (chat.id == user.id) and negative
+ * ids for groups/channels — only the DM case is auto-derivable.
+ */
+export function deriveAdminUserIdFromChatId(chatId: string | undefined): string | undefined {
+  if (!chatId) return undefined;
+  const n = Number(chatId);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return String(Math.trunc(n));
+}
+
 async function runMigrationIfNeeded(io: Io, home: string): Promise<{ migrated: boolean }> {
   const envPath = join(home, 'config.env');
   const jsonPath = join(home, 'config.json');
@@ -134,13 +146,24 @@ async function gatherPlatform(
   io: Io,
   kind: 'telegram' | 'discord' | 'feishu',
   current: TliveConfigV1['channels'] | undefined,
+  workspace: WorkspaceConfigEntry | undefined,
 ): Promise<TliveConfigV1['channels']> {
   const next: TliveConfigV1['channels'] = { ...(current ?? {}) };
   if (!io.tty) return next;
   switch (kind) {
     case 'telegram': {
       const token = await askWithDefault(io, '  Telegram bot token', current?.telegram?.token);
-      if (token) next.telegram = { token, chatId: current?.telegram?.chatId };
+      if (!token) break;
+      const chatId = await askWithDefault(io, '  Default chat id (your DM with the bot, or a group id)', current?.telegram?.chatId);
+      next.telegram = { token, chatId: chatId || undefined };
+      if (workspace) {
+        const derived = deriveAdminUserIdFromChatId(chatId);
+        const prompt = derived
+          ? `  Your Telegram user id (admin)`
+          : `  Your Telegram user id (admin) — required for group chats`;
+        const adminUserId = await askWithDefault(io, prompt, workspace.adminUserId ?? derived);
+        if (adminUserId) workspace.adminUserId = adminUserId;
+      }
       break;
     }
     case 'discord': {
@@ -219,10 +242,13 @@ export async function setupCommand(argv: string[] = []): Promise<void> {
       const order: Array<'telegram' | 'discord' | 'feishu'> = pickPlatform
         ? [pickPlatform as 'telegram' | 'discord' | 'feishu']
         : ['telegram', 'discord', 'feishu'];
+      const wsBeingConfigured = config.workspaces.find((w) => w.id === ws.id) ?? ws;
       for (const p of order) {
         io.out(`\n${p}:\n`);
-        config.channels = await gatherPlatform(io, p, config.channels);
+        config.channels = await gatherPlatform(io, p, config.channels, wsBeingConfigured);
       }
+      // Re-upsert in case the wizard mutated wsBeingConfigured.adminUserId in-place.
+      config = upsertWorkspace(config, wsBeingConfigured);
     } else {
       io.out('\n(non-interactive stdin — platform credentials left unchanged)\n');
     }

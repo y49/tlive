@@ -44,6 +44,7 @@ import { loadConfig, type LoadConfigResult } from '../config/loader.js';
 import type { TliveConfigV1 } from '../config/schema.js';
 
 import { WorkspaceManager } from '../workspace/manager.js';
+import { autoBindFromConfig } from '../workspace/auto-bind.js';
 import { SessionManager } from '../session/manager.js';
 import { SessionPersistence } from '../session/persistence.js';
 import { WarmRuntimePool } from '../session/warm-pool.js';
@@ -198,6 +199,25 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
       for (const [uid, role] of Object.entries(w.roles)) workspaces.setRole(created.id, uid, role);
     }
   }
+  // Claim admin from config-declared adminUserId. Idempotent — only fires
+  // when no admin role is currently assigned on the workspace.
+  for (const w of cfg.workspaces) {
+    const target = (w.id ? workspaces.get(w.id) : undefined)
+      ?? workspaces.findByWorkdir(w.workdir);
+    if (!target || !w.adminUserId) continue;
+    try {
+      const claimed = workspaces.claimAdmin(target.id, w.adminUserId);
+      if (claimed) logger.info('claimed admin from config', {
+        workspaceId: target.id, workspaceName: target.name, userId: w.adminUserId,
+      });
+    } catch (err) {
+      logger.warn('claimAdmin failed', { workspaceName: w.name, reason: (err as Error).message });
+    }
+  }
+
+  // Auto-bind chats declared in config.channels.<platform>.chatId.
+  autoBindFromConfig(workspaces, cfg, logger);
+
   await workspaces.save().catch(() => undefined);
 
   // --- Persistence + cost rollups ---------------------------------------
