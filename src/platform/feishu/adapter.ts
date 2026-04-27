@@ -221,19 +221,21 @@ export class FeishuAdapter implements PlatformAdapter {
   // ---- Internals ----------------------------------------------------------
 
   private parseMessageEvent(payload: unknown): InboundEvent | null {
+    // EventDispatcher.invoke calls RequestHandle.parse on the wire data
+    // BEFORE handing to our handler, which flattens v2 payloads
+    // (`{ ...rest, ...header, ...event }`). So `message` and `sender` are
+    // at the TOP level of `payload`, not under `payload.event`.
     const p = payload as {
-      event?: {
-        message?: {
-          message_id?: string;
-          chat_id?: string;
-          msg_type?: string;
-          content?: string;
-          parent_id?: string;
-        };
-        sender?: { sender_id?: { open_id?: string; user_id?: string }; sender_type?: string };
+      message?: {
+        message_id?: string;
+        chat_id?: string;
+        msg_type?: string;
+        content?: string;
+        parent_id?: string;
       };
+      sender?: { sender_id?: { open_id?: string; user_id?: string }; sender_type?: string };
     };
-    const msg = p.event?.message;
+    const msg = p.message;
     if (!msg) return null;
     let text: string | undefined;
     if (msg.content) {
@@ -243,7 +245,7 @@ export class FeishuAdapter implements PlatformAdapter {
       channelType: 'feishu',
       chatId: msg.chat_id ?? '',
       messageId: msg.message_id ?? '',
-      userId: p.event?.sender?.sender_id?.open_id ?? p.event?.sender?.sender_id?.user_id ?? '',
+      userId: p.sender?.sender_id?.open_id ?? p.sender?.sender_id?.user_id ?? '',
       text,
       replyToMessageId: msg.parent_id,
       kind: 'message',

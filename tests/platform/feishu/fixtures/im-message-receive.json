@@ -1,0 +1,20 @@
+{
+  "event_id": "evt-123",
+  "event_type": "im.message.receive_v1",
+  "create_time": "1730000000000",
+  "token": "v",
+  "app_id": "cli_x",
+  "tenant_key": "t",
+  "message": {
+    "message_id": "om_msg_1",
+    "chat_id": "oc_chat_1",
+    "msg_type": "text",
+    "content": "{\"text\":\"hello\"}",
+    "parent_id": "om_parent_1",
+    "create_time": "1730000000000"
+  },
+  "sender": {
+    "sender_id": { "open_id": "ou_sender_1", "user_id": "user_a" },
+    "sender_type": "user"
+  }
+}

@@ -36,11 +36,11 @@ describe('FeishuAdapter', () => {
     const adapter = new FeishuAdapter({ appId: 'a', appSecret: 's', client: mkLarkClient() });
     const received: unknown[] = [];
     adapter.onInbound((ev) => received.push(ev));
+    // SDK's RequestHandle.parse() flattens v2 events: `{ ...rest, ...header, ...event }`.
+    // So `message` and `sender` arrive at the TOP level, not under `.event`.
     adapter.handleInboundMessage({
-      event: {
-        message: { message_id: 'mm', chat_id: 'cc', content: JSON.stringify({ text: 'hi' }) },
-        sender: { sender_id: { open_id: 'u1' } },
-      },
+      message: { message_id: 'mm', chat_id: 'cc', content: JSON.stringify({ text: 'hi' }) },
+      sender: { sender_id: { open_id: 'u1' } },
     });
     expect(received).toHaveLength(1);
     expect((received[0] as { text: string }).text).toBe('hi');
