@@ -205,6 +205,25 @@ export class WorkspaceManager {
     return ws.roles[userId] ?? ws.defaultRole;
   }
 
+  /**
+   * Promote `userId` to admin role on the workspace, but only if no admin
+   * exists yet. Idempotent. Returns true when the role was actually set,
+   * false when an admin (any user, including this one already) was present.
+   *
+   * Used by bootstrap to convert config-declared `adminUserId` into a real
+   * role assignment without trampling existing admin assignments persisted
+   * in workspaces.json.
+   */
+  claimAdmin(workspaceId: string, userId: string): boolean {
+    const ws = this.byId.get(workspaceId);
+    if (!ws) throw new Error(`claimAdmin: workspace ${workspaceId} not found`);
+    for (const role of Object.values(ws.roles)) {
+      if (role === 'admin') return false;
+    }
+    ws.roles[userId] = 'admin';
+    return true;
+  }
+
   // ---- lazyResumeOrCreate (spec §6.1) --------------------------------------
 
   /**

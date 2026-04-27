@@ -153,3 +153,35 @@ describe('WorkspaceManager.lazyResumeOrCreate', () => {
     await expect(wm.lazyResumeOrCreate('missing', 'x', 'im', deps)).rejects.toThrow(/not found/);
   });
 });
+
+describe('WorkspaceManager.claimAdmin', () => {
+  it('returns true and sets admin role when no admin exists', () => {
+    const wm = new WorkspaceManager();
+    const ws = wm.create({ name: 'x', workdir: '/x' });
+    const claimed = wm.claimAdmin(ws.id, 'user-42');
+    expect(claimed).toBe(true);
+    expect(wm.getRole(ws.id, 'user-42')).toBe('admin');
+  });
+
+  it('returns false and does not change roles when an admin already exists', () => {
+    const wm = new WorkspaceManager();
+    const ws = wm.create({ name: 'x', workdir: '/x' });
+    wm.setRole(ws.id, 'first-admin', 'admin');
+    const claimed = wm.claimAdmin(ws.id, 'user-42');
+    expect(claimed).toBe(false);
+    expect(wm.getRole(ws.id, 'first-admin')).toBe('admin');
+    expect(wm.getRole(ws.id, 'user-42')).toBe('observer');
+  });
+
+  it('is idempotent for the same userId already admin', () => {
+    const wm = new WorkspaceManager();
+    const ws = wm.create({ name: 'x', workdir: '/x' });
+    expect(wm.claimAdmin(ws.id, 'user-42')).toBe(true);
+    expect(wm.claimAdmin(ws.id, 'user-42')).toBe(false);
+  });
+
+  it('throws on non-existent workspace', () => {
+    const wm = new WorkspaceManager();
+    expect(() => wm.claimAdmin('nope', 'user-42')).toThrow(/not found/);
+  });
+});

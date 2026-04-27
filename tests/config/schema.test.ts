@@ -87,3 +87,32 @@ describe('parseConfig', () => {
     expect(() => assertConfig({ workspaces: [] })).toThrow(/version/);
   });
 });
+
+describe('parseConfig adminUserId', () => {
+  it('accepts adminUserId as optional string on workspaces[]', () => {
+    const r = parseConfig({
+      version: '1',
+      workspaces: [{ name: 'w', workdir: '/tmp/w', adminUserId: '12345' }],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.workspaces[0].adminUserId).toBe('12345');
+  });
+
+  it('treats omitted adminUserId as undefined', () => {
+    const r = parseConfig({
+      version: '1',
+      workspaces: [{ name: 'w', workdir: '/tmp/w' }],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.workspaces[0].adminUserId).toBeUndefined();
+  });
+
+  it('rejects non-string adminUserId', () => {
+    const r = parseConfig({
+      version: '1',
+      workspaces: [{ name: 'w', workdir: '/tmp/w', adminUserId: 12345 }],
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.issues.some((i) => i.path === 'workspaces[0].adminUserId')).toBe(true);
+  });
+});

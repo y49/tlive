@@ -44,6 +44,8 @@ export interface WorkspaceConfigEntry {
   name: string;
   workdir: string;
   gitRemote?: string;
+  /** IM user id allowed to claim admin role on first daemon boot. */
+  adminUserId?: string;
   defaults?: {
     provider?: AgentProvider;
     model?: string;
@@ -283,6 +285,13 @@ export function parseConfig(raw: unknown): ParseResult<TliveConfigV1> {
         if (b.monthlyUsd !== undefined) {
           if (typeof b.monthlyUsd !== 'number') issues.push({ path: `${path}.budget.monthlyUsd`, message: 'must be number' });
           else entry.budget.monthlyUsd = b.monthlyUsd;
+        }
+      }
+      if (w.adminUserId !== undefined) {
+        if (typeof w.adminUserId !== 'string' || w.adminUserId.length === 0) {
+          issues.push({ path: `${path}.adminUserId`, message: 'must be non-empty string' });
+        } else {
+          entry.adminUserId = w.adminUserId;
         }
       }
       if (isObject(w.roles)) {
