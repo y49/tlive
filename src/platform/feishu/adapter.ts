@@ -16,16 +16,24 @@ import type { ChannelType } from '../../workspace/bindings.js';
 import { buildInlineCard } from './renderer.js';
 import { buildFormCard } from './form.js';
 import { sendFeishuAttachment, downloadFeishuAttachment } from './attachment.js';
+import { Client as LarkClient, WSClient, EventDispatcher, Domain } from '@larksuiteoapi/node-sdk';
+import type { Logger } from '../../util/logger.js';
+import { larkLoggerAdapter } from './lark-logger.js';
 
 export interface FeishuAdapterOptions {
   appId: string;
   appSecret: string;
-  /** Inject a pre-built lark Client for tests. */
+  /** International edition. Default false → uses Domain.Feishu (China). */
+  lark?: boolean;
+  /** Daemon logger. WSClient log lines are routed to this. */
+  logger?: Logger;
+  /** Test-only: pre-built lark Client. Skips internal Client construction. */
   client?: unknown;
   /**
-   * Optional callback invoked to register event handlers. When omitted, the
-   * adapter expects callers to wire events via `handleInboundMessage` /
-   * `handleCardAction`, e.g. from an Express webhook.
+   * Test-only callback invoked to register event handlers. When provided,
+   * the adapter does NOT construct WSClient/EventDispatcher and start()
+   * /stop() become no-ops (caller manages lifecycle). When omitted (the
+   * production path), the adapter constructs and owns both.
    */
   bindEventDispatcher?: (handlers: {
     onMessage: (payload: unknown) => void;
@@ -36,26 +44,72 @@ export interface FeishuAdapterOptions {
 export class FeishuAdapter implements PlatformAdapter {
   readonly channelType: ChannelType = 'feishu';
   private readonly client: unknown;
-  private readonly inboundListeners = new Set<(ev: InboundEvent) => void>();
+  private readonly wsClient: { start(p: { eventDispatcher: unknown }): Promise<void>; close(p?: { force?: boolean }): void } | null;
+  private readonly eventDispatcher: unknown | null;
   private readonly options: FeishuAdapterOptions;
+  private readonly inboundListeners = new Set<(ev: InboundEvent) => void>();
+  private connected = false;
 
   constructor(options: FeishuAdapterOptions) {
     this.options = options;
-    this.client = options.client ?? null;
-    options.bindEventDispatcher?.({
-      onMessage: (payload) => this.handleInboundMessage(payload),
-      onCardAction: (payload) => this.handleCardAction(payload),
-    });
+
+    // ---- Client (outbound REST) ----
+    if (options.client !== undefined) {
+      this.client = options.client;
+    } else {
+      const domain = options.lark ? Domain.Lark : Domain.Feishu;
+      this.client = new LarkClient({ appId: options.appId, appSecret: options.appSecret, domain });
+    }
+
+    // ---- Inbound dispatcher ----
+    if (options.bindEventDispatcher) {
+      // Test-injected: caller wires handlers via the callback; we do not own
+      // a WSClient.
+      this.wsClient = null;
+      this.eventDispatcher = null;
+      options.bindEventDispatcher({
+        onMessage: (payload) => this.handleInboundMessage(payload),
+        onCardAction: (payload) => this.handleCardAction(payload),
+      });
+    } else {
+      const lg = options.logger ? larkLoggerAdapter(options.logger) : undefined;
+      const dispatcher = new EventDispatcher({ logger: lg });
+      dispatcher.register({
+        'im.message.receive_v1': (payload: unknown) => this.handleInboundMessage(payload),
+        'card.action.trigger':   (payload: unknown) => this.handleCardAction(payload),
+      });
+      this.eventDispatcher = dispatcher;
+      this.wsClient = new WSClient({
+        appId: options.appId,
+        appSecret: options.appSecret,
+        domain: options.lark ? Domain.Lark : Domain.Feishu,
+        autoReconnect: true,
+        logger: lg,
+      }) as never;
+    }
   }
 
   async start(): Promise<void> {
-    // With WSClient integrations the user is expected to have started the
-    // connection before passing the client in; webhook adapters don't need
-    // explicit start.
+    if (!this.wsClient) return;
+    await this.wsClient.start({ eventDispatcher: this.eventDispatcher });
+    this.connected = true;
   }
 
   async stop(): Promise<void> {
-    // Mirror start(). Concrete WSClient stop is caller-owned.
+    if (!this.wsClient) return;
+    this.wsClient.close();
+    this.connected = false;
+  }
+
+  /**
+   * Returns:
+   *   true  — adapter owns a WSClient and start() succeeded
+   *   false — adapter owns a WSClient and start() not yet called or stop() ran
+   *   null  — caller-injected lifecycle (test mode); state unknown to adapter
+   */
+  isConnected(): boolean | null {
+    if (!this.wsClient) return null;
+    return this.connected;
   }
 
   async send(msg: OutboundMessage): Promise<string> {

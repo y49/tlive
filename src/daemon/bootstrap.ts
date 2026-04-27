@@ -152,7 +152,12 @@ export const defaultAdapterFactory: AdapterFactory = (channelType, cfg, logger) 
       return new DiscordAdapter({ token: ch.discord.token });
     }
     if (channelType === 'feishu' && ch.feishu) {
-      return new FeishuAdapter({ appId: ch.feishu.appId, appSecret: ch.feishu.appSecret });
+      return new FeishuAdapter({
+        appId: ch.feishu.appId,
+        appSecret: ch.feishu.appSecret,
+        lark: ch.feishu.lark === true,
+        logger,
+      });
     }
   } catch (err) {
     logger.warn('adapter construction failed', { channelType, reason: (err as Error).message });

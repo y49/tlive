@@ -76,6 +76,8 @@ export interface DiscordChannelConfig {
 export interface FeishuChannelConfig {
   appId: string;
   appSecret: string;
+  /** International edition. Default false → uses Domain.Feishu (China). */
+  lark?: boolean;
 }
 
 export interface PermissionsConfig {
@@ -344,7 +346,15 @@ export function parseConfig(raw: unknown): ParseResult<TliveConfigV1> {
         if (!isObject(c.feishu) || typeof c.feishu.appId !== 'string' || typeof c.feishu.appSecret !== 'string') {
           issues.push({ path: 'channels.feishu', message: 'requires appId + appSecret strings' });
         } else {
-          out.channels.feishu = { appId: c.feishu.appId, appSecret: c.feishu.appSecret };
+          const fe: FeishuChannelConfig = { appId: c.feishu.appId, appSecret: c.feishu.appSecret };
+          if (c.feishu.lark !== undefined) {
+            if (typeof c.feishu.lark !== 'boolean') {
+              issues.push({ path: 'channels.feishu.lark', message: 'must be boolean' });
+            } else {
+              fe.lark = c.feishu.lark;
+            }
+          }
+          out.channels.feishu = fe;
         }
       }
     }

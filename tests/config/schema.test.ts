@@ -116,3 +116,35 @@ describe('parseConfig adminUserId', () => {
     if (!r.ok) expect(r.issues.some((i) => i.path === 'workspaces[0].adminUserId')).toBe(true);
   });
 });
+
+describe('parseConfig channels.feishu.lark', () => {
+  it('accepts lark as boolean', () => {
+    const r = parseConfig({
+      version: '1',
+      workspaces: [{ name: 'w', workdir: '/tmp/w' }],
+      channels: { feishu: { appId: 'cli_x', appSecret: 's', lark: true } },
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.channels?.feishu?.lark).toBe(true);
+  });
+
+  it('treats omitted lark as undefined (defaults to China endpoint downstream)', () => {
+    const r = parseConfig({
+      version: '1',
+      workspaces: [{ name: 'w', workdir: '/tmp/w' }],
+      channels: { feishu: { appId: 'cli_x', appSecret: 's' } },
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.channels?.feishu?.lark).toBeUndefined();
+  });
+
+  it('rejects non-boolean lark', () => {
+    const r = parseConfig({
+      version: '1',
+      workspaces: [{ name: 'w', workdir: '/tmp/w' }],
+      channels: { feishu: { appId: 'cli_x', appSecret: 's', lark: 'true' } },
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.issues.some((i) => i.path === 'channels.feishu.lark')).toBe(true);
+  });
+});
