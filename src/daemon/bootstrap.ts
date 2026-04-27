@@ -436,6 +436,7 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
     rollups,
     startedAt: Date.now(),
     warmPool,
+    adapters,
     requestDaemonShutdown: () => { void lifecycle.shutdown(); },
   });
   const ipc = opts.startIpc === false ? null : await startIpcServer({

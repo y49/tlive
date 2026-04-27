@@ -54,7 +54,14 @@ export interface DoctorFinding {
 }
 
 export type IpcResponse =
-  | { kind: 'daemon.status'; uptimeMs: number; sessionCount: number; warmPoolCount: number; pid: number }
+  | {
+      kind: 'daemon.status';
+      uptimeMs: number;
+      sessionCount: number;
+      warmPoolCount: number;
+      pid: number;
+      adapters?: Partial<Record<'telegram' | 'discord' | 'feishu', 'connected' | 'idle' | 'failed'>>;
+    }
   | { kind: 'daemon.stopped' }
   | { kind: 'session.list'; sessions: SessionListEntry[] }
   | { kind: 'session.stopped'; sdkSessionId: string }

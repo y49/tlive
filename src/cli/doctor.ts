@@ -44,7 +44,7 @@ function glyph(level: Level): string {
   }
 }
 
-async function checkDaemon(findings: Finding[]): Promise<void> {
+async function checkDaemon(findings: Finding[]): Promise<AdapterStatus | undefined> {
   const sockPath = getSocketPath();
   if (!existsSync(sockPath)) {
     findings.push({
@@ -53,13 +53,13 @@ async function checkDaemon(findings: Finding[]): Promise<void> {
       message: 'not running',
       hint: 'Run: tlive start',
     });
-    return;
+    return undefined;
   }
   try {
     const resp = await request({ kind: 'daemon.status' }, { timeoutMs: 3000 });
     if (resp.kind !== 'daemon.status') {
       findings.push({ section: 'daemon', level: 'fail', message: `unexpected response: ${resp.kind}` });
-      return;
+      return undefined;
     }
     const uptimeS = Math.round(resp.uptimeMs / 1000);
     findings.push({
@@ -77,6 +77,7 @@ async function checkDaemon(findings: Finding[]): Promise<void> {
       level: 'ok',
       message: `${resp.warmPoolCount} parked runtime(s)`,
     });
+    return resp.adapters;
   } catch (err) {
     findings.push({
       section: 'daemon',
@@ -84,6 +85,7 @@ async function checkDaemon(findings: Finding[]): Promise<void> {
       message: `unreachable via IPC (${(err as Error).message})`,
       hint: 'Try: tlive stop && tlive start',
     });
+    return undefined;
   }
 }
 
@@ -184,7 +186,13 @@ export function checkEnvKeys(findings: Finding[], opts: CheckEnvKeysOptions = {}
   }
 }
 
-function checkPlatforms(findings: Finding[], parsed: ReturnType<typeof parseConfig>): void {
+type AdapterStatus = Partial<Record<'telegram' | 'discord' | 'feishu', 'connected' | 'idle' | 'failed'>>;
+
+export function checkPlatforms(
+  findings: Finding[],
+  parsed: ReturnType<typeof parseConfig>,
+  adapterStatus?: AdapterStatus,
+): void {
   if (!parsed.ok) return;
   const c = parsed.value.channels ?? {};
   const any = c.telegram || c.discord || c.feishu;
@@ -192,32 +200,53 @@ function checkPlatforms(findings: Finding[], parsed: ReturnType<typeof parseConf
     findings.push({
       section: 'platforms',
       level: 'warn',
-      message: 'no IM platform configured',
-      hint: 'Run: tlive setup to add Telegram / Discord / Feishu tokens',
+      message: 'no IM platforms configured',
+      hint: 'Run: tlive setup to add Telegram / Discord / Feishu',
     });
     return;
   }
-  if (c.telegram) {
-    findings.push({
-      section: 'telegram',
-      level: c.telegram.token ? 'ok' : 'fail',
-      message: c.telegram.token ? 'token configured' : 'token missing',
-    });
-  }
-  if (c.discord) {
-    findings.push({
-      section: 'discord',
-      level: c.discord.token ? 'ok' : 'fail',
-      message: c.discord.token ? 'token configured' : 'token missing',
-    });
-  }
-  if (c.feishu) {
-    findings.push({
-      section: 'feishu',
-      level: (c.feishu.appId && c.feishu.appSecret) ? 'ok' : 'fail',
-      message: (c.feishu.appId && c.feishu.appSecret) ? 'appId + appSecret configured' : 'appId / appSecret incomplete',
-      hint: (!c.feishu.appId || !c.feishu.appSecret) ? 'Run: tlive setup to reconfigure Feishu' : undefined,
-    });
+
+  const platforms: Array<['telegram' | 'discord' | 'feishu', boolean, string]> = [
+    ['telegram', !!c.telegram, c.telegram ? 'token configured' : ''],
+    ['discord',  !!c.discord,  c.discord  ? 'token configured' : ''],
+    ['feishu',   !!c.feishu,   c.feishu   ? 'appId + appSecret configured' : ''],
+  ];
+
+  for (const [name, configured, baseMsg] of platforms) {
+    if (!configured) continue;
+
+    if (adapterStatus === undefined) {
+      // No adapter info available (e.g., daemon not running, doctor still
+      // wants to check config-only). Preserve legacy behavior.
+      findings.push({ section: name, level: 'ok', message: baseMsg });
+      continue;
+    }
+
+    const state = adapterStatus[name];
+    if (state === 'connected') {
+      findings.push({ section: name, level: 'ok', message: `WSClient connected (${baseMsg})` });
+    } else if (state === 'idle') {
+      findings.push({
+        section: name,
+        level: 'warn',
+        message: `${baseMsg}, but adapter not connected`,
+        hint: `Check tlive daemon-logs for ${name}/ws connection errors`,
+      });
+    } else if (state === 'failed') {
+      findings.push({
+        section: name,
+        level: 'fail',
+        message: `${baseMsg}, but adapter init failed`,
+        hint: 'See tlive daemon-logs for stack trace',
+      });
+    } else {
+      findings.push({
+        section: name,
+        level: 'warn',
+        message: `${baseMsg}, but ${name} not in adapter set (daemon may not have started this adapter)`,
+        hint: 'Check tlive daemon-logs',
+      });
+    }
   }
 }
 
@@ -383,11 +412,11 @@ export async function doctorCommand(): Promise<number> {
   const home = join(homedir(), '.tlive');
   const findings: Finding[] = [];
 
-  await checkDaemon(findings);
+  const adapterStatus = await checkDaemon(findings);
   const configResult = await checkConfig(findings, home);
   const parsed = configResult?.raw ? parseConfig(configResult.raw) : undefined;
   checkEnvKeys(findings);
-  if (parsed) checkPlatforms(findings, parsed);
+  if (parsed) checkPlatforms(findings, parsed, adapterStatus);
   await checkJsonlDirs(findings);
   await checkDisk(findings, home);
   await checkMcpRegistry(findings, home);

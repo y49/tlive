@@ -148,6 +148,11 @@ Secure the file:
 chmod 600 ~/.tlive/config.json
 ```
 
+> **Note:** `allowedUsers` and `topicPerSession` are accepted in the
+> documentation block above for forward-compatibility, but as of v1.0
+> only `appId`, `appSecret`, and `lark` are read by the daemon. Use
+> `lark: true` for the international Lark edition (open.larksuite.com).
+
 ## Step 7 — Start + verify
 
 ```bash

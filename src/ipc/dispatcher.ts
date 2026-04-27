@@ -25,6 +25,8 @@ import type { WorkspaceManager } from '../workspace/manager.js';
 import type { SessionPersistence } from '../session/persistence.js';
 import type { CostRollupStore } from '../cost/rollups.js';
 import type { WarmRuntimePool } from '../session/warm-pool.js';
+import type { PlatformAdapter } from '../platform/types.js';
+import type { ChannelType } from '../workspace/bindings.js';
 
 export interface IpcDispatcherDeps {
   sessions: SessionManager;
@@ -32,6 +34,7 @@ export interface IpcDispatcherDeps {
   persistence: SessionPersistence;
   rollups?: CostRollupStore;
   warmPool?: WarmRuntimePool;
+  adapters?: Partial<Record<ChannelType, PlatformAdapter>>;
   startedAt: number;
   requestDaemonShutdown: () => void;
 }
@@ -45,12 +48,25 @@ export function buildIpcDispatcher(deps: IpcDispatcherDeps): IpcServerHandler {
     try {
       switch (req.kind) {
         case 'daemon.status': {
+          let adapters: Partial<Record<ChannelType, 'connected' | 'idle' | 'failed'>> | undefined;
+          if (deps.adapters) {
+            adapters = {};
+            for (const [ct, a] of Object.entries(deps.adapters)) {
+              if (!a) continue;
+              // PlatformAdapter is allowed to expose isConnected(); treat absence as
+              // "connected" (the adapter is in our table, so it was started successfully).
+              const ic = (a as PlatformAdapter & { isConnected?: () => boolean | null }).isConnected;
+              const state = ic ? ic.call(a) : null;
+              adapters[ct as ChannelType] = state === false ? 'idle' : 'connected';
+            }
+          }
           reply({
             kind: 'daemon.status',
             uptimeMs: Date.now() - deps.startedAt,
             sessionCount: deps.sessions.listInfo().length,
             warmPoolCount: deps.warmPool?.size() ?? 0,
             pid: process.pid,
+            ...(adapters ? { adapters } : {}),
           });
           return;
         }

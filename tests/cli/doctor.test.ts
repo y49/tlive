@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { checkEnvKeys } from '../../src/cli/doctor.js';
+import { checkEnvKeys, checkPlatforms } from '../../src/cli/doctor.js';
+import type { TliveConfigV1 } from '../../src/config/schema.js';
 
 interface Finding {
   section: string;
@@ -69,5 +70,51 @@ describe('checkEnvKeys', () => {
   it('openai WARN when neither env nor codex auth', () => {
     const o = run({}).find((f) => f.section === 'openai');
     expect(o?.level).toBe('warn');
+  });
+});
+
+describe('checkPlatforms (with daemon adapter status)', () => {
+  function cfg(): { ok: true; value: TliveConfigV1; warnings: [] } {
+    return {
+      ok: true,
+      warnings: [],
+      value: {
+        version: '1',
+        workspaces: [{ name: 'w', workdir: '/tmp/w' }],
+        channels: { feishu: { appId: 'cli_x', appSecret: 's' } },
+      },
+    };
+  }
+
+  it('feishu OK when adapter status connected', () => {
+    const findings: Array<{ section: string; level: string; message: string; hint?: string }> = [];
+    checkPlatforms(findings, cfg(), { feishu: 'connected' });
+    const f = findings.find((x) => x.section === 'feishu');
+    expect(f?.level).toBe('ok');
+    expect(f?.message).toMatch(/connected/i);
+  });
+
+  it('feishu WARN when adapter status idle (configured but not connected)', () => {
+    const findings: Array<{ section: string; level: string; message: string; hint?: string }> = [];
+    checkPlatforms(findings, cfg(), { feishu: 'idle' });
+    const f = findings.find((x) => x.section === 'feishu');
+    expect(f?.level).toBe('warn');
+    expect(f?.hint).toMatch(/daemon-logs/);
+  });
+
+  it('feishu WARN when channel configured but adapters status missing the entry', () => {
+    const findings: Array<{ section: string; level: string; message: string; hint?: string }> = [];
+    checkPlatforms(findings, cfg(), {});
+    const f = findings.find((x) => x.section === 'feishu');
+    expect(f?.level).toBe('warn');
+    expect(f?.message).toMatch(/not in adapter set/i);
+  });
+
+  it('feishu OK falls back to "configured" message when adapters argument is undefined (legacy behavior)', () => {
+    const findings: Array<{ section: string; level: string; message: string; hint?: string }> = [];
+    checkPlatforms(findings, cfg(), undefined);
+    const f = findings.find((x) => x.section === 'feishu');
+    expect(f?.level).toBe('ok');
+    expect(f?.message).toMatch(/appId \+ appSecret configured/i);
   });
 });
