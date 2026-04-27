@@ -6,8 +6,8 @@
 //
 // `--follow` keeps the file open and prints new appends as they arrive. Ctrl-C
 // to stop. We use `fs.watch` with polling rather than a proper follower
-// library to keep the dep surface zero — for live streaming of structured
-// events use `tlive logs <alias>` (which talks IPC to the daemon).
+// library to keep the dep surface zero — for per-session live event streams
+// use IM (the daemon emits NotificationEvents to the bound chat).
 
 import { existsSync, statSync, openSync, readSync, closeSync, readFileSync, watchFile, unwatchFile } from 'node:fs';
 import { homedir } from 'node:os';

@@ -65,5 +65,7 @@ If your output is going to end up in a Telegram / Discord / Feishu message:
 ## Quick start
 
 - Install / patch config: `tlive install-integrations codex`
-- Daemon control: `tlive start` / `tlive stop-daemon` / `tlive status`
-- Session control: `tlive list` / `tlive stop <alias>` / `tlive logs <alias>`
+- Daemon control: `tlive start` / `tlive stop` / `tlive status` / `tlive doctor`
+- Daemon logs: `tlive daemon-logs [N] [--follow]`
+- Session control lives in IM: `/sessions`, `/kill`, `/stop`, `/resume`. The
+  CLI no longer manages individual sessions.

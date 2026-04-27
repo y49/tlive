@@ -81,7 +81,7 @@ async function checkDaemon(findings: Finding[]): Promise<void> {
       section: 'daemon',
       level: 'fail',
       message: `unreachable via IPC (${(err as Error).message})`,
-      hint: 'Try: tlive stop-daemon && tlive start',
+      hint: 'Try: tlive stop && tlive start',
     });
   }
 }

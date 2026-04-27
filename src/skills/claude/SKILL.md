@@ -92,5 +92,7 @@ When tlive renders your output in an IM chat:
 ## Quick reference
 
 - Install / patch config: `tlive install-integrations claude`
-- Daemon control: `tlive start` / `tlive stop-daemon` / `tlive status`
-- Live session slots: `tlive list` / `tlive stop <alias>` / `tlive logs <alias>`
+- Daemon control: `tlive start` / `tlive stop` / `tlive status` / `tlive doctor`
+- Daemon logs: `tlive daemon-logs [N] [--follow]`
+- Session control lives in IM: `/sessions`, `/kill`, `/stop`, `/resume`. The
+  CLI no longer manages individual sessions.

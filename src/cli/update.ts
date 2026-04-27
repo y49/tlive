@@ -2,8 +2,8 @@
 //
 // Runs `npm install -g tlive@latest` and prints a friendly result. When the
 // daemon is running locally we do NOT restart it automatically — the user
-// controls that with `tlive stop-daemon && tlive start` because in-flight
-// sessions might be mid-turn. A pointer is printed instead.
+// controls that with `tlive stop && tlive start` because in-flight sessions
+// might be mid-turn. A pointer is printed instead.
 //
 // This is intentionally a tiny wrapper. Operators who prefer `npm`, `pnpm`,
 // or `yarn` global installs can invoke them directly; we just provide a
@@ -46,7 +46,7 @@ export function updateCommand(args: string[] = []): void {
     process.stdout.write([
       '',
       'The tlive daemon is currently running. To pick up the new version:',
-      '  tlive stop-daemon && tlive start',
+      '  tlive stop && tlive start',
       'In-flight sessions are preserved across restarts via jsonl auto-resume.',
       '',
     ].join('\n'));
