@@ -24,7 +24,10 @@ async function setup() {
 describe('Session', () => {
   let env: Awaited<ReturnType<typeof setup>>;
   beforeEach(async () => { env = await setup(); });
-  afterEach(async () => { await rm(env.root, { recursive: true, force: true }); });
+  afterEach(async () => {
+    await new Promise((r) => setTimeout(r, 20));
+    await rm(env.root, { recursive: true, force: true });
+  });
 
   it('prepare() + attachSink() wires listeners and transitions to active', async () => {
     await env.session.prepare({});

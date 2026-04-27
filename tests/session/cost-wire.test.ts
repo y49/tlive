@@ -43,7 +43,12 @@ async function setup(opts: { rollupStore?: CostRollupStore } = {}) {
 
 describe('LocalSession -> CostRollupStore', () => {
   let env: Awaited<ReturnType<typeof setup>>;
-  afterEach(async () => { if (env) await rm(env.root, { recursive: true, force: true }); });
+  afterEach(async () => {
+    if (env) {
+      await new Promise((r) => setTimeout(r, 20));
+      await rm(env.root, { recursive: true, force: true });
+    }
+  });
 
   it('turn_end appends a RollupDelta with matching fields', async () => {
     const store = new RecordingRollupStore();
