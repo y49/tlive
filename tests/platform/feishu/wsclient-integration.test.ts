@@ -7,20 +7,33 @@ const eventDispatcherCtor = vi.fn();
 const eventDispatcherRegister = vi.fn().mockReturnThis();
 const clientCtor = vi.fn();
 
+// Shared mutable state — tests manipulate this to simulate ws lifecycle.
+let mockReadyState: number | null = null;
+function setReadyState(s: number | null): void { mockReadyState = s; }
+function makeWsConfig() {
+  return {
+    getWSInstance: () => (mockReadyState === null ? null : { readyState: mockReadyState }),
+  };
+}
+
 vi.mock('@larksuiteoapi/node-sdk', () => ({
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  Client: vi.fn().mockImplementation(function (this: unknown, opts: unknown) { clientCtor(opts); return { im: { v1: { message: { create: vi.fn() } } } }; }),
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  WSClient: vi.fn().mockImplementation(function (this: unknown, opts: unknown) {
+  Client: vi.fn().mockImplementation(function (this: object, opts: unknown) {
+    clientCtor(opts);
+    Object.assign(this, { im: { v1: { message: { create: vi.fn() } } } });
+  }),
+  WSClient: vi.fn().mockImplementation(function (this: object, opts: unknown) {
     wsClientCtor(opts);
-    return { start: wsClientStart, close: wsClientClose };
+    Object.assign(this, {
+      start: wsClientStart,
+      close: wsClientClose,
+      wsConfig: makeWsConfig(),
+    });
   }),
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  EventDispatcher: vi.fn().mockImplementation(function (this: unknown, opts: unknown) {
+  EventDispatcher: vi.fn().mockImplementation(function (this: object, opts: unknown) {
     eventDispatcherCtor(opts);
-    return { register: eventDispatcherRegister };
+    Object.assign(this, { register: eventDispatcherRegister });
   }),
-  Domain: { Feishu: 'https://open.feishu.cn', Lark: 'https://open.larksuite.com' },
+  Domain: { Feishu: 0, Lark: 1 },
   LoggerLevel: { info: 2 },
 }));
 
@@ -34,6 +47,7 @@ beforeEach(() => {
   eventDispatcherCtor.mockClear();
   eventDispatcherRegister.mockClear();
   clientCtor.mockClear();
+  setReadyState(null);
 });
 
 describe('FeishuAdapter (production lifecycle)', () => {
@@ -48,9 +62,14 @@ describe('FeishuAdapter (production lifecycle)', () => {
     }));
   });
 
-  it('lark: true sets Domain.Lark on WSClient', () => {
+  it('default (lark omitted) sets Domain.Feishu (0)', () => {
+    new FeishuAdapter({ appId: 'cli_x', appSecret: 's', logger: createLogger({ sink: () => undefined }) });
+    expect(wsClientCtor).toHaveBeenCalledWith(expect.objectContaining({ domain: 0 }));
+  });
+
+  it('lark: true sets Domain.Lark (1) on WSClient', () => {
     new FeishuAdapter({ appId: 'cli_x', appSecret: 's', lark: true, logger: createLogger({ sink: () => undefined }) });
-    expect(wsClientCtor).toHaveBeenCalledWith(expect.objectContaining({ domain: 'https://open.larksuite.com' }));
+    expect(wsClientCtor).toHaveBeenCalledWith(expect.objectContaining({ domain: 1 }));
   });
 
   it('start() invokes wsClient.start with the EventDispatcher; stop() calls close()', async () => {
@@ -61,11 +80,27 @@ describe('FeishuAdapter (production lifecycle)', () => {
     expect(wsClientClose).toHaveBeenCalled();
   });
 
-  it('isConnected() returns false before start, true after start resolves', async () => {
+  it('isConnected() reflects underlying WebSocket readyState (not just lifecycle)', async () => {
     const a = new FeishuAdapter({ appId: 'cli_x', appSecret: 's', logger: createLogger({ sink: () => undefined }) });
+    // Pre-start: no wsInstance yet
     expect(a.isConnected()).toBe(false);
     await a.start();
+    // After start() resolves but before the SDK sets the wsInstance: still false
+    expect(a.isConnected()).toBe(false);
+    // SDK reports OPEN:
+    setReadyState(1);
     expect(a.isConnected()).toBe(true);
+    // SDK reports CONNECTING (0): not yet OPEN
+    setReadyState(0);
+    expect(a.isConnected()).toBe(false);
+    // SDK reports CLOSING (2): no longer OPEN
+    setReadyState(2);
+    expect(a.isConnected()).toBe(false);
+    // SDK reports CLOSED (3): no longer OPEN
+    setReadyState(3);
+    expect(a.isConnected()).toBe(false);
+    // After stop(): still false (close() invalidates the instance externally)
+    setReadyState(null);
     await a.stop();
     expect(a.isConnected()).toBe(false);
   });

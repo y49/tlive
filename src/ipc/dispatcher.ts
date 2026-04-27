@@ -51,6 +51,13 @@ export function buildIpcDispatcher(deps: IpcDispatcherDeps): IpcServerHandler {
           let adapters: Partial<Record<ChannelType, 'connected' | 'idle' | 'failed'>> | undefined;
           if (deps.adapters) {
             adapters = {};
+            // Note: 'failed' is reserved in the protocol for an explicit init-
+            // failure registry that doesn't exist yet. Adapters that fail
+            // construction or start() are dropped from `deps.adapters` by the
+            // bootstrap try/catch, so this path emits only 'connected' or
+            // 'idle' today. The doctor's 'failed' branch (src/cli/doctor.ts)
+            // remains for forward-compat — populating 'failed' here would
+            // require tracking init-failure separately.
             for (const [ct, a] of Object.entries(deps.adapters)) {
               if (!a) continue;
               // PlatformAdapter is allowed to expose isConnected(); treat absence as

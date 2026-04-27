@@ -48,7 +48,6 @@ export class FeishuAdapter implements PlatformAdapter {
   private readonly eventDispatcher: unknown | null;
   private readonly options: FeishuAdapterOptions;
   private readonly inboundListeners = new Set<(ev: InboundEvent) => void>();
-  private connected = false;
 
   constructor(options: FeishuAdapterOptions) {
     this.options = options;
@@ -92,24 +91,39 @@ export class FeishuAdapter implements PlatformAdapter {
   async start(): Promise<void> {
     if (!this.wsClient) return;
     await this.wsClient.start({ eventDispatcher: this.eventDispatcher });
-    this.connected = true;
+    // Note: lark SDK's wsClient.start() resolves BEFORE the TCP handshake
+    // (it kicks off reConnect(true) without await). The actual connection
+    // state is exposed via wsConfig.getWSInstance().readyState — see
+    // isConnected() below.
   }
 
   async stop(): Promise<void> {
     if (!this.wsClient) return;
     this.wsClient.close();
-    this.connected = false;
   }
 
   /**
    * Returns:
-   *   true  — adapter owns a WSClient and start() succeeded
-   *   false — adapter owns a WSClient and start() not yet called or stop() ran
-   *   null  — caller-injected lifecycle (test mode); state unknown to adapter
+   *   true  — adapter owns a WSClient AND the underlying WebSocket is OPEN
+   *           (readyState === 1). Accurate to the actual socket state, not
+   *           just whether start() was called.
+   *   false — adapter owns a WSClient but the WebSocket is not OPEN. This
+   *           covers: pre-handshake (during start() race), CONNECTING (0),
+   *           CLOSING (2), CLOSED (3), or wsConfig.getWSInstance() is null.
+   *   null  — caller-injected lifecycle (test mode without WSClient); state
+   *           unknown to adapter.
    */
   isConnected(): boolean | null {
     if (!this.wsClient) return null;
-    return this.connected;
+    // The lark SDK does not expose readyState in its TypeScript types, but
+    // wsConfig.getWSInstance() is a stable runtime API used internally for
+    // ping / reconnect logic. Cast through and read defensively — if the
+    // SDK ever restructures, this falls back to false (treated as 'idle' by
+    // doctor) rather than throwing.
+    const ws = (this.wsClient as {
+      wsConfig?: { getWSInstance?: () => { readyState?: number } | null };
+    }).wsConfig?.getWSInstance?.();
+    return ws?.readyState === 1;
   }
 
   async send(msg: OutboundMessage): Promise<string> {
