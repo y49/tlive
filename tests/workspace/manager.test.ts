@@ -10,6 +10,7 @@ import { SessionPersistence } from '../../src/session/persistence.js';
 import { PermissionBroker } from '../../src/permission/broker.js';
 import { FakeRuntime } from '../session/fake-runtime.js';
 import type { SessionLike } from '../../src/session/types.js';
+import type { LocalSession } from '../../src/session/local-session.js';
 
 function fakeSession(id: string): SessionLike {
   return {
@@ -264,5 +265,78 @@ describe('WorkspaceManager.lazyResumeOrCreate resume passes sessionId to runtime
     // The runtime created by resumeLocal must have received the session id.
     expect(runtimes2).toHaveLength(1);
     expect(runtimes2[0]!.resumeRequestedFor).toBe(sid);
+  });
+});
+
+describe('isLive contract — precise active-only lookup (Spec X §I4 / §4.3)', () => {
+  // The isLive predicate constructed in bootstrap.ts must use manager.get(id)
+  // (precise lookup) and only return true when LocalSession.getStatus() === 'active'.
+  // This test mirrors the predicate definition exactly.
+  function makeIsLive(manager: SessionManager): (id: string) => boolean {
+    return (id: string) => {
+      const found = manager.get(id);
+      if (found === undefined) return false;
+      if (found.kind !== 'local') return false;
+      return (found as LocalSession).getStatus() === 'active';
+    };
+  }
+
+  let root: string;
+  let persistence: SessionPersistence;
+  let broker: PermissionBroker;
+  let manager: SessionManager;
+  let runtime: FakeRuntime;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'tlive-islive-'));
+    persistence = new SessionPersistence(root);
+    await persistence.init();
+    broker = new PermissionBroker();
+    manager = new SessionManager({
+      persistence,
+      broker,
+      runtimeFactory: (provider) => {
+        runtime = new FakeRuntime(provider);
+        return runtime;
+      },
+    });
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('isLive returns true for active session, false for stopped', async () => {
+    const isLive = makeIsLive(manager);
+    const s = await manager.createLocal({
+      workspaceId: 'ws-islive', provider: 'claude', workdir: '/tmp', source: 'cli',
+    });
+    // Immediately after create, session is active.
+    expect(isLive(s.id)).toBe(true);
+
+    // After stop, session is removed from manager map → isLive false.
+    await manager.stop(s.id);
+    expect(isLive(s.id)).toBe(false);
+  });
+
+  it('isLive returns false for unknown id', async () => {
+    const isLive = makeIsLive(manager);
+    expect(isLive('00000000-0000-0000-0000-000000000000')).toBe(false);
+  });
+
+  it('isLive returns false after session_complete transitions status to idle', async () => {
+    const isLive = makeIsLive(manager);
+    const s = await manager.createLocal({
+      workspaceId: 'ws-islive2', provider: 'claude', workdir: '/tmp', source: 'cli',
+    });
+    expect(isLive(s.id)).toBe(true);
+
+    // Fire session_complete through the runtime sink — transitions legacy status to 'idle'.
+    runtime.emitEvent({ kind: 'session_complete', reason: 'end_turn', summary: '' });
+
+    // Status is now 'idle'; isLive must be false (lazyResumeOrCreate must take resume branch).
+    expect(isLive(s.id)).toBe(false);
+
+    await manager.stop(s.id);
   });
 });

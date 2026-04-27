@@ -48,6 +48,7 @@ import { autoBindFromConfig } from '../workspace/auto-bind.js';
 import { SessionManager } from '../session/manager.js';
 import { SessionPersistence } from '../session/persistence.js';
 import { WarmRuntimePool } from '../session/warm-pool.js';
+import type { LocalSession } from '../session/local-session.js';
 
 import { PermissionBroker } from '../permission/broker.js';
 import { AskUserQuestionBroker } from '../permission/ask-broker.js';
@@ -599,10 +600,15 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
     }
     try {
       await deps.workspaces.lazyResumeOrCreate(ws.id, text, 'im', {
-        isLive: (id) => deps.sessions.getByPrefix(id).resolved !== null,
+        isLive: (id) => {
+          const s = deps.sessions.get(id);
+          if (s === undefined) return false;
+          if (s.kind !== 'local') return false;
+          return (s as LocalSession).getStatus() === 'active';
+        },
         resume: async (id) => deps.sessions.resumeLocal(id),
         sendInput: async (id, t, src) => {
-          const found = deps.sessions.getByPrefix(id).resolved;
+          const found = deps.sessions.get(id);
           if (!found) throw new Error(`session ${id} not live`);
           // LocalSession has sendInput; RemoteSession does not
           const local = found as unknown as { sendInput?: (t: string, s: 'im' | 'cli') => Promise<void> };
