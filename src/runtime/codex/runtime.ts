@@ -220,16 +220,9 @@ export class CodexAppServerRuntime implements AgentRuntime {
 
       return { sdkSessionId: this.threadId };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
       const alreadyClosing = this.closed;
       this.closed = true;
       this.prepared = false;
-      this.fireEvent({
-        kind: 'runtime_error',
-        severity: 'fatal',
-        code: 'codex_start_failed',
-        message,
-      });
       if (!alreadyClosing) {
         if (this.client) {
           try { await this.client.close(); } catch { /* ignore */ }

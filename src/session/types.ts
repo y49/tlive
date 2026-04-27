@@ -52,7 +52,7 @@ export interface SessionLike {
   title: string | undefined;
   status: AgentStatus;
   readonly cost: CostTracker;
-  /** True once the SDK-assigned sdkSessionId is known (post-runtime.start). */
+  /** True once the SDK-assigned sdkSessionId is known (post-runtime.prepare). */
   readonly isReady: boolean;
 
   onEvent(cb: (e: NotificationEvent) => void): () => void;

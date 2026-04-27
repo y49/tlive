@@ -38,7 +38,6 @@ describe('ClaudeSdkRuntime prepare/attachSink contract', () => {
     const rt = new ClaudeSdkRuntime({ query: makeQueryFnYieldingInit() });
     const ctrl = new AbortController();
     const sink = captureSink();
-    rt.attachSink; // does not throw on access; only call after prepare
     const { sdkSessionId } = await rt.prepare({ workdir: '/tmp', signal: ctrl.signal });
     expect(sdkSessionId).toBe('sdk-fake-1');
     expect(sink.events).toEqual([]);
@@ -71,7 +70,7 @@ describe('ClaudeSdkRuntime prepare/attachSink contract', () => {
   // We simulate by yielding a frame that the adapter would translate to an event before init.
   // The default ClaudeEventAdapter emits no events for unknown frames, so this is a smoke test
   // that the *mechanism* exists rather than a specific event count. See task 6 for fixture-locked tests.
-  it('attachSink consumes iter (no immediate error)', async () => {
+  it('attachSink does not throw after prepare', async () => {
     const rt = new ClaudeSdkRuntime({ query: makeQueryFnYieldingInit() });
     const ctrl = new AbortController();
     await rt.prepare({ workdir: '/tmp', signal: ctrl.signal });
