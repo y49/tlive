@@ -17,6 +17,9 @@ import type { ChatBinding, ChannelType } from '../../../src/workspace/bindings.j
 
 export interface FakeCtxSpec {
   workspace?: Partial<Workspace> | null;
+  /** Workspaces visible via workspaceManager.list() that are NOT bound to
+   *  the current chat. Useful for testing /bind from an unbound chat. */
+  otherWorkspaces?: Array<Partial<Workspace>>;
   activeSession?: Partial<LocalSession> | null;
   sessions?: Array<Partial<LocalSession>>;
   channelType?: ChannelType;
@@ -65,6 +68,38 @@ export function buildCtx(spec: FakeCtxSpec = {}): FakeCtxResult {
     createdAt: new Date().toISOString(),
     ...(spec.workspace as Partial<Workspace>),
   } as Workspace;
+
+  // Build a unified list of all workspaces (primary + otherWorkspaces).
+  // findByChat / get / getRole / addBinding all operate on this list so that
+  // multi-workspace tests (e.g. /bind from an unbound chat) work correctly.
+  const defaultWorkspaceShape: Omit<Workspace, 'id' | 'name' | 'workdir' | 'roles' | 'bindings'> = {
+    activeSessionId: null,
+    defaults: {
+      provider: 'claude',
+      permissionMode: 'default',
+      thinking: 'collapsed',
+      verbose: false,
+      prewarmCache: false,
+      threadPerSession: false,
+    } as never,
+    budget: {},
+    mcpServers: {},
+    defaultRole: 'observer',
+    createdAt: new Date().toISOString(),
+  };
+  const allWorkspaces: Workspace[] = [];
+  if (workspace) allWorkspaces.push(workspace);
+  for (const [i, o] of (spec.otherWorkspaces ?? []).entries()) {
+    allWorkspaces.push({
+      ...defaultWorkspaceShape,
+      id: `ws-other-${i.toString().padStart(4, '0')}`,
+      name: 'other',
+      workdir: `/tmp/other-${i}`,
+      roles: {},
+      bindings: [],
+      ...(o as Partial<Workspace>),
+    } as Workspace);
+  }
 
   const activeSession = spec.activeSession
     ? ({
@@ -129,20 +164,43 @@ export function buildCtx(spec: FakeCtxSpec = {}): FakeCtxResult {
   const workspaceManager = {
     findByChat(ct: ChannelType, cid: string) {
       workspaceCalls.push({ method: 'findByChat', args: [ct, cid] });
-      if (!workspace) return undefined;
-      const matched = workspace.bindings.some(
-        (b) => b.channelType === ct && b.chatId === cid,
+      return allWorkspaces.find((w) =>
+        w.bindings.some((b) => b.channelType === ct && b.chatId === cid),
       );
-      return matched ? workspace : undefined;
     },
-    list() { workspaceCalls.push({ method: 'list', args: [] }); return workspace ? [workspace] : []; },
-    get(id: string) { workspaceCalls.push({ method: 'get', args: [id] }); return workspace; },
-    getRole(wsId: string, u: string) { workspaceCalls.push({ method: 'getRole', args: [wsId, u] }); return workspace?.roles[u] ?? workspace?.defaultRole ?? 'observer'; },
-    setRole(wsId: string, u: string, role: string) { workspaceCalls.push({ method: 'setRole', args: [wsId, u, role] }); if (workspace) workspace.roles[u] = role as never; },
-    addBinding(wsId: string, b: ChatBinding) { workspaceCalls.push({ method: 'addBinding', args: [wsId, b] }); if (workspace) workspace.bindings.push(b); return workspace; },
-    removeBinding(wsId: string, key: unknown) { workspaceCalls.push({ method: 'removeBinding', args: [wsId, key] }); return workspace; },
-    bindActiveSession(wsId: string, sid: string) { workspaceCalls.push({ method: 'bindActiveSession', args: [wsId, sid] }); if (workspace) workspace.activeSessionId = sid; },
-    clearActiveSession(wsId: string) { workspaceCalls.push({ method: 'clearActiveSession', args: [wsId] }); if (workspace) workspace.activeSessionId = null; },
+    list() { workspaceCalls.push({ method: 'list', args: [] }); return [...allWorkspaces]; },
+    get(id: string) { workspaceCalls.push({ method: 'get', args: [id] }); return allWorkspaces.find((w) => w.id === id); },
+    getRole(wsId: string, u: string) {
+      workspaceCalls.push({ method: 'getRole', args: [wsId, u] });
+      const found = allWorkspaces.find((w) => w.id === wsId);
+      if (!found) return 'observer';
+      return found.roles[u] ?? found.defaultRole ?? 'observer';
+    },
+    setRole(wsId: string, u: string, role: string) {
+      workspaceCalls.push({ method: 'setRole', args: [wsId, u, role] });
+      const found = allWorkspaces.find((w) => w.id === wsId);
+      if (found) found.roles[u] = role as never;
+    },
+    addBinding(wsId: string, b: ChatBinding) {
+      workspaceCalls.push({ method: 'addBinding', args: [wsId, b] });
+      const found = allWorkspaces.find((w) => w.id === wsId);
+      if (found) found.bindings.push(b);
+      return found;
+    },
+    removeBinding(wsId: string, key: unknown) {
+      workspaceCalls.push({ method: 'removeBinding', args: [wsId, key] });
+      return allWorkspaces.find((w) => w.id === wsId);
+    },
+    bindActiveSession(wsId: string, sid: string) {
+      workspaceCalls.push({ method: 'bindActiveSession', args: [wsId, sid] });
+      const found = allWorkspaces.find((w) => w.id === wsId);
+      if (found) found.activeSessionId = sid;
+    },
+    clearActiveSession(wsId: string) {
+      workspaceCalls.push({ method: 'clearActiveSession', args: [wsId] });
+      const found = allWorkspaces.find((w) => w.id === wsId);
+      if (found) found.activeSessionId = null;
+    },
     async save() { workspaceCalls.push({ method: 'save', args: [] }); },
   } as unknown as WorkspaceManager;
 

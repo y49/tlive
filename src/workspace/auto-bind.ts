@@ -22,6 +22,7 @@ export function autoBindFromConfig(
 ): number {
   let created = 0;
   const channels = cfg.channels ?? {};
+  const warnedAmbiguous = new Set<string>();
 
   for (const w of cfg.workspaces) {
     const target = (w.id ? workspaces.get(w.id) : undefined)
@@ -40,9 +41,13 @@ export function autoBindFromConfig(
         const matchesThisAdmin = w.adminUserId === chatId;
         if (matchesAnyAdmin && !matchesThisAdmin) continue;
         if (!matchesAnyAdmin) {
-          logger.warn('auto-bind skipped: multi-workspace and no adminUserId matches chatId', {
-            chatId, platform, candidates: cfg.workspaces.map((x) => x.name),
-          });
+          const key = `${platform}:${chatId}`;
+          if (!warnedAmbiguous.has(key)) {
+            warnedAmbiguous.add(key);
+            logger.warn('auto-bind skipped: multi-workspace and no adminUserId matches chatId', {
+              chatId, platform, candidates: cfg.workspaces.map((x) => x.name),
+            });
+          }
           continue;
         }
       }

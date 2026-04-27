@@ -68,4 +68,32 @@ describe('/bind', () => {
     expect(workspaceCalls.some((c) => c.method === 'addBinding')).toBe(false);
     expect(replies[0]).toMatch(/Already bound/i);
   });
+
+  it('binds when chat is unbound but user is admin of some workspace (late-binding flow)', async () => {
+    const { ctx, replies, workspaceCalls } = buildCtx({
+      workspace: null,
+      otherWorkspaces: [{ id: 'ws-tlive', name: 'tlive', roles: { 'u1': 'admin' } }],
+      userId: 'u1',
+      chatId: '99999',
+    });
+    await bindCmd.run(ctx, []);
+    expect(workspaceCalls.some((c) => c.method === 'addBinding')).toBe(true);
+    expect(replies[0]).toMatch(/Bound this chat/);
+    expect(replies[0]).toContain('tlive');
+  });
+
+  it('refuses cross-workspace re-bind and points at /mirror remove', async () => {
+    const { ctx, replies, workspaceCalls } = buildCtx({
+      // Currently bound to workspace A:
+      workspace: { id: 'ws-A', name: 'A', bindings: [{ channelType: 'telegram', chatId: '12345', role: 'primary' }], roles: {} } as never,
+      // User admins workspace B:
+      otherWorkspaces: [{ id: 'ws-B', name: 'B', roles: { 'u1': 'admin' } }],
+      userId: 'u1',
+      chatId: '12345',
+    });
+    await bindCmd.run(ctx, ['B']);
+    expect(workspaceCalls.some((c) => c.method === 'addBinding')).toBe(false);
+    expect(replies[0]).toMatch(/already bound to "A"/i);
+    expect(replies[0]).toMatch(/\/mirror remove/);
+  });
 });

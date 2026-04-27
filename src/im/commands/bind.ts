@@ -8,8 +8,14 @@ import type { CommandDef } from '../command-parser.js';
 
 export const bindCmd: CommandDef = {
   name: 'bind',
-  role: ['admin'],
-  description: 'Bind this chat to a workspace (admin only)',
+  // Intentionally allow any role at the dispatch gate, because /bind is
+  // typically invoked from an *unbound* chat, where dispatch defaults the
+  // caller's role to 'observer' (no workspace to look up roles in). The
+  // command's own logic enforces authorization via `myAdminWs.length > 0`
+  // — only users with admin role on at least one workspace can actually
+  // bind. Non-admins get a friendly, non-revealing error.
+  role: ['admin', 'operator', 'observer'],
+  description: 'Bind this chat to a workspace (admin only — enforced internally)',
   async run(ctx, args) {
     const target = args[0];
 
