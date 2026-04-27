@@ -189,8 +189,8 @@ export class CodexAppServerRuntime implements AgentRuntime {
         capabilities: { experimentalApi: false },
       });
 
-      if (opts.resumeSdkSessionId ?? opts.resumeSessionId) {
-        const resumeId = (opts.resumeSdkSessionId ?? opts.resumeSessionId)!;
+      if (opts.resumeSessionId) {
+        const resumeId = opts.resumeSessionId;
         const resumeResult = await client.request<
           { threadId: string; cwd?: string; model?: string; persistExtendedHistory: boolean },
           { thread: { id: string } }

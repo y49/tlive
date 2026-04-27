@@ -87,16 +87,40 @@ describe('SessionManager', () => {
 
   it('createLocal calls prepare → emit("created") → attachSink in order', async () => {
     const events: string[] = [];
-    env.mgr.subscribe((ev) => {
+    const capturedRuntimes: FakeRuntime[] = [];
+
+    // Build a custom manager with a wrapped runtimeFactory so we can observe
+    // the exact call sequence, not just presence.
+    const mgr2 = new SessionManager({
+      persistence: env.persistence,
+      broker: env.broker,
+      runtimeFactory: (provider) => {
+        const r = new FakeRuntime(provider);
+        const origPrepare = r.prepare.bind(r);
+        const origAttachSink = r.attachSink.bind(r);
+        r.prepare = async (opts) => {
+          events.push('prepare');
+          return origPrepare(opts);
+        };
+        r.attachSink = (sink) => {
+          events.push('attach');
+          return origAttachSink(sink);
+        };
+        capturedRuntimes.push(r);
+        return r;
+      },
+    });
+    mgr2.subscribe((ev) => {
       if (ev.kind === 'created') events.push('emit:created');
     });
-    await env.mgr.createLocal({
+
+    await mgr2.createLocal({
       workspaceId: 'ws-order', provider: 'claude', workdir: '/tmp', source: 'cli',
     });
-    const r = env.runtimes[env.runtimes.length - 1]!;
-    expect(r.prepareCalls).toBe(1);
-    expect(r.attachCalls).toBe(1);
-    expect(events).toContain('emit:created');
+
+    expect(events).toEqual(['prepare', 'emit:created', 'attach']);
+    expect(capturedRuntimes[0]!.prepareCalls).toBe(1);
+    expect(capturedRuntimes[0]!.attachCalls).toBe(1);
   });
 
   it('stopAll stops every live session', async () => {

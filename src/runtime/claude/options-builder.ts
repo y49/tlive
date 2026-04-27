@@ -34,7 +34,7 @@ export function buildClaudeOptions(
     cwd: opts.workdir,
     model: opts.model,
     effort: opts.effort,
-    resume: opts.resumeSdkSessionId ?? opts.resumeSessionId,
+    resume: opts.resumeSessionId,
     permissionMode: mapPermissionMode(opts.permissionMode),
     canUseTool,
     onElicitation,

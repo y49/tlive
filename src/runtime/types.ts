@@ -66,7 +66,6 @@ export interface McpServerConfig {
 
 export interface AgentRuntimeOptions {
   workdir: string;
-  resumeSdkSessionId?: string;
   /** When set, runtime resumes this SDK session id instead of creating a new
    *  one. Symmetry with create path; used by SessionManager.resumeLocal. */
   resumeSessionId?: string;
