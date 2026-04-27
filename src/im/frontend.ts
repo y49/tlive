@@ -105,7 +105,7 @@ export class SessionFrontend {
           case 'created':
           case 'resumed':
           case 'registered':
-            void this.attachSession(ev.session).catch(() => { /* isolate */ });
+            try { this.attachSession(ev.session); } catch { /* isolate */ }
             break;
           case 'stopped':
             void this.detachSession(ev.sessionId).catch(() => { /* isolate */ });
@@ -156,7 +156,7 @@ export class SessionFrontend {
 
   // ---- Session attach / detach --------------------------------------------
 
-  private async attachSession(session: SessionLike): Promise<void> {
+  private attachSession(session: SessionLike): void {
     if (this.sessions.has(session.id)) return;
     const bindings = this.opts.workspaceManager.partitionBindings(session.workspaceId);
     const workspace = this.opts.workspaceManager.get(session.workspaceId);
@@ -199,9 +199,10 @@ export class SessionFrontend {
       channels.push(channel);
     }
 
-    // Initialize session header for every channel (each owns its own msg id).
+    // Initialize session header for every channel (fire-and-forget — visual only,
+    // not on the event-flow critical path).
     for (const c of channels) {
-      try { await c.header.initialize(); } catch { /* isolate */ }
+      void c.header.initialize().catch(() => { /* isolate */ });
     }
 
     const unsubscribeEvent = session.onEvent((ev) => {
