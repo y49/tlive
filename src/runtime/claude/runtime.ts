@@ -5,6 +5,7 @@
 // Composes the control face (control.ts), permission + elicitation handlers,
 // options builder, and event adapter.
 
+import { appendFileSync } from 'node:fs';
 import { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import type { Query } from '@anthropic-ai/claude-agent-sdk';
 import type {
@@ -29,9 +30,17 @@ export interface ClaudeSdkRuntimeDeps {
   query?: typeof sdkQuery;
 }
 
+/**
+ * ClaudeSdkRuntime wraps the Claude Agent SDK's query() in streaming-input mode.
+ *
+ * Debug capture: setting `TL_DEBUG_SDK_FRAMES=/path/to/file.jsonl` causes every
+ * raw SDK frame to be appended as one JSON line. Used to capture fixtures for
+ * tests/runtime/claude/fixtures/ (Spec X §5.7 step 1). No effect when unset.
+ */
 export class ClaudeSdkRuntime implements AgentRuntime {
   readonly provider = 'claude' as const;
 
+  private readonly debugFramesPath: string | null = process.env.TL_DEBUG_SDK_FRAMES ?? null;
   private readonly adapter = new ClaudeEventAdapter();
 
   // Stash for events fired before attachSink runs; flushed to sink in order.
@@ -172,6 +181,13 @@ export class ClaudeSdkRuntime implements AgentRuntime {
 
   // ---- private ------------------------------------------------------------
 
+  private logRawFrame(msg: unknown): void {
+    if (this.debugFramesPath) {
+      try { appendFileSync(this.debugFramesPath, JSON.stringify(msg) + '\n'); }
+      catch { /* debug-only, never fatal */ }
+    }
+  }
+
   private nextMessage(): Promise<QueueEntry | null> {
     if (this.closed) return Promise.resolve(null);
     const queued = this.messageQueue.shift();
@@ -181,6 +197,7 @@ export class ClaudeSdkRuntime implements AgentRuntime {
 
   private async firstInitMessage(iter: Query): Promise<{ session_id: string }> {
     for await (const msg of iter as AsyncIterable<{ type: string; session_id?: string; [k: string]: unknown }>) {
+      this.logRawFrame(msg);
       const frame = this.adapter.adapt(msg as { type: string });
       for (const e of frame.events) this.fireEvent(e);
       if (frame.usage) this.fireUsage(frame.usage);
@@ -197,6 +214,7 @@ export class ClaudeSdkRuntime implements AgentRuntime {
     try {
       for await (const msg of iter as AsyncIterable<unknown>) {
         if (this.closed) break;
+        this.logRawFrame(msg);
         const frame = this.adapter.adapt(msg as { type: string });
         for (const e of frame.events) this.fireEvent(e);
         if (frame.usage) this.fireUsage(frame.usage);
