@@ -1,6 +1,6 @@
 // src/im/bot-commands-registrar.ts
 //
-// Registers the top-15 slash commands on every platform that supports
+// Registers the top-16 slash commands on every platform that supports
 // autocomplete. Called once on daemon start by T9 bootstrap.
 //
 // Platforms:
@@ -17,11 +17,12 @@ import type { BotCommandSpec } from '../platform/telegram/bot-commands.js';
 import { registerBotCommands as telegramRegister } from '../platform/telegram/bot-commands.js';
 
 /**
- * The 15 commands registered for autocomplete. Chosen for discoverability
+ * The 16 commands registered for autocomplete. Chosen for discoverability
  * and IM-mobile ergonomics: heavy use + short enough to type on a phone.
  */
 export const TOP_COMMANDS: BotCommandSpec[] = [
   { command: 'help',     description: 'Show command help' },
+  { command: 'bind',     description: 'Bind this chat to a workspace (admin)' },
   { command: 'new',      description: 'Create a new session' },
   { command: 'stop',     description: 'Interrupt the current turn' },
   { command: 'kill',     description: 'Force kill session + release jsonl' },

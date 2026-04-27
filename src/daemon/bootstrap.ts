@@ -344,7 +344,7 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
         logger.warn('adapter start failed', { channelType: ct, reason: (err as Error).message });
       }
     }
-    // Register top-15 bot commands on each capable adapter.
+    // Register top-16 bot commands on each capable adapter.
     await registerAllBotCommands(adapters).catch(() => undefined);
   }
 

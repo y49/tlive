@@ -15,7 +15,7 @@ Each command is dispatched by `src/im/command-parser.ts` to a handler in
 `src/im/commands/<name>.ts`. Every handler declares the minimum role
 (`admin | operator | observer`) required to invoke it.
 
-Autocomplete: the 15 most-common commands register via the platform API
+Autocomplete: the 16 most-common commands register via the platform API
 (Telegram `setMyCommands`, Discord `applications.commands.put`, Feishu
 mention menu). The rest are discoverable via `/help`.
 

@@ -27,8 +27,8 @@ function fakeAdapter(channelType: 'telegram' | 'discord' | 'feishu', withHook = 
 }
 
 describe('bot-commands-registrar', () => {
-  it('exports 15 top commands', () => {
-    expect(TOP_COMMANDS).toHaveLength(15);
+  it('exports 16 top commands', () => {
+    expect(TOP_COMMANDS).toHaveLength(16);
     expect(TOP_COMMANDS.map((c) => c.command)).toContain('help');
     expect(TOP_COMMANDS.map((c) => c.command)).toContain('new');
     expect(TOP_COMMANDS.map((c) => c.command)).toContain('sessions');
