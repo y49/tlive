@@ -51,6 +51,48 @@ describe('permission-card', () => {
     expect(t).toContain('"foo": 1');
   });
 
+  // Issue 3: AskUserQuestion is dispatched as a generic permission card via
+  // canUseTool; its raw JSON is unreadable for users. Special-case format
+  // surfaces the question + options as plain text.
+  it('AskUserQuestion: special-cased to readable question + options', () => {
+    const t = renderPermissionCard(makeReq('generic', {
+      toolName: 'AskUserQuestion',
+      toolInput: {
+        questions: [{
+          header: 'Pick a color',
+          question: 'Which color do you prefer?',
+          options: [
+            { label: 'Red', description: 'Warm tones' },
+            { label: 'Blue', description: 'Cool tones' },
+            { label: 'Green' },
+          ],
+          multiSelect: false,
+        }],
+      },
+    }));
+    expect(t).toContain('🧩 AskUserQuestion');
+    expect(t).toContain('Pick a color');
+    expect(t).toContain('Which color do you prefer?');
+    expect(t).toContain('1. Red');
+    expect(t).toContain('Warm tones');
+    expect(t).toContain('2. Blue');
+    expect(t).toContain('3. Green');
+    // Critical: NO raw JSON code fence in the rendered output.
+    expect(t).not.toContain('```json');
+    expect(t).not.toContain('"questions"');
+  });
+
+  it('AskUserQuestion: malformed input falls back to JSON dump', () => {
+    const t = renderPermissionCard(makeReq('generic', {
+      toolName: 'AskUserQuestion',
+      toolInput: { whatever: 'unknown shape' },
+    }));
+    // Falls back to the safe JSON-dump path for unrecognized shapes.
+    expect(t).toContain('🧩 AskUserQuestion');
+    expect(t).toContain('```json');
+    expect(t).toContain('whatever');
+  });
+
   it('elicitation template is a minimal placeholder (real render is ElicitationForm)', () => {
     const t = renderPermissionCard(makeReq('elicitation'));
     expect(t).toContain('🔒 Elicitation');

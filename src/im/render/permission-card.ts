@@ -46,6 +46,46 @@ function formatJson(v: unknown): string {
   }
 }
 
+/**
+ * AskUserQuestion is a Claude SDK tool whose input shape we know
+ * (`{ questions: [{ question, header?, options: [{label, description?}] }] }`).
+ * The generic JSON-dump renderer is unreadable for this input — users see a
+ * raw code-fenced ```json block``` for what is fundamentally a question +
+ * multiple-choice prompt. Format it as plain text instead so the user sees
+ * the actual question and the option labels at a glance.
+ *
+ * Returns null if the input doesn't look like the expected shape (caller
+ * falls back to formatJson).
+ */
+function formatAskUserQuestionInput(input: unknown): string | null {
+  if (!input || typeof input !== 'object') return null;
+  const questions = (input as { questions?: unknown }).questions;
+  if (!Array.isArray(questions) || questions.length === 0) return null;
+  const out: string[] = [];
+  for (const q of questions) {
+    if (!q || typeof q !== 'object') continue;
+    const qq = q as { question?: unknown; header?: unknown; options?: unknown; multiSelect?: unknown };
+    const header = typeof qq.header === 'string' && qq.header.trim().length > 0 ? `**${qq.header}**` : '';
+    const question = typeof qq.question === 'string' ? qq.question : '';
+    if (header) out.push(header);
+    if (question) out.push(question);
+    if (Array.isArray(qq.options)) {
+      const opts: string[] = [];
+      for (let i = 0; i < qq.options.length; i++) {
+        const o = qq.options[i] as { label?: unknown; description?: unknown } | undefined;
+        if (!o || typeof o !== 'object') continue;
+        const label = typeof o.label === 'string' ? o.label : `option ${i + 1}`;
+        const desc = typeof o.description === 'string' && o.description.trim().length > 0
+          ? ` — ${o.description}`
+          : '';
+        opts.push(`  ${i + 1}. ${label}${desc}`);
+      }
+      if (opts.length > 0) out.push(opts.join('\n'));
+    }
+  }
+  return out.length > 0 ? out.join('\n') : null;
+}
+
 /** Build a unified-diff view from a diffPreview. */
 function renderDiff(preview: PermissionRequest['diffPreview']): string {
   if (!preview) return '';
@@ -88,7 +128,17 @@ export function renderPermissionCard(req: PermissionRequest): string {
     case 'generic': {
       const parts: string[] = [];
       parts.push(`🔒 Permission · 🧩 ${req.toolName}`);
-      parts.push(formatJson(req.toolInput));
+      // Special-case AskUserQuestion: format the questions + options as plain
+      // text rather than dumping the raw JSON shape. The Allow/Deny buttons
+      // still apply (the user is approving the SDK's use of the tool); the
+      // prettier text just makes the prompt readable.
+      if (req.toolName === 'AskUserQuestion') {
+        const pretty = formatAskUserQuestionInput(req.toolInput);
+        if (pretty) parts.push(pretty);
+        else parts.push(formatJson(req.toolInput));
+      } else {
+        parts.push(formatJson(req.toolInput));
+      }
       const rb = riskBadge(req.risk);
       if (rb) parts.push(rb);
       return parts.join('\n');

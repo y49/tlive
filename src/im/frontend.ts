@@ -365,7 +365,7 @@ export class SessionFrontend {
         state.costUsd = (state.costUsd ?? 0) + (ev.costUsd ?? 0);
         for (const c of channels) { await c.activity.onEvent(ev); await c.agent.onEvent(ev); }
         for (const c of channels) { await c.header.refresh(); }
-        // Reaction anchor: 🤔 → 🎉. Fire-and-forget with a 400ms buffer so
+        // Reaction anchor: 🤔 → 👌. Fire-and-forget with a 400ms buffer so
         // Telegram's separate push channel for reactions doesn't beat the
         // bot's reply text to the user's client. Without the buffer users
         // could see the "completed" reaction before the actual reply

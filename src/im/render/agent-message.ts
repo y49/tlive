@@ -39,6 +39,15 @@ export class AgentMessageRenderer {
   private readonly timers: { setTimeout: typeof setTimeout; clearTimeout: typeof clearTimeout };
   /** Per-target flush timer (avoids cross-target cancellation). */
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * Promise representing the latest in-flight flush. Concurrent callers chain
+   * on this so flushes execute sequentially. Without serialization, two
+   * concurrent flushes could both observe `turn.agentMsgId === undefined`
+   * (the first hasn't returned yet) and both call adapter.send — producing
+   * two distinct primary messages instead of one. Symptom: the same Claude
+   * reply text appears twice in IM.
+   */
+  private inFlightFlush: Promise<void> = Promise.resolve();
 
   constructor(opts: AgentMessageRendererOptions) {
     this.adapter = opts.adapter;
@@ -89,6 +98,18 @@ export class AgentMessageRenderer {
   }
 
   async flush(): Promise<void> {
+    // Chain on the previous in-flight flush so two callers can never both
+    // see `turn.agentMsgId === undefined` and double-send. The chain swallows
+    // prior errors so a failed flush doesn't poison subsequent ones.
+    const next = this.inFlightFlush.then(
+      () => this.doFlush(),
+      () => this.doFlush(),
+    );
+    this.inFlightFlush = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  private async doFlush(): Promise<void> {
     const turn = this.session.turn;
     if (!turn) return;
     if (this.flushTimer) {
