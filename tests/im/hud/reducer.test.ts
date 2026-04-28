@@ -97,6 +97,29 @@ describe('applyEventToHudState', () => {
     expect(s3.subagents[0].status).toBe('done_err');
   });
 
+  it('subagent_progress sets summary on the matching subagent', () => {
+    let s = applyEventToHudState(base(), {
+      kind: 'subagent_start',
+      agentId: 'a1', parentTurnId: 't1', description: 'review pass', taskId: 'tk1',
+    });
+    s = applyEventToHudState(s, {
+      kind: 'subagent_progress', agentId: 'a1', summary: 'finished file scan',
+    });
+    expect(s.subagents[0].summary).toBe('finished file scan');
+    expect(s.subagents[0].status).toBe('running');
+  });
+
+  it('subagent_progress for an unknown agentId leaves subagents unchanged', () => {
+    const s0 = applyEventToHudState(base(), {
+      kind: 'subagent_start',
+      agentId: 'a1', parentTurnId: 't1', description: 'x', taskId: 'tk1',
+    });
+    const s1 = applyEventToHudState(s0, {
+      kind: 'subagent_progress', agentId: 'unknown', summary: 'should not stick',
+    });
+    expect(s1.subagents[0].summary).toBeUndefined();
+  });
+
   it('todo_write replaces todoList with normalized items', () => {
     const s = applyEventToHudState(base(), {
       kind: 'todo_write',
@@ -137,6 +160,29 @@ describe('applyEventToHudState', () => {
       kind: 'runtime_error', severity: 'warn', code: 'soft', message: 'ignore',
     });
     expect(s.isErrored).toBe(false);
+  });
+
+  it('quota_update replaces quotaBars with the event payload', () => {
+    const s = applyEventToHudState(base(), {
+      kind: 'quota_update',
+      quotaBars: [
+        { label: 'Usage', pct: 67, resetsIn: '2h 52m' },
+        { label: 'Weekly', pct: 44 },
+      ],
+    });
+    expect(s.quotaBars).toEqual([
+      { label: 'Usage', pct: 67, resetsIn: '2h 52m' },
+      { label: 'Weekly', pct: 44 },
+    ]);
+  });
+
+  it('quota_update with empty array clears quotaBars', () => {
+    let s = applyEventToHudState(base(), {
+      kind: 'quota_update',
+      quotaBars: [{ label: 'Usage', pct: 50 }],
+    });
+    s = applyEventToHudState(s, { kind: 'quota_update', quotaBars: [] });
+    expect(s.quotaBars).toEqual([]);
   });
 
   it('returns same reference for unknown / no-op events', () => {
