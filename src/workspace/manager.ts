@@ -157,12 +157,19 @@ export class WorkspaceManager {
       throw new WorkspaceConflictError(workspaceId, ws.activeSessionId, sdkSessionId);
     }
     ws.activeSessionId = sdkSessionId;
+    // Fire-and-forget persist so a daemon crash/SIGKILL doesn't lose the
+    // workspace→session binding; without this, only graceful shutdown
+    // wrote activeSessionId to disk and any abnormal exit reset chat
+    // continuity to "no active session" → user sees a new session id on
+    // next message.
+    void this.save().catch(() => undefined);
   }
 
   clearActiveSession(workspaceId: string): void {
     const ws = this.byId.get(workspaceId);
     if (!ws) return;
     ws.activeSessionId = null;
+    void this.save().catch(() => undefined);
   }
 
   getActiveSessionId(workspaceId: string): string | null {
