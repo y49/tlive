@@ -8,6 +8,7 @@
 //   Daemon lifecycle:
 //     tlive start [-F|--foreground] -> tlive-start.mjs
 //     tlive stop                    -> tlive-stop.mjs (daemon shutdown)
+//     tlive restart                 -> tlive-restart.mjs (stop+start, no race)
 //     tlive status                  -> tlive-status.mjs
 //     tlive doctor                  -> tlive-doctor.mjs
 //     tlive daemon-logs [N] [-f]    -> tlive-daemon-logs.mjs
@@ -30,9 +31,35 @@
 import { spawnSync, spawn } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, readFileSync, openSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, openSync, mkdirSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import net from 'node:net';
+
+// ---------------------------------------------------------------------------
+// Liveness helpers — duplicated in src/cli/_liveness.ts for the built CLI
+// surfaces. Kept inline here so this dispatcher has zero compiled deps.
+// ---------------------------------------------------------------------------
+
+/** True iff a process with `pid` is alive. Cross-platform via signal 0. */
+function isPidAlive(pid) {
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; }
+  catch (e) { return e && e.code === 'EPERM'; }
+}
+
+/** Read `daemon.pid` and return a numeric PID or null. */
+function readDaemonPidSync(pidFile) {
+  if (!existsSync(pidFile)) return null;
+  try {
+    const n = Number(readFileSync(pidFile, 'utf8').trim());
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch { return null; }
+}
+
+/** Best-effort unlink. */
+function unlinkIfExists(path) {
+  try { if (existsSync(path)) unlinkSync(path); } catch { /* ignore */ }
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = join(__dirname, '..');
@@ -53,6 +80,7 @@ const DISPATCH = {
   // the typo-suggestion KNOWN set below.
   start: 'start',
   stop: 'stop',
+  restart: 'restart',
   status: 'status',
   doctor: 'doctor',
   'daemon-logs': 'daemon-logs',
@@ -96,7 +124,8 @@ Usage: tlive <command> [args]
 Daemon lifecycle:
   tlive start [--foreground|-F]    Start the daemon (detaches by default;
                                    -F keeps it in the foreground for debug)
-  tlive stop                       Stop the daemon gracefully
+  tlive stop                       Stop the daemon gracefully (blocks on exit)
+  tlive restart                    Atomic stop+start (no socket race)
   tlive status                     Daemon + session snapshot
   tlive doctor                     Structured health checks
   tlive daemon-logs [N] [--follow] Tail the daemon log
@@ -172,12 +201,34 @@ function defaultSocketPath(home) {
 async function startDaemonDetached(argv) {
   const foreground = argv.includes('--foreground') || argv.includes('-F');
 
-  // Short-circuit: if a daemon is already up on the socket, report it.
   const home = process.env.TLIVE_HOME || join(homedir(), '.tlive');
   const sockPath = process.env.TLIVE_SOCKET_PATH || defaultSocketPath(home);
-  if (await socketReady(sockPath, 200)) {
-    process.stdout.write(`tlive daemon already running (socket ${sockPath})\n`);
+  const pidFile = join(home, 'daemon.pid');
+
+  // Authoritative liveness check: the daemon is "running" iff its PID is
+  // alive in the OS process table. Socket-presence and pid-file-presence
+  // both linger after a crash AND while a graceful shutdown is mid-flight
+  // (the socket stays bound until ipc.close fires near the end of the
+  // teardown chain). Trusting the socket for liveness was the source of
+  // the `tlive stop && tlive start` race.
+  const pid = readDaemonPidSync(pidFile);
+  if (pid !== null && isPidAlive(pid)) {
+    process.stdout.write(`tlive daemon already running (pid ${pid}, socket ${sockPath})\n`);
     process.exit(0);
+  }
+
+  // PID file points at a dead process → zombie left over from a crash or
+  // ungraceful exit. Clean up before spawning so the new daemon can claim
+  // a fresh socket and pid path.
+  if (pid !== null) {
+    process.stderr.write(`tlive: cleaning stale pid file (${pid} is dead)\n`);
+    unlinkIfExists(pidFile);
+  }
+  // Stale socket can exist independently (crash before pidfile written, or
+  // bootstrap unlink failed). Drop it so net.createServer doesn't EADDRINUSE.
+  if (existsSync(sockPath)) {
+    process.stderr.write(`tlive: cleaning stale socket ${sockPath}\n`);
+    unlinkIfExists(sockPath);
   }
 
   if (foreground) {

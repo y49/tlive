@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { bootstrapDaemon } from '../../src/daemon/bootstrap.js';
+import { bootstrapDaemon, parseAskAnswer } from '../../src/daemon/bootstrap.js';
 import { createLogger } from '../../src/util/logger.js';
 
 const silentLogger = createLogger({ level: 'error', sink: () => undefined });
@@ -67,6 +67,45 @@ describe('bootstrapDaemon wiring', () => {
     await Promise.all([a, b]);
     // second call should not throw; lifecycle cache ensures one-time run
     await daemon.shutdown();
+  });
+
+  describe('parseAskAnswer', () => {
+    const opts = ['Coffee', 'Tea', 'Cola'];
+
+    it('maps integer reply to option by 1-based index', () => {
+      expect(parseAskAnswer('1', opts)).toBe('Coffee');
+      expect(parseAskAnswer('2', opts)).toBe('Tea');
+      expect(parseAskAnswer('  3 ', opts)).toBe('Cola');
+    });
+
+    it('rejects out-of-range integers', () => {
+      expect(parseAskAnswer('0', opts)).toBeNull();
+      expect(parseAskAnswer('4', opts)).toBeNull();
+      expect(parseAskAnswer('-1', opts)).toBeNull();
+    });
+
+    it('matches case-insensitive label exactly', () => {
+      expect(parseAskAnswer('tea', opts)).toBe('Tea');
+      expect(parseAskAnswer('COLA', opts)).toBe('Cola');
+    });
+
+    it('matches a unique substring', () => {
+      expect(parseAskAnswer('cof', opts)).toBe('Coffee');
+    });
+
+    it('rejects ambiguous substrings (multiple matches)', () => {
+      const ambig = ['Green tea', 'Black tea', 'Coffee'];
+      expect(parseAskAnswer('tea', ambig)).toBeNull();
+    });
+
+    it('returns null for unrelated text (caller treats as new prompt)', () => {
+      expect(parseAskAnswer('hello world', opts)).toBeNull();
+      expect(parseAskAnswer('', opts)).toBeNull();
+    });
+
+    it('returns null when options list is empty', () => {
+      expect(parseAskAnswer('1', [])).toBeNull();
+    });
   });
 
   it('hydrates workspaces from config.workspaces on first boot', async () => {

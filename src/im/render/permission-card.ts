@@ -18,7 +18,7 @@ import type { PermissionRequest } from '../../runtime/types.js';
 import type { PermissionDecision } from '../../runtime/types.js';
 import type { RendererDeps, SessionRenderState, RenderTarget } from './types.js';
 import { targetKey } from './types.js';
-import type { InlineButton, ReplyMarkup } from '../../platform/types.js';
+import type { InlineButton, ParseMode, ReplyMarkup } from '../../platform/types.js';
 
 export interface PermissionCardRendererOptions extends RendererDeps {
   session: SessionRenderState;
@@ -272,10 +272,12 @@ export class PermissionCardRenderer {
     const perTarget = this.session.pendingPermissionMsgIds.get(key);
     const msgId = perTarget?.get(requestId);
     if (!msgId) return;
+    // Resolved banner has no markdown — 'plain' is fine and avoids any chance
+    // of partial entity parse errors when the underlying card was sent as HTML.
     if (this.capabilities.editMessage) {
       // Append banner + strip buttons.
       try {
-        await this.adapter.edit(msgId, target.chatId, banner, { type: 'inline_keyboard', buttons: [] });
+        await this.adapter.edit(msgId, target.chatId, banner, { type: 'inline_keyboard', buttons: [] }, 'plain');
       } catch { /* isolate */ }
     } else {
       try {
@@ -285,11 +287,27 @@ export class PermissionCardRenderer {
           text: banner,
           replyToMessageId: msgId,
           silent: true,
+          parseMode: 'plain',
         });
       } catch { /* isolate */ }
     }
     perTarget!.delete(requestId);
     if (perTarget!.size === 0) this.session.pendingPermissionMsgIds.delete(key);
+  }
+
+  /**
+   * Pick a parseMode for permission cards. Primary targets get 'html' so
+   * `**bold**` (e.g. AskUserQuestion's `header`) is rendered by formatHtml
+   * instead of leaking literal `**` to the user. Mirrors stay 'plain' —
+   * read-only echoes don't need formatting and we don't want a stray HTML
+   * parse error to nuke the mirror copy.
+   *
+   * Code fences, bullets, and inline `code` in the rendered card all pass
+   * through formatHtml safely (see telegram/renderer.ts: HTML mode escapes
+   * only `<`, `>`, `&` outside of code/fence spans).
+   */
+  private pickParseMode(): ParseMode {
+    return this.target.role === 'primary' ? 'html' : 'plain';
   }
 
   private async sendForTarget(
@@ -305,6 +323,7 @@ export class PermissionCardRenderer {
       threadId: target.threadId,
       text: text + mirrorTail,
       replyMarkup: effectiveMarkup,
+      parseMode: this.pickParseMode(),
     });
     const key = targetKey(target);
     let perTarget = this.session.pendingPermissionMsgIds.get(key);

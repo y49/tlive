@@ -186,6 +186,55 @@ describe('permission-card', () => {
     expect(String(adapter.byKind('edit')[0]!.args.text)).toContain('Allowed');
   });
 
+  // Bug C: primary permission cards must be sent with parseMode='html' so
+  // the renderer's `**bold**` markers (e.g. AskUserQuestion header) are
+  // converted to `<b>...</b>` instead of being passed through verbatim.
+  it('primary target sends with parseMode=html so **bold** is rendered', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const state = makeState();
+    const target = state.targets[0]!;
+    const r = new PermissionCardRenderer({ adapter, capabilities: CAPABILITIES.telegram, session: state, target });
+    await r.onPending(makeReq('generic', {
+      toolName: 'AskUserQuestion',
+      toolInput: {
+        questions: [{
+          header: '饮料',
+          question: '你想喝什么饮料?',
+          options: [{ label: '咖啡' }, { label: '茶' }, { label: '可乐' }],
+        }],
+      },
+    }));
+    const send = adapter.byKind('send')[0]!;
+    expect(send.args.parseMode).toBe('html');
+    // The raw text still contains the **bold** markers — actual HTML
+    // conversion happens inside the platform adapter (see formatHtml).
+    expect(String(send.args.text)).toContain('**饮料**');
+  });
+
+  it('mirror target sends with parseMode=plain (no formatting on read-only echo)', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const state = newSessionRenderState({
+      sessionId: 's1', shortAlias: 'abcd',
+      workspaceId: 'w1', workspaceName: 'ws',
+      targets: [{ channelType: 'telegram', chatId: '20', role: 'mirror' }],
+    });
+    const target = state.targets[0]!;
+    const r = new PermissionCardRenderer({ adapter, capabilities: CAPABILITIES.telegram, session: state, target });
+    await r.onPending(makeReq('generic'));
+    const send = adapter.byKind('send')[0]!;
+    expect(send.args.parseMode).toBe('plain');
+  });
+
+  it('Telegram formatHtml converts **bold** in permission card text to <b>', async () => {
+    // End-to-end check that the chosen parseMode actually flips the rendering
+    // path inside the Telegram-side helper used by the real adapter.
+    const { formatHtml } = await import('../../../src/platform/telegram/renderer.js');
+    const text = '🔒 Permission · 🧩 AskUserQuestion\n**饮料**\n你想喝什么饮料?\n  1. 咖啡 — 经典';
+    const html = formatHtml(text);
+    expect(html).toContain('<b>饮料</b>');
+    expect(html).not.toContain('**饮料**');
+  });
+
   it('skips elicitation category (routed elsewhere)', async () => {
     const adapter = new FakeAdapter('telegram');
     const state = makeState();

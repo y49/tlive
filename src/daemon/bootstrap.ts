@@ -597,6 +597,28 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
     // applies it to whichever session ends up attached.
     deps.frontend.markInboundReceived(ev.channelType, ev.chatId, ev.messageId, ev.threadId);
 
+    // AskUserQuestion answer relay: if the agent has a pending question on
+    // this chat's active session, treat plain text like "2", "Tea", or
+    // "tea — green" as the user's answer rather than a brand-new prompt.
+    // Without this, an answer like "2" lands in lazyResumeOrCreate and
+    // creates a new turn while the question keeps waiting forever.
+    const wsForAsk = deps.workspaces.findByChat(ev.channelType, ev.chatId);
+    if (wsForAsk && wsForAsk.activeSessionId) {
+      const pending = deps.askBroker.pendingFor(wsForAsk.activeSessionId);
+      if (pending.length > 0) {
+        const ask = pending[0]!; // multiple in-flight questions are unusual
+        const choice = parseAskAnswer(text, ask.options);
+        if (choice !== null) {
+          deps.askBroker.resolve(wsForAsk.activeSessionId, ask.id, [choice], ev.userId);
+          deps.logger.info('ask-answer relayed', {
+            sessionId: wsForAsk.activeSessionId, askId: ask.id, choice, userId: ev.userId,
+          });
+          return; // do NOT fall through to lazyResumeOrCreate
+        }
+        // Unparseable text → fall through and treat as a regular prompt.
+      }
+    }
+
     // Plain-text: route to the workspace's lazyResumeOrCreate. We need a
     // workspace first — look up by chat binding.
     const ws = deps.workspaces.findByChat(ev.channelType, ev.chatId);
@@ -684,4 +706,38 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
   };
 
   await dispatchCommand(ctx, text, userRole);
+}
+
+/**
+ * Map a freeform user reply to one of the AskUserQuestion `options` strings.
+ * Tries integer index first ("2" → options[1]), then case-insensitive label
+ * match (full or substring). Returns null when the reply doesn't pick any
+ * option — the caller treats null as "not an answer, route as a prompt".
+ *
+ * Exported for unit tests.
+ */
+export function parseAskAnswer(text: string, options: string[]): string | null {
+  if (!Array.isArray(options) || options.length === 0) return null;
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return null;
+
+  // 1) Pure integer index: "2", "  3 ".
+  const asInt = Number(trimmed);
+  if (Number.isInteger(asInt) && String(asInt) === trimmed.replace(/^\s+|\s+$/g, '')) {
+    if (asInt >= 1 && asInt <= options.length) return options[asInt - 1]!;
+  }
+
+  // 2) Exact case-insensitive match against an option label.
+  const lc = trimmed.toLowerCase();
+  for (const opt of options) {
+    if (opt.toLowerCase() === lc) return opt;
+  }
+
+  // 3) Substring match — only if there is exactly one matching option, to
+  //    avoid ambiguity (e.g. user types "tea" with both "Green tea" and
+  //    "Black tea" available — fall through to "treat as new prompt").
+  const subs = options.filter((o) => o.toLowerCase().includes(lc));
+  if (subs.length === 1) return subs[0]!;
+
+  return null;
 }

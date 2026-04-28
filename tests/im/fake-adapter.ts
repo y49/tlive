@@ -5,7 +5,7 @@
 // produced.
 
 import type {
-  PlatformAdapter, OutboundMessage, OutboundAttachment, InboundEvent, ReplyMarkup,
+  PlatformAdapter, OutboundMessage, OutboundAttachment, InboundEvent, ParseMode, ReplyMarkup,
 } from '../../src/platform/types.js';
 import type { ChannelType } from '../../src/workspace/bindings.js';
 
@@ -40,12 +40,12 @@ export class FakeAdapter implements PlatformAdapter {
   }
 
   async edit(
-    messageId: string, chatId: string, text?: string, markup?: ReplyMarkup,
+    messageId: string, chatId: string, text?: string, markup?: ReplyMarkup, parseMode?: ParseMode,
   ): Promise<void> {
     this.calls.push({
       kind: 'edit',
       at: Date.now(),
-      args: { messageId, chatId, text, markup },
+      args: { messageId, chatId, text, markup, parseMode },
     });
   }
 

@@ -57,6 +57,7 @@ const cliEntries = [
   // Daemon lifecycle
   'start',
   'stop',
+  'restart',
   'status',
   'doctor',
   'daemon-logs',
