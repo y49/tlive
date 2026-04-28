@@ -53,6 +53,33 @@ describe('telegram/formatHtml', () => {
     expect(formatHtml('this is **bold** and *italic*')).toBe('this is <b>bold</b> and <i>italic</i>');
   });
 
+  it('renders CJK bold — smoke case **饮料**', () => {
+    expect(formatHtml('**饮料**')).toContain('<b>饮料</b>');
+  });
+
+  it('renders _italic_ underscored form', () => {
+    expect(formatHtml('_italic_')).toContain('<i>italic</i>');
+  });
+
+  it('renders italic surrounded by plain text', () => {
+    expect(formatHtml('plain *no spaces beside* text')).toContain('<i>no spaces beside</i>');
+  });
+
+  it('a*b*c — italic only when not joined to alphanumeric on boundary', () => {
+    // The italic regex requires a non-word char (or start) before the opening *,
+    // so `a*b*c` does NOT trigger italic — the opening * is preceded by 'a' (word char).
+    expect(formatHtml('a*b*c')).not.toContain('<i>');
+  });
+
+  it('bold then italic nested — **bold _and italic_**', () => {
+    const html = formatHtml('**bold _and italic_**');
+    expect(html).toContain('<b>');
+    expect(html).toContain('bold');
+    // The italic inside the bold span: _and italic_ is processed inside the already-replaced text.
+    // Since bold replacement happens first on the HTML-escaped string, the inner _italic_ IS matched.
+    expect(html).toContain('<i>and italic</i>');
+  });
+
   it('renders inline `code` spans', () => {
     expect(formatHtml('use `npm install` here')).toBe('use <code>npm install</code> here');
   });

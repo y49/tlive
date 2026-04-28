@@ -101,4 +101,35 @@ describe('ActivityStickyRenderer', () => {
     });
     expect(adapter.byKind('delete')).toHaveLength(1);
   });
+
+  // Fix 2: edit-fail fallback must delete the old message before re-sending,
+  // so only one sticky is visible in chat at any time.
+  it('edit-fail on sticky: deletes old id then sends new one', async () => {
+    const { adapter, state, r, setNow } = setup();
+    // First turn_start — creates the sticky via send.
+    await r.onEvent({ kind: 'turn_start', turnId: 't1', userInputPreview: 'hi', at: 1_000_000 });
+    expect(adapter.byKind('send')).toHaveLength(1);
+    const oldMsgId = state.turn!.activityMsgId!;
+    expect(oldMsgId).toBeDefined();
+
+    // Make subsequent edits throw.
+    adapter.edit = async () => { throw new Error('message can\'t be edited'); };
+
+    // Advance past throttle window so next event forces an immediate re-render.
+    setNow(1_000_000 + 2000);
+    state.turn!.currentTool = 'Bash';
+    await r.onEvent({
+      kind: 'tool_use_start', turnId: 't1', toolUseId: 'u2', toolName: 'Bash', input: {},
+    });
+
+    // delete of the old sticky must have been called.
+    const deletes = adapter.byKind('delete');
+    expect(deletes.length).toBeGreaterThanOrEqual(1);
+    expect(deletes[0]!.args.messageId).toBe(oldMsgId);
+
+    // A new send must have produced a replacement sticky.
+    expect(adapter.byKind('send')).toHaveLength(2);
+    // The stored msgId must have been updated to the new message.
+    expect(state.turn!.activityMsgId).not.toBe(oldMsgId);
+  });
 });

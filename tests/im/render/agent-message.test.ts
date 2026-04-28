@@ -171,6 +171,54 @@ describe('AgentMessageRenderer', () => {
     expect(buildAgentFooter(turn, 0)).toBeNull();
   });
 
+  // Fix 2: edit-fail for agent message must delete old message before sending
+  // a new one, preventing duplicate assistant text visible in chat.
+  it('edit-fail on agent message: deletes old id then sends new one', async () => {
+    const { adapter, state, r } = setup();
+    // First flush via assistant_text — creates the primary message.
+    await r.onEvent({ kind: 'assistant_text', turnId: 't1', text: 'Hello.', complete: true });
+    expect(adapter.byKind('send')).toHaveLength(1);
+    const oldMsgId = state.turn!.agentMsgId!;
+    expect(oldMsgId).toBeDefined();
+
+    // Make edits throw.
+    adapter.edit = async () => { throw new Error('message can\'t be edited'); };
+
+    // turn_end triggers another flush (body + footer).
+    state.turn!.toolUseCounts.set('Bash', 1);
+    await r.onEvent({
+      kind: 'turn_end', turnId: 't1', durationMs: 1000, costUsd: 0.01, tokensIn: 5, tokensOut: 10,
+    });
+
+    // Old message deleted before new send.
+    const deletes = adapter.byKind('delete');
+    expect(deletes.length).toBeGreaterThanOrEqual(1);
+    expect(deletes[0]!.args.messageId).toBe(oldMsgId);
+
+    // Exactly one additional send (not two).
+    expect(adapter.byKind('send')).toHaveLength(2);
+    // agentMsgId updated to the new message.
+    expect(state.turn!.agentMsgId).not.toBe(oldMsgId);
+  });
+
+  // Fix 3: Two flushes per turn (body flush + footer flush via edit) is by
+  // design for the streaming path. Verify the second flush uses edit (not send)
+  // when agentMsgId is set, keeping exactly one primary message in chat.
+  it('two-flush turn: body send then footer edit — only 1 primary message', async () => {
+    const { adapter, state, r } = setup();
+    state.turn!.toolUseCounts.set('Read', 1);
+    // First flush: body text only (footer not yet available).
+    await r.onEvent({ kind: 'assistant_text', turnId: 't1', text: 'The answer.', complete: true });
+    expect(adapter.byKind('send')).toHaveLength(1);
+    expect(adapter.byKind('edit')).toHaveLength(0);
+    // Second flush: turn_end adds footer → edit, NOT send.
+    await r.onEvent({
+      kind: 'turn_end', turnId: 't1', durationMs: 2000, costUsd: 0.02, tokensIn: 10, tokensOut: 50,
+    });
+    expect(adapter.byKind('send')).toHaveLength(1); // still only 1 send
+    expect(adapter.byKind('edit')).toHaveLength(1); // footer added via edit
+  });
+
   it('buildAgentFooter renders single-tool single-stat footer', () => {
     const turn = newTurnRenderState('t', 0, 0);
     turn.toolUseCounts.set('Bash', 1);

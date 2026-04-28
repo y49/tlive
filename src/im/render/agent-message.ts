@@ -227,8 +227,14 @@ export class AgentMessageRenderer {
     if (turn.agentMsgId && this.capabilities.editMessage) {
       try {
         await this.adapter.edit(turn.agentMsgId, target.chatId, primaryChunk, undefined, parseMode);
-      } catch {
-        // Fallback: send anew (lose previous id).
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        process.stderr.write(
+          `[agent-render] edit failed channel=${target.channelType} chat=${target.chatId} reason=${reason}; falling back to send + delete old\n`,
+        );
+        // Best-effort delete the old message so the user doesn't see two copies.
+        const oldId = turn.agentMsgId;
+        try { await this.adapter.delete(oldId, target.chatId); } catch { /* ignore */ }
         const sent = await this.adapter.send({
           chatId: target.chatId,
           threadId: target.threadId,
@@ -254,7 +260,14 @@ export class AgentMessageRenderer {
         try {
           await this.adapter.edit(existing, target.chatId, chunks[i]!, undefined, parseMode);
           continue;
-        } catch { /* fall through to send */ }
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          process.stderr.write(
+            `[agent-render] overflow-edit failed channel=${target.channelType} chat=${target.chatId} chunk=${i} reason=${reason}; re-sending\n`,
+          );
+          // Best-effort delete the old overflow chunk.
+          try { await this.adapter.delete(existing, target.chatId); } catch { /* ignore */ }
+        }
       }
       const sent = await this.adapter.send({
         chatId: target.chatId,

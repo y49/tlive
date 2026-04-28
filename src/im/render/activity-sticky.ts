@@ -202,7 +202,14 @@ export class ActivityStickyRenderer {
       try {
         await this.adapter.edit(msgId, target.chatId, text, effectiveMarkup);
         return;
-      } catch { /* fall through to re-send */ }
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        process.stderr.write(
+          `[activity-render] edit failed channel=${target.channelType} chat=${target.chatId} reason=${reason}; falling back to send + delete old\n`,
+        );
+        // Best-effort delete the stale sticky so only one copy shows in chat.
+        try { await this.adapter.delete(msgId, target.chatId); } catch { /* ignore */ }
+      }
     }
     const sent = await this.adapter.send({
       chatId: target.chatId,
