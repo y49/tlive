@@ -155,6 +155,27 @@ export class ClaudeEventAdapter {
         break;
       }
       case 'assistant': {
+        // The Claude Agent SDK in streaming-input mode does NOT echo the
+        // user's prompt back as a `type:'user'` frame in its output stream
+        // unless tool_results need to be relayed. So in pure Q&A scenarios
+        // the adapter never sees a `case 'user'` and `newTurn()` is never
+        // called → renderers that gate on `state.turn` (agent-message,
+        // activity-sticky) silently drop every assistant_text.
+        //
+        // Synthesize a turn_start when we observe the first assistant frame
+        // without an active turn. The SDK's assistant frame IS the moment
+        // the LLM begins responding to the queued prompt, which is a valid
+        // turn boundary. The synthesized turn closes via the existing
+        // `case 'result'` → turn_end path that fires on stop_reason='end_turn'.
+        if (this.currentTurnId === null) {
+          const turnId = this.newTurn();
+          events.push({
+            kind: 'turn_start',
+            turnId,
+            userInputPreview: '',
+            at: Date.now(),
+          });
+        }
         const parts = extractAssistantContent(msg);
         const toolUseParts = parts.filter((p) => p.type === 'tool_use');
         const isParallel = toolUseParts.length > 1;

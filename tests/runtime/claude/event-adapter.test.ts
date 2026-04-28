@@ -288,4 +288,54 @@ describe('ClaudeEventAdapter', () => {
     expect(result.events.some((e) => e.kind === 'hook_generic')).toBe(false);
     expect(result.events.some((e) => e.kind === 'runtime_error')).toBe(false);
   });
+
+  it('assistant frame without prior user frame synthesizes turn_start (B4 plain Q&A)', () => {
+    // Claude Agent SDK in streaming-input mode does NOT echo the user's
+    // prompt back into its output stream unless a tool_result needs to be
+    // relayed. So in pure Q&A scenarios the adapter NEVER sees `case 'user'`
+    // and `newTurn()` would never fire — leaving renderers that gate on
+    // `state.turn` (agent-message, activity-sticky) to silently drop every
+    // assistant_text. The adapter synthesizes a turn_start on first
+    // assistant frame when currentTurnId is null.
+    const adapter = new ClaudeEventAdapter();
+    const result = adapter.adapt({
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: 'reply' }],
+        role: 'assistant',
+      },
+      parent_tool_use_id: null,
+      session_id: 'sess-qa-1',
+    });
+    const turnStart = result.events.find((e) => e.kind === 'turn_start') as Extract<NotificationEvent, { kind: 'turn_start' }> | undefined;
+    const text = result.events.find((e) => e.kind === 'assistant_text') as Extract<NotificationEvent, { kind: 'assistant_text' }> | undefined;
+    expect(turnStart).toBeDefined();
+    expect(text).toBeDefined();
+    // assistant_text must carry the synthesized turnId, not 'unknown'
+    expect(text!.turnId).toBe(turnStart!.turnId);
+    expect(text!.turnId).not.toBe('unknown');
+    // The synthesized turn must precede the assistant_text in event order
+    const tsIdx = result.events.findIndex((e) => e.kind === 'turn_start');
+    const txIdx = result.events.findIndex((e) => e.kind === 'assistant_text');
+    expect(tsIdx).toBeGreaterThanOrEqual(0);
+    expect(txIdx).toBeGreaterThan(tsIdx);
+  });
+
+  it('assistant frames after a real user-frame turn do NOT synthesize a duplicate turn_start', () => {
+    const adapter = new ClaudeEventAdapter();
+    // Establish a real turn via user frame (simulates tool_result relay path).
+    const userResult = adapter.adapt({ type: 'user', message: { content: 'real prompt' } } as unknown as Parameters<typeof adapter.adapt>[0]);
+    const realTurnId = (userResult.events.find((e) => e.kind === 'turn_start') as Extract<NotificationEvent, { kind: 'turn_start' }>).turnId;
+    const r2 = adapter.adapt({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'reply' }], role: 'assistant' },
+      parent_tool_use_id: null,
+      session_id: 'sess-qa-2',
+    });
+    // Should NOT contain a second turn_start — currentTurnId is non-null
+    expect(r2.events.some((e) => e.kind === 'turn_start')).toBe(false);
+    // assistant_text inherits the real turnId
+    const text = r2.events.find((e) => e.kind === 'assistant_text') as Extract<NotificationEvent, { kind: 'assistant_text' }>;
+    expect(text.turnId).toBe(realTurnId);
+  });
 });
