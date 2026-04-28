@@ -5,6 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { ClaudeEventAdapter } from '../../../src/runtime/claude/event-adapter.js';
+import type { NotificationEvent } from '../../../src/runtime/events.js';
 
 describe('ClaudeEventAdapter', () => {
   it('emits turn_start on user message', () => {
@@ -253,12 +254,16 @@ describe('ClaudeEventAdapter', () => {
       severity: 'warn',
       code: 'unknown_sdk_message_kind',
     });
+    expect((errs[0] as Extract<typeof errs[0], { kind: 'runtime_error' }>).message).toContain('something_we_dont_know');
   });
 
   it('assistant text block (B4 fix): emits assistant_text with turnId and complete=true', () => {
     const adapter = new ClaudeEventAdapter();
     // Simulate a minimal SDK SDKAssistantMessage shape: type='assistant', message.content array
-    adapter.adapt({ type: 'user', message: { content: 'ping' } }); // establish a turnId
+    const userResult = adapter.adapt({ type: 'user', message: { content: 'ping' } } as unknown as Parameters<typeof adapter.adapt>[0]);
+    const turnStart = userResult.events.find((e) => e.kind === 'turn_start') as Extract<NotificationEvent, { kind: 'turn_start' }> | undefined;
+    const expectedTurnId = turnStart?.turnId;
+    expect(expectedTurnId).toBeTruthy(); // sanity-check the prelude itself
     const result = adapter.adapt({
       type: 'assistant',
       message: {
@@ -277,8 +282,8 @@ describe('ClaudeEventAdapter', () => {
       text: 'Hello, I can hear you.',
       complete: true,
     });
-    // turnId must be a non-empty string (set by prior turn_start)
-    expect((textEvents[0] as Extract<typeof textEvents[0], { kind: 'assistant_text' }>).turnId).toBeTruthy();
+    // turnId must equal the value set by the prior turn_start — not just be truthy
+    expect((textEvents[0] as Extract<NotificationEvent, { kind: 'assistant_text' }>).turnId).toBe(expectedTurnId);
     // Must not emit hook_generic or runtime_error for a well-formed assistant message
     expect(result.events.some((e) => e.kind === 'hook_generic')).toBe(false);
     expect(result.events.some((e) => e.kind === 'runtime_error')).toBe(false);

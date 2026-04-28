@@ -330,7 +330,7 @@ export class ClaudeEventAdapter {
           kind: 'runtime_error',
           severity: 'warn',
           code: 'unknown_sdk_message_kind',
-          message: `unrecognized SDK msg kind: ${msg.type}${(msg as { subtype?: string }).subtype ? '/' + (msg as { subtype?: string }).subtype : ''}`,
+          message: `unrecognized SDK msg kind: ${msg.type}${sub ? '/' + sub : ''}`,
         });
         break;
       }
