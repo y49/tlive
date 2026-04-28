@@ -98,15 +98,24 @@ export class AgentMessageRenderer {
     if (turn.agentAccText.length === 0) return;
     if (turn.agentAccText === turn.agentRenderedText) return;
 
-    const chunks = splitText(turn.agentAccText, this.capabilities.maxTextLen);
-    await this.renderForTarget(turn, chunks);
-    turn.agentRenderedText = turn.agentAccText;
+    // Snapshot the text and mark it as rendered BEFORE awaiting the network
+    // call. This makes flush() reentry-safe: if the deferred-flush timer
+    // fires while we are awaiting renderForTarget, the timer's flush()
+    // observes agentAccText === agentRenderedText and returns immediately
+    // instead of double-sending. Without this guard the same text was sent
+    // twice (once by the await-completing flush, once by the timer-fired
+    // flush), producing duplicate "你好！..." messages in IM.
+    const snapshot = turn.agentAccText;
+    turn.agentRenderedText = snapshot;
     turn.agentLastFlushMs = this.clock();
+
+    const chunks = splitText(snapshot, this.capabilities.maxTextLen);
+    await this.renderForTarget(turn, chunks);
     // Component breadcrumb: confirms IM actually saw assistant text. Goes to
     // stderr so daemon.log shows it; doesn't carry sessionId because this
     // renderer doesn't have it threaded in.
     process.stderr.write(
-      `[agent-render] flush channel=${this.target.channelType} chat=${this.target.chatId} chunks=${chunks.length} chars=${turn.agentAccText.length}\n`,
+      `[agent-render] flush channel=${this.target.channelType} chat=${this.target.chatId} chunks=${chunks.length} chars=${snapshot.length}\n`,
     );
   }
 

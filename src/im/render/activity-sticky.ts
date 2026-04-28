@@ -63,10 +63,32 @@ export class ActivityStickyRenderer {
   async onEvent(event: NotificationEvent): Promise<void> {
     const turn = this.session.turn;
     if (!turn) return;
+    // turn_end → delete the activity sticky instead of rendering one more
+    // "🧠 thinking …" frame. The header card already carries cost + status,
+    // and `session_complete` is not fired in streaming-input mode (the SDK
+    // iter stays open across turns), so teardown() called on session detach
+    // would not reach here in time. Cleanly removing the sticky on turn_end
+    // matches user expectation that "thinking" disappears when the turn
+    // resolves.
+    if (event.kind === 'turn_end') {
+      if (this.flushTimer) {
+        this.timers.clearTimeout(this.flushTimer);
+        this.flushTimer = undefined;
+      }
+      const msgId = this.activityMsgIdFor(turn, this.target);
+      if (msgId) {
+        try { await this.adapter.delete(msgId, this.target.chatId); } catch { /* isolate */ }
+        if (this.target.role === 'primary') {
+          turn.activityMsgId = undefined;
+        } else {
+          (turn as TurnWithMirrors)._mirrorActivityMsgIds?.delete(targetKey(this.target));
+        }
+      }
+      return;
+    }
     let force = false;
     switch (event.kind) {
       case 'turn_start':
-      case 'turn_end':
       case 'parallel_tool_batch_start':
       case 'parallel_tool_batch_end':
       case 'subagent_start':

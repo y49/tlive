@@ -281,7 +281,7 @@ describe('Session lifecycle — full stack', () => {
 
   // ---- Reactions (Spec Z absorbed into lifecycle hardening) ------------------
 
-  it('reaction wiring: markInboundReceived → 👁️, turn_start → ⏳, turn_end → ✅', async () => {
+  it('reaction wiring: markInboundReceived → 👀, turn_start → 🤔, turn_end → 👍', async () => {
     env = await setup();
     // Bootstrap behavior: register inbound BEFORE the session attaches. Frontend
     // parks it in pendingInbound; on attach it fires the 'received' reaction.
@@ -293,35 +293,35 @@ describe('Session lifecycle — full stack', () => {
     const reactionCalls = env.adapter.byKind('setReaction');
     expect(reactionCalls.length).toBeGreaterThanOrEqual(1);
     expect(reactionCalls[0]!.args.messageId).toBe('user-msg-1');
-    expect(reactionCalls[0]!.args.emoji).toBe('👁️');
+    expect(reactionCalls[0]!.args.emoji).toBe('👀');
 
-    // Drive turn_start through the runtime sink; expect ⏳ on the same inbound.
+    // Drive turn_start through the runtime sink; expect 🤔 on the same inbound.
     const runtime = env.runtimes[0]!;
     runtime.emitEvent({
       kind: 'turn_start', turnId: 't1', userInputPreview: 'hello', at: Date.now(),
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
     const afterStart = env.adapter.byKind('setReaction');
-    const processing = afterStart.find((c) => c.args.emoji === '⏳');
+    const processing = afterStart.find((c) => c.args.emoji === '🤔');
     expect(processing).toBeDefined();
     expect(processing!.args.messageId).toBe('user-msg-1');
 
-    // turn_end → ✅
+    // turn_end → 👍
     runtime.emitEvent({
       kind: 'turn_end', turnId: 't1', durationMs: 100, costUsd: 0.01,
       tokensIn: 10, tokensOut: 20,
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
-    const doneOk = env.adapter.byKind('setReaction').find((c) => c.args.emoji === '✅');
+    const doneOk = env.adapter.byKind('setReaction').find((c) => c.args.emoji === '👍');
     expect(doneOk).toBeDefined();
     expect(doneOk!.args.messageId).toBe('user-msg-1');
 
-    // runtime_error (severity warn or fatal) → ❌
+    // runtime_error (severity warn or fatal) → 👎
     runtime.emitEvent({
       kind: 'runtime_error', severity: 'warn', code: 'test', message: 'oops',
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
-    const doneErr = env.adapter.byKind('setReaction').find((c) => c.args.emoji === '❌');
+    const doneErr = env.adapter.byKind('setReaction').find((c) => c.args.emoji === '👎');
     expect(doneErr).toBeDefined();
     expect(doneErr!.args.messageId).toBe('user-msg-1');
 
