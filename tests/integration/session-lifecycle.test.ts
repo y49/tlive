@@ -33,6 +33,7 @@ interface SetupOpts {
 interface Env {
   home: string;
   manager: SessionManager;
+  workspaces: WorkspaceManager;
   frontend: SessionFrontend;
   adapter: FakeAdapter;
   runtimes: FakeRuntime[];
@@ -72,7 +73,7 @@ async function setup(opts: SetupOpts = {}): Promise<Env> {
   });
   frontend.start();
 
-  return { home, manager, frontend, adapter, runtimes, wsId: ws.id, workdir };
+  return { home, manager, workspaces, frontend, adapter, runtimes, wsId: ws.id, workdir };
 }
 
 async function teardown(env: Env): Promise<void> {
@@ -138,38 +139,56 @@ describe('Session lifecycle — full stack', () => {
 
   it('createLocal calls prepare → emit("created") → attachSink in order', async () => {
     const events: string[] = [];
-    env = await setup();
+    env = await setup({
+      onRuntimeCreated: (r) => {
+        // Wrap prepare to push a marker after it resolves.
+        const origPrepare = r.prepare.bind(r);
+        r.prepare = async (opts) => {
+          const result = await origPrepare(opts);
+          events.push('prepare-end');
+          return result;
+        };
+        // Wrap attachSink to push a marker when it is called.
+        const origAttachSink = r.attachSink.bind(r);
+        r.attachSink = (sink) => {
+          events.push('attach');
+          return origAttachSink(sink);
+        };
+      },
+    });
     env.manager.subscribe((ev) => {
       if (ev.kind === 'created') events.push('emit:created');
     });
     await createLocal(env);
 
-    // Manager emitted 'created' exactly once.
-    expect(events).toEqual(['emit:created']);
-    // FakeRuntime was prepared and had its sink attached once each.
-    expect(env.runtimes[0]!.prepareCalls).toBe(1);
-    expect(env.runtimes[0]!.attachCalls).toBe(1);
+    // All three phases must occur in strict sequence. This catches regressions
+    // that swap emit('created') and attachSink (the old test only checked counts).
+    expect(events).toEqual(['prepare-end', 'emit:created', 'attach']);
   });
 
   // ---- Frontend sync attach (I3) ---------------------------------------------
 
-  it('SessionFrontend.attachSession completes synchronously inside emit callstack', async () => {
-    const observedDuringEmit: string[] = [];
-    env = await setup();
-    env.manager.subscribe((ev) => {
-      if (ev.kind === 'created') {
-        // SessionFrontend's own subscribe listener runs before ours only when
-        // it was registered first (it calls frontend.start() before us).
-        // Both listeners execute in the same synchronous emit() loop.
-        // By the time ANY listener fires, attachSession has already returned
-        // (because the frontend listener fires first and attachSession is sync).
-        if ((env.frontend as unknown as { sessions: Map<string, unknown> }).sessions.has(ev.session.id)) {
-          observedDuringEmit.push('frontend-attached');
-        }
-      }
+  it('frontend.attachSession completes synchronously inside emit callstack', async () => {
+    // Strategy: FakeRuntime.attachSink is called by manager.createLocal()
+    // synchronously AFTER emit('created') returns. If SessionFrontend.attachSession
+    // is synchronous (as required), frontend.sessions already contains the entry
+    // by the time attachSink is invoked. We spy on attachSink to capture the
+    // observation without relying on listener ordering.
+    let frontendHadEntryAtAttachSink = false;
+    env = await setup({
+      onRuntimeCreated: (r) => {
+        const origAttachSink = r.attachSink.bind(r);
+        r.attachSink = (sink) => {
+          // attachSink runs after emit('created') returns synchronously.
+          // If frontend.sessions already has the id here, attachSession was sync.
+          const sessionsMap = (env.frontend as unknown as { sessions: Map<string, unknown> }).sessions;
+          frontendHadEntryAtAttachSink = sessionsMap.size > 0;
+          return origAttachSink(sink);
+        };
+      },
     });
     await createLocal(env);
-    expect(observedDuringEmit).toEqual(['frontend-attached']);
+    expect(frontendHadEntryAtAttachSink).toBe(true);
   });
 
   // ---- B7 regression ---------------------------------------------------------
@@ -224,20 +243,73 @@ describe('Session lifecycle — full stack', () => {
 
   // ---- Resume contract -------------------------------------------------------
 
-  it('resume contract: resumeLocal passes resumeSessionId to runtime.prepare', async () => {
+  it('resume contract: lazyResumeOrCreate threads resumeSessionId through to runtime.prepare', async () => {
     env = await setup();
     const s = await createLocal(env);
+    // Bind the active session so lazyResumeOrCreate sees it on branch 2.
+    env.workspaces.bindActiveSession(env.wsId, s.id);
     // Stop the session (saves snapshot to disk).
     await env.manager.stop(s.id);
 
     // Wait a tick so any async snapshot writes complete.
     await new Promise<void>((resolve) => setImmediate(resolve));
 
-    const r = await env.manager.resumeLocal(s.id);
-    expect(r).not.toBeNull();
+    // Drive through lazyResumeOrCreate with the same deps shape bootstrap uses,
+    // exercising the full IM-resume path instead of calling resumeLocal directly.
+    await env.workspaces.lazyResumeOrCreate(env.wsId, 'second message', 'im', {
+      isLive: (id) => {
+        const found = env.manager.get(id);
+        return (
+          found !== undefined &&
+          found.kind === 'local' &&
+          (found as unknown as { getStatus: () => string }).getStatus() === 'active'
+        );
+      },
+      resume: (id) => env.manager.resumeLocal(id),
+      sendInput: async (id, text, src) => {
+        const found = env.manager.get(id);
+        if (!found || found.kind !== 'local') throw new Error('session not live for sendInput');
+        await (found as unknown as { sendInput: (t: string, s: 'im' | 'cli') => Promise<void> }).sendInput(text, src);
+      },
+      createLocal: async () => { throw new Error('should not create new session in resume branch'); },
+    });
 
-    // The new runtime constructed for resume was pushed after the first one.
+    // The runtime created for resume should have been called with resumeSessionId === s.id.
     const lastRuntime = env.runtimes[env.runtimes.length - 1]!;
     expect(lastRuntime.resumeRequestedFor).toBe(s.id);
+  });
+
+  // ---- lazyResumeOrCreate live branch (spec §8.3 case 2) --------------------
+
+  it('lazyResumeOrCreate live branch: second message reuses session, no new created emit', async () => {
+    env = await setup();
+    const s = await createLocal(env);
+    // Bind and keep alive.
+    env.workspaces.bindActiveSession(env.wsId, s.id);
+
+    let createdCount = 0;
+    env.manager.subscribe((ev) => { if (ev.kind === 'created') createdCount++; });
+
+    await env.workspaces.lazyResumeOrCreate(env.wsId, 'second message', 'im', {
+      isLive: (id) => {
+        const found = env.manager.get(id);
+        return (
+          found !== undefined &&
+          found.kind === 'local' &&
+          (found as unknown as { getStatus: () => string }).getStatus() === 'active'
+        );
+      },
+      resume: (id) => env.manager.resumeLocal(id),
+      sendInput: async (id, text, src) => {
+        const found = env.manager.get(id);
+        if (!found || found.kind !== 'local') throw new Error('session not live for sendInput');
+        await (found as unknown as { sendInput: (t: string, s: 'im' | 'cli') => Promise<void> }).sendInput(text, src);
+      },
+      createLocal: async () => { throw new Error('should not create new session in live branch'); },
+    });
+
+    // Live branch: no new created event, and the same runtime received the input.
+    expect(createdCount).toBe(0);
+    expect(env.runtimes[0]!.inputs).toContain('second message');
   });
 });
