@@ -296,11 +296,13 @@ export class WorkspaceManager {
     await fs.mkdir(dirname(path), { recursive: true });
     const payload = {
       version: 1,
-      workspaces: [...this.byId.values()].map((ws) => ({
-        ...ws,
-        // activeSessionId is runtime-only; don't persist it
-        activeSessionId: null,
-      })),
+      // activeSessionId IS persisted so the user's IM thread keeps the same
+      // session id across daemon restarts. lazyResumeOrCreate's branch 2
+      // (active && !isLive → resume) reattaches via runtime.prepare's
+      // resumeSessionId option (T3 plumbed end-to-end). If resume fails for
+      // a stale id, the same function safely falls through to branch 3
+      // createLocal — so persistence is robust against crashed sessions.
+      workspaces: [...this.byId.values()].map((ws) => ({ ...ws })),
     };
     await fs.writeFile(path, JSON.stringify(payload, null, 2), 'utf8');
   }
