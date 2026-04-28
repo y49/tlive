@@ -365,16 +365,34 @@ export class SessionFrontend {
         state.costUsd = (state.costUsd ?? 0) + (ev.costUsd ?? 0);
         for (const c of channels) { await c.activity.onEvent(ev); await c.agent.onEvent(ev); }
         for (const c of channels) { await c.header.refresh(); }
-        // Reaction anchor: upgrade ⏳ → ✅ on the most-recent inbound for each channel.
+        // Reaction anchor: 🤔 → 🎉. Fire-and-forget with a 400ms buffer so
+        // Telegram's separate push channel for reactions doesn't beat the
+        // bot's reply text to the user's client. Without the buffer users
+        // could see the "completed" reaction before the actual reply
+        // appears (the two are independent server pushes; no API ordering
+        // guarantee). 400ms is empirical — long enough to win the race in
+        // typical conditions, short enough that the reaction transition
+        // still feels responsive.
+        const turnEndAt = Date.now();
+        const inbounds: Array<{ c: ChannelRenderers; inbound: { chatId: string; messageId: string; threadId?: string } }> = [];
         for (const c of channels) {
           const inbound = c.session.lastInboundByTarget.get(targetKey(c.target));
-          if (!inbound) continue;
-          try { await c.reaction.setPhase(inbound, 'done_ok'); }
-          catch (err) {
-            this.opts.logger?.warn('reaction done_ok failed', {
-              sessionId, channelType: c.target.channelType, reason: (err as Error).message,
-            });
-          }
+          if (inbound) inbounds.push({ c, inbound });
+        }
+        if (inbounds.length > 0) {
+          void (async () => {
+            const elapsed = Date.now() - turnEndAt;
+            const remaining = Math.max(0, 400 - elapsed);
+            if (remaining > 0) await new Promise<void>((resolve) => setTimeout(resolve, remaining));
+            for (const { c, inbound } of inbounds) {
+              try { await c.reaction.setPhase(inbound, 'done_ok'); }
+              catch (err) {
+                this.opts.logger?.warn('reaction done_ok failed', {
+                  sessionId, channelType: c.target.channelType, reason: (err as Error).message,
+                });
+              }
+            }
+          })();
         }
         state.turn = undefined;
         return;
@@ -475,18 +493,30 @@ export class SessionFrontend {
         if (state.turn) {
           for (const c of channels) { await c.activity.onEvent(ev); }
         }
-        // Reaction anchor: ❌ for runtime errors. Soft-faults (warn severity)
+        // Reaction anchor: 💔 for runtime errors. Soft-faults (warn severity)
         // also upgrade the reaction so users see something failed; the warn
-        // banner from activity-sticky carries the diagnostic.
+        // banner from activity-sticky carries the diagnostic. Same 400ms
+        // buffer as done_ok so any error-banner activity render lands first.
+        const errAt = Date.now();
+        const errInbounds: Array<{ c: ChannelRenderers; inbound: { chatId: string; messageId: string; threadId?: string } }> = [];
         for (const c of channels) {
           const inbound = c.session.lastInboundByTarget.get(targetKey(c.target));
-          if (!inbound) continue;
-          try { await c.reaction.setPhase(inbound, 'done_err'); }
-          catch (err) {
-            this.opts.logger?.warn('reaction done_err failed', {
-              sessionId, channelType: c.target.channelType, reason: (err as Error).message,
-            });
-          }
+          if (inbound) errInbounds.push({ c, inbound });
+        }
+        if (errInbounds.length > 0) {
+          void (async () => {
+            const elapsed = Date.now() - errAt;
+            const remaining = Math.max(0, 400 - elapsed);
+            if (remaining > 0) await new Promise<void>((resolve) => setTimeout(resolve, remaining));
+            for (const { c, inbound } of errInbounds) {
+              try { await c.reaction.setPhase(inbound, 'done_err'); }
+              catch (err) {
+                this.opts.logger?.warn('reaction done_err failed', {
+                  sessionId, channelType: c.target.channelType, reason: (err as Error).message,
+                });
+              }
+            }
+          })();
         }
         return;
       }

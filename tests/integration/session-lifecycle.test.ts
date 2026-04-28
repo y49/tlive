@@ -281,7 +281,7 @@ describe('Session lifecycle — full stack', () => {
 
   // ---- Reactions (Spec Z absorbed into lifecycle hardening) ------------------
 
-  it('reaction wiring: markInboundReceived → 👀, turn_start → 🤔, turn_end → 👍', async () => {
+  it('reaction wiring: markInboundReceived → 👀, turn_start → 🤔, turn_end → 🎉', async () => {
     env = await setup();
     // Bootstrap behavior: register inbound BEFORE the session attaches. Frontend
     // parks it in pendingInbound; on attach it fires the 'received' reaction.
@@ -306,22 +306,23 @@ describe('Session lifecycle — full stack', () => {
     expect(processing).toBeDefined();
     expect(processing!.args.messageId).toBe('user-msg-1');
 
-    // turn_end → 👍
+    // turn_end → 🎉, but with a 400ms buffer in frontend so Telegram propagates
+    // the bot's reply text before reaction transition. Wait 500ms.
     runtime.emitEvent({
       kind: 'turn_end', turnId: 't1', durationMs: 100, costUsd: 0.01,
       tokensIn: 10, tokensOut: 20,
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    const doneOk = env.adapter.byKind('setReaction').find((c) => c.args.emoji === '👍');
+    await new Promise<void>((resolve) => setTimeout(resolve, 500));
+    const doneOk = env.adapter.byKind('setReaction').find((c) => c.args.emoji === '🎉');
     expect(doneOk).toBeDefined();
     expect(doneOk!.args.messageId).toBe('user-msg-1');
 
-    // runtime_error (severity warn or fatal) → 👎
+    // runtime_error (severity warn or fatal) → 💔, also after the 400ms buffer.
     runtime.emitEvent({
       kind: 'runtime_error', severity: 'warn', code: 'test', message: 'oops',
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    const doneErr = env.adapter.byKind('setReaction').find((c) => c.args.emoji === '👎');
+    await new Promise<void>((resolve) => setTimeout(resolve, 500));
+    const doneErr = env.adapter.byKind('setReaction').find((c) => c.args.emoji === '💔');
     expect(doneErr).toBeDefined();
     expect(doneErr!.args.messageId).toBe('user-msg-1');
 

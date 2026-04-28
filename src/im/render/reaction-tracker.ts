@@ -2,13 +2,15 @@
 //
 // Anchor #1 — inbound-message reaction ack (spec §7.3). When the user sends
 // a message, the reaction tracker puts 👀 (received) on the inbound message.
-// On turn_start it upgrades to 🤔 (processing), on turn_end to 👍, and on
-// failure to 👎.
+// On turn_start it upgrades to 🤔 (processing), on turn_end to 🎉, and on
+// failure to 💔.
 //
 // Emoji choice: Telegram's `setMessageReaction` only accepts a fixed Bot API
 // whitelist (~84 emoji). 👁️/⏳/✅/❌ are NOT in it — they trigger
-// REACTION_INVALID. The current set (👀/🤔/👍/👎) is in the whitelist on
-// Telegram and renders fine on Feishu's fallback reply path.
+// REACTION_INVALID. The current set is in the whitelist on Telegram and
+// renders fine on Feishu's fallback reply path. 🎉 / 💔 chosen specifically
+// for visual + color distinction (success vs failure should not look like
+// 👍/👎 which a glance can confuse).
 //
 // Feishu fallback (capabilities.reactions === false): send a short reply
 // message containing the emoji and track that id so we can delete/edit it on
@@ -21,8 +23,8 @@ export type ReactionPhase = 'received' | 'processing' | 'done_ok' | 'done_err';
 const EMOJI_FOR: Record<ReactionPhase, string> = {
   received: '👀',
   processing: '🤔',
-  done_ok: '👍',
-  done_err: '👎',
+  done_ok: '🎉',
+  done_err: '💔',
 };
 
 export interface ReactionTrackerOptions extends RendererDeps {
