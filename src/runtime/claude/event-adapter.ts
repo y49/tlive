@@ -319,6 +319,21 @@ export class ClaudeEventAdapter {
         // mapped to a user-facing event here.
         break;
       }
+      default: {
+        // Unknown SDK message kind — surface as a visible warn rather than
+        // silently returning an empty events array. This causes schema drift
+        // (new SDK message types we haven't handled) to appear as observable
+        // warnings instead of silent degradation. hook_generic is reserved
+        // exclusively for genuine SDK hook events (type==='system', sub===
+        // 'hook_started'/'hook_progress'/'hook_response').
+        events.push({
+          kind: 'runtime_error',
+          severity: 'warn',
+          code: 'unknown_sdk_message_kind',
+          message: `unrecognized SDK msg kind: ${msg.type}${(msg as { subtype?: string }).subtype ? '/' + (msg as { subtype?: string }).subtype : ''}`,
+        });
+        break;
+      }
     }
 
     return { events, usage, askUserQuestion };

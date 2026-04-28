@@ -241,4 +241,46 @@ describe('ClaudeEventAdapter', () => {
     const tr = frame.events.find((e) => e.kind === 'tool_use_result');
     expect(tr).toMatchObject({ kind: 'tool_use_result', toolUseId: 'tu-3', ok: false });
   });
+
+  it('unknown SDK message kind emits runtime_error{warn}, not hook_generic', () => {
+    const adapter = new ClaudeEventAdapter();
+    const result = adapter.adapt({ type: 'something_we_dont_know', some_field: 42 } as { type: string });
+    expect(result.events.some((e) => e.kind === 'hook_generic')).toBe(false);
+    const errs = result.events.filter((e) => e.kind === 'runtime_error');
+    expect(errs.length).toBe(1);
+    expect(errs[0]).toMatchObject({
+      kind: 'runtime_error',
+      severity: 'warn',
+      code: 'unknown_sdk_message_kind',
+    });
+  });
+
+  it('assistant text block (B4 fix): emits assistant_text with turnId and complete=true', () => {
+    const adapter = new ClaudeEventAdapter();
+    // Simulate a minimal SDK SDKAssistantMessage shape: type='assistant', message.content array
+    adapter.adapt({ type: 'user', message: { content: 'ping' } }); // establish a turnId
+    const result = adapter.adapt({
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'text', text: 'Hello, I can hear you.' },
+        ],
+        role: 'assistant',
+      },
+      parent_tool_use_id: null,
+      session_id: 'sess-123',
+    });
+    const textEvents = result.events.filter((e) => e.kind === 'assistant_text');
+    expect(textEvents.length).toBe(1);
+    expect(textEvents[0]).toMatchObject({
+      kind: 'assistant_text',
+      text: 'Hello, I can hear you.',
+      complete: true,
+    });
+    // turnId must be a non-empty string (set by prior turn_start)
+    expect((textEvents[0] as Extract<typeof textEvents[0], { kind: 'assistant_text' }>).turnId).toBeTruthy();
+    // Must not emit hook_generic or runtime_error for a well-formed assistant message
+    expect(result.events.some((e) => e.kind === 'hook_generic')).toBe(false);
+    expect(result.events.some((e) => e.kind === 'runtime_error')).toBe(false);
+  });
 });
