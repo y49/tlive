@@ -1,0 +1,147 @@
+import { describe, it, expect } from 'vitest';
+import { applyEventToHudState } from '../../../src/im/hud/reducer.js';
+import { initialHudState } from '../../../src/im/hud/state.js';
+import type { NotificationEvent } from '../../../src/runtime/events.js';
+
+function base() {
+  return initialHudState({
+    sessionShortId: 'abc',
+    workspaceName: 'w',
+    provider: 'claude',
+    model: 'opus-4-6',
+    modelMaxContext: 200_000,
+    turnNumber: 1,
+    startedAtMs: 0,
+    costSession: 0,
+  });
+}
+
+describe('applyEventToHudState', () => {
+  it('turn_start sets currentActivity to thinking', () => {
+    const ev: NotificationEvent = { kind: 'turn_start', turnId: 't1', userInputPreview: 'hi', at: 0 };
+    const next = applyEventToHudState(base(), ev);
+    expect(next.currentActivity).toEqual({ kind: 'thinking', elapsedMs: 0 });
+  });
+
+  it('tool_use_start sets currentActivity with tool name + arg preview', () => {
+    const ev: NotificationEvent = {
+      kind: 'tool_use_start',
+      turnId: 't1',
+      toolUseId: 'u1',
+      toolName: 'Read',
+      input: { file_path: '/abs/path/README.md' },
+    };
+    const next = applyEventToHudState(base(), ev);
+    expect(next.currentActivity).toMatchObject({
+      kind: 'tool_running',
+      toolName: 'Read',
+      elapsedMs: 0,
+    });
+    expect(next.currentActivity?.toolArg).toContain('README.md');
+  });
+
+  it('tool_use_result increments toolTally and clears matching activity', () => {
+    let s = base();
+    s = applyEventToHudState(s, {
+      kind: 'tool_use_start',
+      turnId: 't1',
+      toolUseId: 'u1',
+      toolName: 'Bash',
+      input: { command: 'ls' },
+    });
+    s = applyEventToHudState(s, {
+      kind: 'tool_use_result',
+      toolUseId: 'u1',
+      output: 'a\nb',
+      durationMs: 12,
+      ok: true,
+    });
+    expect(s.toolTally.get('Bash')).toBe(1);
+    // After tool result the activity drops back to thinking.
+    expect(s.currentActivity).toEqual({ kind: 'thinking', elapsedMs: 0 });
+  });
+
+  it('tool_use_result aggregates same-tool count', () => {
+    let s = base();
+    for (let i = 0; i < 3; i++) {
+      s = applyEventToHudState(s, {
+        kind: 'tool_use_start', turnId: 't1', toolUseId: `u${i}`, toolName: 'Bash', input: {},
+      });
+      s = applyEventToHudState(s, {
+        kind: 'tool_use_result', toolUseId: `u${i}`, output: '', durationMs: 1, ok: true,
+      });
+    }
+    expect(s.toolTally.get('Bash')).toBe(3);
+  });
+
+  it('subagent_start appends a running entry; subagent_stop flips status', () => {
+    let s = base();
+    s = applyEventToHudState(s, {
+      kind: 'subagent_start',
+      agentId: 'a1', parentTurnId: 't1', description: 'review pass', taskId: 'tk1',
+    });
+    expect(s.subagents).toHaveLength(1);
+    expect(s.subagents[0]).toMatchObject({ agentId: 'a1', status: 'running' });
+
+    s = applyEventToHudState(s, {
+      kind: 'subagent_stop', agentId: 'a1', taskId: 'tk1', ok: true,
+    });
+    expect(s.subagents[0].status).toBe('done_ok');
+
+    const s2 = applyEventToHudState(base(), {
+      kind: 'subagent_start', agentId: 'a2', parentTurnId: 't1', description: 'x', taskId: 'tk2',
+    });
+    const s3 = applyEventToHudState(s2, {
+      kind: 'subagent_stop', agentId: 'a2', taskId: 'tk2', ok: false,
+    });
+    expect(s3.subagents[0].status).toBe('done_err');
+  });
+
+  it('todo_write replaces todoList with normalized items', () => {
+    const s = applyEventToHudState(base(), {
+      kind: 'todo_write',
+      items: [
+        { content: 'design HUD', status: 'completed' },
+        { content: 'write reducer', status: 'in_progress' },
+        { content: 'ship', status: 'pending' },
+      ],
+    });
+    expect(s.todoList).toEqual([
+      { text: 'design HUD', status: 'done' },
+      { text: 'write reducer', status: 'in_progress' },
+      { text: 'ship', status: 'pending' },
+    ]);
+  });
+
+  it('turn_end freezes, captures cost + duration', () => {
+    const s = applyEventToHudState(base(), {
+      kind: 'turn_end', turnId: 't1', durationMs: 4_200, costUsd: 0.04, tokensIn: 100, tokensOut: 50,
+    });
+    expect(s.isFrozen).toBe(true);
+    expect(s.costThisTurn).toBe(0.04);
+    expect(s.costSession).toBeCloseTo(0.04);
+    expect(s.durationMs).toBe(4_200);
+    expect(s.currentActivity).toBeNull();
+  });
+
+  it('runtime_error fatal sets isErrored + errorSummary', () => {
+    const s = applyEventToHudState(base(), {
+      kind: 'runtime_error', severity: 'fatal', code: 'sdk_aborted', message: 'connection reset',
+    });
+    expect(s.isErrored).toBe(true);
+    expect(s.errorSummary).toBe('connection reset');
+  });
+
+  it('runtime_error warn does not flip isErrored', () => {
+    const s = applyEventToHudState(base(), {
+      kind: 'runtime_error', severity: 'warn', code: 'soft', message: 'ignore',
+    });
+    expect(s.isErrored).toBe(false);
+  });
+
+  it('returns same reference for unknown / no-op events', () => {
+    const s0 = base();
+    const s1 = applyEventToHudState(s0, { kind: 'heartbeat', elapsedMs: 100 });
+    expect(s1).toBe(s0);
+  });
+});

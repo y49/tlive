@@ -110,6 +110,7 @@ const FRONTEND_NOOP_KINDS = new Set<string>([
   'pre_compact', 'post_compact', 'prewarm_tick', 'api_throttle', 'api_resumed',
   'rewind_files', 'session_forked', 'session_renamed', 'mcp_status_change',
   'plugin_reloaded', 'hook_generic', 'status_change',
+  'quota_update',
 ]);
 
 function isFrontendNoopKind(kind: string): boolean {
@@ -558,6 +559,9 @@ export class SessionFrontend {
       case 'mcp_status_change':
       case 'plugin_reloaded':
       case 'hook_generic':
+        return;
+      // quota_update — consumed by the HUD layer (T4); noop in legacy path.
+      case 'quota_update':
         return;
       default:
         // Compile-time exhaustiveness: if a new NotificationEvent kind is added,

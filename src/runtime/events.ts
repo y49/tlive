@@ -55,4 +55,5 @@ export type NotificationEvent =
   | { kind: 'plugin_reloaded'; commandsAdded: string[]; commandsRemoved: string[] }
   | { kind: 'hook_generic'; event: string; payload: unknown }
   | { kind: 'session_complete'; reason: string; summary: string }
-  | { kind: 'runtime_error'; severity: 'warn' | 'fatal'; code: string; message: string; retryHintMs?: number };
+  | { kind: 'runtime_error'; severity: 'warn' | 'fatal'; code: string; message: string; retryHintMs?: number }
+  | { kind: 'quota_update'; quotaBars: Array<{ label: string; pct: number; resetsIn?: string }> };
