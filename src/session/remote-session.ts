@@ -18,7 +18,7 @@ import type { NotificationEvent } from '../runtime/events.js';
 import { SessionContext } from './context.js';
 import { CostTracker } from '../cost/tracker.js';
 import type { AgentStatus } from './status.js';
-import type { SessionInfo, SessionLike, SessionEventListener as SessionLikeListener } from './types.js';
+import type { SessionInfo, SessionLike } from './types.js';
 import { shortId } from '../util/short-id.js';
 
 export interface RemoteSessionInit {
@@ -137,12 +137,6 @@ export class RemoteSession implements SessionLike {
       createdAt: this.createdAt,
       lastActivityAt: this.lastActivityAt,
     };
-  }
-
-  subscribeEvents(listener: SessionLikeListener): () => void {
-    const a = this.onEvent((event) => listener({ kind: 'event', event }));
-    const b = this.onStatusChange((status) => listener({ kind: 'status_change', status }));
-    return () => { a(); b(); };
   }
 
   // ---- MCP-driven mutators (spec §4.3) --------------------------------------
