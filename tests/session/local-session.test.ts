@@ -168,6 +168,8 @@ describe('LocalSession', () => {
       const kinds = brokerEvents.map((e) => e.kind);
       expect(kinds).toEqual(['resolved']);
       expect(brokerEvents[0].autoResolvedBy).toMatch(/^pol-/);
+
+      await session.flushPendingPersistence();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

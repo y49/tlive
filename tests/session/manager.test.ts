@@ -22,7 +22,11 @@ async function setup() {
 describe('SessionManager', () => {
   let env: Awaited<ReturnType<typeof setup>>;
   beforeEach(async () => { env = await setup(); });
-  afterEach(async () => { await rm(env.root, { recursive: true, force: true }); });
+  afterEach(async () => {
+    // Stop any sessions left running so their tracked saves drain before rm.
+    await env.mgr.stopAll().catch(() => undefined);
+    await rm(env.root, { recursive: true, force: true });
+  });
 
   it('create allocates a fresh session and emits "created"', async () => {
     const events: string[] = [];
@@ -121,6 +125,9 @@ describe('SessionManager', () => {
     expect(events).toEqual(['prepare', 'emit:created', 'attach']);
     expect(capturedRuntimes[0]!.prepareCalls).toBe(1);
     expect(capturedRuntimes[0]!.attachCalls).toBe(1);
+
+    // Drain the secondary manager's tracked saves before afterEach rm.
+    await mgr2.stopAll();
   });
 
   it('stopAll stops every live session', async () => {
