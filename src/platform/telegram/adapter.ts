@@ -14,7 +14,7 @@ import type {
   PlatformAdapter, OutboundMessage, OutboundAttachment, InboundEvent, ReplyMarkup, ParseMode,
 } from '../types.js';
 import type { ChannelType } from '../../workspace/bindings.js';
-import { replyMarkupToTelegram, escapeMarkdownV2 } from './renderer.js';
+import { replyMarkupToTelegram, escapeMarkdownV2, formatHtml } from './renderer.js';
 import { sendTelegramAttachment, downloadTelegramFile } from './attachment.js';
 
 export interface TelegramAdapterOptions {
@@ -106,7 +106,8 @@ export class TelegramAdapter implements PlatformAdapter {
     const extra: Record<string, unknown> = {};
     const rm = replyMarkupToTelegram(markup);
     if (rm) extra.reply_markup = rm;
-    if (parseMode && parseMode !== 'plain') extra.parse_mode = parseMode === 'markdown' ? 'MarkdownV2' : 'HTML';
+    if (parseMode === 'markdown') extra.parse_mode = 'MarkdownV2';
+    else if (parseMode === 'html') extra.parse_mode = 'HTML';
     if (text !== undefined) {
       try {
         await this.bot.api.editMessageText(Number(chatId), Number(messageId), this.encodeText(text, parseMode), extra);
@@ -179,7 +180,8 @@ export class TelegramAdapter implements PlatformAdapter {
     const extra: Record<string, unknown> = {};
     const rm = replyMarkupToTelegram(markup);
     if (rm) extra.reply_markup = rm;
-    if (parseMode && parseMode !== 'plain') extra.parse_mode = parseMode === 'markdown' ? 'MarkdownV2' : 'HTML';
+    if (parseMode === 'markdown') extra.parse_mode = 'MarkdownV2';
+    else if (parseMode === 'html') extra.parse_mode = 'HTML';
     if (threadId) extra.message_thread_id = Number(threadId);
     if (replyToMessageId) extra.reply_to_message_id = Number(replyToMessageId);
     if (silent) extra.disable_notification = true;
@@ -187,7 +189,13 @@ export class TelegramAdapter implements PlatformAdapter {
   }
 
   private encodeText(text: string, parseMode: ParseMode | undefined): string {
+    // 'markdown' → assume the caller wants every char treated literally (they
+    //   passed raw text), so blanket-escape MarkdownV2 reserved chars.
+    // 'html'     → run the smart Markdown→HTML converter so code fences,
+    //   inline code, **bold**, *italic*, and links are formatted.
+    // 'plain' / undefined → pass through unchanged.
     if (parseMode === 'markdown') return escapeMarkdownV2(text);
+    if (parseMode === 'html') return formatHtml(text);
     return text;
   }
 

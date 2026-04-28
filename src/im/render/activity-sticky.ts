@@ -49,6 +49,15 @@ export class ActivityStickyRenderer {
   private lastText: string | undefined;
   /** Per-target last edit time for throttle bookkeeping. */
   private lastEditMs = 0;
+  /**
+   * Latest runtime_error captured during this turn — surfaced as an explicit
+   * banner line in the sticky so users see WHY a turn died, not just that
+   * it ended. Reset implicitly when a new turn starts (a new TurnRenderState
+   * triggers a re-instantiation of buildText with no error context yet).
+   */
+  private lastError: { severity: 'warn' | 'fatal'; code: string; message: string } | undefined;
+  /** Turn id this lastError belongs to — clears on new turn. */
+  private lastErrorTurnId: string | undefined;
 
   constructor(opts: ActivityStickyRendererOptions) {
     this.adapter = opts.adapter;
@@ -75,6 +84,15 @@ export class ActivityStickyRenderer {
         this.timers.clearTimeout(this.flushTimer);
         this.flushTimer = undefined;
       }
+      // If a fatal runtime_error happened during this turn, leave the sticky
+      // up so the user sees what went wrong. The next turn_start will wipe
+      // it via the normal new-turn path. Warn-level errors still allow the
+      // delete because the agent recovered and produced an answer.
+      const fatal = this.lastError?.severity === 'fatal' && this.lastErrorTurnId === turn.turnId;
+      if (fatal) {
+        await this.render(true);
+        return;
+      }
       const msgId = this.activityMsgIdFor(turn, this.target);
       if (msgId) {
         try { await this.adapter.delete(msgId, this.target.chatId); } catch { /* isolate */ }
@@ -89,14 +107,28 @@ export class ActivityStickyRenderer {
     let force = false;
     switch (event.kind) {
       case 'turn_start':
+        // New turn → wipe stale error context from the previous turn so
+        // the sticky doesn't carry it forward.
+        this.lastError = undefined;
+        this.lastErrorTurnId = undefined;
+        force = true;
+        break;
       case 'parallel_tool_batch_start':
       case 'parallel_tool_batch_end':
       case 'subagent_start':
       case 'subagent_stop':
       case 'tool_use_start':
       case 'tool_use_result':
-      case 'runtime_error':
       case 'prompt_suggestion':
+        force = true;
+        break;
+      case 'runtime_error':
+        this.lastError = {
+          severity: event.severity,
+          code: event.code,
+          message: event.message,
+        };
+        this.lastErrorTurnId = turn.turnId;
         force = true;
         break;
       default:
@@ -194,6 +226,19 @@ export class ActivityStickyRenderer {
       parts.push(`🔧 running · ${elapsedStr}`);
     } else {
       parts.push(`🧠 thinking · ${elapsedStr}`);
+    }
+
+    // Error banner — surface before parallel/subagent blocks so it's the
+    // first thing a user sees when a turn faulted. Only show when the error
+    // belongs to the CURRENT turn (we wipe lastError on turn_start).
+    if (this.lastError && this.lastErrorTurnId === turn.turnId) {
+      const sev = this.lastError.severity === 'fatal' ? '🚨' : '⚠️';
+      const codePart = this.lastError.code ? ` (${this.lastError.code})` : '';
+      // Trim long messages to keep the sticky readable.
+      const msg = this.lastError.message.length > 200
+        ? this.lastError.message.slice(0, 197) + '…'
+        : this.lastError.message;
+      parts.push(`${sev} ${msg}${codePart}`);
     }
 
     const parallel = renderParallelBlock([...turn.parallelTools.values()]);

@@ -86,6 +86,87 @@ function formatAskUserQuestionInput(input: unknown): string | null {
   return out.length > 0 ? out.join('\n') : null;
 }
 
+/**
+ * Per-tool input formatter for the `generic` permission category. Each
+ * formatter returns a short readable summary (one or a few lines) for tools
+ * whose input shape is known and predictable. Falls back to JSON dump when
+ * the input doesn't match — the user always sees SOMETHING, never an error.
+ *
+ * Add new tools by inserting an entry here. Keep formatters small (≤ 4 lines
+ * of rendered output) so the permission card stays scannable on mobile.
+ */
+function formatGenericToolInput(toolName: string, input: unknown): string | null {
+  if (toolName === 'AskUserQuestion') return formatAskUserQuestionInput(input);
+  if (!input || typeof input !== 'object') return null;
+  const inp = input as Record<string, unknown>;
+  const str = (k: string): string | undefined => typeof inp[k] === 'string' ? (inp[k] as string) : undefined;
+
+  switch (toolName) {
+    case 'Read': {
+      const path = str('file_path') ?? str('path');
+      if (!path) return null;
+      const offset = inp.offset !== undefined ? `:${inp.offset}` : '';
+      const limit = inp.limit !== undefined ? ` (${inp.limit} lines)` : '';
+      return `📄 ${path}${offset}${limit}`;
+    }
+    case 'Glob': {
+      const pattern = str('pattern');
+      const path = str('path');
+      if (!pattern) return null;
+      return path ? `🔍 ${pattern}\nin ${path}` : `🔍 ${pattern}`;
+    }
+    case 'Grep': {
+      const pattern = str('pattern');
+      if (!pattern) return null;
+      const path = str('path');
+      const glob = str('glob');
+      const lines = [`🔎 ${pattern}`];
+      if (path) lines.push(`in ${path}`);
+      if (glob) lines.push(`glob ${glob}`);
+      return lines.join('\n');
+    }
+    case 'WebFetch': {
+      const url = str('url');
+      if (!url) return null;
+      const prompt = str('prompt');
+      return prompt ? `🌐 ${url}\n${prompt}` : `🌐 ${url}`;
+    }
+    case 'WebSearch': {
+      const query = str('query');
+      if (!query) return null;
+      return `🔍 ${query}`;
+    }
+    case 'TodoWrite': {
+      const todos = inp.todos;
+      if (!Array.isArray(todos)) return null;
+      const lines = [`📋 ${todos.length} todo${todos.length === 1 ? '' : 's'}`];
+      for (let i = 0; i < Math.min(5, todos.length); i++) {
+        const t = todos[i] as { content?: unknown; status?: unknown } | undefined;
+        if (!t || typeof t !== 'object') continue;
+        const content = typeof t.content === 'string' ? t.content : '';
+        const status = typeof t.status === 'string' ? t.status : 'pending';
+        const glyph = status === 'completed' ? '✅' : status === 'in_progress' ? '⏳' : '⬜';
+        lines.push(`  ${glyph} ${content}`);
+      }
+      if (todos.length > 5) lines.push(`  …and ${todos.length - 5} more`);
+      return lines.join('\n');
+    }
+    case 'Task': {
+      const description = str('description');
+      const subagent = str('subagent_type');
+      if (!description) return null;
+      return subagent ? `🤖 ${subagent}\n${description}` : `🤖 ${description}`;
+    }
+    case 'SlashCommand': {
+      const cmd = str('command');
+      if (!cmd) return null;
+      return `/${cmd.replace(/^\//, '')}`;
+    }
+    default:
+      return null;
+  }
+}
+
 /** Build a unified-diff view from a diffPreview. */
 function renderDiff(preview: PermissionRequest['diffPreview']): string {
   if (!preview) return '';
@@ -128,17 +209,12 @@ export function renderPermissionCard(req: PermissionRequest): string {
     case 'generic': {
       const parts: string[] = [];
       parts.push(`🔒 Permission · 🧩 ${req.toolName}`);
-      // Special-case AskUserQuestion: format the questions + options as plain
-      // text rather than dumping the raw JSON shape. The Allow/Deny buttons
-      // still apply (the user is approving the SDK's use of the tool); the
-      // prettier text just makes the prompt readable.
-      if (req.toolName === 'AskUserQuestion') {
-        const pretty = formatAskUserQuestionInput(req.toolInput);
-        if (pretty) parts.push(pretty);
-        else parts.push(formatJson(req.toolInput));
-      } else {
-        parts.push(formatJson(req.toolInput));
-      }
+      // Per-tool readable formatters (Read path, Bash isn't here — exec
+      // category — but Grep/Glob/WebFetch/etc. are). Falls back to a JSON
+      // dump only when the input shape doesn't match a known pattern.
+      const pretty = formatGenericToolInput(req.toolName, req.toolInput);
+      if (pretty) parts.push(pretty);
+      else parts.push(formatJson(req.toolInput));
       const rb = riskBadge(req.risk);
       if (rb) parts.push(rb);
       return parts.join('\n');

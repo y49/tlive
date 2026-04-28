@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AgentMessageRenderer, AGENT_FLUSH_CHARS } from '../../../src/im/render/agent-message.js';
+import { AgentMessageRenderer, AGENT_FLUSH_CHARS, buildAgentFooter } from '../../../src/im/render/agent-message.js';
 import { CAPABILITIES } from '../../../src/im/capability-matrix.js';
 import { newSessionRenderState, newTurnRenderState } from '../../../src/im/render/types.js';
 import { FakeAdapter } from '../fake-adapter.js';
@@ -116,5 +116,71 @@ describe('AgentMessageRenderer', () => {
     await r.onEvent({ kind: 'assistant_text', turnId: 't1', text: 'first updated', complete: true });
     expect(adapter.byKind('send')).toHaveLength(1); // still just one
     expect(adapter.byKind('edit')).toHaveLength(1);
+  });
+
+  // Issue: agent-message must request HTML parse mode so Telegram renders
+  // **bold**, code fences, etc. Without parseMode='html' the user sees raw
+  // markdown source.
+  it("primary target sends with parseMode='html'", async () => {
+    const { adapter, r } = setup();
+    await r.onEvent({ kind: 'assistant_text', turnId: 't1', text: 'use `ls`', complete: true });
+    const send = adapter.byKind('send')[0]!;
+    expect(send.args.parseMode).toBe('html');
+  });
+
+  // Issue: footer must be appended ONLY when there's body text. Empty turns
+  // (agent ran tools but said nothing) shouldn't yield a footer-only message.
+  it('appends footer on turn_end when body text exists', async () => {
+    const { adapter, state, r } = setup();
+    state.turn!.toolUseCounts.set('Bash', 2);
+    state.turn!.toolUseCounts.set('Read', 1);
+    state.costUsd = 0.12;
+    await r.onEvent({ kind: 'assistant_text_delta', turnId: 't1', text: 'Hello.', partial: true });
+    await r.onEvent({
+      kind: 'turn_end', turnId: 't1', durationMs: 32_000, costUsd: 0.09,
+      tokensIn: 7, tokensOut: 528,
+    });
+    const sends = adapter.byKind('send');
+    expect(sends).toHaveLength(1);
+    const text = String(sends[0]!.args.text);
+    expect(text).toContain('Hello.');
+    expect(text).toContain('📦');
+    expect(text).toContain('Bash ×2');
+    expect(text).toContain('Read ×1');
+    expect(text).toContain('(3 total)');
+    expect(text).toContain('📊');
+    expect(text).toContain('7/528 tok');
+    expect(text).toContain('$0.09');
+    expect(text).toContain('Σ $0.12');
+    expect(text).toContain('32.0s');
+  });
+
+  it('does NOT emit a message on empty turn_end (no body text)', async () => {
+    const { adapter, state, r } = setup();
+    state.turn!.toolUseCounts.set('Bash', 1);
+    await r.onEvent({
+      kind: 'turn_end', turnId: 't1', durationMs: 100, costUsd: 0.01,
+      tokensIn: 0, tokensOut: 0,
+    });
+    expect(adapter.calls).toHaveLength(0);
+  });
+
+  // Helper export sanity-check.
+  it('buildAgentFooter returns null when no tools and no stats', () => {
+    const turn = newTurnRenderState('t', 0, 0);
+    expect(buildAgentFooter(turn, 0)).toBeNull();
+  });
+
+  it('buildAgentFooter renders single-tool single-stat footer', () => {
+    const turn = newTurnRenderState('t', 0, 0);
+    turn.toolUseCounts.set('Bash', 1);
+    turn.lastTurnStats = { durationMs: 1500, costUsd: 0.05, tokensIn: 10, tokensOut: 20 };
+    const footer = buildAgentFooter(turn, 0.1);
+    expect(footer).toContain('Bash ×1');
+    expect(footer).toContain('1 total');
+    expect(footer).toContain('10/20 tok');
+    expect(footer).toContain('$0.05');
+    expect(footer).toContain('Σ $0.10');
+    expect(footer).toContain('1.5s');
   });
 });

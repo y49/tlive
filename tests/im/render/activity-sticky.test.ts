@@ -60,4 +60,45 @@ describe('ActivityStickyRenderer', () => {
   it('respects throttle constant', () => {
     expect(ACTIVITY_EDIT_THROTTLE_MS).toBe(1500);
   });
+
+  // runtime_error must surface in the sticky text so the user sees what
+  // actually went wrong instead of a silent disappearance.
+  it('runtime_error surfaces an error banner in the sticky text', async () => {
+    const { adapter, r } = setup();
+    await r.onEvent({ kind: 'turn_start', turnId: 't1', userInputPreview: 'hi', at: 1_000_000 });
+    await r.onEvent({
+      kind: 'runtime_error', severity: 'warn', code: 'API_429',
+      message: 'rate limited',
+    });
+    const calls = adapter.calls;
+    const last = calls[calls.length - 1]!;
+    const text = String((last.kind === 'edit' ? last.args.text : last.args.text) ?? '');
+    expect(text).toContain('rate limited');
+    expect(text).toContain('API_429');
+  });
+
+  it('fatal runtime_error keeps the sticky alive on turn_end', async () => {
+    const { adapter, r } = setup();
+    await r.onEvent({ kind: 'turn_start', turnId: 't1', userInputPreview: '', at: 1_000_000 });
+    await r.onEvent({
+      kind: 'runtime_error', severity: 'fatal', code: 'OOM', message: 'out of memory',
+    });
+    await r.onEvent({
+      kind: 'turn_end', turnId: 't1', durationMs: 1, costUsd: 0, tokensIn: 0, tokensOut: 0,
+    });
+    // Should NOT have called delete on the sticky.
+    expect(adapter.byKind('delete')).toHaveLength(0);
+  });
+
+  it('warn runtime_error allows turn_end to delete the sticky', async () => {
+    const { adapter, r } = setup();
+    await r.onEvent({ kind: 'turn_start', turnId: 't1', userInputPreview: '', at: 1_000_000 });
+    await r.onEvent({
+      kind: 'runtime_error', severity: 'warn', code: 'API_429', message: 'throttled',
+    });
+    await r.onEvent({
+      kind: 'turn_end', turnId: 't1', durationMs: 1, costUsd: 0, tokensIn: 0, tokensOut: 0,
+    });
+    expect(adapter.byKind('delete')).toHaveLength(1);
+  });
 });

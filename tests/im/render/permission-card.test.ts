@@ -93,6 +93,72 @@ describe('permission-card', () => {
     expect(t).toContain('whatever');
   });
 
+  // Per-tool readable formatters for common 'generic' tools. Each surfaces
+  // the meaningful field rather than dumping JSON.
+  it('Read: renders path with offset/limit', () => {
+    const t = renderPermissionCard(makeReq('generic', {
+      toolName: 'Read', toolInput: { file_path: '/etc/hosts', offset: 10, limit: 50 },
+    }));
+    expect(t).toContain('🧩 Read');
+    expect(t).toContain('/etc/hosts');
+    expect(t).toContain(':10');
+    expect(t).toContain('(50 lines)');
+    expect(t).not.toContain('```json');
+  });
+
+  it('Glob: renders pattern + path', () => {
+    const t = renderPermissionCard(makeReq('generic', {
+      toolName: 'Glob', toolInput: { pattern: '**/*.ts', path: 'src/' },
+    }));
+    expect(t).toContain('🧩 Glob');
+    expect(t).toContain('**/*.ts');
+    expect(t).toContain('in src/');
+    expect(t).not.toContain('```json');
+  });
+
+  it('Grep: renders pattern + scope', () => {
+    const t = renderPermissionCard(makeReq('generic', {
+      toolName: 'Grep', toolInput: { pattern: 'TODO', path: 'src/', glob: '*.ts' },
+    }));
+    expect(t).toContain('🧩 Grep');
+    expect(t).toContain('TODO');
+    expect(t).toContain('in src/');
+    expect(t).toContain('glob *.ts');
+  });
+
+  it('WebFetch: renders url + prompt', () => {
+    const t = renderPermissionCard(makeReq('generic', {
+      toolName: 'WebFetch', toolInput: { url: 'https://example.com', prompt: 'extract title' },
+    }));
+    expect(t).toContain('🧩 WebFetch');
+    expect(t).toContain('https://example.com');
+    expect(t).toContain('extract title');
+    expect(t).not.toContain('```json');
+  });
+
+  it('TodoWrite: renders todo list with glyphs, truncated to 5', () => {
+    const todos = Array.from({ length: 7 }, (_, i) => ({
+      content: `task ${i}`, status: i % 3 === 0 ? 'completed' : 'pending', id: `t${i}`,
+    }));
+    const t = renderPermissionCard(makeReq('generic', {
+      toolName: 'TodoWrite', toolInput: { todos },
+    }));
+    expect(t).toContain('🧩 TodoWrite');
+    expect(t).toContain('7 todos');
+    expect(t).toContain('✅ task 0');
+    expect(t).toContain('⬜ task 1');
+    expect(t).toContain('and 2 more');
+  });
+
+  it('Task: renders subagent + description', () => {
+    const t = renderPermissionCard(makeReq('generic', {
+      toolName: 'Task', toolInput: { subagent_type: 'general-purpose', description: 'find bugs' },
+    }));
+    expect(t).toContain('🧩 Task');
+    expect(t).toContain('general-purpose');
+    expect(t).toContain('find bugs');
+  });
+
   it('elicitation template is a minimal placeholder (real render is ElicitationForm)', () => {
     const t = renderPermissionCard(makeReq('elicitation'));
     expect(t).toContain('🔒 Elicitation');

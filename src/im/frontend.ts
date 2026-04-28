@@ -361,6 +361,17 @@ export class SessionFrontend {
         return;
       }
       case 'turn_end': {
+        // Capture turn stats on the turn render-state BEFORE we tear it down
+        // so the assistant-message renderer can stamp a footer line with
+        // tool counts + tokens + cost + duration on its final flush.
+        if (state.turn) {
+          state.turn.lastTurnStats = {
+            durationMs: ev.durationMs ?? 0,
+            costUsd: ev.costUsd ?? 0,
+            tokensIn: ev.tokensIn ?? 0,
+            tokensOut: ev.tokensOut ?? 0,
+          };
+        }
         // Accumulate cost so the session header reflects true running total.
         state.costUsd = (state.costUsd ?? 0) + (ev.costUsd ?? 0);
         for (const c of channels) { await c.activity.onEvent(ev); await c.agent.onEvent(ev); }
@@ -415,6 +426,9 @@ export class SessionFrontend {
             status: 'running',
             batchIndex: ev.batchIndex,
           });
+          // Bump per-tool invocation count for the assistant-message footer.
+          const prev = state.turn.toolUseCounts.get(ev.toolName) ?? 0;
+          state.turn.toolUseCounts.set(ev.toolName, prev + 1);
         }
         for (const c of channels) { await c.activity.onEvent(ev); }
         return;

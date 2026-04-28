@@ -58,6 +58,23 @@ export interface TurnRenderState {
   queueCount: number;
   /** Whether this turn has produced any assistant text. */
   hasAssistantText: boolean;
+  /**
+   * Tools used during the turn, keyed by tool name → invocation count.
+   * Populated from `tool_use_start` events; rendered in the assistant-message
+   * footer on `turn_end` so the user sees `📦 Bash ×2 · Read ×1 (3 total)`.
+   */
+  toolUseCounts: Map<string, number>;
+  /**
+   * Last completed turn stats, captured from `turn_end`. Set on the SESSION
+   * state too so the assistant-message renderer can stamp a footer line on
+   * its final flush. Cleared when a new turn starts.
+   */
+  lastTurnStats?: {
+    durationMs: number;
+    costUsd: number;
+    tokensIn: number;
+    tokensOut: number;
+  };
 }
 
 /**
@@ -171,5 +188,6 @@ export function newTurnRenderState(turnId: string, startedAtMs: number, queueCou
     subagents: new Map(),
     queueCount,
     hasAssistantText: false,
+    toolUseCounts: new Map(),
   };
 }
