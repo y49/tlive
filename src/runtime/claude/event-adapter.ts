@@ -295,6 +295,15 @@ export class ClaudeEventAdapter {
             message: String(raw.result ?? raw.subtype ?? 'error'),
           });
         }
+        // Reset turn-bookkeeping so the NEXT assistant frame in this same
+        // session correctly synthesizes a new turn_start (see case 'assistant'
+        // above). Without this, currentTurnId stayed set across turns and
+        // the synth check `currentTurnId === null` never re-fired — the
+        // second turn's assistant_text events arrived with state.turn=undefined
+        // in the frontend (turn_end clears it) and renderers silently dropped
+        // them. Symptom: 2nd / 3rd Claude reply never appeared in IM.
+        this.currentTurnId = null;
+        this.turnStartedAt = 0;
         break;
       }
       case 'prompt_suggestion': {

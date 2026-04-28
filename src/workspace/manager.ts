@@ -237,14 +237,48 @@ export class WorkspaceManager {
   // ---- lazyResumeOrCreate (spec §6.1) --------------------------------------
 
   /**
+   * Per-workspace serialization for lazyResumeOrCreate. Two near-simultaneous
+   * inbound messages on the same workspace would otherwise both observe
+   * `activeSessionId === null`, both take branch 3, and create two sessions —
+   * the user sees N parallel session headers for one chat. Chain calls so the
+   * second one observes the first's bindActiveSession.
+   */
+  private readonly lazyResumeChain = new Map<string, Promise<unknown>>();
+
+  /**
    * Plain-text IM flow. Three branches:
    *   (1) activeSessionId set + live → sendInput
    *   (2) activeSessionId set + stopped (meta exists) → resume; on success sendInput
    *   (3) else → createLocal with workspace defaults
    *
    * Returns a tagged outcome so callers can message the user contextually.
+   *
+   * Per-workspace serialized — concurrent calls for the same workspaceId
+   * await each other rather than racing on activeSessionId reads.
    */
   async lazyResumeOrCreate(
+    workspaceId: string,
+    initialPrompt: string,
+    source: 'im' | 'cli',
+    deps: LazyResumeDeps,
+  ): Promise<LazyResumeOutcome> {
+    const prev = this.lazyResumeChain.get(workspaceId) ?? Promise.resolve();
+    const next = prev
+      .catch(() => undefined)
+      .then(() => this.lazyResumeOrCreateInner(workspaceId, initialPrompt, source, deps));
+    this.lazyResumeChain.set(workspaceId, next);
+    try {
+      return await next;
+    } finally {
+      // Drop the chain entry once it completes if no follower took it over;
+      // a follower would have already replaced the entry via .set above.
+      if (this.lazyResumeChain.get(workspaceId) === next) {
+        this.lazyResumeChain.delete(workspaceId);
+      }
+    }
+  }
+
+  private async lazyResumeOrCreateInner(
     workspaceId: string,
     initialPrompt: string,
     source: 'im' | 'cli',
