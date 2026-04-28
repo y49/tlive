@@ -23,6 +23,7 @@ import type { AttachmentStore } from '../attachment/store.js';
 import { resolveByPrefix } from '../util/short-id.js';
 import { WarmRuntimePool } from './warm-pool.js';
 import type { CostRollupStore } from '../cost/rollups.js';
+import type { Logger } from '../util/logger.js';
 
 // ---- Options -------------------------------------------------------------
 
@@ -73,6 +74,10 @@ export interface SessionManagerDeps {
   warmPool?: WarmRuntimePool;
   /** Optional rollup store. LocalSessions will append per-turn cost deltas here. */
   rollupStore?: CostRollupStore;
+  /** Optional structured logger. When wired by bootstrap, the manager emits
+   *  one log line per session creation/resume so daemon.log shows the
+   *  new-session path. */
+  logger?: Logger;
 }
 
 // ---- Manager -------------------------------------------------------------
@@ -82,10 +87,12 @@ export class SessionManager {
   private listeners = new Set<ManagerEventListener>();
   private readonly warmPool: WarmRuntimePool | null;
   private readonly rollupStore: CostRollupStore | null;
+  private readonly logger: Logger | null;
 
   constructor(private readonly deps: SessionManagerDeps) {
     this.warmPool = deps.warmPool ?? null;
     this.rollupStore = deps.rollupStore ?? null;
+    this.logger = deps.logger ?? null;
   }
 
   // ---- New v1.0 API --------------------------------------------------------
@@ -117,8 +124,13 @@ export class SessionManager {
       initialPrompt: opts.initialPrompt,
     });
     this.sessions.set(id, session);
+    this.logger?.info('session created', {
+      sessionId: id, provider: opts.provider, workspaceId: opts.workspaceId,
+      hasInitialPrompt: Boolean(opts.initialPrompt),
+    });
     this.emit({ kind: 'created', session });
     session.attachSink();
+    this.logger?.info('session running', { sessionId: id });
     return session;
   }
 
@@ -140,8 +152,10 @@ export class SessionManager {
     });
     await session.prepare({ resumeSessionId: id });
     this.sessions.set(id, session);
+    this.logger?.info('session resumed', { sessionId: id, provider: snap.ctx.provider });
     this.emit({ kind: 'resumed', session });
     session.attachSink();
+    this.logger?.info('session running', { sessionId: id });
     return session;
   }
 

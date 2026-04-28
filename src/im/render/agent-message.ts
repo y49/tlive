@@ -102,6 +102,12 @@ export class AgentMessageRenderer {
     await this.renderForTarget(turn, chunks);
     turn.agentRenderedText = turn.agentAccText;
     turn.agentLastFlushMs = this.clock();
+    // Component breadcrumb: confirms IM actually saw assistant text. Goes to
+    // stderr so daemon.log shows it; doesn't carry sessionId because this
+    // renderer doesn't have it threaded in.
+    process.stderr.write(
+      `[agent-render] flush channel=${this.target.channelType} chat=${this.target.chatId} chunks=${chunks.length} chars=${turn.agentAccText.length}\n`,
+    );
   }
 
   /** Teardown: clear pending flush timer and drop any pending batch. */

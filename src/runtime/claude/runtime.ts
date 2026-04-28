@@ -244,16 +244,32 @@ export class ClaudeSdkRuntime implements AgentRuntime {
    * Continue iterating the SDK stream from where firstInitMessage left off.
    * Manual iterator.next() (not for-await) — see firstInitMessage / sdkIterator
    * for the rationale.
+   *
+   * Emits stderr breadcrumbs (component-prefixed) at each lifecycle boundary
+   * so the daemon log surfaces consume's progress without a logger reference:
+   *   [claude/consume] start
+   *   [claude/consume] frame N type=<msg.type>   (first frame only)
+   *   [claude/consume] done frames=<N>
+   *   [claude/consume] error <msg>
+   * The runtime is constructed before the daemon's logger is wired through;
+   * stderr is the lowest-friction trace we can emit. `daemon.log` captures it.
    */
   private async consume(): Promise<void> {
     const it = this.sdkIterator;
     if (!it) return;
+    process.stderr.write(`[claude/consume] start sdkSessionId=${this.sdkSessionId ?? 'unknown'}\n`);
     let errored = false;
+    let frames = 0;
     try {
       while (!this.closed) {
         const r = await it.next();
         if (r.done) break;
         const msg = r.value;
+        frames++;
+        if (frames === 1) {
+          const t = (msg as { type?: unknown })?.type;
+          process.stderr.write(`[claude/consume] first frame type=${String(t)}\n`);
+        }
         this.logRawFrame(msg);
         const frame = this.adapter.adapt(msg as { type: string });
         for (const e of frame.events) this.fireEvent(e);
@@ -262,13 +278,16 @@ export class ClaudeSdkRuntime implements AgentRuntime {
       }
     } catch (err) {
       errored = true;
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[claude/consume] error frames=${frames} msg=${msg}\n`);
       this.fireEvent({
         kind: 'runtime_error',
         severity: 'fatal',
         code: 'claude_stream_error',
-        message: err instanceof Error ? err.message : String(err),
+        message: msg,
       });
     } finally {
+      if (!errored) process.stderr.write(`[claude/consume] done frames=${frames} closed=${this.closed}\n`);
       if (!this.closed && !errored) this.fireEvent({ kind: 'session_complete', reason: 'normal', summary: '' });
     }
   }

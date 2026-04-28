@@ -93,6 +93,14 @@ export interface SessionRenderState {
   cacheWarmUntilMs?: number | null;
   /** Reaction emoji set on most recent inbound message (for clear-on-turn-end). */
   lastInboundReactionMsg?: { chatId: string; messageId: string; emoji: string };
+  /**
+   * Most-recent inbound message coordinates per render target (keyed by
+   * targetKey). SessionFrontend records this on `markInboundReceived` so
+   * later turn_start / turn_end / runtime_error can update the reaction
+   * emoji on the right user message. Cleared per target when the session
+   * detaches.
+   */
+  lastInboundByTarget: Map<string, { chatId: string; messageId: string; threadId?: string }>;
 }
 
 export interface RendererDeps {
@@ -145,6 +153,7 @@ export function newSessionRenderState(init: {
     pendingAskMsgIds: new Map(),
     costUsd: 0,
     cacheWarmUntilMs: null,
+    lastInboundByTarget: new Map(),
   };
 }
 

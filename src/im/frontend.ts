@@ -21,6 +21,7 @@ import type { ElicitationBroker, ElicitationBrokerEvent } from '../permission/el
 import type { WorkspaceManager } from '../workspace/manager.js';
 import type { ChannelType } from '../workspace/bindings.js';
 import type { PlatformAdapter } from '../platform/types.js';
+import type { Logger } from '../util/logger.js';
 import { capabilitiesOf } from './capability-matrix.js';
 import {
   type SessionRenderState,
@@ -76,6 +77,14 @@ export interface SessionFrontendOptions {
   elicitationBroker?: ElicitationBroker;
   /** Map of registered adapters keyed by channelType. */
   adapters: Partial<Record<ChannelType, PlatformAdapter>>;
+  /** Optional structured logger. When provided, the frontend logs entry per
+   *  non-noop session event so daemon.log shows the IM-render path. */
+  logger?: Logger;
+}
+
+/** Helper: stable key for a (channelType, chatId) inbound source. */
+function chatKey(channelType: ChannelType, chatId: string): string {
+  return `${channelType}:${chatId}`;
 }
 
 /**
@@ -87,10 +96,38 @@ function assertNever(_x: never): void {
   /* nothing at runtime; `_x` should be unreachable */
 }
 
+/**
+ * Mirrors the noop-case set in handleSessionEvent's switch. Kept as a
+ * separate predicate so the dispatch log doesn't fire for every heartbeat
+ * tick. Update both this list AND the switch statement when adding new
+ * NotificationEvent kinds.
+ */
+const FRONTEND_NOOP_KINDS = new Set<string>([
+  'heartbeat', 'thinking_delta', 'thinking_end', 'subagent_event', 'file_changed',
+  'ask_user_question_requested', 'ask_user_question_resolved',
+  'elicitation_requested', 'elicitation_resolved',
+  'permission_requested', 'permission_resolved',
+  'pre_compact', 'post_compact', 'prewarm_tick', 'api_throttle', 'api_resumed',
+  'rewind_files', 'session_forked', 'session_renamed', 'mcp_status_change',
+  'plugin_reloaded', 'hook_generic', 'status_change',
+]);
+
+function isFrontendNoopKind(kind: string): boolean {
+  return FRONTEND_NOOP_KINDS.has(kind);
+}
+
 export class SessionFrontend {
   private readonly sessions = new Map<string, SessionEntry>();
   private readonly unsubscribers: Array<() => void> = [];
   private started = false;
+  /**
+   * Pending inbound messageIds keyed by `chatKey(channelType, chatId)`.
+   * Bootstrap calls `markInboundReceived` on every plain-text inbound BEFORE
+   * `lazyResumeOrCreate` resolves; in the create branch the SessionFrontend
+   * may not yet have a SessionEntry for the new session. We stash here and
+   * apply on the next attachSession that owns a matching channel.
+   */
+  private readonly pendingInbound = new Map<string, { messageId: string; threadId?: string }>();
 
   constructor(private readonly opts: SessionFrontendOptions) {}
 
@@ -205,6 +242,32 @@ export class SessionFrontend {
       void c.header.initialize().catch(() => { /* isolate */ });
     }
 
+    // Apply any pending inbound that arrived BEFORE this session was attached:
+    // bootstrap.handleInbound calls markInboundReceived right before
+    // lazyResumeOrCreate, so by the time we see 'created' here the inbound
+    // message id is parked in pendingInbound. Drain it into per-channel state
+    // and fire the 'received' reaction (👁️) so the user sees an ack.
+    for (const c of channels) {
+      const key = chatKey(c.target.channelType, c.target.chatId);
+      const pending = this.pendingInbound.get(key);
+      if (!pending) continue;
+      renderState.lastInboundByTarget.set(targetKey(c.target), {
+        chatId: c.target.chatId,
+        messageId: pending.messageId,
+        threadId: pending.threadId,
+      });
+      this.pendingInbound.delete(key);
+      void c.reaction.setPhase(
+        { chatId: c.target.chatId, messageId: pending.messageId, threadId: pending.threadId },
+        'received',
+      ).catch((err) => {
+        this.opts.logger?.warn('reaction received failed', {
+          sessionId: session.id, channelType: c.target.channelType,
+          reason: (err as Error).message,
+        });
+      });
+    }
+
     const unsubscribeEvent = session.onEvent((ev) => {
       void this.handleSessionEvent(session.id, ev).catch(() => { /* isolate */ });
     });
@@ -215,6 +278,41 @@ export class SessionFrontend {
       unsubscribeEvent,
       channels,
     });
+    this.opts.logger?.info('frontend attach', {
+      sessionId: session.id, workspaceId: session.workspaceId,
+      channels: channels.map((c) => c.target.channelType),
+    });
+  }
+
+  /**
+   * Bootstrap calls this on every plain-text inbound BEFORE driving the
+   * workspace's lazyResumeOrCreate. We update both:
+   * - `pendingInbound` (drained on next matching attachSession) so freshly
+   *   created sessions can fire the 'received' reaction;
+   * - any already-attached session whose channel matches (chatKey),
+   *   updating `lastInboundByTarget` and immediately firing 'received'.
+   *
+   * This is the single hook that lets the IM frontend see inbound messages —
+   * the rest of the inbound dispatch lives in bootstrap.handleInbound.
+   */
+  markInboundReceived(channelType: ChannelType, chatId: string, messageId: string, threadId?: string): void {
+    const key = chatKey(channelType, chatId);
+    this.pendingInbound.set(key, { messageId, threadId });
+    // Apply to every already-attached session whose channels include this chat.
+    for (const entry of this.sessions.values()) {
+      for (const c of entry.channels) {
+        if (c.target.channelType !== channelType || c.target.chatId !== chatId) continue;
+        c.session.lastInboundByTarget.set(targetKey(c.target), { chatId, messageId, threadId });
+        void c.reaction.setPhase({ chatId, messageId, threadId }, 'received').catch((err) => {
+          this.opts.logger?.warn('reaction received failed', {
+            sessionId: entry.sessionId, channelType,
+            reason: (err as Error).message,
+          });
+        });
+        // Drain pending — at least one session consumed it.
+        this.pendingInbound.delete(key);
+      }
+    }
   }
 
   private async detachSession(sessionId: string): Promise<void> {
@@ -240,10 +338,26 @@ export class SessionFrontend {
     const state = channels[0]?.session;
     if (!state) return;
 
+    // Trace dispatch for non-noop kinds so daemon.log shows the path.
+    if (!isFrontendNoopKind(ev.kind)) {
+      this.opts.logger?.info('frontend dispatch', { sessionId, kind: ev.kind });
+    }
+
     switch (ev.kind) {
       case 'turn_start': {
         state.turn = newTurnRenderState(ev.turnId, ev.at, 0);
         for (const c of channels) { await c.activity.onEvent(ev); }
+        // Reaction anchor: upgrade 👁️ → ⏳ on the most-recent inbound for each channel.
+        for (const c of channels) {
+          const inbound = c.session.lastInboundByTarget.get(targetKey(c.target));
+          if (!inbound) continue;
+          try { await c.reaction.setPhase(inbound, 'processing'); }
+          catch (err) {
+            this.opts.logger?.warn('reaction processing failed', {
+              sessionId, channelType: c.target.channelType, reason: (err as Error).message,
+            });
+          }
+        }
         return;
       }
       case 'turn_end': {
@@ -251,6 +365,17 @@ export class SessionFrontend {
         state.costUsd = (state.costUsd ?? 0) + (ev.costUsd ?? 0);
         for (const c of channels) { await c.activity.onEvent(ev); await c.agent.onEvent(ev); }
         for (const c of channels) { await c.header.refresh(); }
+        // Reaction anchor: upgrade ⏳ → ✅ on the most-recent inbound for each channel.
+        for (const c of channels) {
+          const inbound = c.session.lastInboundByTarget.get(targetKey(c.target));
+          if (!inbound) continue;
+          try { await c.reaction.setPhase(inbound, 'done_ok'); }
+          catch (err) {
+            this.opts.logger?.warn('reaction done_ok failed', {
+              sessionId, channelType: c.target.channelType, reason: (err as Error).message,
+            });
+          }
+        }
         state.turn = undefined;
         return;
       }
@@ -349,6 +474,19 @@ export class SessionFrontend {
         // Still flush the activity sticky so the user sees any fault banner.
         if (state.turn) {
           for (const c of channels) { await c.activity.onEvent(ev); }
+        }
+        // Reaction anchor: ❌ for runtime errors. Soft-faults (warn severity)
+        // also upgrade the reaction so users see something failed; the warn
+        // banner from activity-sticky carries the diagnostic.
+        for (const c of channels) {
+          const inbound = c.session.lastInboundByTarget.get(targetKey(c.target));
+          if (!inbound) continue;
+          try { await c.reaction.setPhase(inbound, 'done_err'); }
+          catch (err) {
+            this.opts.logger?.warn('reaction done_err failed', {
+              sessionId, channelType: c.target.channelType, reason: (err as Error).message,
+            });
+          }
         }
         return;
       }

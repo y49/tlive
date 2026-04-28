@@ -279,6 +279,56 @@ describe('Session lifecycle — full stack', () => {
     expect(lastRuntime.resumeRequestedFor).toBe(s.id);
   });
 
+  // ---- Reactions (Spec Z absorbed into lifecycle hardening) ------------------
+
+  it('reaction wiring: markInboundReceived → 👁️, turn_start → ⏳, turn_end → ✅', async () => {
+    env = await setup();
+    // Bootstrap behavior: register inbound BEFORE the session attaches. Frontend
+    // parks it in pendingInbound; on attach it fires the 'received' reaction.
+    env.frontend.markInboundReceived('telegram', 'chat-1', 'user-msg-1');
+    const session = await createLocal(env);
+    // Allow the post-attach setPhase('received') microtask to settle.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const reactionCalls = env.adapter.byKind('setReaction');
+    expect(reactionCalls.length).toBeGreaterThanOrEqual(1);
+    expect(reactionCalls[0]!.args.messageId).toBe('user-msg-1');
+    expect(reactionCalls[0]!.args.emoji).toBe('👁️');
+
+    // Drive turn_start through the runtime sink; expect ⏳ on the same inbound.
+    const runtime = env.runtimes[0]!;
+    runtime.emitEvent({
+      kind: 'turn_start', turnId: 't1', userInputPreview: 'hello', at: Date.now(),
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const afterStart = env.adapter.byKind('setReaction');
+    const processing = afterStart.find((c) => c.args.emoji === '⏳');
+    expect(processing).toBeDefined();
+    expect(processing!.args.messageId).toBe('user-msg-1');
+
+    // turn_end → ✅
+    runtime.emitEvent({
+      kind: 'turn_end', turnId: 't1', durationMs: 100, costUsd: 0.01,
+      tokensIn: 10, tokensOut: 20,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const doneOk = env.adapter.byKind('setReaction').find((c) => c.args.emoji === '✅');
+    expect(doneOk).toBeDefined();
+    expect(doneOk!.args.messageId).toBe('user-msg-1');
+
+    // runtime_error (severity warn or fatal) → ❌
+    runtime.emitEvent({
+      kind: 'runtime_error', severity: 'warn', code: 'test', message: 'oops',
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const doneErr = env.adapter.byKind('setReaction').find((c) => c.args.emoji === '❌');
+    expect(doneErr).toBeDefined();
+    expect(doneErr!.args.messageId).toBe('user-msg-1');
+
+    // Use session to silence unused-var lint.
+    void session;
+  });
+
   // ---- lazyResumeOrCreate live branch (spec §8.3 case 2) --------------------
 
   it('lazyResumeOrCreate live branch: second message reuses session, no new created emit', async () => {

@@ -54,6 +54,9 @@ export interface LazyResumeDeps {
     initialPrompt?: string;
     source: 'im' | 'cli';
   }) => Promise<SessionLike>;
+  /** Optional log hook fired right after the branch decision. Bootstrap wires
+   *  to its structured logger; tests may omit. */
+  onBranch?: (info: { branch: 'live' | 'resumed' | 'created'; sessionId: string; workspaceId: string }) => void;
 }
 
 export type LazyResumeOutcome =
@@ -246,6 +249,7 @@ export class WorkspaceManager {
     // Branch 1: live session exists
     const active = ws.activeSessionId;
     if (active && deps.isLive(active)) {
+      deps.onBranch?.({ branch: 'live', sessionId: active, workspaceId });
       await deps.sendInput(active, initialPrompt, source);
       // Caller should provide SessionLike via its own manager.get(); we only
       // expose action + a minimal stub so IM can signal to the user.
@@ -257,6 +261,7 @@ export class WorkspaceManager {
     if (active) {
       const resumed = await deps.resume(active);
       if (resumed) {
+        deps.onBranch?.({ branch: 'resumed', sessionId: resumed.id, workspaceId });
         try { this.bindActiveSession(workspaceId, resumed.id); }
         catch { /* conflict: race with concurrent create; fall through */ }
         await deps.sendInput(resumed.id, initialPrompt, source);
@@ -272,6 +277,7 @@ export class WorkspaceManager {
       initialPrompt,
       source,
     });
+    deps.onBranch?.({ branch: 'created', sessionId: created.id, workspaceId });
     this.bindActiveSession(workspaceId, created.id);
     return { action: 'created', session: created };
   }

@@ -258,6 +258,7 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
     attachmentStore: attachments,
     warmPool,
     rollupStore: rollups,
+    logger,
   });
 
   // Bind SessionManager to LocalSession instances so the api-throttle retry
@@ -362,6 +363,7 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
     askBroker,
     elicitationBroker: elicitBroker,
     adapters,
+    logger,
   });
   frontend.start();
 
@@ -396,6 +398,7 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
         attachments,
         policyStoreFor,
         callbackRouter,
+        frontend,
         logger,
       }).catch((err) => logger.error('inbound handler failed', { reason: (err as Error).message }));
     });
@@ -554,10 +557,23 @@ interface InboundDeps {
   attachments: AttachmentStore;
   policyStoreFor: (workspaceId: string) => PolicyStore;
   callbackRouter: CallbackRouter;
+  frontend: SessionFrontend;
   logger: Logger;
 }
 
 async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void> {
+  // Trace every inbound at the structural decision points so daemon.log
+  // shows exactly where dispatch went. Truncate text to 40 chars to keep
+  // user prompts out of warmth-context logs.
+  deps.logger.info('inbound', {
+    kind: ev.kind,
+    channel: ev.channelType,
+    chatId: ev.chatId,
+    userId: ev.userId,
+    messageId: ev.messageId,
+    text: typeof ev.text === 'string' ? ev.text.slice(0, 40) : undefined,
+  });
+
   // Callback (inline button click) → CallbackRouter.
   if (ev.kind === 'callback' && ev.callbackData) {
     const outcome = await deps.callbackRouter.route({
@@ -567,7 +583,7 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
       messageId: ev.messageId,
       channelType: ev.channelType,
     });
-    deps.logger.debug('callback routed', { kind: outcome.kind, user: ev.userId });
+    deps.logger.info('callback routed', { kind: outcome.kind, user: ev.userId });
     return;
   }
 
@@ -575,6 +591,12 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
   const text = ev.text?.trim() ?? '';
   if (!text) return;
   if (!text.startsWith('/')) {
+    // Anchor #1 — reaction tracker: surface the inbound to the IM frontend so
+    // it can fire 👁️ on the user's message before the lazyResumeOrCreate
+    // round-trip completes. The frontend owns pending-inbound state and
+    // applies it to whichever session ends up attached.
+    deps.frontend.markInboundReceived(ev.channelType, ev.chatId, ev.messageId, ev.threadId);
+
     // Plain-text: route to the workspace's lazyResumeOrCreate. We need a
     // workspace first — look up by chat binding.
     const ws = deps.workspaces.findByChat(ev.channelType, ev.chatId);
@@ -622,6 +644,7 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
           initialPrompt: opts.initialPrompt,
           source: opts.source,
         }),
+        onBranch: (info) => deps.logger.info('lazyResumeOrCreate branch', info),
       });
     } catch (err) {
       await deps.adapter.send({
