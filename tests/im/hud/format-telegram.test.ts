@@ -94,6 +94,13 @@ describe('formatTelegramHud', () => {
     expect(out).toContain('API 503');
   });
 
+  it('renders 0% bar when contextUsedTok produces NaN/Infinity', () => {
+    const state = { ...s(), modelMaxContext: 0 }; // 0/0 → NaN
+    const out = formatTelegramHud(state);
+    // The Context bar should render as empty (0%) rather than corrupting the layout.
+    expect(out).toMatch(/Context\s+░{10}\s+0%/);
+  });
+
   it('escapes HTML in dynamic content (workspaceName + branch + tool args)', () => {
     const state = {
       ...s(),

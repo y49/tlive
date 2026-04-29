@@ -139,6 +139,54 @@ describe('PermissionCard — ask multi', () => {
   });
 });
 
+describe('PermissionCard — race guard', () => {
+  it('handleCallback double-click fires onResolve only once', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const onResolve = vi.fn();
+    const card = new PermissionCard(adapter, tgt(), {
+      kind: 'generic', requestId: 'pr', toolName: 'Bash', toolInput: {}, onResolve,
+    });
+    await card.send();
+    await Promise.all([
+      card.handleCallback('perm:pr:allow'),
+      card.handleCallback('perm:pr:allow'),
+    ]);
+    expect(onResolve).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolveWithPlaintext after click is a no-op', async () => {
+    const onResolve = vi.fn();
+    const card = new PermissionCard(new FakeAdapter('telegram'), tgt(), {
+      kind: 'ask', requestId: 'ar', mode: 'single', question: 'q',
+      options: [{ label: 'A' }], onResolve,
+    });
+    await card.send();
+    await card.handleCallback('ask:ar:opt:0');
+    await card.resolveWithPlaintext('A');
+    expect(onResolve).toHaveBeenCalledTimes(1);
+  });
+
+  it('multi-mode toggle clicks do NOT trigger the race guard', async () => {
+    const onResolve = vi.fn();
+    const card = new PermissionCard(new FakeAdapter('telegram'), tgt(), {
+      kind: 'ask', requestId: 'am', mode: 'multi', question: 'q',
+      options: [{ label: 'A' }, { label: 'B' }], onResolve,
+    });
+    await card.send();
+    // Toggle on, off, on — none of these resolve.
+    await card.handleCallback('ask:am:opt:0');
+    await card.handleCallback('ask:am:opt:0');
+    await card.handleCallback('ask:am:opt:1');
+    expect(onResolve).not.toHaveBeenCalled();
+    // Confirm fires onResolve once.
+    await card.handleCallback('ask:am:confirm');
+    expect(onResolve).toHaveBeenCalledTimes(1);
+    // A second confirm is a no-op.
+    await card.handleCallback('ask:am:confirm');
+    expect(onResolve).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('PermissionCard — ask custom-input', () => {
   it('switches to pending state on custom button click', async () => {
     const adapter = new FakeAdapter('telegram');

@@ -38,6 +38,7 @@ export class PermissionCard {
   private msgId: string | null = null;
   private selected = new Set<number>();
   private customInputPending = false;
+  private resolved = false;
 
   constructor(
     private readonly adapter: PlatformAdapter,
@@ -68,12 +69,14 @@ export class PermissionCard {
   }
 
   async handleCallback(data: string): Promise<void> {
+    if (this.resolved) return;
     if (!this.msgId) return;
     if (this.opts.kind === 'generic') {
       const m = data.match(/^perm:([^:]+):(allow|deny|always|learn)$/);
       if (!m || m[1] !== this.opts.requestId) return;
       const verb = m[2] as 'allow' | 'deny' | 'always' | 'learn';
       if (verb === 'learn') return; // future: open URL or expand body
+      this.resolved = true;
       this.opts.onResolve(verb);
       await this.markResolved(`✅ ${verb}`);
       return;
@@ -85,6 +88,7 @@ export class PermissionCard {
       const idx = Number(optMatch[2]);
       if (this.opts.mode === 'single') {
         const label = this.opts.options[idx]?.label ?? '';
+        this.resolved = true;
         this.opts.onResolve([label]);
         await this.markResolved(`✅ ${escapeHtml(label)}`);
         return;
@@ -102,6 +106,7 @@ export class PermissionCard {
       const labels = [...this.selected]
         .sort((a, b) => a - b)
         .map(i => askOpts.options[i]?.label ?? '');
+      this.resolved = true;
       askOpts.onResolve(labels);
       await this.markResolved(labels.length > 0 ? `✅ ${escapeHtml(labels.join(', '))}` : '✅ (空提交)');
       return;
@@ -116,8 +121,10 @@ export class PermissionCard {
 
   /** Called by frontend's plaintext-relay path when user replies with text. */
   async resolveWithPlaintext(text: string): Promise<void> {
+    if (this.resolved) return;
     if (this.opts.kind !== 'ask') return;
     if (this.opts.mode === 'custom-input' && this.customInputPending) {
+      this.resolved = true;
       this.opts.onResolve([text]);
       await this.markResolved(`✅ ${escapeHtml(text)}`);
       return;
@@ -134,6 +141,7 @@ export class PermissionCard {
           ?? labels.find(l => l.toLowerCase().includes(trimmed.toLowerCase()));
       }
       if (chosen) {
+        this.resolved = true;
         this.opts.onResolve([chosen]);
         await this.markResolved(`✅ ${escapeHtml(chosen)}`);
       }
@@ -154,6 +162,7 @@ export class PermissionCard {
         if (match) chosen.push(match);
       }
       if (chosen.length > 0) {
+        this.resolved = true;
         this.opts.onResolve(chosen);
         await this.markResolved(`✅ ${escapeHtml(chosen.join(', '))}`);
       }

@@ -11,7 +11,8 @@ import { escapeHtml } from '../util/html.js';
 const BAR_WIDTH = 10;
 
 function bar(pct: number): string {
-  const filled = Math.max(0, Math.min(BAR_WIDTH, Math.round((pct / 100) * BAR_WIDTH)));
+  const safe = Number.isFinite(pct) ? pct : 0;
+  const filled = Math.max(0, Math.min(BAR_WIDTH, Math.round((safe / 100) * BAR_WIDTH)));
   return '▓'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled);
 }
 
