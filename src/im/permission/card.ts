@@ -129,7 +129,9 @@ export class PermissionCard {
     if (optMatch) {
       if (optMatch[1] !== this.opts.requestId) return;
       const idx = Number(optMatch[2]);
-      if (this.opts.mode === 'single') {
+      if (this.opts.mode === 'single' || this.opts.mode === 'custom-input') {
+        // custom-input mode also resolves immediately on a direct option click
+        // — the "✏️ 自己输入" button is the *fallback*, not the only path.
         const label = this.opts.options[idx]?.label ?? '';
         this.resolved = true;
         this.opts.onResolve([label]);
