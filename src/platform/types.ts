@@ -218,3 +218,21 @@ function balanceFences(chunks: string[], _maxLen: number): string[] {
   }
   return out;
 }
+
+/**
+ * Thrown by platform adapters when the underlying API responds with a
+ * rate-limit error (Telegram 429, Feishu code 99991663). EditQueue catches
+ * this to schedule retries with the embedded `retryAfterMs` and to drive
+ * its circuit-break logic. `platform` lets callers route platform-specific
+ * recovery hints into telemetry.
+ */
+export class RateLimitError extends Error {
+  constructor(
+    public readonly retryAfterMs: number,
+    public readonly platform: ChannelType,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'RateLimitError';
+  }
+}

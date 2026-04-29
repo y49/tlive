@@ -8,11 +8,12 @@
 // the platform-agnostic renderer layer doesn't need to care about number vs
 // string.
 
-import { Bot, type Context } from 'grammy';
+import { Bot, GrammyError, type Context } from 'grammy';
 import { run, type RunnerHandle } from '@grammyjs/runner';
 import type {
   PlatformAdapter, OutboundMessage, OutboundAttachment, InboundEvent, ReplyMarkup, ParseMode,
 } from '../types.js';
+import { RateLimitError } from '../types.js';
 import type { ChannelType } from '../../workspace/bindings.js';
 import { replyMarkupToTelegram, escapeMarkdownV2, formatHtml } from './renderer.js';
 import { sendTelegramAttachment, downloadTelegramFile } from './attachment.js';
@@ -85,14 +86,16 @@ export class TelegramAdapter implements PlatformAdapter {
     const extra = this.buildExtra(msg.replyMarkup, msg.parseMode, msg.threadId, msg.replyToMessageId, msg.silent);
     const text = msg.text ?? '';
     if (msg.attachment) {
-      return sendTelegramAttachment(this.bot, {
+      return this.guard429('sendAttachment', () => sendTelegramAttachment(this.bot, {
         chatId: msg.chatId,
-        attachment: { ...msg.attachment, caption: msg.text },
+        attachment: { ...msg.attachment!, caption: msg.text },
         threadId: msg.threadId,
         replyMarkup: extra.reply_markup as object | undefined,
-      });
+      }));
     }
-    const sent = await this.bot.api.sendMessage(chat, this.encodeText(text, msg.parseMode), extra);
+    const sent = await this.guard429('sendMessage', () =>
+      this.bot.api.sendMessage(chat, this.encodeText(text, msg.parseMode), extra),
+    );
     return String(sent.message_id);
   }
 
@@ -110,25 +113,34 @@ export class TelegramAdapter implements PlatformAdapter {
     else if (parseMode === 'html') extra.parse_mode = 'HTML';
     if (text !== undefined) {
       try {
-        await this.bot.api.editMessageText(Number(chatId), Number(messageId), this.encodeText(text, parseMode), extra);
+        await this.guard429('editMessageText', () =>
+          this.bot.api.editMessageText(Number(chatId), Number(messageId), this.encodeText(text, parseMode), extra),
+        );
         return;
       } catch (err) {
+        if (err instanceof RateLimitError) throw err;
         // "message is not modified" is benign — swallow.
         const msg = String((err as Error)?.message ?? '');
         if (msg.includes('message is not modified')) return;
         throw err;
       }
     } else if (markup) {
-      await this.bot.api.editMessageReplyMarkup(Number(chatId), Number(messageId), extra);
+      await this.guard429('editMessageReplyMarkup', () =>
+        this.bot.api.editMessageReplyMarkup(Number(chatId), Number(messageId), extra),
+      );
     }
   }
 
   async delete(messageId: string, chatId: string): Promise<void> {
-    await this.bot.api.deleteMessage(Number(chatId), Number(messageId));
+    await this.guard429('deleteMessage', () =>
+      this.bot.api.deleteMessage(Number(chatId), Number(messageId)),
+    );
   }
 
   async pin(messageId: string, chatId: string): Promise<void> {
-    await this.bot.api.pinChatMessage(Number(chatId), Number(messageId), { disable_notification: true });
+    await this.guard429('pinChatMessage', () =>
+      this.bot.api.pinChatMessage(Number(chatId), Number(messageId), { disable_notification: true }),
+    );
   }
 
   async setReaction(messageId: string, chatId: string, emoji: string | null): Promise<void> {
@@ -140,7 +152,9 @@ export class TelegramAdapter implements PlatformAdapter {
     const reaction = emoji
       ? ([{ type: 'emoji', emoji } as unknown as Parameters<typeof this.bot.api.setMessageReaction>[2][number]])
       : [];
-    await this.bot.api.setMessageReaction(Number(chatId), Number(messageId), reaction);
+    await this.guard429('setMessageReaction', () =>
+      this.bot.api.setMessageReaction(Number(chatId), Number(messageId), reaction),
+    );
   }
 
   async sendAttachment(
@@ -150,13 +164,13 @@ export class TelegramAdapter implements PlatformAdapter {
     threadId?: string,
   ): Promise<string> {
     if (!attachment) throw new Error('TelegramAdapter.sendAttachment: attachment required');
-    return sendTelegramAttachment(this.bot, {
+    return this.guard429('sendAttachment', () => sendTelegramAttachment(this.bot, {
       chatId,
       attachment,
       caption: attachment.caption,
       threadId,
       replyMarkup: replyMarkupToTelegram(replyMarkup),
-    });
+    }));
   }
 
   async downloadAttachment(fileRef: string): Promise<Buffer> {
@@ -169,6 +183,26 @@ export class TelegramAdapter implements PlatformAdapter {
   }
 
   // ---- Internals ----------------------------------------------------------
+
+  /**
+   * Wrap a Telegram Bot API call so that a `429 Too Many Requests` response
+   * (surfaced by grammy as a `GrammyError` with `error_code === 429` and
+   * optional `parameters.retry_after` seconds) is rethrown as our
+   * platform-agnostic `RateLimitError`. EditQueue catches this to drive
+   * retry / circuit-break. All other errors pass through untouched.
+   */
+  private async guard429<T>(action: string, fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err instanceof GrammyError && err.error_code === 429) {
+        const retrySec = (err.parameters as { retry_after?: number } | undefined)?.retry_after;
+        const ms = (retrySec ?? 1) * 1000;
+        throw new RateLimitError(ms, 'telegram', err.description ?? `${action} 429`);
+      }
+      throw err;
+    }
+  }
 
   private buildExtra(
     markup: ReplyMarkup | undefined,

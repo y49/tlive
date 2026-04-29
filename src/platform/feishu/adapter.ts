@@ -12,6 +12,7 @@ import type {
   PlatformAdapter, OutboundMessage, OutboundAttachment, InboundEvent, ReplyMarkup,
   FormField,
 } from '../types.js';
+import { RateLimitError } from '../types.js';
 import type { ChannelType } from '../../workspace/bindings.js';
 import { buildInlineCard } from './renderer.js';
 import { buildFormCard } from './form.js';
@@ -128,47 +129,53 @@ export class FeishuAdapter implements PlatformAdapter {
 
   async send(msg: OutboundMessage): Promise<string> {
     if (msg.attachment) {
-      return sendFeishuAttachment({ client: this.mustClient(), chatId: msg.chatId, attachment: { ...msg.attachment, caption: msg.text } });
+      return this.guard429('send.attachment', () =>
+        sendFeishuAttachment({ client: this.mustClient(), chatId: msg.chatId, attachment: { ...msg.attachment!, caption: msg.text } }),
+      );
     }
     const card = buildInlineCard(msg.text ?? '', msg.replyMarkup);
     const content = JSON.stringify(card);
     const c = this.mustClient() as {
-      im: { v1: { message: { create: (args: unknown) => Promise<{ data?: { message_id?: string } }> } } };
+      im: { v1: { message: { create: (args: unknown) => Promise<{ code?: number; msg?: string; data?: { message_id?: string } }> } } };
     };
-    const res = await c.im.v1.message.create({
+    const res = await this.guard429('send', () => c.im.v1.message.create({
       params: { receive_id_type: 'chat_id' },
       data: {
         receive_id: msg.chatId,
         msg_type: 'interactive',
         content,
       },
-    });
+    }));
+    this.checkLarkCode(res, 'send');
     return res.data?.message_id ?? '';
   }
 
   async edit(messageId: string, _chatId: string, text?: string, markup?: ReplyMarkup): Promise<void> {
     const card = buildInlineCard(text ?? '', markup);
     const c = this.mustClient() as {
-      im: { v1: { message: { patch: (args: unknown) => Promise<unknown> } } };
+      im: { v1: { message: { patch: (args: unknown) => Promise<{ code?: number; msg?: string }> } } };
     };
-    await c.im.v1.message.patch({
+    const res = await this.guard429('edit', () => c.im.v1.message.patch({
       path: { message_id: messageId },
       data: { content: JSON.stringify(card) },
-    });
+    }));
+    this.checkLarkCode(res, 'edit');
   }
 
   async delete(messageId: string, _chatId: string): Promise<void> {
     const c = this.mustClient() as {
-      im: { v1: { message: { delete: (args: unknown) => Promise<unknown> } } };
+      im: { v1: { message: { delete: (args: unknown) => Promise<{ code?: number; msg?: string }> } } };
     };
-    await c.im.v1.message.delete({ path: { message_id: messageId } });
+    const res = await this.guard429('delete', () => c.im.v1.message.delete({ path: { message_id: messageId } }));
+    this.checkLarkCode(res, 'delete');
   }
 
   async pin(messageId: string, _chatId: string): Promise<void> {
     const c = this.mustClient() as {
-      im: { v1: { pin: { create: (args: unknown) => Promise<unknown> } } };
+      im: { v1: { pin: { create: (args: unknown) => Promise<{ code?: number; msg?: string }> } } };
     };
-    await c.im.v1.pin.create({ data: { message_id: messageId } });
+    const res = await this.guard429('pin', () => c.im.v1.pin.create({ data: { message_id: messageId } }));
+    this.checkLarkCode(res, 'pin');
   }
 
   async setReaction(_messageId: string, _chatId: string, _emoji: string | null): Promise<void> {
@@ -177,27 +184,29 @@ export class FeishuAdapter implements PlatformAdapter {
 
   async sendCard(opts: { chatId: string; threadId?: string; card: object }): Promise<string> {
     const c = this.mustClient() as {
-      im: { v1: { message: { create: (args: unknown) => Promise<{ data?: { message_id?: string } }> } } };
+      im: { v1: { message: { create: (args: unknown) => Promise<{ code?: number; msg?: string; data?: { message_id?: string } }> } } };
     };
-    const res = await c.im.v1.message.create({
+    const res = await this.guard429('sendCard', () => c.im.v1.message.create({
       params: { receive_id_type: 'chat_id' },
       data: {
         receive_id: opts.chatId,
         msg_type: 'interactive',
         content: JSON.stringify(opts.card),
       },
-    });
+    }));
+    this.checkLarkCode(res, 'sendCard');
     return res.data?.message_id ?? '';
   }
 
   async updateCard(messageId: string, _chatId: string, card: object): Promise<void> {
     const c = this.mustClient() as {
-      im: { v1: { message: { patch: (args: unknown) => Promise<unknown> } } };
+      im: { v1: { message: { patch: (args: unknown) => Promise<{ code?: number; msg?: string }> } } };
     };
-    await c.im.v1.message.patch({
+    const res = await this.guard429('updateCard', () => c.im.v1.message.patch({
       path: { message_id: messageId },
       data: { content: JSON.stringify(card) },
-    });
+    }));
+    this.checkLarkCode(res, 'updateCard');
   }
 
   /**
@@ -213,16 +222,17 @@ export class FeishuAdapter implements PlatformAdapter {
     const card = buildFormCard(spec.title, spec.fields, spec.submitId);
     const content = JSON.stringify(card);
     const c = this.mustClient() as {
-      im: { v1: { message: { create: (args: unknown) => Promise<{ data?: { message_id?: string } }> } } };
+      im: { v1: { message: { create: (args: unknown) => Promise<{ code?: number; msg?: string; data?: { message_id?: string } }> } } };
     };
-    const res = await c.im.v1.message.create({
+    const res = await this.guard429('sendFormCard', () => c.im.v1.message.create({
       params: { receive_id_type: 'chat_id' },
       data: {
         receive_id: chatId,
         msg_type: 'interactive',
         content,
       },
-    });
+    }));
+    this.checkLarkCode(res, 'sendFormCard');
     return res.data?.message_id ?? '';
   }
 
@@ -233,7 +243,9 @@ export class FeishuAdapter implements PlatformAdapter {
     _threadId?: string,
   ): Promise<string> {
     if (!attachment) throw new Error('FeishuAdapter.sendAttachment: attachment required');
-    return sendFeishuAttachment({ client: this.mustClient(), chatId, attachment });
+    return this.guard429('sendAttachment', () =>
+      sendFeishuAttachment({ client: this.mustClient(), chatId, attachment }),
+    );
   }
 
   async downloadAttachment(fileRef: string): Promise<Buffer> {
@@ -330,6 +342,47 @@ export class FeishuAdapter implements PlatformAdapter {
   private mustClient(): unknown {
     if (!this.client) throw new Error('FeishuAdapter: client not configured');
     return this.client;
+  }
+
+  /**
+   * Wrap a lark Client API call so transport-level rate-limit signals
+   * (HTTP 429 surfaced as AxiosError with response.status===429) become
+   * `RateLimitError`. Lark also returns a 429-equivalent in the JSON body
+   * (`code: 99991663`) — that's caught by `checkLarkCode` after the call
+   * resolves; both paths funnel into the same RateLimitError type.
+   */
+  private async guard429<T>(action: string, fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (err) {
+      const e = err as { response?: { status?: number; data?: { msg?: string; code?: number } }; message?: string };
+      const status = e?.response?.status;
+      if (status === 429) {
+        const body = e?.response?.data;
+        const desc = body?.msg ?? e?.message ?? `${action} 429`;
+        throw new RateLimitError(1000, 'feishu', desc);
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Lark returns errors in the response body as `{ code, msg, data }` with
+   * non-zero `code`. The rate-limit code is `99991663` (open-platform
+   * frequency limit). Other non-zero codes pass through as a generic Error
+   * — we don't pretend to know their semantics here.
+   */
+  private checkLarkCode(res: { code?: number; msg?: string }, action: string): void {
+    const code = res?.code;
+    if (code === undefined || code === 0) return;
+    if (code === 99991663) {
+      throw new RateLimitError(1000, 'feishu', res?.msg ?? `${action} rate limited`);
+    }
+    // Other non-zero codes — surface but don't dress up. The existing test
+    // mocks resolve with `{ data: { ... } }` (no `code`), so this branch
+    // does NOT fire for those. New code paths that explicitly mock `code`
+    // will raise here.
+    throw new Error(`feishu ${action} failed: code=${code} msg=${res?.msg ?? ''}`);
   }
 
   private emitInbound(ev: InboundEvent): void {
