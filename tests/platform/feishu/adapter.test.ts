@@ -61,3 +61,43 @@ describe('FeishuAdapter', () => {
     expect((received[0] as { kind: string }).kind).toBe('callback');
   });
 });
+
+describe('FeishuAdapter — sendCard / updateCard', () => {
+  it('sendCard posts msg_type=interactive with stringified card content', async () => {
+    const client = mkLarkClient();
+    client.im.v1.message.create = vi.fn().mockResolvedValue({ data: { message_id: 'om_1' } });
+    const adapter = new FeishuAdapter({ appId: 'a', appSecret: 's', client });
+    const id = await adapter.sendCard({ chatId: 'oc_1', card: { schema: '2.0' } });
+    expect(id).toBe('om_1');
+    expect(client.im.v1.message.create).toHaveBeenCalledTimes(1);
+    const callArg = client.im.v1.message.create.mock.calls[0]![0] as {
+      params: { receive_id_type: string };
+      data: { receive_id: string; msg_type: string; content: string };
+    };
+    expect(callArg.data.msg_type).toBe('interactive');
+    expect(callArg.params.receive_id_type).toBe('chat_id');
+    expect(callArg.data.receive_id).toBe('oc_1');
+    expect((JSON.parse(callArg.data.content) as { schema: string }).schema).toBe('2.0');
+  });
+
+  it('updateCard calls im.v1.message.patch with stringified card', async () => {
+    const client = mkLarkClient();
+    const adapter = new FeishuAdapter({ appId: 'a', appSecret: 's', client });
+    await adapter.updateCard('om_1', 'oc_1', { schema: '2.0', body: { elements: [] } });
+    expect(client.im.v1.message.patch).toHaveBeenCalledTimes(1);
+    const callArg = client.im.v1.message.patch.mock.calls[0]![0] as {
+      path: { message_id: string };
+      data: { content: string };
+    };
+    expect(callArg.path.message_id).toBe('om_1');
+    expect((JSON.parse(callArg.data.content) as { schema: string }).schema).toBe('2.0');
+  });
+
+  it('sendCard returns empty string on missing message_id (defensive)', async () => {
+    const client = mkLarkClient();
+    client.im.v1.message.create = vi.fn().mockResolvedValue({ data: {} });
+    const adapter = new FeishuAdapter({ appId: 'a', appSecret: 's', client });
+    const id = await adapter.sendCard({ chatId: 'oc_1', card: {} });
+    expect(id).toBe('');
+  });
+});

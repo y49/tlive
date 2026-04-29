@@ -38,6 +38,8 @@ export interface ChannelCapabilities {
   sendChatAction: boolean;
   /** Maximum bytes for callback payload (inline button data). */
   callbackDataMaxBytes: number;
+  /** Can deliver a structured card payload (e.g. lark card 2.0)? */
+  cards: boolean;
 }
 
 export const CAPABILITIES: Record<ChannelType, ChannelCapabilities> = {
@@ -54,6 +56,7 @@ export const CAPABILITIES: Record<ChannelType, ChannelCapabilities> = {
     maxCaptionLen: 1024,
     sendChatAction: true,
     callbackDataMaxBytes: 64,
+    cards: false,
   },
   discord: {
     reactions: true,
@@ -68,6 +71,7 @@ export const CAPABILITIES: Record<ChannelType, ChannelCapabilities> = {
     maxCaptionLen: 2000,
     sendChatAction: true,
     callbackDataMaxBytes: 100,
+    cards: false,
   },
   feishu: {
     reactions: false,               // platform has no reaction API
@@ -82,6 +86,7 @@ export const CAPABILITIES: Record<ChannelType, ChannelCapabilities> = {
     maxCaptionLen: 500,
     sendChatAction: false,
     callbackDataMaxBytes: 200,
+    cards: true,
   },
 };
 

@@ -175,6 +175,31 @@ export class FeishuAdapter implements PlatformAdapter {
     throw new Error('FeishuAdapter: native reactions unsupported — renderer must fall back');
   }
 
+  async sendCard(opts: { chatId: string; threadId?: string; card: object }): Promise<string> {
+    const c = this.mustClient() as {
+      im: { v1: { message: { create: (args: unknown) => Promise<{ data?: { message_id?: string } }> } } };
+    };
+    const res = await c.im.v1.message.create({
+      params: { receive_id_type: 'chat_id' },
+      data: {
+        receive_id: opts.chatId,
+        msg_type: 'interactive',
+        content: JSON.stringify(opts.card),
+      },
+    });
+    return res.data?.message_id ?? '';
+  }
+
+  async updateCard(messageId: string, _chatId: string, card: object): Promise<void> {
+    const c = this.mustClient() as {
+      im: { v1: { message: { patch: (args: unknown) => Promise<unknown> } } };
+    };
+    await c.im.v1.message.patch({
+      path: { message_id: messageId },
+      data: { content: JSON.stringify(card) },
+    });
+  }
+
   /**
    * Send a Feishu elicitation form card (interactive card with a `form`
    * element). Used by ElicitationFormRenderer for form-mode requests; the

@@ -143,6 +143,11 @@ export interface PlatformAdapter {
   downloadAttachment(fileRef: string): Promise<Buffer>;
   /** Subscribe to inbound events. Returns unsubscribe fn. */
   onInbound(cb: (ev: InboundEvent) => void): () => void;
+  /** Send a structured card payload (lark card 2.0, etc). Optional;
+   *  callers must check capabilities.cards. */
+  sendCard?(opts: { chatId: string; threadId?: string; card: object }): Promise<string>;
+  /** Patch an existing card's content. Optional; pairs with sendCard. */
+  updateCard?(messageId: string, chatId: string, card: object): Promise<void>;
 }
 
 /**
