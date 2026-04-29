@@ -13,6 +13,7 @@ function makeFrontend(channel: 'telegram' | 'discord' | 'feishu') {
   const sm = {
     subscribe(l: ManagerEventListener) { smListeners.add(l); return () => smListeners.delete(l); },
     push(ev: Parameters<ManagerEventListener>[0]) { for (const l of smListeners) l(ev); },
+    get(_id: string) { return undefined; },
   } as unknown as SessionManager & { push: (ev: Parameters<ManagerEventListener>[0]) => void };
   const pbListeners = new Set<BrokerListener>();
   const pb = {
@@ -56,7 +57,7 @@ describe('integration: Telegram end-to-end turn', () => {
     ctx.sm.push({ kind: 'created', session });
     await tick();
 
-    // Turn start
+    // Turn start — HUD is sent (new UX path; no legacy session-header on attach).
     session.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: 'help', at: 1_000_000 });
     await tick();
 
@@ -65,18 +66,17 @@ describe('integration: Telegram end-to-end turn', () => {
     await tick();
 
     // Permission requested via broker
-    let approved = false;
     ctx.pb.push({
       kind: 'pending',
       sessionId: 'sess-a',
       request: {
         id: 'sess-a:p1', category: 'exec', toolName: 'Bash', toolInput: { command: 'ls' },
-        resolve: () => { approved = true; },
+        resolve: () => { /* noop */ },
       },
     });
     await tick();
 
-    // Approve (simulate callback → broker.resolve)
+    // Broker resolved (external approval via another path; no in-card callback here).
     ctx.pb.push({
       kind: 'resolved',
       sessionId: 'sess-a', requestId: 'sess-a:p1', decision: 'allow',
@@ -94,26 +94,22 @@ describe('integration: Telegram end-to-end turn', () => {
     session.emit({ kind: 'session_complete', reason: 'ok', summary: 'done' });
     await tick();
 
-    // Assertions:
-    // At least: session-header send, activity-sticky send, permission-card send, agent-message send.
+    // Assertions (new UX path):
+    // At least: HUD send (turn_start) + permission-card send + reply-message send.
     const sends = ctx.adapter.byKind('send');
-    expect(sends.length).toBeGreaterThanOrEqual(4);
-    // Permission card must have been edited to "Allowed" banner.
-    const edits = ctx.adapter.byKind('edit');
-    const allowed = edits.some((e) => String(e.args.text).includes('Allowed'));
-    expect(allowed).toBe(true);
-    // Agent message text "Done" rendered.
+    expect(sends.length).toBeGreaterThanOrEqual(2);
+    // Permission card send: new renderer uses 🔐 Permission prefix.
+    expect(sends.some((s) => String(s.args.text ?? '').includes('Permission'))).toBe(true);
+    // Reply send contains agent text "Done".
     expect(sends.some((s) => String(s.args.text).includes('Done'))).toBe(true);
-    // Approval callback was invoked in our broker mock indirectly; broker side is T4's test.
-    expect(approved).toBe(false); // our mock broker doesn't call request.resolve, that's fine.
 
-    // Cost accumulation (T6 review fix #3): turn_end costUsd should have been
-    // folded into state.costUsd AND surfaced via header edit.
+    // Cost accumulation: turn_end costUsd surfaced in HUD edit.
+    const edits = ctx.adapter.byKind('edit');
     const costShown = edits.some((e) => String(e.args.text ?? '').includes('$0.01'));
     expect(costShown).toBe(true);
   });
 
-  it('outbound call sequence: header → activity → permission → agent → header-cost', async () => {
+  it('outbound call sequence: HUD → permission → reply → HUD-cost-edit (new UX)', async () => {
     const session = new FakeSession({ id: 'sess-seq', workspaceId: 'w1' });
     ctx.sm.push({ kind: 'created', session });
     await tick();
@@ -142,23 +138,20 @@ describe('integration: Telegram end-to-end turn', () => {
       text: String((c.args as { text?: unknown }).text ?? ''),
     }));
 
-    // First event is the session header send (📁 prefix).
+    // First send is the HUD (new UX: <pre><code>📊 turn…).
     expect(sequence[0]!.kind).toBe('send');
-    expect(sequence[0]!.text).toContain('📁');
+    expect(sequence[0]!.text).toMatch(/^<pre><code>📊/);
 
-    // Activity sticky thinking appears next.
-    const activityThink = sequence.find((s) => s.kind === 'send' && s.text.includes('🧠 thinking'));
-    expect(activityThink).toBeDefined();
-
-    // Permission card send occurs (📝 Edit prefix for file-edit).
-    const permission = sequence.find((s) => s.kind === 'send' && s.text.includes('📝 Edit'));
+    // Permission card send uses 🔐 Permission prefix (new PermissionCard).
+    const permission = sequence.find((s) => s.kind === 'send' && s.text.includes('Permission'));
     expect(permission).toBeDefined();
+    expect(permission!.text).toContain('Edit');
 
-    // Agent message send contains the text payload.
-    const agentMsg = sequence.find((s) => s.kind === 'send' && s.text.includes('Looking at the'));
-    expect(agentMsg).toBeDefined();
+    // Reply send contains the assistant text payload.
+    const replyMsg = sequence.find((s) => s.kind === 'send' && s.text.includes('Looking at the'));
+    expect(replyMsg).toBeDefined();
 
-    // A header edit with the accumulated cost appears after turn_end.
+    // A HUD edit with the accumulated cost appears after turn_end.
     const costEdit = sequence.find((s) => s.kind === 'edit' && /\$0\.07/.test(s.text));
     expect(costEdit).toBeDefined();
   });

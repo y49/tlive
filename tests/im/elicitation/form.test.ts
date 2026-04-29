@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ElicitationFormRenderer, buildElicitationMarkup } from '../../../src/im/render/elicitation-form.js';
+import { ElicitationFormRenderer, buildElicitationMarkup } from '../../../src/im/elicitation/form.js';
 import { CAPABILITIES } from '../../../src/im/capability-matrix.js';
 import { newSessionRenderState } from '../../../src/im/render/types.js';
 import { FakeAdapter } from '../fake-adapter.js';

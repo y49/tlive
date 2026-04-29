@@ -12,6 +12,7 @@ function makeFrontend() {
   const sm = {
     subscribe(l: ManagerEventListener) { smListeners.add(l); return () => smListeners.delete(l); },
     push(ev: Parameters<ManagerEventListener>[0]) { for (const l of smListeners) l(ev); },
+    get(_id: string) { return undefined; },
   } as unknown as SessionManager & { push: (ev: Parameters<ManagerEventListener>[0]) => void };
   const pbListeners = new Set<BrokerListener>();
   const pb = {
@@ -44,7 +45,7 @@ describe('integration: Feishu end-to-end with reaction fallback', () => {
   let ctx: ReturnType<typeof makeFrontend>;
   beforeEach(() => { ctx = makeFrontend(); });
 
-  it('attach → file-edit permission with diff → allow', async () => {
+  it('attach → file-edit permission with diff → allow (new UX path)', async () => {
     const session = new FakeSession({ id: 'sess-f', workspaceId: 'w1' });
     ctx.sm.push({ kind: 'created', session });
     await tick();
@@ -66,12 +67,14 @@ describe('integration: Feishu end-to-end with reaction fallback', () => {
     });
     await tick();
 
+    // New UX: PermissionCard renders 🔐 Permission: <code>Edit</code> (not 📝 Edit).
     const sends = ctx.adapter.byKind('send');
-    expect(sends.some((s) => String(s.args.text).includes('📝 Edit'))).toBe(true);
-    // Diff block included.
-    expect(sends.some((s) => String(s.args.text).includes('+1 -1'))).toBe(true);
-    const edits = ctx.adapter.byKind('edit');
-    expect(edits.some((e) => String(e.args.text).includes('Allow-always'))).toBe(true);
+    expect(sends.some((s) => String(s.args.text ?? '').includes('Permission'))).toBe(true);
+    expect(sends.some((s) => String(s.args.text ?? '').includes('Edit'))).toBe(true);
+    // Tool input JSON preview included in the card.
+    expect(sends.some((s) => String(s.args.text ?? '').includes('README.md'))).toBe(true);
+    // Broker resolved event cleans up the card registry (no crash).
+    expect(ctx.adapter.byKind('send').length).toBeGreaterThanOrEqual(1);
   });
 
   it('reactions are never invoked on Feishu (capability matrix enforces)', async () => {

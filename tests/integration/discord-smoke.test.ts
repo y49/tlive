@@ -13,6 +13,7 @@ function makeFrontend() {
   const sm = {
     subscribe(l: ManagerEventListener) { smListeners.add(l); return () => smListeners.delete(l); },
     push(ev: Parameters<ManagerEventListener>[0]) { for (const l of smListeners) l(ev); },
+    get(_id: string) { return undefined; },
   } as unknown as SessionManager & { push: (ev: Parameters<ManagerEventListener>[0]) => void };
   const pbListeners = new Set<BrokerListener>();
   const pb = {
@@ -51,11 +52,16 @@ describe('integration: Discord end-to-end elicitation', () => {
   let ctx: ReturnType<typeof makeFrontend>;
   beforeEach(() => { ctx = makeFrontend(); });
 
-  it('attach → todo_write → elicitation form → decline → teardown', async () => {
+  it('attach → elicitation form → decline → teardown (new UX: todo_write is noop)', async () => {
+    // T10b removed the legacy todo-sticky renderer. todo_write events are now
+    // surfaced only through the HUD's todoList field (T12 manual smoke covers
+    // the full HUD rendering path). This test verifies elicitation still works.
     const session = new FakeSession({ id: 'sess-d', workspaceId: 'w1' });
     ctx.sm.push({ kind: 'created', session });
     await tick();
 
+    // todo_write is no longer rendered as a separate sticky message in new UX.
+    // (TODO(T12-smoke): verify todo list appears in HUD card on turn_start)
     session.emit({ kind: 'todo_write', items: [
       { content: 'a', status: 'completed' },
       { content: 'b', status: 'pending' },
@@ -81,10 +87,10 @@ describe('integration: Discord end-to-end elicitation', () => {
     });
     await tick();
 
+    // Elicitation form still sends a message and edits it on resolution.
     const sends = ctx.adapter.byKind('send');
-    expect(sends.some((s) => String(s.args.text).includes('📋 Todo'))).toBe(true);
-    expect(sends.some((s) => String(s.args.text).includes('github'))).toBe(true);
+    expect(sends.some((s) => String(s.args.text ?? '').includes('github'))).toBe(true);
     const edits = ctx.adapter.byKind('edit');
-    expect(edits.some((e) => String(e.args.text).includes('Declined'))).toBe(true);
+    expect(edits.some((e) => String(e.args.text ?? '').includes('Declined'))).toBe(true);
   });
 });

@@ -22,6 +22,7 @@ function mkSm(): SessionManager & { push: ManagerEventListener } {
   return {
     subscribe(l: ManagerEventListener) { listeners.add(l); return () => listeners.delete(l); },
     push(ev: Parameters<ManagerEventListener>[0]) { for (const l of listeners) l(ev); },
+    get(_id: string) { return undefined; },
   } as unknown as SessionManager & { push: ManagerEventListener };
 }
 
@@ -67,29 +68,23 @@ describe('multi-binding fan-out (T6 review #1)', () => {
     sm.push({ kind: 'created', session });
     await tick();
 
-    // Both adapters should have received EXACTLY one session header each,
-    // each with its OWN chatId.
-    const tgSends = tg.byKind('send');
-    const dsSends = ds.byKind('send');
-    expect(tgSends.length).toBe(1);
-    expect(dsSends.length).toBe(1);
-    expect(tgSends[0]!.args.chatId).toBe('tg-100');
-    expect(dsSends[0]!.args.chatId).toBe('ds-200');
+    // No sends on session attach (legacy session-header renderer removed in T10b).
+    expect(tg.byKind('send').length).toBe(0);
+    expect(ds.byKind('send').length).toBe(0);
 
-    // No Telegram call ever had Discord chatId or vice versa.
-    for (const c of tg.calls) expect(String(c.args.chatId ?? '')).not.toBe('ds-200');
-    for (const c of ds.calls) expect(String(c.args.chatId ?? '')).not.toBe('tg-100');
-
-    // Now drive a turn.
+    // Drive a turn — turn_start sends HUD to primary (Telegram); mirror (Discord)
+    // gets a reply echo on assistant_text but no HUD (primary-only).
     session.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: 'hi', at: 1_000_000 });
     await tick();
     session.emit({ kind: 'assistant_text', turnId: 't1', text: 'hello', complete: true });
     await tick();
     session.emit({ kind: 'turn_end', turnId: 't1', durationMs: 100, costUsd: 0.05, tokensIn: 0, tokensOut: 0 });
-    await tick();
+    await tick(400); // wait past TurnUI turn_end 400ms reaction buffer
 
-    // Each adapter should have received its share of sends, still scoped
-    // to its own chatId.
+    // Each adapter must have received AT LEAST one send (HUD for Telegram,
+    // reply-echo for Discord), all scoped to the correct chatId.
+    expect(tg.byKind('send').length).toBeGreaterThan(0);
+    expect(ds.byKind('send').length).toBeGreaterThan(0);
     for (const c of tg.calls) {
       if ('chatId' in (c.args as Record<string, unknown>)) {
         expect(String(c.args.chatId ?? 'tg-100')).toBe('tg-100');
@@ -101,7 +96,7 @@ describe('multi-binding fan-out (T6 review #1)', () => {
       }
     }
 
-    // Cost accumulation: session header edit on turn_end must include $0.05.
+    // Cost accumulation: HUD edit on turn_end must include $0.05.
     const tgEdits = tg.byKind('edit');
     const costShown = tgEdits.some((e) => String(e.args.text ?? '').includes('$0.05'));
     expect(costShown).toBe(true);
@@ -109,7 +104,7 @@ describe('multi-binding fan-out (T6 review #1)', () => {
     await frontend.stop();
   });
 
-  it('permission card: buttons only on primary; mirror gets "Respond from primary" tail', async () => {
+  it('permission card: only primary gets interactive card; mirror receives nothing (new UX)', async () => {
     const tg = new FakeAdapter('telegram');
     const ds = new FakeAdapter('discord');
     const sm = mkSm();
@@ -134,20 +129,17 @@ describe('multi-binding fan-out (T6 review #1)', () => {
     });
     await tick();
 
-    // Each adapter received exactly one permission card send.
+    // Primary (Telegram) receives exactly one permission card send with buttons.
     const tgPermSends = tg.byKind('send').filter((c) => String(c.args.text ?? '').includes('Permission'));
-    const dsPermSends = ds.byKind('send').filter((c) => String(c.args.text ?? '').includes('Permission'));
     expect(tgPermSends).toHaveLength(1);
-    expect(dsPermSends).toHaveLength(1);
-
-    // Primary (Telegram) has replyMarkup with buttons.
     const tgMarkup = tgPermSends[0]!.args.replyMarkup as { buttons?: unknown[][] } | undefined;
     expect(tgMarkup).toBeDefined();
     expect((tgMarkup!.buttons ?? []).length).toBeGreaterThan(0);
 
-    // Mirror (Discord) has NO replyMarkup, and text contains the mirror tail.
-    expect(dsPermSends[0]!.args.replyMarkup).toBeUndefined();
-    expect(String(dsPermSends[0]!.args.text ?? '')).toContain('Respond from primary chat');
+    // Mirror (Discord) receives no permission card in the new UX path —
+    // only primaries get interactive cards (T10b: legacy mirror-tail renderer removed).
+    const dsPermSends = ds.byKind('send').filter((c) => String(c.args.text ?? '').includes('Permission'));
+    expect(dsPermSends).toHaveLength(0);
 
     await frontend.stop();
   });

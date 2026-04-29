@@ -80,25 +80,6 @@ describe('SessionFrontend', () => {
     frontend.start();
   });
 
-  it('attaches renderers on session created and sends header', async () => {
-    const session = new FakeSession({ id: 'sess-1', workspaceId: 'w1' });
-    sm.push({ kind: 'created', session } as Parameters<typeof sm.push>[0]);
-    // Allow microtasks to flush
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(adapter.byKind('send').length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('routes turn_start to activity sticky', async () => {
-    const session = new FakeSession({ id: 'sess-2', workspaceId: 'w1' });
-    sm.push({ kind: 'created', session } as Parameters<typeof sm.push>[0]);
-    await new Promise((r) => setTimeout(r, 10));
-    session.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: 'hi', at: 1_000_000 });
-    await new Promise((r) => setTimeout(r, 10));
-    // At least the header + activity sticky
-    expect(adapter.byKind('send').length).toBeGreaterThanOrEqual(2);
-  });
-
   it('routes permission_requested via PermissionBroker', async () => {
     const session = new FakeSession({ id: 'sess-3', workspaceId: 'w1' });
     sm.push({ kind: 'created', session } as Parameters<typeof sm.push>[0]);
@@ -114,16 +95,6 @@ describe('SessionFrontend', () => {
     } as Parameters<typeof pb.push>[0]);
     await new Promise((r) => setTimeout(r, 10));
     expect(adapter.byKind('send').length).toBeGreaterThan(countBefore);
-  });
-
-  it('routes todo_write to todo sticky', async () => {
-    const session = new FakeSession({ id: 'sess-4', workspaceId: 'w1' });
-    sm.push({ kind: 'created', session } as Parameters<typeof sm.push>[0]);
-    await new Promise((r) => setTimeout(r, 10));
-    session.emit({ kind: 'todo_write', items: [{ content: 'a', status: 'pending' }] });
-    await new Promise((r) => setTimeout(r, 10));
-    const sends = adapter.byKind('send').map((c) => String(c.args.text));
-    expect(sends.some((t) => t.includes('📋 Todo'))).toBe(true);
   });
 
   it('tears down on session stopped', async () => {

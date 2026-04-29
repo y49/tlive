@@ -65,7 +65,10 @@ describe('integration: multi-chat-mirror', () => {
     rmSync(env.home, { recursive: true, force: true });
   });
 
-  it('primary and mirror each receive their own chatId; mirror permission card has no buttons', async () => {
+  it('primary gets permission card with buttons; mirror gets nothing (new UX)', async () => {
+    // T10b removed legacy session-header and mirror-tail renderers. In the new UX
+    // no messages are sent on session attach; only turn_start (HUD) triggers outbound.
+    // (TODO(T12-smoke): verify HUD sends on turn_start for multi-binding scenario)
     const session = await env.mgr.createLocal({
       workspaceId: env.ws.id,
       provider: 'claude',
@@ -74,19 +77,9 @@ describe('integration: multi-chat-mirror', () => {
     });
     await tick();
 
-    // Session header went to both adapters with their respective chatIds.
-    const tgSends = env.tg.byKind('send');
-    const dsSends = env.ds.byKind('send');
-    expect(tgSends.length).toBeGreaterThan(0);
-    expect(dsSends.length).toBeGreaterThan(0);
-    for (const c of env.tg.calls) {
-      const cid = (c.args as { chatId?: string }).chatId;
-      if (cid) expect(cid).toBe('tg-1');
-    }
-    for (const c of env.ds.calls) {
-      const cid = (c.args as { chatId?: string }).chatId;
-      if (cid) expect(cid).toBe('ds-1');
-    }
+    // No sends on attach in new UX (no legacy session-header renderer).
+    expect(env.tg.byKind('send').length).toBe(0);
+    expect(env.ds.byKind('send').length).toBe(0);
 
     // Issue a permission request via the runtime and flush.
     const runtime = env.runtimes[0]!;
@@ -99,14 +92,18 @@ describe('integration: multi-chat-mirror', () => {
     });
     await tick();
 
+    // Primary (Telegram tg-1) receives the permission card with buttons.
     const tgPerms = env.tg.byKind('send').filter((c) => /Permission/i.test(String((c.args as { text?: string }).text ?? '')));
-    const dsPerms = env.ds.byKind('send').filter((c) => /Permission/i.test(String((c.args as { text?: string }).text ?? '')));
     expect(tgPerms.length).toBe(1);
-    expect(dsPerms.length).toBe(1);
-
-    // Primary has buttons; mirror does not.
     const tgMarkup = (tgPerms[0]!.args as { replyMarkup?: { buttons?: unknown[][] } }).replyMarkup;
     expect(tgMarkup?.buttons?.length ?? 0).toBeGreaterThan(0);
-    expect((dsPerms[0]!.args as { replyMarkup?: unknown }).replyMarkup).toBeUndefined();
+    expect((tgPerms[0]!.args as { chatId?: string }).chatId).toBe('tg-1');
+
+    // Mirror (Discord ds-1) receives no permission card in new UX
+    // (legacy mirror-tail renderer was deleted in T10b).
+    const dsPerms = env.ds.byKind('send').filter((c) => /Permission/i.test(String((c.args as { text?: string }).text ?? '')));
+    expect(dsPerms.length).toBe(0);
+
+    void session; // suppress unused-var lint
   });
 });

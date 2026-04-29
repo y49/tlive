@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { ReactionTracker } from '../../../src/im/render/reaction-tracker.js';
-import { CAPABILITIES } from '../../../src/im/capability-matrix.js';
-import { newSessionRenderState } from '../../../src/im/render/types.js';
-import { FakeAdapter } from '../fake-adapter.js';
+import { ReactionTracker } from '../../src/im/reaction-tracker.js';
+import { CAPABILITIES } from '../../src/im/capability-matrix.js';
+import { newSessionRenderState } from '../../src/im/render/types.js';
+import { FakeAdapter } from './fake-adapter.js';
 
 function makeState() {
   return newSessionRenderState({
