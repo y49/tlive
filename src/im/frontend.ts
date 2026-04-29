@@ -45,6 +45,7 @@ import { AttachmentPreview } from './attachment.js';
 import { PermissionCard } from './permission/card.js';
 import { TurnComposite } from './turn-composite.js';
 import { EditQueue } from './reply-document/edit-queue.js';
+import { AskCardController } from './ask/ask-card-controller.js';
 
 /**
  * A renderer set lives per (session, binding). The set's adapter is the one
@@ -96,6 +97,8 @@ interface SessionEntry {
   /** v2: per-turn TurnComposite + EditQueue per channel target. */
   activeTurnComposites?: Map<string, TurnComposite>;
   editQueues?: Map<string, EditQueue>;
+  /** v2: per-channel AskCardController (dual-path with v1 activeAskCards). */
+  askControllers?: Map<string, AskCardController>;
 }
 
 export interface SessionFrontendOptions {
@@ -342,6 +345,9 @@ export class SessionFrontend {
     if (entry.activeAskCards) {
       for (const reqId of entry.activeAskCards.keys()) this.cardsByReqId.delete(reqId);
     }
+    if (entry.askControllers) {
+      for (const ctrl of entry.askControllers.values()) ctrl.cancelPending();
+    }
     if (entry.pendingPermPlaintextCards) entry.pendingPermPlaintextCards.clear();
   }
 
@@ -503,6 +509,20 @@ export class SessionFrontend {
           entry.activeTurnComposites.set(tk, tc);
           void tc.start();
         }
+
+        // v2 dual-path: build AskCardController per primary channel. Cancel
+        // any cards from the previous turn (turn boundary forgets pending
+        // questions just like v1's activeAskCards reset on session
+        // teardown). Lives alongside v1 activeAskCards until T9.
+        if (entry.askControllers) {
+          for (const ctrl of entry.askControllers.values()) ctrl.cancelPending();
+        }
+        entry.askControllers = new Map<string, AskCardController>();
+        for (const c of entry.channels) {
+          if (c.target.role !== 'primary') continue;
+          const tk = renderTargetKey(c.target);
+          entry.askControllers.set(tk, new AskCardController(c.adapter, c.target));
+        }
       }
 
       if (entry.activeTurnUI) {
@@ -645,6 +665,15 @@ export class SessionFrontend {
         entry.activeAskCards.set(req.id, card);
         this.cardsByReqId.set(req.id, card);
       }
+      // v2 dual-path: AskCardController open. Independent send (renders v2
+      // visual alongside v1 card; T9 removes v1 path). Run only when
+      // controllers exist — they're created on turn_start, so an ask event
+      // arriving before any turn has no v2 destination yet.
+      if (entry.askControllers) {
+        for (const ctrl of entry.askControllers.values()) {
+          void ctrl.open(req).catch(() => { /* isolate */ });
+        }
+      }
       return;
     }
 
@@ -655,6 +684,14 @@ export class SessionFrontend {
       if (entry.pendingCustomInputCards) {
         for (const [chatId, c] of [...entry.pendingCustomInputCards.entries()]) {
           if (c.requestId === ev.requestId) entry.pendingCustomInputCards.delete(chatId);
+        }
+      }
+      // v2 dual-path: AskCardController markResolved switches v2 visual to ✅.
+      if (entry.askControllers) {
+        for (const ctrl of entry.askControllers.values()) {
+          if (ctrl.has(ev.requestId)) {
+            void ctrl.markResolved(ev.requestId, ev.chosen).catch(() => { /* isolate */ });
+          }
         }
       }
     }

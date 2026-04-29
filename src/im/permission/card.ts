@@ -67,6 +67,29 @@ export class PermissionCard {
     // The fallback hint message stays as-is in the chat.
   }
 
+  /**
+   * Switch an ask card to its resolved visual state, replacing the keyboard
+   * with a one-line summary of the user's choice. Drives both telegram and
+   * feishu via adapter.edit (same path as the in-class markResolved). No-op
+   * for generic-permission cards or already-resolved ask cards.
+   */
+  async markResolvedAsk(chosen: string[]): Promise<void> {
+    if (this.opts.kind !== 'ask') return;
+    if (this.resolved) return;
+    this.resolved = true;
+    if (!this.msgId) return;
+    const summary = chosen.length === 0
+      ? '(已跳过)'
+      : `已选: ${chosen.join('、')}`;
+    const text = `❓ <b>${escapeHtml(this.opts.question)}</b>\n\n✅ ${escapeHtml(summary)}`;
+    try {
+      await this.adapter.edit(this.msgId, this.target.chatId, text, undefined, 'html');
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[ask-card] resolved-edit failed target=${this.target.channelType}:${this.target.chatId} reason=${reason}\n`);
+    }
+  }
+
   async send(): Promise<void> {
     const { text, markup } = this.render();
     const sendOnce = () => this.adapter.send({

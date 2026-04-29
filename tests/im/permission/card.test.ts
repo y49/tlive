@@ -325,3 +325,61 @@ describe('PermissionCard — ask custom-input', () => {
     expect(onResolve).toHaveBeenCalledWith(['A', 'C']);
   });
 });
+
+describe('PermissionCard kind=ask — resolved 视觉', () => {
+  it('multi 模式 resolve 后 edit 显示 ✅ 已选: ...', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const card = new PermissionCard(adapter, tgt(), {
+      kind: 'ask', requestId: 'r1', mode: 'multi',
+      question: '选模块', options: [{ label: '认证' }, { label: '看板' }],
+      onResolve: vi.fn(),
+    });
+    await card.send();
+    await card.markResolvedAsk(['认证', '看板']);
+    const lastEdit = adapter.calls.filter(c => c.kind === 'edit').at(-1)!;
+    const text = lastEdit.args.text as string;
+    expect(text).toContain('✅ 已选');
+    expect(text).toContain('认证');
+    expect(text).toContain('看板');
+    expect(text).not.toContain('提交');  // confirm button residue cleared
+  });
+
+  it('空 chosen 显示 (已跳过)', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const card = new PermissionCard(adapter, tgt(), {
+      kind: 'ask', requestId: 'r2', mode: 'multi',
+      question: 'q', options: [{ label: 'a' }, { label: 'b' }],
+      onResolve: vi.fn(),
+    });
+    await card.send();
+    await card.markResolvedAsk([]);
+    const lastEdit = adapter.calls.filter(c => c.kind === 'edit').at(-1)!;
+    expect(lastEdit.args.text as string).toContain('已跳过');
+  });
+
+  it('markResolvedAsk on generic card is a no-op', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const card = new PermissionCard(adapter, tgt(), {
+      kind: 'generic', requestId: 'p', toolName: 'Bash', toolInput: {}, onResolve: vi.fn(),
+    });
+    await card.send();
+    const editsBefore = adapter.calls.filter(c => c.kind === 'edit').length;
+    await card.markResolvedAsk(['x']);
+    const editsAfter = adapter.calls.filter(c => c.kind === 'edit').length;
+    expect(editsAfter).toBe(editsBefore);
+  });
+
+  it('markResolvedAsk is idempotent (second call is a no-op)', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const card = new PermissionCard(adapter, tgt(), {
+      kind: 'ask', requestId: 'r3', mode: 'multi', question: 'q',
+      options: [{ label: 'a' }], onResolve: vi.fn(),
+    });
+    await card.send();
+    await card.markResolvedAsk(['a']);
+    const editsAfterFirst = adapter.calls.filter(c => c.kind === 'edit').length;
+    await card.markResolvedAsk(['a']);
+    const editsAfterSecond = adapter.calls.filter(c => c.kind === 'edit').length;
+    expect(editsAfterSecond).toBe(editsAfterFirst);
+  });
+});
