@@ -250,4 +250,17 @@ describe('SessionFrontend — TL_NEW_UX path', () => {
     // No additional edits should occur after the session was stopped
     expect(adapter.calls.filter(c => c.kind === 'edit').length).toBe(editCountAfterStop);
   });
+
+  it('forwards assistant_text to ReplyRenderer (one reply send per primary)', async () => {
+    const { adapter, fakeSession } = await bootstrapFrontend();
+    fakeSession.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: '', at: 0 });
+    // Flush turn_start so replyRenderers are initialised before assistant_text arrives.
+    await flushAsync();
+    fakeSession.emit({ kind: 'assistant_text', turnId: 't1', text: 'hello world', complete: true });
+    await flushAsync();
+    // 1 HUD send + 1 reply send; reply contains 'hello world'.
+    const sends = adapter.calls.filter(c => c.kind === 'send');
+    expect(sends.length).toBeGreaterThanOrEqual(2);
+    expect(sends.some(s => /hello world/.test((s.args.text as string) ?? ''))).toBe(true);
+  });
 });

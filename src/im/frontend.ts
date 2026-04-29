@@ -45,6 +45,7 @@ import { TelegramHudPanel } from './hud/telegram-panel.js';
 import { FeishuHudPanel } from './hud/feishu-panel.js';
 import { initialHudState, type HudState } from './hud/state.js';
 import { targetKey as renderTargetKey } from './render-target.js';
+import { ReplyRenderer } from './reply.js';
 
 /**
  * A renderer set lives per (session, binding). All renderers in a set share
@@ -76,6 +77,15 @@ interface SessionEntry {
   activeTurnUI?: TurnUI;
   /** TL_NEW_UX path: per-turn counter for HUD header display. */
   turnCounter?: number;
+  /** TL_NEW_UX path: per-turn reply renderers, keyed by targetKey. Reset on turn_start. */
+  replyRenderers?: Map<string, ReplyRenderer>;
+  /**
+   * TL_NEW_UX path: accumulated assistant text across deltas for the current turn.
+   * assistant_text_delta carries only the new portion (diff, partial:true); we
+   * accumulate here so ReplyRenderer receives the full text on each call.
+   * Reset to '' on turn_start.
+   */
+  replyAcc?: string;
 }
 
 export interface SessionFrontendOptions {
@@ -372,10 +382,34 @@ export class SessionFrontend {
       const initState = this.buildInitialHudState(sessionId, entry);
       entry.activeTurnUI = new TurnUI(initState, primaryTargets, factory);
       await entry.activeTurnUI.start();
+      // Reset reply renderers and accumulator for the fresh turn.
+      // Both primary and mirror targets get renderers: mirrors echo assistant text (spec §I5).
+      if (!entry.replyRenderers) entry.replyRenderers = new Map();
+      entry.replyRenderers.clear();
+      entry.replyAcc = '';
+      for (const c of entry.channels) {
+        if (c.target.role !== 'primary' && c.target.role !== 'mirror') continue;
+        entry.replyRenderers.set(renderTargetKey(c.target), new ReplyRenderer(c.adapter, c.target));
+      }
     }
 
     if (entry.activeTurnUI) {
       await entry.activeTurnUI.ingestEvent(ev);
+    }
+
+    // Dispatch assistant text events to reply renderers.
+    // assistant_text_delta carries only the new portion (diff); accumulate first.
+    if (entry.replyRenderers && entry.replyRenderers.size > 0) {
+      if (ev.kind === 'assistant_text_delta') {
+        entry.replyAcc = (entry.replyAcc ?? '') + ev.text;
+        for (const r of entry.replyRenderers.values()) {
+          await r.onTextDelta(entry.replyAcc);
+        }
+      } else if (ev.kind === 'assistant_text') {
+        for (const r of entry.replyRenderers.values()) {
+          await r.onTextComplete(ev.text);
+        }
+      }
     }
   }
 
