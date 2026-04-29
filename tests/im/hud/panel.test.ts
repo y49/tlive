@@ -84,7 +84,7 @@ describe('FeishuHudPanel', () => {
     const adapter = new FakeAdapter('feishu');
     const panel = new FeishuHudPanel(adapter, { chatId: 'c1', role: 'primary', channelType: 'feishu' });
     const id = await panel.send(baseState());
-    await panel.update(id, { ...baseState(), contextUsedTok: 1 });
+    await panel.update(id, { ...baseState(), contextUsedTok: 2000 });
     expect(adapter.calls[1].kind).toBe('updateCard');
   });
 

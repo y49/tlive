@@ -19,23 +19,13 @@ export class FeishuHudPanel implements HudPanel {
     private readonly target: RenderTarget,
   ) {}
 
-  private stateHash(state: HudState): string {
-    return JSON.stringify({
-      ...state,
-      toolTally: [...state.toolTally.entries()],
-      subagents: [...state.subagents],
-      todoList: [...state.todoList],
-      quotaBars: [...state.quotaBars],
-    });
-  }
-
   async send(state: HudState): Promise<string> {
     const adapter = this.adapter as CardCapable;
     if (typeof adapter.sendCard !== 'function') {
       throw new Error('FeishuHudPanel requires adapter.sendCard');
     }
     const card = buildFeishuHudCard(state);
-    this.lastHash = this.stateHash(state);
+    this.lastHash = JSON.stringify(card);
     return await adapter.sendCard({
       chatId: this.target.chatId,
       threadId: this.target.threadId,
@@ -48,10 +38,10 @@ export class FeishuHudPanel implements HudPanel {
     if (typeof adapter.updateCard !== 'function') {
       throw new Error('FeishuHudPanel requires adapter.updateCard');
     }
-    const hash = this.stateHash(state);
+    const card = buildFeishuHudCard(state);
+    const hash = JSON.stringify(card);
     if (hash === this.lastHash) return;
     this.lastHash = hash;
-    const card = buildFeishuHudCard(state);
     try {
       await adapter.updateCard(msgId, this.target.chatId, card);
     } catch (err) {
@@ -64,7 +54,7 @@ export class FeishuHudPanel implements HudPanel {
     const adapter = this.adapter as CardCapable;
     if (typeof adapter.updateCard !== 'function') return;
     const card = buildFeishuHudCard(state);
-    this.lastHash = this.stateHash(state);
+    this.lastHash = JSON.stringify(card);
     try {
       await adapter.updateCard(msgId, this.target.chatId, card);
     } catch (err) {
