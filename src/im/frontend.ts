@@ -31,7 +31,6 @@ import {
   type SessionRenderState,
   newSessionRenderState,
   type RenderTarget,
-  type TurnRenderState,
   targetKey,
 } from './render/types.js';
 import { ReactionTracker } from './reaction-tracker.js';
@@ -216,8 +215,6 @@ export class SessionFrontend {
       workspaceName: workspace?.name ?? session.workspaceId,
       targets,
     });
-    renderState.model = workspace?.defaults.model;
-
     for (const target of targets) {
       const adapter = this.opts.adapters[target.channelType];
       if (!adapter) continue;
@@ -615,5 +612,3 @@ export class SessionFrontend {
   }
 }
 
-// Avoid unused-import warnings for TurnRenderState (exposed for tests via types).
-export type { TurnRenderState };

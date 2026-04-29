@@ -123,7 +123,6 @@ export class ReactionTracker {
     if (this.capabilities.reactions) {
       // Native: adapter replaces whatever emoji was there.
       await this.adapter.setReaction(inbound.messageId, inbound.chatId, emoji);
-      this.session.lastInboundReactionMsg = { ...inbound, emoji };
       return;
     }
     // Fallback: send (or edit) a reply-message with the emoji.
