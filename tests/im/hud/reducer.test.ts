@@ -74,6 +74,43 @@ describe('applyEventToHudState', () => {
     expect(s.toolTally.get('Bash')).toBe(3);
   });
 
+  it('parallel tool batch: results tally each tool by toolUseId, not by current activity', () => {
+    let s = base();
+    s = applyEventToHudState(s, {
+      kind: 'tool_use_start', turnId: 't1', toolUseId: 'u1', toolName: 'Bash', input: { command: 'a' },
+    });
+    s = applyEventToHudState(s, {
+      kind: 'tool_use_start', turnId: 't1', toolUseId: 'u2', toolName: 'Read', input: { file_path: 'x.ts' },
+    });
+    s = applyEventToHudState(s, {
+      kind: 'tool_use_start', turnId: 't1', toolUseId: 'u3', toolName: 'Edit', input: { file_path: 'y.ts' },
+    });
+    expect(s.pendingTools.size).toBe(3);
+
+    s = applyEventToHudState(s, {
+      kind: 'tool_use_result', toolUseId: 'u1', output: '', durationMs: 1, ok: true,
+    });
+    s = applyEventToHudState(s, {
+      kind: 'tool_use_result', toolUseId: 'u2', output: '', durationMs: 1, ok: true,
+    });
+    s = applyEventToHudState(s, {
+      kind: 'tool_use_result', toolUseId: 'u3', output: '', durationMs: 1, ok: true,
+    });
+    expect(s.toolTally.get('Bash')).toBe(1);
+    expect(s.toolTally.get('Read')).toBe(1);
+    expect(s.toolTally.get('Edit')).toBe(1);
+    expect(s.pendingTools.size).toBe(0);
+    // After draining all pending tools, activity drops to thinking.
+    expect(s.currentActivity).toEqual({ kind: 'thinking', elapsedMs: 0 });
+  });
+
+  it('tool_use_result for unknown toolUseId tallies "unknown"', () => {
+    const s = applyEventToHudState(base(), {
+      kind: 'tool_use_result', toolUseId: 'never-started', output: '', durationMs: 1, ok: true,
+    });
+    expect(s.toolTally.get('unknown')).toBe(1);
+  });
+
   it('subagent_start appends a running entry; subagent_stop flips status', () => {
     let s = base();
     s = applyEventToHudState(s, {

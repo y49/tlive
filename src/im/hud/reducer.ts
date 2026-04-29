@@ -62,14 +62,26 @@ export function applyEventToHudState(state: HudState, ev: NotificationEvent): Hu
         toolArg: previewArg(ev.input),
         elapsedMs: 0,
       };
-      return { ...state, currentActivity: activity };
+      const nextPending = new Map(state.pendingTools);
+      nextPending.set(ev.toolUseId, ev.toolName);
+      return { ...state, currentActivity: activity, pendingTools: nextPending };
     }
     case 'tool_use_result': {
-      const tally = incTally(state.toolTally, lookupToolName(state, ev.toolUseId) ?? 'unknown');
+      const resolvedName = state.pendingTools.get(ev.toolUseId) ?? 'unknown';
+      const nextPending = new Map(state.pendingTools);
+      nextPending.delete(ev.toolUseId);
+      const tally = incTally(state.toolTally, resolvedName);
+      // currentActivity drops back to thinking only when the result is for the
+      // currently-displayed tool. Under parallel batches, mid-batch results
+      // shouldn't blank the running indicator.
+      const isCurrentTool =
+        state.currentActivity?.kind === 'tool_running' &&
+        state.currentActivity.toolName === resolvedName;
       const next: HudState = {
         ...state,
         toolTally: tally,
-        currentActivity: state.currentActivity?.kind === 'tool_running'
+        pendingTools: nextPending,
+        currentActivity: isCurrentTool && nextPending.size === 0
           ? { kind: 'thinking', elapsedMs: 0 }
           : state.currentActivity,
       };
@@ -124,12 +136,4 @@ export function applyEventToHudState(state: HudState, ev: NotificationEvent): Hu
     default:
       return state;
   }
-}
-
-// State doesn't track toolUseId → toolName; we keep this as a forward-compat hook.
-// For now the reducer can't recover the tool name on tool_use_result, so we let
-// the dispatcher feed the tally itself when we have currentActivity set.
-function lookupToolName(state: HudState, _toolUseId: string): string | undefined {
-  if (state.currentActivity?.kind === 'tool_running') return state.currentActivity.toolName;
-  return undefined;
 }

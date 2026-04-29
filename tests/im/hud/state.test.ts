@@ -23,6 +23,7 @@ describe('HudState — initialHudState', () => {
     expect(s.contextUsedTok).toBe(0);
     expect(s.currentActivity).toBeNull();
     expect(s.toolTally.size).toBe(0);
+    expect(s.pendingTools.size).toBe(0);
     expect(s.subagents).toEqual([]);
     expect(s.todoList).toEqual([]);
     expect(s.quotaBars).toEqual([]);

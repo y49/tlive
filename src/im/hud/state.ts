@@ -44,6 +44,7 @@ export interface HudState {
   contextUsedTok: number;
   currentActivity: HudActivity | null;
   toolTally: ReadonlyMap<string, number>;
+  pendingTools: ReadonlyMap<string, string>;
   subagents: ReadonlyArray<HudSubagent>;
   todoList: ReadonlyArray<HudTodo>;
 
@@ -83,6 +84,7 @@ export function initialHudState(input: InitialHudStateInput): HudState {
     contextUsedTok: 0,
     currentActivity: null,
     toolTally: new Map(),
+    pendingTools: new Map(),
     subagents: [],
     todoList: [],
     quotaBars: [],
