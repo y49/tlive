@@ -7,6 +7,7 @@
 
 import type { PlatformAdapter } from '../platform/types.js';
 import type { RenderTarget } from './render-target.js';
+import { escapeHtml } from './util/html.js';
 
 type CardCapable = PlatformAdapter & {
   sendCard?: (opts: { chatId: string; threadId?: string; card: object }) => Promise<string>;
@@ -17,10 +18,6 @@ export interface AttachmentPayload {
   mime: string;
   sizeBytes: number;
   path: string;
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function fmtSize(bytes: number): string {

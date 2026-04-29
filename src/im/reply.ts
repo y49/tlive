@@ -8,6 +8,7 @@
 
 import type { PlatformAdapter } from '../platform/types.js';
 import type { RenderTarget } from './render-target.js';
+import { escapeHtml } from './util/html.js';
 
 const TG_MAX = 4096;
 
@@ -15,10 +16,6 @@ type CardCapable = PlatformAdapter & {
   sendCard?: (opts: { chatId: string; threadId?: string; card: object }) => Promise<string>;
   updateCard?: (msgId: string, chatId: string, card: object) => Promise<void>;
 };
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
 
 export function markdownToTelegramHtml(md: string): string {
   // Order matters: handle code fences first (so inline syntax inside fences

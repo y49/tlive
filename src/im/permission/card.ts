@@ -7,6 +7,7 @@
 
 import type { PlatformAdapter, ReplyMarkup, InlineButton } from '../../platform/types.js';
 import type { RenderTarget } from '../render-target.js';
+import { escapeHtml } from '../util/html.js';
 
 export type PermissionCardOptions =
   | {
@@ -24,10 +25,6 @@ export type PermissionCardOptions =
       options: Array<{ label: string; description?: string }>;
       onResolve: (chosen: string[]) => void;
     };
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
 
 function jsonPreview(input: unknown, max = 500): string {
   try {
