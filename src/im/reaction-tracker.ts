@@ -1,4 +1,4 @@
-// src/im/render/reaction-tracker.ts
+// src/im/reaction-tracker.ts
 //
 // Anchor #1 — inbound-message reaction ack (spec §7.3). When the user sends
 // a message, the reaction tracker puts 👀 (received) on the inbound message.
@@ -27,7 +27,7 @@
 // (`PHASE_RANK`) drops late-arriving lower-rank phases entirely so a stale
 // in-flight call never undoes a completed transition.
 
-import type { RendererDeps, SessionRenderState, RenderTarget } from './types.js';
+import type { RendererDeps, SessionRenderState, RenderTarget } from './render/types.js';
 
 export type ReactionPhase = 'received' | 'processing' | 'done_ok' | 'done_err';
 

@@ -7,9 +7,25 @@
 import type { ChannelType } from '../../workspace/bindings.js';
 import type { PlatformAdapter } from '../../platform/types.js';
 import type { ChannelCapabilities } from '../capability-matrix.js';
-import type { ParallelToolEntry } from './parallel-tools.js';
-import type { SubagentEntry } from './subagent-nested.js';
 import type { PermissionCategory } from '../../runtime/types.js';
+
+// Inlined from deleted parallel-tools.ts (T10b).
+export type ParallelToolStatus = 'running' | 'done_ok' | 'done_err';
+export interface ParallelToolEntry {
+  toolUseId: string;
+  toolName: string;
+  status: ParallelToolStatus;
+  batchIndex?: number;
+}
+
+// Inlined from deleted subagent-nested.ts (T10b).
+export interface SubagentEntry {
+  agentId: string;
+  description: string;
+  latestSummary?: string;
+  done: boolean;
+  ok: boolean | null;
+}
 
 /** Destination (workspace binding) for a renderer. */
 export interface RenderTarget {

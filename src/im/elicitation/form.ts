@@ -1,4 +1,4 @@
-// src/im/render/elicitation-form.ts
+// src/im/elicitation/form.ts
 //
 // Renders MCP ElicitationRequest via the platform's native primitive
 // (spec §7.3 item 5 / §10). Three modes:
@@ -19,8 +19,8 @@
 //   Telegram: forceReply sequence (existing path).
 
 import type { ElicitationRequest } from '../../runtime/types.js';
-import type { RendererDeps, SessionRenderState, RenderTarget } from './types.js';
-import { targetKey } from './types.js';
+import type { RendererDeps, SessionRenderState, RenderTarget } from '../render/types.js';
+import { targetKey } from '../render/types.js';
 import type { FormField, InlineButton, ReplyMarkup } from '../../platform/types.js';
 import type { FeishuAdapter } from '../../platform/feishu/adapter.js';
 import type { DiscordAdapter } from '../../platform/discord/adapter.js';
