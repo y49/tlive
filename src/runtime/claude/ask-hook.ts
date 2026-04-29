@@ -20,16 +20,8 @@ import type {
   PreToolUseHookInput,
   HookJSONOutput,
 } from '@anthropic-ai/claude-agent-sdk';
-import type { AskUserQuestionRequest, AskUserQuestionOption } from '../types.js';
-
-interface SdkAskUserQuestionInput {
-  questions: Array<{
-    question: string;
-    header?: string;
-    options: Array<{ label: string; description?: string; preview?: string }>;
-    multiSelect?: boolean;
-  }>;
-}
+import type { AskUserQuestionRequest } from '../types.js';
+import { buildAskRequest, type SdkAskUserQuestionInput } from '../../im/ask/ask-hook-input.js';
 
 export interface AskHookContext {
   sdkSessionId: () => string | null;
@@ -50,26 +42,11 @@ export function makeAskUserQuestionHook(ctx: AskHookContext): HookCallback {
       return { continue: true };
     }
 
-    const options: AskUserQuestionOption[] = first.options.map((o) => ({
-      label: o.label,
-      description: o.description,
-      preview: o.preview,
-    }));
-
     // 8-hex shortId only — no sid prefix, because IM callback_data parses
     // `ask:<reqId>:<verb>` and embedding `:` inside reqId breaks the regex.
     const id = randomBytes(4).toString('hex');
     const chosen = await new Promise<string[]>((resolve) => {
-      const req: AskUserQuestionRequest = {
-        id,
-        prompt: first.question,
-        header: first.header,
-        options,
-        multiSelect: first.multiSelect ?? false,
-        // SDK builtin always offers an "Other" fallback; surface custom-input UI.
-        allowCustom: true,
-        resolve: (value) => resolve(value),
-      };
+      const req: AskUserQuestionRequest = buildAskRequest(aiq, id, resolve);
       ctx.emitRequest(req);
     });
 
