@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { initialHudState } from '../../../src/im/hud/state.js';
+import { initialHudState, resolveModelLabel } from '../../../src/im/hud/state.js';
 
 describe('HudState — initialHudState', () => {
   it('produces a frozen-ready snapshot with sane defaults', () => {
@@ -48,5 +48,29 @@ describe('HudState — initialHudState', () => {
       costSession: 0,
     });
     expect(s.gitBranch).toBeUndefined();
+  });
+});
+
+describe('initialHudState — v2 fields', () => {
+  it('askPending 默认 false,tokensTotal 默认 undefined', () => {
+    const s = initialHudState({
+      sessionShortId: 'a', workspaceName: 'w', provider: 'claude',
+      model: 'opus-4-6', modelMaxContext: 200_000, turnNumber: 1,
+      startedAtMs: 0, costSession: 0,
+    });
+    expect(s.askPending).toBe(false);
+    expect(s.tokensTotal).toBeUndefined();
+  });
+});
+
+describe('resolveModelLabel — v2 fallback chain', () => {
+  it('preferred: system frame → workspace → session → default', () => {
+    expect(resolveModelLabel('opus-4-6', 'sonnet', 'haiku')).toBe('opus-4-6');
+    expect(resolveModelLabel(null, 'sonnet', 'haiku')).toBe('sonnet');
+    expect(resolveModelLabel(undefined, '', 'haiku')).toBe('haiku');
+    expect(resolveModelLabel(null, null, null)).toBe('claude-sonnet-4');
+  });
+  it('whitespace-only treated as missing', () => {
+    expect(resolveModelLabel('  ', null, null)).toBe('claude-sonnet-4');
   });
 });

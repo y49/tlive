@@ -58,6 +58,15 @@ export interface HudState {
   isFrozen: boolean;
   isErrored: boolean;
   errorSummary?: string;
+
+  // v2 additions
+  askPending: boolean;
+  tokensTotal?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheCreate: number;
+  };
 }
 
 export interface InitialHudStateInput {
@@ -94,5 +103,24 @@ export function initialHudState(input: InitialHudStateInput): HudState {
     durationMs: 0,
     isFrozen: false,
     isErrored: false,
+    askPending: false,
   };
+}
+
+/**
+ * Resolve the HUD model label using the v2 fallback chain (spec § 5.3).
+ * Eliminates the 'unknown' literal that surfaces in smoke when neither
+ * SDK system frame nor workspace defaults yields a model name.
+ */
+export function resolveModelLabel(
+  systemFrameModel: string | null | undefined,
+  workspaceDefaultModel: string | null | undefined,
+  sessionMetadataModel: string | null | undefined,
+): string {
+  return (
+    (systemFrameModel && systemFrameModel.trim()) ||
+    (workspaceDefaultModel && workspaceDefaultModel.trim()) ||
+    (sessionMetadataModel && sessionMetadataModel.trim()) ||
+    'claude-sonnet-4'
+  );
 }

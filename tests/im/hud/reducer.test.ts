@@ -228,3 +228,96 @@ describe('applyEventToHudState', () => {
     expect(s1).toBe(s0);
   });
 });
+
+describe('reducer — usage event', () => {
+  const baseState = initialHudState({
+    sessionShortId: 's1', workspaceName: 'w', provider: 'claude',
+    model: 'opus-4-6', modelMaxContext: 200_000, turnNumber: 1,
+    startedAtMs: 0, costSession: 0,
+  });
+
+  it('累加 input + output + cacheRead + cacheCreate 到 contextUsedTok', () => {
+    const next = applyEventToHudState(baseState, {
+      kind: 'usage', turnId: 't1',
+      inputTokens: 1000, outputTokens: 500,
+      cacheReadTokens: 200, cacheCreateTokens: 100,
+    });
+    expect(next.contextUsedTok).toBe(1800);
+    expect(next.tokensTotal).toEqual({ input: 1000, output: 500, cacheRead: 200, cacheCreate: 100 });
+  });
+
+  it('多次 usage event 累加 tokensTotal,contextUsedTok 取最新一次总额', () => {
+    const s1 = applyEventToHudState(baseState, {
+      kind: 'usage', turnId: 't1',
+      inputTokens: 1000, outputTokens: 500, cacheReadTokens: 0, cacheCreateTokens: 0,
+    });
+    const s2 = applyEventToHudState(s1, {
+      kind: 'usage', turnId: 't1',
+      inputTokens: 200, outputTokens: 300, cacheReadTokens: 0, cacheCreateTokens: 0,
+    });
+    expect(s2.tokensTotal).toEqual({ input: 1200, output: 800, cacheRead: 0, cacheCreate: 0 });
+    expect(s2.contextUsedTok).toBe(2000);
+  });
+});
+
+describe('reducer — ask_user_question events', () => {
+  const baseState = initialHudState({
+    sessionShortId: 's1', workspaceName: 'w', provider: 'claude',
+    model: 'opus-4-6', modelMaxContext: 200_000, turnNumber: 1,
+    startedAtMs: 0, costSession: 0,
+  });
+
+  it('ask_user_question_requested 设 askPending=true 并清 currentActivity', () => {
+    const stateWithActivity = { ...baseState, currentActivity: { kind: 'thinking' as const, elapsedMs: 0 } };
+    const next = applyEventToHudState(stateWithActivity, {
+      kind: 'ask_user_question_requested', requestId: 'r1', prompt: 'q', options: ['a', 'b'],
+    });
+    expect(next.askPending).toBe(true);
+    expect(next.currentActivity).toBeNull();
+  });
+
+  it('ask_user_question_resolved 清 askPending', () => {
+    const blocked = { ...baseState, askPending: true };
+    const next = applyEventToHudState(blocked, {
+      kind: 'ask_user_question_resolved', requestId: 'r1', chosen: ['a'],
+    });
+    expect(next.askPending).toBe(false);
+  });
+});
+
+describe('reducer — permission events', () => {
+  const baseState = initialHudState({
+    sessionShortId: 's1', workspaceName: 'w', provider: 'claude',
+    model: 'opus-4-6', modelMaxContext: 200_000, turnNumber: 1,
+    startedAtMs: 0, costSession: 0,
+  });
+
+  it('permission_requested 设 currentActivity=waiting_permission', () => {
+    const next = applyEventToHudState(baseState, {
+      kind: 'permission_requested', requestId: 'p1',
+      category: 'tool', toolName: 'Bash', toolInput: { command: 'ls' },
+    });
+    expect(next.currentActivity).toEqual({
+      kind: 'waiting_permission', toolName: 'Bash', elapsedMs: 0,
+    });
+  });
+
+  it('permission_resolved 清 waiting_permission activity', () => {
+    const waiting = applyEventToHudState(baseState, {
+      kind: 'permission_requested', requestId: 'p1',
+      category: 'tool', toolName: 'Bash', toolInput: {},
+    });
+    const next = applyEventToHudState(waiting, {
+      kind: 'permission_resolved', requestId: 'p1', decision: 'allow',
+    });
+    expect(next.currentActivity).toBeNull();
+  });
+
+  it('permission_resolved 不清非 waiting_permission 的 activity', () => {
+    const tool = { ...baseState, currentActivity: { kind: 'tool_running' as const, toolName: 'Read', elapsedMs: 100 } };
+    const next = applyEventToHudState(tool, {
+      kind: 'permission_resolved', requestId: 'px', decision: 'deny',
+    });
+    expect(next.currentActivity).toEqual({ kind: 'tool_running', toolName: 'Read', elapsedMs: 100 });
+  });
+});

@@ -126,6 +126,37 @@ export function applyEventToHudState(state: HudState, ev: NotificationEvent): Hu
         isFrozen: true,
       };
     }
+    case 'usage': {
+      const tt = state.tokensTotal ?? { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
+      const next = {
+        input: tt.input + ev.inputTokens,
+        output: tt.output + ev.outputTokens,
+        cacheRead: tt.cacheRead + ev.cacheReadTokens,
+        cacheCreate: tt.cacheCreate + ev.cacheCreateTokens,
+      };
+      return {
+        ...state,
+        tokensTotal: next,
+        contextUsedTok: next.input + next.output + next.cacheRead + next.cacheCreate,
+      };
+    }
+    case 'ask_user_question_requested': {
+      return { ...state, askPending: true, currentActivity: null };
+    }
+    case 'ask_user_question_resolved': {
+      if (!state.askPending) return state;
+      return { ...state, askPending: false };
+    }
+    case 'permission_requested': {
+      return {
+        ...state,
+        currentActivity: { kind: 'waiting_permission', toolName: ev.toolName, elapsedMs: 0 },
+      };
+    }
+    case 'permission_resolved': {
+      if (state.currentActivity?.kind !== 'waiting_permission') return state;
+      return { ...state, currentActivity: null };
+    }
     case 'runtime_error': {
       if (ev.severity !== 'fatal') return state;
       return { ...state, isErrored: true, errorSummary: ev.message };

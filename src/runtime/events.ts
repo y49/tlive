@@ -56,4 +56,5 @@ export type NotificationEvent =
   | { kind: 'hook_generic'; event: string; payload: unknown }
   | { kind: 'session_complete'; reason: string; summary: string }
   | { kind: 'runtime_error'; severity: 'warn' | 'fatal'; code: string; message: string; retryHintMs?: number }
+  | { kind: 'usage'; turnId: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreateTokens: number }
   | { kind: 'quota_update'; quotaBars: Array<{ label: string; pct: number; resetsIn?: string }> };
