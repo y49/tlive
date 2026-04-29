@@ -22,7 +22,7 @@ describe('codex approval split', () => {
     const req = emitted[0];
     expect(req.category).toBe('exec');
     expect(req.risk).toBe('high');
-    expect(req.id.startsWith('abc:')).toBe(true);
+    expect(req.id).toMatch(/^[0-9a-f]{8}$/); // 8-hex shortId only — see permission-handler.ts
     req.resolve('allow');
     await expect(p).resolves.toEqual({ outcome: 'approved_for_request' });
   });

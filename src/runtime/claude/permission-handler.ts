@@ -29,10 +29,13 @@ export function makeCanUseTool(ctx: ClaudeCanUseToolContext): CanUseTool {
     return new Promise<PermissionResult>((resolve) => {
       const shortId = randomBytes(4).toString('hex');
       const { category, diffPreview, risk } = ctx.categorize(toolName, toolInput);
-      const sid = ctx.sdkSessionId() ?? 'pending';
+      const _sid = ctx.sdkSessionId() ?? 'pending';
+      void _sid; // sid not embedded in id any more — IM callback path can't parse `:` inside reqId
       const suggestions = options.suggestions;
       const request: PermissionRequest = {
-        id: `${sid}:${shortId}`,
+        // 8-hex; globally unique within a session's pending map; safe inside
+        // Telegram inline-keyboard callback_data which is `:`-delimited.
+        id: shortId,
         category,
         toolName,
         toolInput,

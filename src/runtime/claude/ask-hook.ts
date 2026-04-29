@@ -56,7 +56,9 @@ export function makeAskUserQuestionHook(ctx: AskHookContext): HookCallback {
       preview: o.preview,
     }));
 
-    const id = `${ctx.sdkSessionId() ?? 'pending'}:${randomBytes(4).toString('hex')}`;
+    // 8-hex shortId only — no sid prefix, because IM callback_data parses
+    // `ask:<reqId>:<verb>` and embedding `:` inside reqId breaks the regex.
+    const id = randomBytes(4).toString('hex');
     const chosen = await new Promise<string[]>((resolve) => {
       const req: AskUserQuestionRequest = {
         id,

@@ -73,9 +73,9 @@ function buildRequest(
   resolveOuter: (r: CodexApprovalResult) => void,
 ): PermissionRequest {
   const shortId = randomBytes(4).toString('hex');
-  const sid = ctx.sdkSessionId() ?? 'pending';
+  // sid intentionally not embedded — `:` inside reqId would break IM callback_data parsing.
   return {
-    id: `${sid}:${shortId}`,
+    id: shortId,
     ...data,
     resolve: (decision: PermissionDecision) => {
       if (decision === 'allow') resolveOuter({ outcome: 'approved_for_request' });

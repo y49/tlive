@@ -31,6 +31,10 @@ export function markdownToTelegramHtml(md: string): string {
   out = out.replace(/`([^`\n]+)`/g, (_, x) => `<code>${x}</code>`);
   out = out.replace(/\*\*([^*\n]+)\*\*/g, (_, x) => `<b>${x}</b>`);
   out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, (_, p, x) => `${p}<i>${x}</i>`);
+  // Markdown headings: Telegram HTML has no <h1>/<h2>/...; render `# Foo` as
+  // a bold line. Multi-hash headings stack; we collapse to bold + line break
+  // so heading text doesn't sit literal in the message.
+  out = out.replace(/^(#{1,6})\s+(.+?)$/gm, (_, _hashes: string, body: string) => `<b>${body}</b>`);
   // Restore fenced blocks.
   const restoreRe = new RegExp(` \x00F\x00 (\\d+) \x00E\x00 `, 'g');
   out = out.replace(restoreRe, (_, i) => fences[Number(i)] ?? '');
