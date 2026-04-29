@@ -48,6 +48,8 @@ export class PermissionCard {
     private readonly opts: PermissionCardOptions,
   ) {}
 
+  get requestId(): string { return this.opts.requestId; }
+
   expectsPlaintextRelay(): boolean {
     return this.customInputPending;
   }

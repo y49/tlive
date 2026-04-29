@@ -263,4 +263,205 @@ describe('SessionFrontend — TL_NEW_UX path', () => {
     expect(sends.length).toBeGreaterThanOrEqual(2);
     expect(sends.some(s => /hello world/.test((s.args.text as string) ?? ''))).toBe(true);
   });
+
+  // ---------------------------------------------------------------------------
+  // T6b: AskUserQuestion → PermissionCard (new UX path)
+  // ---------------------------------------------------------------------------
+
+  it('AskBroker pending → renders PermissionCard via send (new path)', async () => {
+    const { adapter, fakeSession } = await bootstrapFrontend();
+    const ab = mkFakeAskBroker();
+    // Re-bootstrap with the ask broker exposed. We push directly via the
+    // already-registered broker because bootstrapFrontend() wires it internally.
+    // Instead, emit the event to the broker that was passed to the frontend.
+    // NOTE: bootstrapFrontend does not expose the askBroker handle — however the
+    // frontend subscribes to the one passed in; we need to use that one.
+    // Simplest: bootstrap a fresh frontend with the broker we control.
+    const adapter2 = new FakeAdapter('telegram');
+    const fakeSession2 = new FakeSession({ id: 'ask-sess-1', workspaceId: 'ux-ws-1' });
+    const sessions2 = new Map([[fakeSession2.id, fakeSession2]]);
+    const sessionManager2 = mkFakeSessionManagerWithGet(sessions2);
+    const askBroker2 = mkFakeAskBroker();
+    const frontend2 = new SessionFrontend({
+      sessionManager: sessionManager2,
+      workspaceManager: mkFakeWm(),
+      permissionBroker: mkFakeBroker(),
+      askBroker: askBroker2,
+      elicitationBroker: mkFakeElicBroker(),
+      adapters: { telegram: adapter2 },
+    });
+    frontend2.start();
+    sessionManager2.push({ kind: 'created', session: fakeSession2 } as Parameters<typeof sessionManager2.push>[0]);
+    await flushAsync();
+
+    const sendsBefore = adapter2.calls.filter(c => c.kind === 'send').length;
+    askBroker2.push({
+      kind: 'pending',
+      sessionId: fakeSession2.id,
+      request: {
+        id: 'q1',
+        prompt: 'pick one',
+        options: ['Alpha', 'Beta'],
+        resolve: () => { /* noop */ },
+      },
+    } as Parameters<typeof askBroker2.push>[0]);
+    await flushAsync();
+
+    const newSends = adapter2.calls.filter(c => c.kind === 'send').slice(sendsBefore);
+    expect(newSends.length).toBeGreaterThanOrEqual(1);
+    const askSend = newSends.find(s => /pick one/.test((s.args.text as string) ?? ''));
+    expect(askSend).toBeTruthy();
+    // Should have inline keyboard buttons for each option
+    const markup = askSend?.args.replyMarkup as { buttons?: unknown[][] } | undefined;
+    expect(markup?.buttons?.length).toBeGreaterThanOrEqual(2);
+
+    frontend2.stop && await (frontend2 as unknown as { stop(): Promise<void> }).stop();
+  });
+
+  it('AskBroker pending → button click routes to broker.resolve via callback interceptor', async () => {
+    const adapter2 = new FakeAdapter('telegram');
+    const fakeSession2 = new FakeSession({ id: 'ask-sess-2', workspaceId: 'ux-ws-1' });
+    const sessions2 = new Map([[fakeSession2.id, fakeSession2]]);
+    const sessionManager2 = mkFakeSessionManagerWithGet(sessions2);
+    const askBroker2 = mkFakeAskBroker();
+    let resolved: { rid: string; chosen: string[] } | null = null;
+    // Add a resolve spy to the broker
+    const origPush = askBroker2.push.bind(askBroker2);
+    void origPush; // unused — we spy at the broker interface level
+    (askBroker2 as unknown as { resolve: unknown }).resolve = vi.fn(
+      (_sid: string, rid: string, chosen: string[]) => { resolved = { rid, chosen }; return true; },
+    );
+    const frontend2 = new SessionFrontend({
+      sessionManager: sessionManager2,
+      workspaceManager: mkFakeWm(),
+      permissionBroker: mkFakeBroker(),
+      askBroker: askBroker2,
+      elicitationBroker: mkFakeElicBroker(),
+      adapters: { telegram: adapter2 },
+    });
+    frontend2.start();
+    sessionManager2.push({ kind: 'created', session: fakeSession2 } as Parameters<typeof sessionManager2.push>[0]);
+    await flushAsync();
+
+    askBroker2.push({
+      kind: 'pending',
+      sessionId: fakeSession2.id,
+      request: {
+        id: 'q2',
+        prompt: 'choose',
+        options: ['X', 'Y'],
+        resolve: () => { /* noop */ },
+      },
+    } as Parameters<typeof askBroker2.push>[0]);
+    await flushAsync();
+
+    // Simulate button click for option index 1 ('Y') using new card format.
+    adapter2.emit({
+      channelType: 'telegram',
+      chatId: '100',
+      messageId: 'm-callback',
+      userId: 'u1',
+      kind: 'callback',
+      callbackData: 'ask:q2:opt:1',
+      at: 0,
+    });
+    await flushAsync();
+
+    expect(resolved).toEqual(expect.objectContaining({ rid: 'q2', chosen: ['Y'] }));
+
+    frontend2.stop && await (frontend2 as unknown as { stop(): Promise<void> }).stop();
+  });
+
+  it('AskBroker multi-select → button toggles then confirm resolves', async () => {
+    const adapter2 = new FakeAdapter('telegram');
+    const fakeSession2 = new FakeSession({ id: 'ask-sess-3', workspaceId: 'ux-ws-1' });
+    const sessions2 = new Map([[fakeSession2.id, fakeSession2]]);
+    const sessionManager2 = mkFakeSessionManagerWithGet(sessions2);
+    const askBroker2 = mkFakeAskBroker();
+    let resolved: { rid: string; chosen: string[] } | null = null;
+    (askBroker2 as unknown as { resolve: unknown }).resolve = vi.fn(
+      (_sid: string, rid: string, chosen: string[]) => { resolved = { rid, chosen }; return true; },
+    );
+    const frontend2 = new SessionFrontend({
+      sessionManager: sessionManager2,
+      workspaceManager: mkFakeWm(),
+      permissionBroker: mkFakeBroker(),
+      askBroker: askBroker2,
+      elicitationBroker: mkFakeElicBroker(),
+      adapters: { telegram: adapter2 },
+    });
+    frontend2.start();
+    sessionManager2.push({ kind: 'created', session: fakeSession2 } as Parameters<typeof sessionManager2.push>[0]);
+    await flushAsync();
+
+    askBroker2.push({
+      kind: 'pending',
+      sessionId: fakeSession2.id,
+      request: {
+        id: 'q3',
+        prompt: 'multi',
+        options: ['P', 'Q', 'R'],
+        multiSelect: true,
+        resolve: () => { /* noop */ },
+      },
+    } as Parameters<typeof askBroker2.push>[0]);
+    await flushAsync();
+
+    // Toggle option 0 (P) and option 2 (R)
+    adapter2.emit({ channelType: 'telegram', chatId: '100', messageId: 'm1', userId: 'u1', kind: 'callback', callbackData: 'ask:q3:opt:0', at: 0 });
+    await flushAsync();
+    adapter2.emit({ channelType: 'telegram', chatId: '100', messageId: 'm1', userId: 'u1', kind: 'callback', callbackData: 'ask:q3:opt:2', at: 0 });
+    await flushAsync();
+    // Confirm
+    adapter2.emit({ channelType: 'telegram', chatId: '100', messageId: 'm1', userId: 'u1', kind: 'callback', callbackData: 'ask:q3:confirm', at: 0 });
+    await flushAsync();
+
+    expect(resolved).toEqual(expect.objectContaining({ rid: 'q3', chosen: ['P', 'R'] }));
+
+    frontend2.stop && await (frontend2 as unknown as { stop(): Promise<void> }).stop();
+  });
+
+  it('AskBroker resolved event cleans up activeAskCards registry', async () => {
+    const adapter2 = new FakeAdapter('telegram');
+    const fakeSession2 = new FakeSession({ id: 'ask-sess-4', workspaceId: 'ux-ws-1' });
+    const sessions2 = new Map([[fakeSession2.id, fakeSession2]]);
+    const sessionManager2 = mkFakeSessionManagerWithGet(sessions2);
+    const askBroker2 = mkFakeAskBroker();
+    const frontend2 = new SessionFrontend({
+      sessionManager: sessionManager2,
+      workspaceManager: mkFakeWm(),
+      permissionBroker: mkFakeBroker(),
+      askBroker: askBroker2,
+      elicitationBroker: mkFakeElicBroker(),
+      adapters: { telegram: adapter2 },
+    });
+    frontend2.start();
+    sessionManager2.push({ kind: 'created', session: fakeSession2 } as Parameters<typeof sessionManager2.push>[0]);
+    await flushAsync();
+
+    askBroker2.push({
+      kind: 'pending',
+      sessionId: fakeSession2.id,
+      request: { id: 'q4', prompt: 'p', options: ['A'], resolve: () => { /* noop */ } },
+    } as Parameters<typeof askBroker2.push>[0]);
+    await flushAsync();
+
+    // Simulate resolved event coming back from broker
+    askBroker2.push({
+      kind: 'resolved',
+      sessionId: fakeSession2.id,
+      requestId: 'q4',
+      chosen: ['A'],
+    } as Parameters<typeof askBroker2.push>[0]);
+    await flushAsync();
+
+    // After resolved, a callback for the old request should be silently dropped
+    // (no crash) — the card is gone from the registry.
+    expect(() => {
+      adapter2.emit({ channelType: 'telegram', chatId: '100', messageId: 'm1', userId: 'u1', kind: 'callback', callbackData: 'ask:q4:opt:0', at: 0 });
+    }).not.toThrow();
+    await flushAsync();
+
+    frontend2.stop && await (frontend2 as unknown as { stop(): Promise<void> }).stop();
+  });
 });

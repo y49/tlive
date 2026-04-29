@@ -47,6 +47,7 @@ import { initialHudState, type HudState } from './hud/state.js';
 import { targetKey as renderTargetKey } from './render-target.js';
 import { ReplyRenderer } from './reply.js';
 import { AttachmentPreview } from './attachment.js';
+import { PermissionCard } from './permission/card.js';
 
 /**
  * A renderer set lives per (session, binding). All renderers in a set share
@@ -87,6 +88,10 @@ interface SessionEntry {
    * Reset to '' on turn_start.
    */
   replyAcc?: string;
+  /** TL_NEW_UX path: active AskUserQuestion cards keyed by requestId. */
+  activeAskCards?: Map<string, PermissionCard>;
+  /** TL_NEW_UX path: per-chatId pending custom-input cards for plaintext relay. */
+  pendingCustomInputCards?: Map<string, PermissionCard>;
 }
 
 export interface SessionFrontendOptions {
@@ -193,6 +198,25 @@ export class SessionFrontend {
       this.unsubscribers.push(
         this.opts.elicitationBroker.subscribe((ev) => {
           void this.handleElicitationEvent(ev).catch(() => { /* isolate */ });
+        }),
+      );
+    }
+
+    // TL_NEW_UX: per-adapter inbound interceptor for new PermissionCard callback
+    // format (ask:<reqId>:opt:<n>, ask:<reqId>:confirm, ask:<reqId>:custom) and
+    // for plaintext relay to pending custom-input cards.
+    for (const adapter of Object.values(this.opts.adapters)) {
+      if (!adapter) continue;
+      this.unsubscribers.push(
+        adapter.onInbound((inbound) => {
+          if (process.env.TL_NEW_UX !== '1') return;
+          if (inbound.kind === 'callback' && inbound.callbackData) {
+            void this.routeNewUxCallback(inbound.callbackData).catch(() => { /* isolate */ });
+            return;
+          }
+          if (inbound.kind === 'message' && typeof inbound.text === 'string') {
+            void this.routeNewUxPlaintext(inbound.chatId, inbound.text).catch(() => { /* isolate */ });
+          }
         }),
       );
     }
@@ -707,6 +731,10 @@ export class SessionFrontend {
   }
 
   private async handleAskEvent(ev: AskBrokerEvent): Promise<void> {
+    if (process.env.TL_NEW_UX === '1') {
+      await this.handleAskEventNewUx(ev);
+      return;
+    }
     const entry = this.sessions.get(ev.sessionId);
     if (!entry) return;
     if (ev.kind === 'pending') {
@@ -740,6 +768,80 @@ export class SessionFrontend {
           await c.adapter.edit(msgId, target.chatId, `✅ Chosen: ${ev.chosen.join(', ')}`, { type: 'inline_keyboard', buttons: [] });
         } catch { /* isolate */ }
         c.session.pendingAskMsgIds.get(key)?.delete(ev.requestId);
+      }
+    }
+  }
+
+  private async handleAskEventNewUx(ev: AskBrokerEvent): Promise<void> {
+    const entry = this.sessions.get(ev.sessionId);
+    if (!entry) return;
+    if (!entry.activeAskCards) entry.activeAskCards = new Map<string, PermissionCard>();
+    if (!entry.pendingCustomInputCards) entry.pendingCustomInputCards = new Map<string, PermissionCard>();
+
+    if (ev.kind === 'pending') {
+      // Determine mode from request shape. AskUserQuestionRequest has multiSelect?:boolean
+      // but no allowCustom — custom-input mode is deferred until the broker exposes the flag.
+      const req = ev.request as { id: string; prompt: string; options: string[]; multiSelect?: boolean };
+      const mode: 'single' | 'multi' = req.multiSelect ? 'multi' : 'single';
+
+      for (const c of entry.channels) {
+        if (c.target.role !== 'primary') continue;
+        const card = new PermissionCard(c.adapter, c.target, {
+          kind: 'ask',
+          requestId: req.id,
+          mode,
+          question: req.prompt,
+          options: req.options.map((label) => ({ label })),
+          onResolve: (chosen) => {
+            this.opts.askBroker?.resolve(ev.sessionId, req.id, chosen);
+            entry.pendingCustomInputCards?.delete(c.target.chatId);
+          },
+        });
+        await card.send();
+        entry.activeAskCards.set(req.id, card);
+      }
+      return;
+    }
+
+    // resolved
+    if (ev.kind === 'resolved') {
+      entry.activeAskCards.delete(ev.requestId);
+      if (entry.pendingCustomInputCards) {
+        for (const [chatId, c] of [...entry.pendingCustomInputCards.entries()]) {
+          if (c.requestId === ev.requestId) entry.pendingCustomInputCards.delete(chatId);
+        }
+      }
+    }
+  }
+
+  private async routeNewUxCallback(data: string): Promise<void> {
+    // Intercept new PermissionCard format: ask:<reqId>:(opt:N|confirm|custom).
+    // The legacy callback-router handles ask:<reqId>:<optIdx> (2 parts after 'ask:')
+    // and ask:<optIdx>:<sid>:<reqId> (3+ parts). Our new format ask:<reqId>:opt:<n>
+    // has parts=['<reqId>','opt','<n>'] — parts[0] is a UUID, not a digit, so the
+    // legacy router returns 'ask:bad-idx' and does NOT call broker.resolve. Safe.
+    const askMatch = data.match(/^ask:([^:]+):/);
+    if (askMatch) {
+      const reqId = askMatch[1]!;
+      for (const entry of this.sessions.values()) {
+        const card = entry.activeAskCards?.get(reqId);
+        if (card) {
+          await card.handleCallback(data);
+          return;
+        }
+      }
+    }
+    // Generic permission (perm:) and elicitation (elic:) are handled by the
+    // legacy callback-router — no interception needed here until T10.
+  }
+
+  private async routeNewUxPlaintext(chatId: string, text: string): Promise<void> {
+    for (const entry of this.sessions.values()) {
+      const card = entry.pendingCustomInputCards?.get(chatId);
+      if (card && card.expectsPlaintextRelay()) {
+        await card.resolveWithPlaintext(text);
+        entry.pendingCustomInputCards?.delete(chatId);
+        return;
       }
     }
   }
