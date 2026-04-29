@@ -83,6 +83,14 @@ interface SessionEntry {
   activePermCards?: Map<string, PermissionCard>;
   /** Generic permission cards waiting for plaintext fallback resolution (per chatId). */
   pendingPermPlaintextCards?: Map<string, PermissionCard>;
+  /**
+   * Per-session promise chain to serialize handleSessionEvent invocations.
+   * SDK fires events in order, but the onEvent callback is fire-and-forget.
+   * Without this chain, two assistant_text_delta would race in
+   * ReplyRenderer.renderTelegram (both see headMsgId === null and both
+   * `send`, producing duplicate IM messages).
+   */
+  dispatchChain: Promise<void>;
 }
 
 export interface SessionFrontendOptions {
@@ -261,16 +269,20 @@ export class SessionFrontend {
       });
     }
 
-    const unsubscribeEvent = session.onEvent((ev) => {
-      void this.handleSessionEvent(session.id, ev).catch(() => { /* isolate */ });
-    });
-
-    this.sessions.set(session.id, {
+    const entry: SessionEntry = {
       sessionId: session.id,
       workspaceId: session.workspaceId,
-      unsubscribeEvent,
+      unsubscribeEvent: () => { /* set below */ },
       channels,
+      dispatchChain: Promise.resolve(),
+    };
+    const unsubscribeEvent = session.onEvent((ev) => {
+      entry.dispatchChain = entry.dispatchChain
+        .then(() => this.handleSessionEvent(session.id, ev))
+        .catch(() => { /* isolate */ });
     });
+    entry.unsubscribeEvent = unsubscribeEvent;
+    this.sessions.set(session.id, entry);
     this.opts.logger?.info('frontend attach', {
       sessionId: session.id, workspaceId: session.workspaceId,
       channels: channels.map((c) => c.target.channelType),

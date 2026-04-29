@@ -189,13 +189,12 @@ export class TelegramAdapter implements PlatformAdapter {
   }
 
   private encodeText(text: string, parseMode: ParseMode | undefined): string {
-    // 'markdown' → assume the caller wants every char treated literally (they
-    //   passed raw text), so blanket-escape MarkdownV2 reserved chars.
-    // 'html'     → run the smart Markdown→HTML converter so code fences,
-    //   inline code, **bold**, *italic*, and links are formatted.
+    // 'markdown' → assume the caller passed raw text, blanket-escape MarkdownV2 reserved chars.
+    // 'html'     → caller built valid Telegram HTML themselves (HUD / Reply /
+    //   PermissionCard / Attachment all do their own escapeHtml + tag wrapping
+    //   post-T10b). Pass through unchanged.
     // 'plain' / undefined → pass through unchanged.
     if (parseMode === 'markdown') return escapeMarkdownV2(text);
-    if (parseMode === 'html') return formatHtml(text);
     return text;
   }
 
