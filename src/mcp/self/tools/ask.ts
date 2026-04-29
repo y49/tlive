@@ -42,7 +42,7 @@ export function makeAskRemoteTool(deps: McpToolDeps): McpTool {
         const req = {
           id,
           prompt,
-          options,
+          options: options.map((label) => ({ label })),
           multiSelect,
           resolve: (value: string[]) => {
             if (settled) return;

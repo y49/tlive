@@ -9,6 +9,7 @@ import type {
   Options,
   PermissionMode as SdkPermissionMode,
   McpServerConfig as SdkMcpServerConfig,
+  HookCallbackMatcher,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { AgentRuntimeOptions } from '../types.js';
 
@@ -24,12 +25,39 @@ You are being invoked from an IM bridge. Optimize your responses for mobile IM r
   conversation and the full output written to ./tlive-artifacts/<timestamp>-<name>.
 `.trim();
 
+export interface ClaudeHookCallbacks {
+  /**
+   * Intercepts Claude SDK's PreToolUse hook for `AskUserQuestion`. The
+   * builtin handler expects to deliver the prompt over a transport
+   * channel that doesn't exist in daemon mode, so we hijack it here:
+   * route to askBroker → IM ask card → resolve with chosen labels →
+   * synthesize a deny+reason so SDK skips the builtin tool execution
+   * but Claude still sees the user answer.
+   */
+  askUserQuestionPreTool?: HookCallbackMatcher['hooks'][number];
+  /** Same pattern for `ExitPlanMode` (plan-mode approval has no IM UI yet). */
+  exitPlanModePreTool?: HookCallbackMatcher['hooks'][number];
+}
+
 export function buildClaudeOptions(
   opts: AgentRuntimeOptions,
   canUseTool: Options['canUseTool'],
   onElicitation: Options['onElicitation'],
+  hookCallbacks?: ClaudeHookCallbacks,
 ): Options {
   const append = (opts.systemPromptAppend ? opts.systemPromptAppend + '\n\n' : '') + IM_AWARE_SYSTEM_APPEND;
+  const hooks: NonNullable<Options['hooks']> = {};
+  if (hookCallbacks?.askUserQuestionPreTool || hookCallbacks?.exitPlanModePreTool) {
+    const matchers: HookCallbackMatcher[] = [];
+    if (hookCallbacks.askUserQuestionPreTool) {
+      matchers.push({ matcher: 'AskUserQuestion', hooks: [hookCallbacks.askUserQuestionPreTool] });
+    }
+    if (hookCallbacks.exitPlanModePreTool) {
+      matchers.push({ matcher: 'ExitPlanMode', hooks: [hookCallbacks.exitPlanModePreTool] });
+    }
+    hooks.PreToolUse = matchers;
+  }
+
   const options: Options = {
     cwd: opts.workdir,
     model: opts.model,
@@ -47,6 +75,7 @@ export function buildClaudeOptions(
     permissionPromptToolName: opts.permissionPromptToolName,
     promptSuggestions: opts.promptSuggestions ?? true,
     systemPrompt: { type: 'preset', preset: 'claude_code', append },
+    hooks: Object.keys(hooks).length > 0 ? hooks : undefined,
   };
   return options;
 }

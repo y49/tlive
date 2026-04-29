@@ -19,6 +19,7 @@ import { ClaudeEventAdapter } from './event-adapter.js';
 import { buildClaudeOptions } from './options-builder.js';
 import { makeCanUseTool } from './permission-handler.js';
 import { makeOnElicitation } from './elicitation-handler.js';
+import { makeAskUserQuestionHook } from './ask-hook.js';
 import { makeClaudeControlFace } from './control.js';
 import { categorizeClaudeToolUse } from './categorize.js';
 import { UnsupportedByRuntimeError } from '../abstractions.js';
@@ -98,6 +99,10 @@ export class ClaudeSdkRuntime implements AgentRuntime {
       sdkSessionId: () => this.sdkSessionId,
       emitRequest: (r) => this.fireElicitation(r),
     });
+    const askUserQuestionPreTool = makeAskUserQuestionHook({
+      sdkSessionId: () => this.sdkSessionId,
+      emitRequest: (r) => this.fireAsk(r),
+    });
 
     const self = this;
     async function* prompts(): AsyncGenerator<{
@@ -118,7 +123,9 @@ export class ClaudeSdkRuntime implements AgentRuntime {
       }
     }
 
-    const options = buildClaudeOptions(opts, canUseTool, onElicitation);
+    const options = buildClaudeOptions(opts, canUseTool, onElicitation, {
+      askUserQuestionPreTool,
+    });
     this.queryIter = this.queryFn({ prompt: prompts(), options });
 
     // Get the iterator ONCE and hold it across prepare→attachSink. See the

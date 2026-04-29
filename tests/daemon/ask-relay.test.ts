@@ -58,7 +58,7 @@ describe('handleInbound — AskUserQuestion answer relay', () => {
       const req: AskUserQuestionRequest = {
         id: 'ask-1',
         prompt: '你想喝什么饮料?',
-        options: ['咖啡', '茶', '可乐'],
+        options: [{ label: '咖啡' }, { label: '茶' }, { label: '可乐' }],
         resolve: (chosen) => { resolved = chosen; },
       };
       handle.askBroker.issue(sessionId, req);
@@ -105,7 +105,7 @@ describe('handleInbound — AskUserQuestion answer relay', () => {
       handle.askBroker.issue(sessionId, {
         id: 'ask-2',
         prompt: '你想喝什么?',
-        options: ['咖啡', '茶'],
+        options: [{ label: '咖啡' }, { label: '茶' }],
         resolve: (chosen) => { resolved = chosen; },
       });
 

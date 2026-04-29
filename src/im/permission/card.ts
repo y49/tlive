@@ -22,7 +22,9 @@ export type PermissionCardOptions =
       requestId: string;
       mode: 'single' | 'multi' | 'custom-input';
       question: string;
-      options: Array<{ label: string; description?: string }>;
+      /** Optional short chip/tag (max ~12 chars per Claude SDK convention). */
+      header?: string;
+      options: Array<{ label: string; description?: string; preview?: string }>;
       onResolve: (chosen: string[]) => void;
     };
 
@@ -229,8 +231,22 @@ export class PermissionCard {
     }
     // ask
     const askOpts = this.opts as Extract<PermissionCardOptions, { kind: 'ask' }>;
-    const lines = [`❓ <b>${escapeHtml(askOpts.question)}</b>`];
+    const headerChip = askOpts.header ? ` <i>[${escapeHtml(askOpts.header)}]</i>` : '';
+    const lines = [`❓ <b>${escapeHtml(askOpts.question)}</b>${headerChip}`];
+    if (askOpts.mode === 'multi') lines.push('<i>多选 — 点选/取消,然后确认提交</i>');
     if (this.customInputPending) lines.push('⌛ 等你输入...');
+    // Append per-option descriptions inline below the question (compact, monospace).
+    const optsWithDesc = askOpts.options.filter((o) => o.description);
+    if (!this.customInputPending && optsWithDesc.length > 0) {
+      lines.push('');
+      askOpts.options.forEach((o, i) => {
+        if (o.description) {
+          lines.push(`  <b>${i + 1}. ${escapeHtml(o.label)}</b> — ${escapeHtml(o.description)}`);
+        } else {
+          lines.push(`  <b>${i + 1}. ${escapeHtml(o.label)}</b>`);
+        }
+      });
+    }
     const buttons: InlineButton[][] = [];
     if (!this.customInputPending) {
       askOpts.options.forEach((o, i) => {

@@ -519,6 +519,20 @@ export class SessionFrontend {
 
     if (ev.kind === 'pending') {
       const req = ev.request;
+      // Tools that should NOT reach the generic 4-button permission flow:
+      // - AskUserQuestion / ExitPlanMode are intercepted upstream by Claude SDK
+      //   PreToolUse hooks (src/runtime/claude/ask-hook.ts). If we still see
+      //   them here it means the hook didn't fire — auto-deny is safer than
+      //   showing the user a generic Allow/Deny card for an unanswerable tool.
+      const HOOKED_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
+      if (HOOKED_TOOLS.has(req.toolName)) {
+        process.stderr.write(
+          `[frontend] ${req.toolName} reached permissionBroker; PreToolUse hook missed. ` +
+          `Auto-denying so the agent doesn't render a generic permission card.\n`,
+        );
+        this.opts.permissionBroker.resolve(ev.sessionId, req.id, 'deny');
+        return;
+      }
       for (const c of entry.channels) {
         if (c.target.role !== 'primary') continue;
         const card = new PermissionCard(c.adapter, c.target, {
@@ -564,8 +578,10 @@ export class SessionFrontend {
     if (ev.kind === 'pending') {
       // Determine mode from request shape. AskUserQuestionRequest has multiSelect?:boolean
       // but no allowCustom — custom-input mode is deferred until the broker exposes the flag.
-      const req = ev.request as { id: string; prompt: string; options: string[]; multiSelect?: boolean };
-      const mode: 'single' | 'multi' = req.multiSelect ? 'multi' : 'single';
+      const req = ev.request;
+      const mode: 'single' | 'multi' | 'custom-input' = req.allowCustom
+        ? 'custom-input'
+        : req.multiSelect ? 'multi' : 'single';
 
       for (const c of entry.channels) {
         if (c.target.role !== 'primary') continue;
@@ -574,7 +590,8 @@ export class SessionFrontend {
           requestId: req.id,
           mode,
           question: req.prompt,
-          options: req.options.map((label) => ({ label })),
+          header: req.header,
+          options: req.options,
           onResolve: (chosen) => {
             this.opts.askBroker?.resolve(ev.sessionId, req.id, chosen);
             entry.pendingCustomInputCards?.delete(c.target.chatId);

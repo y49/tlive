@@ -19,7 +19,7 @@ function fakeBrokerCalls() {
   } as unknown as PermissionBroker;
   const askBroker = {
     resolve: (...a: unknown[]) => { calls.push({ name: 'ask.resolve', args: a }); return true; },
-    pendingFor: (sid: string) => sid === 'sess-live' ? [{ id: 'req1', options: ['A', 'B'] } as Parameters<AskUserQuestionBroker['resolve']>[0] extends never ? never : { id: string; options: string[] }] : [],
+    pendingFor: (sid: string) => sid === 'sess-live' ? [{ id: 'req1', options: [{ label: 'A' }, { label: 'B' }] } as Parameters<AskUserQuestionBroker['resolve']>[0] extends never ? never : { id: string; options: string[] }] : [],
   } as unknown as AskUserQuestionBroker;
   const elicitationBroker = {
     resolve: (...a: unknown[]) => { calls.push({ name: 'elic.resolve', args: a }); return true; },
@@ -101,7 +101,7 @@ describe('CallbackRouter', () => {
     const brokers = fakeBrokerCalls();
     // Make askBroker.pendingFor return the request for sess-live
     (brokers.askBroker as unknown as { pendingFor: (s: string) => unknown[] }).pendingFor = (sid: string) =>
-      sid === 'sess-live' ? [{ id: 'req1', options: ['A', 'B'] }] : [];
+      sid === 'sess-live' ? [{ id: 'req1', options: [{ label: 'A' }, { label: 'B' }] }] : [];
     router = new CallbackRouter({
       sessionManager: sm,
       permissionBroker: brokers.permissionBroker,

@@ -250,8 +250,9 @@ export class CallbackRouter {
       await this.editStaleCard(ctx, 'already_resolved');
       return { kind: 'stale', action: 'already_resolved' };
     }
-    const chosen = req.options[optIdx];
-    if (!chosen) return { kind: 'unknown', reason: 'ask:idx-out-of-range' };
+    const chosenOpt = req.options[optIdx];
+    if (!chosenOpt) return { kind: 'unknown', reason: 'ask:idx-out-of-range' };
+    const chosen = chosenOpt.label;
 
     const ok = this.deps.askBroker.resolve(sid, reqId, [chosen], ctx.userId);
     if (!ok) {

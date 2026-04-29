@@ -211,7 +211,7 @@ export class RemoteSession implements SessionLike {
       kind: 'ask_user_question_requested',
       requestId: req.id,
       prompt: req.prompt,
-      options: req.options,
+      options: req.options.map((o) => o.label),
     });
   }
 

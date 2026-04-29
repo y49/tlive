@@ -255,7 +255,7 @@ describe('SessionFrontend — TL_NEW_UX path', () => {
       request: {
         id: 'q1',
         prompt: 'pick one',
-        options: ['Alpha', 'Beta'],
+        options: [{ label: 'Alpha' }, { label: 'Beta' }],
         resolve: () => { /* noop */ },
       },
     } as Parameters<typeof askBroker2.push>[0]);
@@ -303,7 +303,7 @@ describe('SessionFrontend — TL_NEW_UX path', () => {
       request: {
         id: 'q2',
         prompt: 'choose',
-        options: ['X', 'Y'],
+        options: [{ label: 'X' }, { label: 'Y' }],
         resolve: () => { /* noop */ },
       },
     } as Parameters<typeof askBroker2.push>[0]);
@@ -354,7 +354,7 @@ describe('SessionFrontend — TL_NEW_UX path', () => {
       request: {
         id: 'q3',
         prompt: 'multi',
-        options: ['P', 'Q', 'R'],
+        options: [{ label: 'P' }, { label: 'Q' }, { label: 'R' }],
         multiSelect: true,
         resolve: () => { /* noop */ },
       },
@@ -396,7 +396,7 @@ describe('SessionFrontend — TL_NEW_UX path', () => {
     askBroker2.push({
       kind: 'pending',
       sessionId: fakeSession2.id,
-      request: { id: 'q4', prompt: 'p', options: ['A'], resolve: () => { /* noop */ } },
+      request: { id: 'q4', prompt: 'p', options: [{ label: 'A' }], resolve: () => { /* noop */ } },
     } as Parameters<typeof askBroker2.push>[0]);
     await flushAsync();
 

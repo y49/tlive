@@ -32,11 +32,29 @@ export interface PermissionRequest {
   resolve: (decision: PermissionDecision) => void;
 }
 
+export interface AskUserQuestionOption {
+  label: string;
+  description?: string;
+  /** Markdown / HTML preview for option (used when SDK toolConfig.askUserQuestion.previewFormat enabled). */
+  preview?: string;
+}
+
 export interface AskUserQuestionRequest {
   id: string;
+  /** Question text (terminal '?'). */
   prompt: string;
-  options: string[];
+  /** Short chip/tag (max 12 chars per Claude SDK). Optional. */
+  header?: string;
+  /** 2-4 distinct choices. */
+  options: AskUserQuestionOption[];
+  /** When true, allow multiple selections. */
   multiSelect?: boolean;
+  /**
+   * Optional free-form custom-answer support. Claude builtin AskUserQuestion always
+   * provides an 'Other' fallback; we model it as: when allowCustom is true the IM
+   * card surfaces a "✏️ 自己输入" button.
+   */
+  allowCustom?: boolean;
   resolve: (chosen: string[]) => void;
 }
 

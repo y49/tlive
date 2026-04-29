@@ -607,7 +607,7 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
       const pending = deps.askBroker.pendingFor(wsForAsk.activeSessionId);
       if (pending.length > 0) {
         const ask = pending[0]!; // multiple in-flight questions are unusual
-        const choice = parseAskAnswer(text, ask.options);
+        const choice = parseAskAnswer(text, ask.options.map((o) => o.label));
         if (choice !== null) {
           deps.askBroker.resolve(wsForAsk.activeSessionId, ask.id, [choice], ev.userId);
           deps.logger.info('ask-answer relayed', {
