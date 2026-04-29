@@ -8,6 +8,7 @@
 import type { SessionLike, SessionEventKind, SessionInfo } from '../../src/session/types.js';
 import type { NotificationEvent } from '../../src/runtime/events.js';
 import type { AgentStatus } from '../../src/session/status.js';
+import type { SessionManager, ManagerEventListener } from '../../src/session/manager.js';
 import { SessionContext } from '../../src/session/context.js';
 import { CostTracker } from '../../src/cost/tracker.js';
 
@@ -79,4 +80,30 @@ export class FakeSession implements SessionLike {
   emit(ev: NotificationEvent): void {
     for (const l of this.listeners) l(ev);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Canonical fake SessionManager
+// ---------------------------------------------------------------------------
+
+export type FakeSessionManager = SessionManager & { push: ManagerEventListener };
+
+/** Canonical fake SessionManager used by IM frontend / multi-binding / smoke tests.
+ *  Always provides a working `get(id)` method to avoid the silent-throw class of
+ *  bugs where SessionFrontend.buildInitialHudState (post-T10) silently fails when
+ *  the manager mock returns undefined (or worse, has no `get` method at all).
+ *
+ *  Pass a `sessions` map to wire up real FakeSession lookups; otherwise `get`
+ *  returns undefined which is also valid (frontend code must handle missing
+ *  sessions gracefully). */
+export function mkFakeSessionManager(
+  opts: { sessions?: Map<string, FakeSession> } = {},
+): FakeSessionManager {
+  const sessions = opts.sessions ?? new Map<string, FakeSession>();
+  const listeners = new Set<ManagerEventListener>();
+  return {
+    subscribe(l: ManagerEventListener) { listeners.add(l); return () => listeners.delete(l); },
+    push(ev) { for (const l of listeners) l(ev); },
+    get(id: string) { return sessions.get(id); },
+  } as unknown as FakeSessionManager;
 }

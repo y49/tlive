@@ -11,20 +11,10 @@
 
 import { describe, it, expect } from 'vitest';
 import { SessionFrontend } from '../../src/im/frontend.js';
-import type { SessionManager, ManagerEventListener } from '../../src/session/manager.js';
 import type { PermissionBroker, BrokerListener } from '../../src/permission/broker.js';
 import type { WorkspaceManager } from '../../src/workspace/manager.js';
 import { FakeAdapter } from './fake-adapter.js';
-import { FakeSession } from './fake-session.js';
-
-function mkSm(): SessionManager & { push: ManagerEventListener } {
-  const listeners = new Set<ManagerEventListener>();
-  return {
-    subscribe(l: ManagerEventListener) { listeners.add(l); return () => listeners.delete(l); },
-    push(ev: Parameters<ManagerEventListener>[0]) { for (const l of listeners) l(ev); },
-    get(_id: string) { return undefined; },
-  } as unknown as SessionManager & { push: ManagerEventListener };
-}
+import { FakeSession, mkFakeSessionManager } from './fake-session.js';
 
 function mkPb(): PermissionBroker & { push: BrokerListener } {
   const listeners = new Set<BrokerListener>();
@@ -56,7 +46,7 @@ describe('multi-binding fan-out (T6 review #1)', () => {
   it('each adapter receives its own chatId only; no cross-sends', async () => {
     const tg = new FakeAdapter('telegram');
     const ds = new FakeAdapter('discord');
-    const sm = mkSm();
+    const sm = mkFakeSessionManager();
     const pb = mkPb();
     const frontend = new SessionFrontend({
       sessionManager: sm, workspaceManager: mkWm(), permissionBroker: pb,
@@ -107,7 +97,7 @@ describe('multi-binding fan-out (T6 review #1)', () => {
   it('permission card: only primary gets interactive card; mirror receives nothing (new UX)', async () => {
     const tg = new FakeAdapter('telegram');
     const ds = new FakeAdapter('discord');
-    const sm = mkSm();
+    const sm = mkFakeSessionManager();
     const pb = mkPb();
     const frontend = new SessionFrontend({
       sessionManager: sm, workspaceManager: mkWm(), permissionBroker: pb,

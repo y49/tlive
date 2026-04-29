@@ -1,20 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { SessionFrontend } from '../../src/im/frontend.js';
-import type { SessionManager, ManagerEventListener } from '../../src/session/manager.js';
 import type { PermissionBroker, BrokerListener } from '../../src/permission/broker.js';
 import type { ElicitationBroker, ElicitationBrokerListener } from '../../src/permission/elicitation-broker.js';
 import type { WorkspaceManager } from '../../src/workspace/manager.js';
 import { FakeAdapter } from '../im/fake-adapter.js';
-import { FakeSession } from '../im/fake-session.js';
+import { FakeSession, mkFakeSessionManager } from '../im/fake-session.js';
 
 function makeFrontend(channel: 'telegram' | 'discord' | 'feishu') {
   const adapter = new FakeAdapter(channel);
-  const smListeners = new Set<ManagerEventListener>();
-  const sm = {
-    subscribe(l: ManagerEventListener) { smListeners.add(l); return () => smListeners.delete(l); },
-    push(ev: Parameters<ManagerEventListener>[0]) { for (const l of smListeners) l(ev); },
-    get(_id: string) { return undefined; },
-  } as unknown as SessionManager & { push: (ev: Parameters<ManagerEventListener>[0]) => void };
+  const sm = mkFakeSessionManager();
   const pbListeners = new Set<BrokerListener>();
   const pb = {
     subscribe(l: BrokerListener) { pbListeners.add(l); return () => pbListeners.delete(l); },

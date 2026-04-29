@@ -1,20 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SessionFrontend } from '../../src/im/frontend.js';
-import type { SessionManager, ManagerEventListener } from '../../src/session/manager.js';
 import type { PermissionBroker, BrokerListener } from '../../src/permission/broker.js';
 import type { AskUserQuestionBroker, AskBrokerListener } from '../../src/permission/ask-broker.js';
 import type { ElicitationBroker, ElicitationBrokerListener } from '../../src/permission/elicitation-broker.js';
 import type { WorkspaceManager } from '../../src/workspace/manager.js';
 import { FakeAdapter } from './fake-adapter.js';
-import { FakeSession } from './fake-session.js';
-
-function mkFakeSessionManager(): SessionManager & { push: ManagerEventListener } {
-  const listeners = new Set<ManagerEventListener>();
-  return {
-    subscribe(l: ManagerEventListener) { listeners.add(l); return () => listeners.delete(l); },
-    push(ev) { for (const l of listeners) l(ev); },
-  } as unknown as SessionManager & { push: ManagerEventListener };
-}
+import { FakeSession, mkFakeSessionManager } from './fake-session.js';
 
 function mkFakeBroker(): PermissionBroker & { push: BrokerListener } {
   const listeners = new Set<BrokerListener>();
@@ -128,26 +119,17 @@ describe('SessionFrontend', () => {
 // TL_NEW_UX path tests
 // ---------------------------------------------------------------------------
 
-function mkFakeSessionManagerWithGet(sessions: Map<string, FakeSession>): SessionManager & { push: ManagerEventListener } {
-  const listeners = new Set<ManagerEventListener>();
-  return {
-    subscribe(l: ManagerEventListener) { listeners.add(l); return () => listeners.delete(l); },
-    push(ev: Parameters<ManagerEventListener>[0]) { for (const l of listeners) l(ev); },
-    get(id: string) { return sessions.get(id); },
-  } as unknown as SessionManager & { push: ManagerEventListener };
-}
-
 async function bootstrapFrontend(): Promise<{
   frontend: SessionFrontend;
   adapter: FakeAdapter;
   fakeSession: FakeSession;
-  sessionManager: ReturnType<typeof mkFakeSessionManagerWithGet>;
+  sessionManager: ReturnType<typeof mkFakeSessionManager>;
   permissionBroker: ReturnType<typeof mkFakeBroker>;
 }> {
   const adapter = new FakeAdapter('telegram');
   const fakeSession = new FakeSession({ id: 'ux-sess-1', workspaceId: 'ux-ws-1' });
   const sessions = new Map([[fakeSession.id, fakeSession]]);
-  const sessionManager = mkFakeSessionManagerWithGet(sessions);
+  const sessionManager = mkFakeSessionManager({ sessions });
   const permissionBroker = mkFakeBroker();
   const askBroker = mkFakeAskBroker();
   const elicitationBroker = mkFakeElicBroker();
@@ -252,7 +234,7 @@ describe('SessionFrontend — TL_NEW_UX path', () => {
     const adapter2 = new FakeAdapter('telegram');
     const fakeSession2 = new FakeSession({ id: 'ask-sess-1', workspaceId: 'ux-ws-1' });
     const sessions2 = new Map([[fakeSession2.id, fakeSession2]]);
-    const sessionManager2 = mkFakeSessionManagerWithGet(sessions2);
+    const sessionManager2 = mkFakeSessionManager({ sessions: sessions2 });
     const askBroker2 = mkFakeAskBroker();
     const frontend2 = new SessionFrontend({
       sessionManager: sessionManager2,
@@ -294,7 +276,7 @@ describe('SessionFrontend — TL_NEW_UX path', () => {
     const adapter2 = new FakeAdapter('telegram');
     const fakeSession2 = new FakeSession({ id: 'ask-sess-2', workspaceId: 'ux-ws-1' });
     const sessions2 = new Map([[fakeSession2.id, fakeSession2]]);
-    const sessionManager2 = mkFakeSessionManagerWithGet(sessions2);
+    const sessionManager2 = mkFakeSessionManager({ sessions: sessions2 });
     const askBroker2 = mkFakeAskBroker();
     let resolved: { rid: string; chosen: string[] } | null = null;
     // Add a resolve spy to the broker
@@ -348,7 +330,7 @@ describe('SessionFrontend — TL_NEW_UX path', () => {
     const adapter2 = new FakeAdapter('telegram');
     const fakeSession2 = new FakeSession({ id: 'ask-sess-3', workspaceId: 'ux-ws-1' });
     const sessions2 = new Map([[fakeSession2.id, fakeSession2]]);
-    const sessionManager2 = mkFakeSessionManagerWithGet(sessions2);
+    const sessionManager2 = mkFakeSessionManager({ sessions: sessions2 });
     const askBroker2 = mkFakeAskBroker();
     let resolved: { rid: string; chosen: string[] } | null = null;
     (askBroker2 as unknown as { resolve: unknown }).resolve = vi.fn(
@@ -397,7 +379,7 @@ describe('SessionFrontend — TL_NEW_UX path', () => {
     const adapter2 = new FakeAdapter('telegram');
     const fakeSession2 = new FakeSession({ id: 'ask-sess-4', workspaceId: 'ux-ws-1' });
     const sessions2 = new Map([[fakeSession2.id, fakeSession2]]);
-    const sessionManager2 = mkFakeSessionManagerWithGet(sessions2);
+    const sessionManager2 = mkFakeSessionManager({ sessions: sessions2 });
     const askBroker2 = mkFakeAskBroker();
     const frontend2 = new SessionFrontend({
       sessionManager: sessionManager2,
