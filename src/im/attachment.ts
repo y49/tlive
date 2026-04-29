@@ -9,10 +9,6 @@ import type { PlatformAdapter } from '../platform/types.js';
 import type { RenderTarget } from './render-target.js';
 import { escapeHtml } from './util/html.js';
 
-type CardCapable = PlatformAdapter & {
-  sendCard?: (opts: { chatId: string; threadId?: string; card: object }) => Promise<string>;
-};
-
 export interface AttachmentPayload {
   name: string;
   mime: string;
@@ -33,7 +29,7 @@ export class AttachmentPreview {
   ) {}
 
   async send(p: AttachmentPayload): Promise<void> {
-    const adapter = this.adapter as CardCapable;
+    const adapter = this.adapter;
     const safeName = escapeHtml(p.name);
     const sizeStr = fmtSize(p.sizeBytes);
 

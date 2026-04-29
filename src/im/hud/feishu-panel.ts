@@ -6,11 +6,6 @@ import type { HudPanel } from './panel.js';
 import type { HudState } from './state.js';
 import { buildFeishuHudCard } from './format-feishu.js';
 
-type CardCapable = PlatformAdapter & {
-  sendCard?: (opts: { chatId: string; threadId?: string; card: object }) => Promise<string>;
-  updateCard?: (msgId: string, chatId: string, card: object) => Promise<void>;
-};
-
 export class FeishuHudPanel implements HudPanel {
   private lastHash: string | null = null;
 
@@ -20,7 +15,7 @@ export class FeishuHudPanel implements HudPanel {
   ) {}
 
   async send(state: HudState): Promise<string> {
-    const adapter = this.adapter as CardCapable;
+    const adapter = this.adapter;
     if (typeof adapter.sendCard !== 'function') {
       throw new Error('FeishuHudPanel requires adapter.sendCard');
     }
@@ -34,7 +29,7 @@ export class FeishuHudPanel implements HudPanel {
   }
 
   async update(msgId: string, state: HudState): Promise<void> {
-    const adapter = this.adapter as CardCapable;
+    const adapter = this.adapter;
     if (typeof adapter.updateCard !== 'function') {
       throw new Error('FeishuHudPanel requires adapter.updateCard');
     }
@@ -51,7 +46,7 @@ export class FeishuHudPanel implements HudPanel {
   }
 
   async freeze(msgId: string, state: HudState): Promise<void> {
-    const adapter = this.adapter as CardCapable;
+    const adapter = this.adapter;
     if (typeof adapter.updateCard !== 'function') return;
     const card = buildFeishuHudCard(state);
     this.lastHash = JSON.stringify(card);

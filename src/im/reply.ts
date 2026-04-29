@@ -12,11 +12,6 @@ import { escapeHtml } from './util/html.js';
 
 const TG_MAX = 4096;
 
-type CardCapable = PlatformAdapter & {
-  sendCard?: (opts: { chatId: string; threadId?: string; card: object }) => Promise<string>;
-  updateCard?: (msgId: string, chatId: string, card: object) => Promise<void>;
-};
-
 export function markdownToTelegramHtml(md: string): string {
   // Order matters: handle code fences first (so inline syntax inside fences
   // is preserved), then inline code, bold, italic.
@@ -92,7 +87,7 @@ export class ReplyRenderer {
   private async flushMirror(): Promise<void> {
     if (this.headMsgId !== null) return;
     if (this.target.channelType === 'feishu') {
-      const adapter = this.adapter as CardCapable;
+      const adapter = this.adapter;
       if (typeof adapter.sendCard !== 'function') {
         throw new Error('FeishuReply requires adapter.sendCard');
       }
@@ -193,7 +188,7 @@ export class ReplyRenderer {
   }
 
   private async renderFeishu(text: string): Promise<void> {
-    const adapter = this.adapter as CardCapable;
+    const adapter = this.adapter;
     if (typeof adapter.sendCard !== 'function') {
       throw new Error('FeishuReply requires adapter.sendCard');
     }
