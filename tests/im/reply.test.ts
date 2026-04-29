@@ -31,6 +31,40 @@ describe('ReplyRenderer — telegram primary', () => {
     expect(text).toContain('<code>code</code>');
   });
 
+  it('preserves user text containing the literal substring "FENCE0"', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const r = new ReplyRenderer(adapter, { chatId: 'c', role: 'primary', channelType: 'telegram' });
+    await r.onTextComplete('see FENCE0 here\n```ts\nx\n```\nend');
+    const text = adapter.calls[0].args.text as string;
+    expect(text).toContain('see FENCE0 here');
+    expect(text).toContain('end');
+    expect(text).toMatch(/<pre><code/);
+  });
+
+  it('overflow send failure does not duplicate the chunk on subsequent deltas', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const realSend = adapter.send.bind(adapter);
+    let callCount = 0;
+    adapter.send = async (msg) => {
+      callCount++;
+      // First send (head) succeeds. Second send (first overflow chunk) fails.
+      // Subsequent sends succeed.
+      if (callCount === 2) throw new Error('rate limited');
+      return await realSend(msg);
+    };
+    const r = new ReplyRenderer(adapter, { chatId: 'c', role: 'primary', channelType: 'telegram' });
+    const text1 = 'a'.repeat(5000); // 2 chunks
+    await r.onTextComplete(text1);
+    const text2 = 'a'.repeat(8000); // 2 chunks
+    await r.onTextComplete(text2);
+    // We expect: head send (success), overflow send (failed), then on the 2nd
+    // delta only chunks beyond what was attempted are sent. The failed chunk
+    // is NOT retried (it'd be a duplicate). Total wire sends: 1 (head) + 1
+    // (failed overflow attempt) + chunks beyond = 4 total adapter.send calls,
+    // since text2 = 2 chunks total → no NEW chunks beyond what was attempted.
+    expect(callCount).toBe(2);
+  });
+
   it('text >4096 chars splits into multiple sends linked via replyToMessageId', async () => {
     const adapter = new FakeAdapter('telegram');
     const r = new ReplyRenderer(adapter, { chatId: 'c', role: 'primary', channelType: 'telegram' });

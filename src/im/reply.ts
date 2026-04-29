@@ -23,19 +23,25 @@ function escapeHtml(s: string): string {
 export function markdownToTelegramHtml(md: string): string {
   // Order matters: handle code fences first (so inline syntax inside fences
   // is preserved), then inline code, bold, italic.
+  // NUL-byte sentinel: cannot survive escapeHtml below (it doesn't strip NUL,
+  // but NUL never appears in normal user text from the agent stream), and
+  // cannot collide with user content like the literal substring "FENCE0".
   const fences: string[] = [];
+  const SENTINEL_OPEN = ' \x00F\x00 ';
+  const SENTINEL_CLOSE = ' \x00E\x00 ';
   let out = md.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, body) => {
     const idx = fences.length;
     const langAttr = lang ? ` class="language-${escapeHtml(lang)}"` : '';
     fences.push(`<pre><code${langAttr}>${escapeHtml(body)}</code></pre>`);
-    return ` FENCE${idx} `;
+    return `${SENTINEL_OPEN}${idx}${SENTINEL_CLOSE}`;
   });
   out = escapeHtml(out);
   out = out.replace(/`([^`\n]+)`/g, (_, x) => `<code>${x}</code>`);
   out = out.replace(/\*\*([^*\n]+)\*\*/g, (_, x) => `<b>${x}</b>`);
   out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, (_, p, x) => `${p}<i>${x}</i>`);
   // Restore fenced blocks.
-  out = out.replace(/ FENCE(\d+) /g, (_, i) => fences[Number(i)] ?? '');
+  const restoreRe = new RegExp(` \x00F\x00 (\\d+) \x00E\x00 `, 'g');
+  out = out.replace(restoreRe, (_, i) => fences[Number(i)] ?? '');
   return out;
 }
 
@@ -55,7 +61,9 @@ export function chunkForTelegram(text: string): string[] {
 
 export class ReplyRenderer {
   private headMsgId: string | null = null;
-  private overflowMsgIds: string[] = [];
+  // Per-overflow-chunk msgId or null if the prior send failed. Length tracks
+  // how many chunks we've ATTEMPTED so subsequent deltas don't re-send.
+  private overflowMsgIds: Array<string | null> = [];
   private lastRendered = '';
   private mirrorBuffer = '';
 
@@ -88,13 +96,16 @@ export class ReplyRenderer {
     if (this.headMsgId !== null) return;
     if (this.target.channelType === 'feishu') {
       const adapter = this.adapter as CardCapable;
-      if (typeof adapter.sendCard !== 'function') return;
+      if (typeof adapter.sendCard !== 'function') {
+        throw new Error('FeishuReply requires adapter.sendCard');
+      }
       const card = { schema: '2.0', body: { elements: [{ tag: 'markdown', content: this.mirrorBuffer }] } };
       try {
         const id = await adapter.sendCard({
           chatId: this.target.chatId, threadId: this.target.threadId, card,
         });
         this.headMsgId = id;
+        this.mirrorBuffer = '';
       } catch (err) {
         process.stderr.write(`[reply-mirror] target=fs:${this.target.chatId} reason=${(err as Error).message}\n`);
       }
@@ -109,6 +120,7 @@ export class ReplyRenderer {
         parseMode: 'html',
       });
       this.headMsgId = id;
+      this.mirrorBuffer = '';
     } catch (err) {
       process.stderr.write(`[reply-mirror] target=tg:${this.target.chatId} reason=${(err as Error).message}\n`);
     }
@@ -151,6 +163,7 @@ export class ReplyRenderer {
           this.overflowMsgIds.push(ofId);
         } catch (err) {
           process.stderr.write(`[reply-overflow] target=tg:${this.target.chatId} reason=${(err as Error).message}\n`);
+          this.overflowMsgIds.push(null);
         }
       }
       return;
@@ -177,6 +190,7 @@ export class ReplyRenderer {
         this.overflowMsgIds.push(ofId);
       } catch (err) {
         process.stderr.write(`[reply-overflow] target=tg:${this.target.chatId} reason=${(err as Error).message}\n`);
+        this.overflowMsgIds.push(null);
       }
     }
   }

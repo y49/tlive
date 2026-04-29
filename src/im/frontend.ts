@@ -384,8 +384,7 @@ export class SessionFrontend {
       await entry.activeTurnUI.start();
       // Reset reply renderers and accumulator for the fresh turn.
       // Both primary and mirror targets get renderers: mirrors echo assistant text (spec §I5).
-      if (!entry.replyRenderers) entry.replyRenderers = new Map();
-      entry.replyRenderers.clear();
+      entry.replyRenderers = new Map<string, ReplyRenderer>();
       entry.replyAcc = '';
       for (const c of entry.channels) {
         if (c.target.role !== 'primary' && c.target.role !== 'mirror') continue;
@@ -409,6 +408,7 @@ export class SessionFrontend {
         for (const r of entry.replyRenderers.values()) {
           await r.onTextComplete(ev.text);
         }
+        entry.replyAcc = '';
       }
     }
   }
