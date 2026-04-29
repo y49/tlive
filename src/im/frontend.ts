@@ -92,6 +92,8 @@ interface SessionEntry {
   activeAskCards?: Map<string, PermissionCard>;
   /** TL_NEW_UX path: per-chatId pending custom-input cards for plaintext relay. */
   pendingCustomInputCards?: Map<string, PermissionCard>;
+  /** TL_NEW_UX path: active generic-permission cards keyed by requestId. */
+  activePermCards?: Map<string, PermissionCard>;
 }
 
 export interface SessionFrontendOptions {
@@ -721,12 +723,48 @@ export class SessionFrontend {
   }
 
   private async handlePermissionEvent(ev: BrokerEvent): Promise<void> {
+    if (process.env.TL_NEW_UX === '1') {
+      await this.handlePermissionEventNewUx(ev);
+      return;
+    }
     const entry = this.sessions.get(ev.sessionId);
     if (!entry) return;
     if (ev.kind === 'pending') {
       for (const c of entry.channels) { await c.permission.onPending(ev.request); }
     } else {
       for (const c of entry.channels) { await c.permission.onResolved(ev.requestId, ev.decision, ev.resolvedByUserId); }
+    }
+  }
+
+  private async handlePermissionEventNewUx(ev: BrokerEvent): Promise<void> {
+    const entry = this.sessions.get(ev.sessionId);
+    if (!entry) return;
+    if (!entry.activePermCards) entry.activePermCards = new Map<string, PermissionCard>();
+
+    if (ev.kind === 'pending') {
+      const req = ev.request;
+      for (const c of entry.channels) {
+        if (c.target.role !== 'primary') continue;
+        const card = new PermissionCard(c.adapter, c.target, {
+          kind: 'generic',
+          requestId: req.id,
+          toolName: req.toolName,
+          toolInput: req.toolInput,
+          onResolve: (decision) => {
+            // PermissionCard uses 'always'; broker expects 'allow_always'.
+            const brokerDecision = decision === 'always' ? 'allow_always' : decision;
+            this.opts.permissionBroker.resolve(ev.sessionId, req.id, brokerDecision);
+          },
+        });
+        await card.send();
+        entry.activePermCards.set(req.id, card);
+      }
+      return;
+    }
+
+    if (ev.kind === 'resolved') {
+      entry.activePermCards.delete(ev.requestId);
+      return;
     }
   }
 
@@ -831,8 +869,22 @@ export class SessionFrontend {
         }
       }
     }
-    // Generic permission (perm:) and elicitation (elic:) are handled by the
-    // legacy callback-router — no interception needed here until T10.
+    // Generic permission cards: perm:<reqId>:(allow|deny|always|learn).
+    // The legacy callback-router parses perm:<verb>:<sid>:<reqId> (4 parts). Our
+    // new format perm:<reqId>:<verb> (3 parts) causes parts[0] to be a UUID (not
+    // a known verb), so legacyhandlePerm returns 'perm:bad-verb:<uuid>' — a no-op.
+    // Our subscription fires FIRST here and returns early, so no double-dispatch.
+    const permMatch = data.match(/^perm:([^:]+):/);
+    if (permMatch) {
+      const reqId = permMatch[1]!;
+      for (const entry of this.sessions.values()) {
+        const card = entry.activePermCards?.get(reqId);
+        if (card) {
+          await card.handleCallback(data);
+          return;
+        }
+      }
+    }
   }
 
   private async routeNewUxPlaintext(chatId: string, text: string): Promise<void> {

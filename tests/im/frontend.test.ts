@@ -171,6 +171,7 @@ async function bootstrapFrontend(): Promise<{
   adapter: FakeAdapter;
   fakeSession: FakeSession;
   sessionManager: ReturnType<typeof mkFakeSessionManagerWithGet>;
+  permissionBroker: ReturnType<typeof mkFakeBroker>;
 }> {
   const adapter = new FakeAdapter('telegram');
   const fakeSession = new FakeSession({ id: 'ux-sess-1', workspaceId: 'ux-ws-1' });
@@ -192,7 +193,7 @@ async function bootstrapFrontend(): Promise<{
   // Attach session via the SessionManager 'created' event
   sessionManager.push({ kind: 'created', session: fakeSession } as Parameters<typeof sessionManager.push>[0]);
   await flushAsync();
-  return { frontend, adapter, fakeSession, sessionManager };
+  return { frontend, adapter, fakeSession, sessionManager, permissionBroker };
 }
 
 async function flushAsync(): Promise<void> {
@@ -463,5 +464,75 @@ describe('SessionFrontend — TL_NEW_UX path', () => {
     await flushAsync();
 
     frontend2.stop && await (frontend2 as unknown as { stop(): Promise<void> }).stop();
+  });
+
+  // ---------------------------------------------------------------------------
+  // T10a: PermissionBroker → PermissionCard (generic, new UX path)
+  // ---------------------------------------------------------------------------
+
+  it('PermissionBroker pending → renders PermissionCard via send (new path)', async () => {
+    const { adapter, permissionBroker, fakeSession } = await bootstrapFrontend();
+    fakeSession.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: '', at: 0 });
+    await flushAsync();
+    permissionBroker.push({
+      kind: 'pending',
+      sessionId: fakeSession.id,
+      request: {
+        id: 'rq1', category: 'exec', toolName: 'Bash', toolInput: { command: 'ls' },
+        resolve: () => { /* noop */ },
+      },
+    } as Parameters<typeof permissionBroker.push>[0]);
+    await flushAsync();
+    const sends = adapter.calls.filter(c => c.kind === 'send');
+    // 1 HUD + 1 PermissionCard send.
+    expect(sends.length).toBeGreaterThanOrEqual(2);
+    const permSend = sends.find(s => /Bash/.test((s.args.text as string) ?? ''));
+    expect(permSend).toBeTruthy();
+    // Buttons should include all 4 verbs.
+    const buttons = (permSend!.args.replyMarkup as any)?.buttons?.flat() ?? [];
+    const labels = buttons.map((b: any) => b.text);
+    expect(labels).toEqual(expect.arrayContaining(['✅ Allow', '❌ Deny', '🔄 Always', '💡 Learn']));
+  });
+
+  it('PermissionBroker pending → callback resolves via permissionBroker.resolve', async () => {
+    const { adapter, permissionBroker, fakeSession } = await bootstrapFrontend();
+    let resolved: any = null;
+    (permissionBroker as any).resolve = vi.fn((sid: string, rid: string, decision: any) => {
+      resolved = { sid, rid, decision };
+    });
+    fakeSession.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: '', at: 0 });
+    await flushAsync();
+    permissionBroker.push({
+      kind: 'pending', sessionId: fakeSession.id,
+      request: { id: 'rq2', category: 'exec', toolName: 'Bash', toolInput: {}, resolve: () => { /* noop */ } },
+    } as Parameters<typeof permissionBroker.push>[0]);
+    await flushAsync();
+    // Find the permission card send.
+    const permSend = adapter.calls.find(c => c.kind === 'send' && /Bash/.test((c.args.text as string) ?? ''))!;
+    expect(permSend).toBeTruthy();
+    adapter.emit({
+      channelType: 'telegram', chatId: permSend.args.chatId as string,
+      messageId: 'm1', userId: 'u1', kind: 'callback', callbackData: 'perm:rq2:allow', at: 0,
+    } as any);
+    await flushAsync();
+    expect(resolved).toEqual(expect.objectContaining({ rid: 'rq2', decision: 'allow' }));
+  });
+
+  it('PermissionBroker resolved event cleans up activePermCards', async () => {
+    const { permissionBroker, fakeSession, frontend } = await bootstrapFrontend();
+    fakeSession.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: '', at: 0 });
+    await flushAsync();
+    permissionBroker.push({
+      kind: 'pending', sessionId: fakeSession.id,
+      request: { id: 'rq3', category: 'exec', toolName: 'Bash', toolInput: {}, resolve: () => { /* noop */ } },
+    } as Parameters<typeof permissionBroker.push>[0]);
+    await flushAsync();
+    permissionBroker.push({
+      kind: 'resolved', sessionId: fakeSession.id, requestId: 'rq3', decision: 'allow',
+    } as Parameters<typeof permissionBroker.push>[0]);
+    await flushAsync();
+    // Internal state check: card should have been removed from registry.
+    const entry = (frontend as any).sessions.get(fakeSession.id);
+    expect(entry?.activePermCards?.has('rq3')).toBe(false);
   });
 });
