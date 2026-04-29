@@ -182,13 +182,21 @@ describe('SessionFrontend — TL_NEW_UX path', () => {
 
   it('a second turn_start destroys the previous TurnUI before creating a new one', async () => {
     const { adapter, fakeSession } = await bootstrapFrontend();
-    const sendsBefore = adapter.calls.filter(c => c.kind === 'send').length;
+    const hudSendsBefore = adapter.calls.filter(
+      c => c.kind === 'send' && typeof c.args.text === 'string' && (c.args.text as string).startsWith('<pre><code>'),
+    ).length;
     fakeSession.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: 'a', at: 0 });
     await flushAsync();
     fakeSession.emit({ kind: 'turn_start', turnId: 't2', userInputPreview: 'b', at: 100 });
     await flushAsync();
-    // Each turn_start sends one new HUD message → exactly 2 HUD sends after bootstrap
-    expect(adapter.calls.filter(c => c.kind === 'send').length - sendsBefore).toBe(2);
+    // Each turn_start sends one new v1 HUD message (<pre><code>...). Filter on
+    // that signature so the v2 dual-path TurnComposite placeholder (sent
+    // alongside) doesn't inflate the count. Exactly 2 v1 HUD sends after
+    // bootstrap proves "second turn_start destroyed the previous TurnUI".
+    const hudSendsAfter = adapter.calls.filter(
+      c => c.kind === 'send' && typeof c.args.text === 'string' && (c.args.text as string).startsWith('<pre><code>'),
+    ).length;
+    expect(hudSendsAfter - hudSendsBefore).toBe(2);
   });
 
   it('session stopped destroys the active TurnUI (no edits on late events)', async () => {

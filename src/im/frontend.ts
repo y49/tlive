@@ -43,6 +43,8 @@ import { targetKey as renderTargetKey } from './render-target.js';
 import { ReplyRenderer } from './reply.js';
 import { AttachmentPreview } from './attachment.js';
 import { PermissionCard } from './permission/card.js';
+import { TurnComposite } from './turn-composite.js';
+import { EditQueue } from './reply-document/edit-queue.js';
 
 /**
  * A renderer set lives per (session, binding). The set's adapter is the one
@@ -91,6 +93,9 @@ interface SessionEntry {
    * `send`, producing duplicate IM messages).
    */
   dispatchChain: Promise<void>;
+  /** v2: per-turn TurnComposite + EditQueue per channel target. */
+  activeTurnComposites?: Map<string, TurnComposite>;
+  editQueues?: Map<string, EditQueue>;
 }
 
 export interface SessionFrontendOptions {
@@ -326,6 +331,11 @@ export class SessionFrontend {
     this.sessions.delete(sessionId);
     try { entry.unsubscribeEvent(); } catch { /* isolate */ }
     try { entry.activeTurnUI?.destroy(); } catch { /* isolate */ }
+    if (entry.activeTurnComposites) {
+      for (const tc of entry.activeTurnComposites.values()) {
+        try { tc.destroy(); } catch { /* isolate */ }
+      }
+    }
     if (entry.activePermCards) {
       for (const reqId of entry.activePermCards.keys()) this.cardsByReqId.delete(reqId);
     }
@@ -468,10 +478,44 @@ export class SessionFrontend {
           if (c.target.role !== 'primary' && c.target.role !== 'mirror') continue;
           entry.replyRenderers.set(renderTargetKey(c.target), new ReplyRenderer(c.adapter, c.target));
         }
+
+        // v2 dual-path: build TurnComposite alongside the v1 TurnUI/ReplyRenderer
+        // wiring. v1 path stays active until T9 cleanup; smoke can compare both
+        // layouts. EditQueue persists across turns (rate-limit state belongs to
+        // the chat, not the turn) so we cache it on the SessionEntry.
+        if (entry.activeTurnComposites) {
+          for (const tc of entry.activeTurnComposites.values()) tc.destroy();
+        }
+        entry.activeTurnComposites = new Map<string, TurnComposite>();
+        if (!entry.editQueues) entry.editQueues = new Map<string, EditQueue>();
+        for (const c of entry.channels) {
+          if (c.target.role !== 'primary') continue;
+          const tk = renderTargetKey(c.target);
+          let eq = entry.editQueues.get(tk);
+          if (!eq) {
+            const eqOpts = c.target.channelType === 'telegram'
+              ? { refillMs: 2000, capacity: 5 }
+              : { refillMs: 100, capacity: 50 };
+            eq = new EditQueue(eqOpts);
+            entry.editQueues.set(tk, eq);
+          }
+          const tc = new TurnComposite(c.adapter, c.target, eq, initState);
+          entry.activeTurnComposites.set(tk, tc);
+          void tc.start();
+        }
       }
 
       if (entry.activeTurnUI) {
         await entry.activeTurnUI.ingestEvent(ev);
+      }
+
+      // v2 dual-path: broadcast every event to all live TurnComposites. v1
+      // continues to render the legacy HUD panel + ReplyRenderer in parallel
+      // (T9 deletes v1 once smoke confirms v2 layout).
+      if (entry.activeTurnComposites) {
+        for (const tc of entry.activeTurnComposites.values()) {
+          if (!tc.isDestroyed()) tc.ingestEvent(ev);
+        }
       }
     }
 
