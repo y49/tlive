@@ -39,6 +39,7 @@ export class PermissionCard {
   private selected = new Set<number>();
   private customInputPending = false;
   private resolved = false;
+  private fallbackPending = false;
 
   constructor(
     private readonly adapter: PlatformAdapter,
@@ -52,19 +53,59 @@ export class PermissionCard {
     return this.customInputPending;
   }
 
+  isPermFallbackPending(): boolean { return this.fallbackPending; }
+
+  async resolveFromKeyword(verb: 'allow' | 'deny' | 'always'): Promise<void> {
+    if (this.resolved) return;
+    if (this.opts.kind !== 'generic') return;
+    this.resolved = true;
+    this.fallbackPending = false;
+    this.opts.onResolve(verb);
+    // Don't try to edit — the card never landed on the wire (or msgId may be empty).
+    // The fallback hint message stays as-is in the chat.
+  }
+
   async send(): Promise<void> {
     const { text, markup } = this.render();
+    const sendOnce = () => this.adapter.send({
+      chatId: this.target.chatId,
+      threadId: this.target.threadId,
+      text,
+      parseMode: 'html',
+      replyMarkup: markup,
+    });
+
     try {
-      this.msgId = await this.adapter.send({
-        chatId: this.target.chatId,
-        threadId: this.target.threadId,
-        text,
-        parseMode: 'html',
-        replyMarkup: markup,
-      });
+      this.msgId = await sendOnce();
+      return;
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`[perm-send] target=${this.target.channelType}:${this.target.chatId} reason=${reason}\n`);
+      process.stderr.write(`[perm-send] retry-after target=${this.target.channelType}:${this.target.chatId} reason=${reason}\n`);
+    }
+
+    await new Promise((r) => setTimeout(r, 1000));
+
+    try {
+      this.msgId = await sendOnce();
+      return;
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[perm-send] fatal-fallback target=${this.target.channelType}:${this.target.chatId} reason=${reason}\n`);
+    }
+
+    // Final fallback: plaintext hint (only meaningful for generic kind).
+    if (this.opts.kind === 'generic') {
+      try {
+        await this.adapter.send({
+          chatId: this.target.chatId,
+          threadId: this.target.threadId,
+          text: `⚠️ Permission needed for ${this.opts.toolName}; daemon couldn't send card. Reply 'allow' or 'deny'.`,
+        });
+        this.fallbackPending = true;
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`[perm-send] fallback-text-failed target=${this.target.channelType}:${this.target.chatId} reason=${reason}\n`);
+      }
     }
   }
 

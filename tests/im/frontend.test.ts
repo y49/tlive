@@ -488,4 +488,79 @@ describe('SessionFrontend — TL_NEW_UX path', () => {
     const entry = (frontend as any).sessions.get(fakeSession.id);
     expect(entry?.activePermCards?.has('rq3')).toBe(false);
   });
+
+  // ---------------------------------------------------------------------------
+  // §7.5: plaintext keyword fallback for failed permission card send
+  // ---------------------------------------------------------------------------
+
+  it('plaintext "allow" resolves a fallback-pending generic permission card', async () => {
+    const { adapter, permissionBroker, fakeSession } = await bootstrapFrontend();
+    let resolved: any = null;
+    (permissionBroker as any).resolve = vi.fn((sid: string, rid: string, decision: any) => {
+      resolved = { sid, rid, decision };
+    });
+    fakeSession.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: '', at: 0 });
+    await flushAsync();
+
+    // Make the next two sends throw so the card falls back to plaintext hint.
+    const realSend = adapter.send.bind(adapter);
+    let sendCalls = 0;
+    adapter.send = async (msg: any) => {
+      sendCalls++;
+      // First two targeted card sends (after HUD) fail; plaintext hint succeeds.
+      if (sendCalls <= 2) throw new Error(`flake ${sendCalls}`);
+      return await realSend(msg);
+    };
+
+    permissionBroker.push({
+      kind: 'pending', sessionId: fakeSession.id,
+      request: { id: 'rqf', category: 'exec', toolName: 'Bash', toolInput: {} } as any,
+    });
+    // Advance past the 1s retry delay.
+    await vi.advanceTimersByTimeAsync(1500);
+    await flushAsync();
+
+    // At this point the card is in fallback state. Simulate user typing "allow".
+    adapter.inboundListeners.forEach(l => l({
+      channelType: 'telegram', chatId: '100',
+      messageId: 'm-allow', userId: 'u1', kind: 'message', text: 'allow', at: 0,
+    } as any));
+    await flushAsync();
+
+    expect(resolved).toEqual(expect.objectContaining({ rid: 'rqf', decision: 'allow' }));
+  });
+
+  it('random plaintext on a fallback-pending card is no-op', async () => {
+    const { adapter, permissionBroker, fakeSession } = await bootstrapFrontend();
+    let resolved: any = null;
+    (permissionBroker as any).resolve = vi.fn((sid: string, rid: string, decision: any) => {
+      resolved = { sid, rid, decision };
+    });
+    fakeSession.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: '', at: 0 });
+    await flushAsync();
+
+    const realSend = adapter.send.bind(adapter);
+    let sendCalls = 0;
+    adapter.send = async (msg: any) => {
+      sendCalls++;
+      if (sendCalls <= 2) throw new Error(`flake ${sendCalls}`);
+      return await realSend(msg);
+    };
+
+    permissionBroker.push({
+      kind: 'pending', sessionId: fakeSession.id,
+      request: { id: 'rqg', category: 'exec', toolName: 'Bash', toolInput: {} } as any,
+    });
+    await vi.advanceTimersByTimeAsync(1500);
+    await flushAsync();
+
+    // Random text — should NOT resolve the card.
+    adapter.inboundListeners.forEach(l => l({
+      channelType: 'telegram', chatId: '100',
+      messageId: 'm-noop', userId: 'u1', kind: 'message', text: 'hello there', at: 0,
+    } as any));
+    await flushAsync();
+
+    expect(resolved).toBeNull();
+  });
 });

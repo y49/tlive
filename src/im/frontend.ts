@@ -81,6 +81,8 @@ interface SessionEntry {
   pendingCustomInputCards?: Map<string, PermissionCard>;
   /** Active generic-permission cards keyed by requestId. */
   activePermCards?: Map<string, PermissionCard>;
+  /** Generic permission cards waiting for plaintext fallback resolution (per chatId). */
+  pendingPermPlaintextCards?: Map<string, PermissionCard>;
 }
 
 export interface SessionFrontendOptions {
@@ -318,6 +320,7 @@ export class SessionFrontend {
     if (entry.activeAskCards) {
       for (const reqId of entry.activeAskCards.keys()) this.cardsByReqId.delete(reqId);
     }
+    if (entry.pendingPermPlaintextCards) entry.pendingPermPlaintextCards.clear();
   }
 
   // ---- Event dispatch -----------------------------------------------------
@@ -520,6 +523,10 @@ export class SessionFrontend {
         await card.send();
         entry.activePermCards.set(req.id, card);
         this.cardsByReqId.set(req.id, card);
+        if (card.isPermFallbackPending()) {
+          if (!entry.pendingPermPlaintextCards) entry.pendingPermPlaintextCards = new Map<string, PermissionCard>();
+          entry.pendingPermPlaintextCards.set(c.target.chatId, card);
+        }
       }
       return;
     }
@@ -527,6 +534,11 @@ export class SessionFrontend {
     if (ev.kind === 'resolved') {
       entry.activePermCards.delete(ev.requestId);
       this.cardsByReqId.delete(ev.requestId);
+      if (entry.pendingPermPlaintextCards) {
+        for (const [chatId, c] of [...entry.pendingPermPlaintextCards.entries()]) {
+          if (c.requestId === ev.requestId) entry.pendingPermPlaintextCards.delete(chatId);
+        }
+      }
       return;
     }
   }
@@ -586,6 +598,19 @@ export class SessionFrontend {
   }
 
   private async routePlaintext(chatId: string, text: string): Promise<void> {
+    const trimmed = text.trim().toLowerCase();
+    // Try generic permission keyword fallback first.
+    for (const entry of this.sessions.values()) {
+      const card = entry.pendingPermPlaintextCards?.get(chatId);
+      if (!card || !card.isPermFallbackPending()) continue;
+      const verb = parsePermissionKeyword(trimmed);
+      if (verb) {
+        await card.resolveFromKeyword(verb);
+        entry.pendingPermPlaintextCards?.delete(chatId);
+        return;
+      }
+    }
+    // Existing custom-input handling.
     for (const entry of this.sessions.values()) {
       const card = entry.pendingCustomInputCards?.get(chatId);
       if (card && card.expectsPlaintextRelay()) {
@@ -605,5 +630,15 @@ export class SessionFrontend {
       for (const c of entry.channels) { await c.elicitation.onResolved(ev.requestId, ev.result.action); }
     }
   }
+}
+
+function parsePermissionKeyword(s: string): 'allow' | 'deny' | 'always' | null {
+  const allowSet = new Set(['allow', 'yes', 'y', '同意', '允许', '好', 'ok']);
+  const denySet = new Set(['deny', 'no', 'n', '拒绝', '不', 'cancel']);
+  const alwaysSet = new Set(['always', 'always allow', '始终', '始终允许']);
+  if (allowSet.has(s)) return 'allow';
+  if (denySet.has(s)) return 'deny';
+  if (alwaysSet.has(s)) return 'always';
+  return null;
 }
 
