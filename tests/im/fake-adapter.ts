@@ -10,7 +10,7 @@ import type {
 import type { ChannelType } from '../../src/workspace/bindings.js';
 
 export interface FakeCall {
-  kind: 'send' | 'edit' | 'delete' | 'pin' | 'setReaction' | 'sendAttachment';
+  kind: 'send' | 'edit' | 'delete' | 'pin' | 'setReaction' | 'sendAttachment' | 'sendCard' | 'updateCard';
   at: number;
   args: Record<string, unknown>;
   returnedId?: string;
@@ -76,6 +76,25 @@ export class FakeAdapter implements PlatformAdapter {
     });
     return id;
   }
+
+  sendCard = async (opts: { chatId: string; threadId?: string; card: object }): Promise<string> => {
+    const id = this.nextId();
+    this.calls.push({
+      kind: 'sendCard',
+      at: Date.now(),
+      args: { ...opts },
+      returnedId: id,
+    });
+    return id;
+  };
+
+  updateCard = async (messageId: string, chatId: string, card: object): Promise<void> => {
+    this.calls.push({
+      kind: 'updateCard',
+      at: Date.now(),
+      args: { messageId, chatId, card },
+    });
+  };
 
   async downloadAttachment(_fileRef: string): Promise<Buffer> {
     return Buffer.from('fake');
