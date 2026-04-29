@@ -99,5 +99,7 @@ describe('TurnUI', () => {
     expect(calls).toBe(2);
     await ui.ingestEvent({ kind: 'tool_use_start', turnId: 't1', toolUseId: 'u', toolName: 'Bash', input: {} });
     await vi.advanceTimersByTimeAsync(300);
+    expect(adapter.calls.some(c => c.kind === 'edit' && c.args.chatId === 'good')).toBe(true);
+    expect(adapter.calls.some(c => c.kind === 'edit' && c.args.chatId === 'bad')).toBe(false);
   });
 });

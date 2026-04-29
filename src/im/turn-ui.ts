@@ -91,7 +91,12 @@ export class TurnUI {
       const panel = this.hudPanels.get(key);
       const msgId = this.hudMsgIds.get(key);
       if (!panel || !msgId) continue;
-      await panel.update(msgId, this.state);
+      try {
+        await panel.update(msgId, this.state);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`[turn-ui] update failed target=${key} reason=${reason}\n`);
+      }
     }
   }
 
@@ -107,7 +112,12 @@ export class TurnUI {
       const panel = this.hudPanels.get(key);
       const msgId = this.hudMsgIds.get(key);
       if (!panel || !msgId) continue;
-      await panel.freeze(msgId, this.state);
+      try {
+        await panel.freeze(msgId, this.state);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`[turn-ui] freeze failed target=${key} reason=${reason}\n`);
+      }
     }
     this.destroyTimer = setTimeout(() => { this.destroyed = true; }, DESTROY_GRACE_MS);
   }

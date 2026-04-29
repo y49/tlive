@@ -40,6 +40,11 @@ import { PermissionCardRenderer } from './render/permission-card.js';
 import { ElicitationFormRenderer } from './render/elicitation-form.js';
 import { AttachmentPreviewRenderer } from './render/attachment-preview.js';
 import { QueueHintRenderer } from './render/queue-hint.js';
+import { TurnUI, type HudPanelFactory } from './turn-ui.js';
+import { TelegramHudPanel } from './hud/telegram-panel.js';
+import { FeishuHudPanel } from './hud/feishu-panel.js';
+import { initialHudState, type HudState } from './hud/state.js';
+import { targetKey as renderTargetKey } from './render-target.js';
 
 /**
  * A renderer set lives per (session, binding). All renderers in a set share
@@ -67,6 +72,10 @@ interface SessionEntry {
   workspaceId: string;
   unsubscribeEvent: () => void;
   channels: ChannelRenderers[];
+  /** TL_NEW_UX path: per-turn HUD ownership. Replaced on each turn_start. */
+  activeTurnUI?: TurnUI;
+  /** TL_NEW_UX path: per-turn counter for HUD header display. */
+  turnCounter?: number;
 }
 
 export interface SessionFrontendOptions {
@@ -321,6 +330,7 @@ export class SessionFrontend {
     if (!entry) return;
     this.sessions.delete(sessionId);
     try { entry.unsubscribeEvent(); } catch { /* isolate */ }
+    try { entry.activeTurnUI?.destroy(); } catch { /* isolate */ }
     // Teardown each channel's renderers (timers, pinned messages, etc.).
     for (const c of entry.channels) {
       try { await c.todo.teardown(); } catch { /* isolate */ }
@@ -328,6 +338,67 @@ export class SessionFrontend {
       try { await c.activity.teardown(); } catch { /* isolate */ }
       try { await c.agent.teardown(); } catch { /* isolate */ }
     }
+  }
+
+  // ---- TL_NEW_UX dispatch path --------------------------------------------
+
+  private async dispatchNewUx(sessionId: string, ev: NotificationEvent, entry: SessionEntry): Promise<void> {
+    const primaryTargets = entry.channels
+      .filter(c => c.target.role === 'primary')
+      .map(c => c.target);
+    if (primaryTargets.length === 0) return;
+
+    const adaptersByKey = new Map<string, PlatformAdapter>();
+    for (const c of entry.channels) {
+      if (c.target.role !== 'primary') continue;
+      adaptersByKey.set(renderTargetKey(c.target), c.adapter);
+    }
+
+    const factory: HudPanelFactory = (target) => {
+      const adapter = adaptersByKey.get(renderTargetKey(target));
+      if (!adapter) throw new Error(`dispatchNewUx: no adapter for target ${renderTargetKey(target)}`);
+      if (target.channelType === 'feishu') return new FeishuHudPanel(adapter, target);
+      // TODO: T2 only built telegram + feishu panels. Discord primaries fall here as telegram default.
+      return new TelegramHudPanel(adapter, target);
+    };
+
+    if (ev.kind === 'turn_start') {
+      entry.activeTurnUI?.destroy();
+      entry.turnCounter = (entry.turnCounter ?? 0) + 1;
+      const initState = this.buildInitialHudState(sessionId, entry);
+      entry.activeTurnUI = new TurnUI(initState, primaryTargets, factory);
+      await entry.activeTurnUI.start();
+    }
+
+    if (entry.activeTurnUI) {
+      await entry.activeTurnUI.ingestEvent(ev);
+    }
+  }
+
+  private buildInitialHudState(sessionId: string, entry: SessionEntry): HudState {
+    const session = this.opts.sessionManager.get(sessionId);
+    const sessionWithModel = session as unknown as {
+      model?: string;
+      modelMaxContext?: number;
+      provider?: string;
+      workspace?: { gitBranch?: string; name?: string };
+      costUsd?: number;
+    };
+    const provider = sessionWithModel?.provider === 'codex' ? 'codex' : 'claude';
+    const workspaceName = sessionWithModel?.workspace?.name
+      ?? entry.channels[0]?.session.workspaceName
+      ?? entry.workspaceId;
+    return initialHudState({
+      sessionShortId: sessionId.slice(0, 7),
+      workspaceName,
+      gitBranch: sessionWithModel?.workspace?.gitBranch,
+      provider,
+      model: sessionWithModel?.model ?? 'unknown',
+      modelMaxContext: sessionWithModel?.modelMaxContext ?? 200_000,
+      turnNumber: entry.turnCounter ?? 1,
+      startedAtMs: Date.now(),
+      costSession: sessionWithModel?.costUsd ?? 0,
+    });
   }
 
   // ---- Event dispatch -----------------------------------------------------
@@ -338,6 +409,11 @@ export class SessionFrontend {
     const channels = entry.channels;
     const state = channels[0]?.session;
     if (!state) return;
+
+    if (process.env.TL_NEW_UX === '1') {
+      await this.dispatchNewUx(sessionId, ev, entry);
+      return;
+    }
 
     // Trace dispatch for non-noop kinds so daemon.log shows the path.
     if (!isFrontendNoopKind(ev.kind)) {

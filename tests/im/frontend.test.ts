@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { SessionFrontend } from '../../src/im/frontend.js';
 import type { SessionManager, ManagerEventListener } from '../../src/session/manager.js';
 import type { PermissionBroker, BrokerListener } from '../../src/permission/broker.js';
@@ -150,5 +150,100 @@ describe('SessionFrontend', () => {
     } as Parameters<typeof eb.push>[0]);
     await new Promise((r) => setTimeout(r, 10));
     expect(adapter.byKind('send').length).toBeGreaterThan(countBefore);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TL_NEW_UX path tests
+// ---------------------------------------------------------------------------
+
+function mkFakeSessionManagerWithGet(sessions: Map<string, FakeSession>): SessionManager & { push: ManagerEventListener } {
+  const listeners = new Set<ManagerEventListener>();
+  return {
+    subscribe(l: ManagerEventListener) { listeners.add(l); return () => listeners.delete(l); },
+    push(ev: Parameters<ManagerEventListener>[0]) { for (const l of listeners) l(ev); },
+    get(id: string) { return sessions.get(id); },
+  } as unknown as SessionManager & { push: ManagerEventListener };
+}
+
+async function bootstrapFrontend(): Promise<{
+  frontend: SessionFrontend;
+  adapter: FakeAdapter;
+  fakeSession: FakeSession;
+  sessionManager: ReturnType<typeof mkFakeSessionManagerWithGet>;
+}> {
+  const adapter = new FakeAdapter('telegram');
+  const fakeSession = new FakeSession({ id: 'ux-sess-1', workspaceId: 'ux-ws-1' });
+  const sessions = new Map([[fakeSession.id, fakeSession]]);
+  const sessionManager = mkFakeSessionManagerWithGet(sessions);
+  const permissionBroker = mkFakeBroker();
+  const askBroker = mkFakeAskBroker();
+  const elicitationBroker = mkFakeElicBroker();
+  const workspaceManager = mkFakeWm();
+  const frontend = new SessionFrontend({
+    sessionManager,
+    workspaceManager,
+    permissionBroker,
+    askBroker,
+    elicitationBroker,
+    adapters: { telegram: adapter },
+  });
+  frontend.start();
+  // Attach session via the SessionManager 'created' event
+  sessionManager.push({ kind: 'created', session: fakeSession } as Parameters<typeof sessionManager.push>[0]);
+  await flushAsync();
+  return { frontend, adapter, fakeSession, sessionManager };
+}
+
+async function flushAsync(): Promise<void> {
+  await new Promise(r => setTimeout(r, 0));
+  await new Promise(r => setTimeout(r, 0));
+  // Allow TurnUI's 250ms debounce timer to fire
+  await new Promise(r => setTimeout(r, 300));
+}
+
+describe('SessionFrontend — TL_NEW_UX path', () => {
+  const orig = process.env.TL_NEW_UX;
+  beforeEach(() => { process.env.TL_NEW_UX = '1'; });
+  afterEach(() => {
+    if (orig === undefined) delete process.env.TL_NEW_UX;
+    else process.env.TL_NEW_UX = orig;
+  });
+
+  it('on turn_start creates a TurnUI and sends a HUD via adapter', async () => {
+    const { adapter, fakeSession } = await bootstrapFrontend();
+    const sendsBefore = adapter.calls.filter(c => c.kind === 'send').length;
+    fakeSession.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: 'hi', at: 0 });
+    await flushAsync();
+    // TurnUI.start() sends the HUD — filter sends that happened after bootstrap
+    const newSends = adapter.calls.filter(c => c.kind === 'send').slice(sendsBefore);
+    expect(newSends.length).toBeGreaterThanOrEqual(1);
+    // HUD text is formatted as a <pre><code> block by formatTelegramHud
+    expect((newSends[0].args.text as string)).toMatch(/^<pre><code>/);
+  });
+
+  it('a second turn_start destroys the previous TurnUI before creating a new one', async () => {
+    const { adapter, fakeSession } = await bootstrapFrontend();
+    const sendsBefore = adapter.calls.filter(c => c.kind === 'send').length;
+    fakeSession.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: 'a', at: 0 });
+    await flushAsync();
+    fakeSession.emit({ kind: 'turn_start', turnId: 't2', userInputPreview: 'b', at: 100 });
+    await flushAsync();
+    // Each turn_start sends one new HUD message → exactly 2 HUD sends after bootstrap
+    expect(adapter.calls.filter(c => c.kind === 'send').length - sendsBefore).toBe(2);
+  });
+
+  it('session stopped destroys the active TurnUI (no edits on late events)', async () => {
+    const { adapter, fakeSession, sessionManager } = await bootstrapFrontend();
+    fakeSession.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: 'a', at: 0 });
+    await flushAsync();
+    sessionManager.push({ kind: 'stopped', sessionId: fakeSession.id } as Parameters<typeof sessionManager.push>[0]);
+    await flushAsync();
+    // Capture edit count AFTER session stop and all pending timers drained
+    const editCountAfterStop = adapter.calls.filter(c => c.kind === 'edit').length;
+    fakeSession.emit({ kind: 'tool_use_start', turnId: 't1', toolUseId: 'u', toolName: 'Bash', input: {} });
+    await flushAsync();
+    // No additional edits should occur after the session was stopped
+    expect(adapter.calls.filter(c => c.kind === 'edit').length).toBe(editCountAfterStop);
   });
 });
