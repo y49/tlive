@@ -46,6 +46,7 @@ import { FeishuHudPanel } from './hud/feishu-panel.js';
 import { initialHudState, type HudState } from './hud/state.js';
 import { targetKey as renderTargetKey } from './render-target.js';
 import { ReplyRenderer } from './reply.js';
+import { AttachmentPreview } from './attachment.js';
 
 /**
  * A renderer set lives per (session, binding). All renderers in a set share
@@ -409,6 +410,16 @@ export class SessionFrontend {
           await r.onTextComplete(ev.text);
         }
         entry.replyAcc = '';
+      }
+    }
+
+    // Dispatch attachment previews to primary targets only (mirrors get text
+    // echoes but not file previews per spec §I5).
+    if (ev.kind === 'attachment_produced') {
+      for (const c of entry.channels) {
+        if (c.target.role !== 'primary') continue;
+        const ap = new AttachmentPreview(c.adapter, c.target);
+        await ap.send({ name: ev.name, mime: ev.mime, sizeBytes: ev.sizeBytes, path: ev.path });
       }
     }
   }
