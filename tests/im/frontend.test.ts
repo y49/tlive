@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SessionFrontend } from '../../src/im/frontend.js';
 import type { SessionManager, ManagerEventListener } from '../../src/session/manager.js';
 import type { PermissionBroker, BrokerListener } from '../../src/permission/broker.js';
@@ -196,16 +196,20 @@ async function bootstrapFrontend(): Promise<{
 }
 
 async function flushAsync(): Promise<void> {
-  await new Promise(r => setTimeout(r, 0));
-  await new Promise(r => setTimeout(r, 0));
-  // Allow TurnUI's 250ms debounce timer to fire
-  await new Promise(r => setTimeout(r, 300));
+  // Drain microtasks first.
+  await Promise.resolve();
+  // Then advance fake timers past TurnUI's 250ms debounce.
+  await vi.advanceTimersByTimeAsync(300);
 }
 
 describe('SessionFrontend — TL_NEW_UX path', () => {
   const orig = process.env.TL_NEW_UX;
-  beforeEach(() => { process.env.TL_NEW_UX = '1'; });
+  beforeEach(() => {
+    process.env.TL_NEW_UX = '1';
+    vi.useFakeTimers();
+  });
   afterEach(() => {
+    vi.useRealTimers();
     if (orig === undefined) delete process.env.TL_NEW_UX;
     else process.env.TL_NEW_UX = orig;
   });

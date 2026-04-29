@@ -358,7 +358,11 @@ export class SessionFrontend {
       const adapter = adaptersByKey.get(renderTargetKey(target));
       if (!adapter) throw new Error(`dispatchNewUx: no adapter for target ${renderTargetKey(target)}`);
       if (target.channelType === 'feishu') return new FeishuHudPanel(adapter, target);
-      // TODO: T2 only built telegram + feishu panels. Discord primaries fall here as telegram default.
+      if (target.channelType === 'discord') {
+        // TODO: T4 only built telegram + feishu HUD panels. Discord primaries
+        // would mis-render <pre><code> blocks. Fail loudly until a panel exists.
+        throw new Error('TurnUI: discord HUD panel not implemented');
+      }
       return new TelegramHudPanel(adapter, target);
     };
 
@@ -377,27 +381,25 @@ export class SessionFrontend {
 
   private buildInitialHudState(sessionId: string, entry: SessionEntry): HudState {
     const session = this.opts.sessionManager.get(sessionId);
-    const sessionWithModel = session as unknown as {
-      model?: string;
-      modelMaxContext?: number;
-      provider?: string;
-      workspace?: { gitBranch?: string; name?: string };
-      costUsd?: number;
-    };
-    const provider = sessionWithModel?.provider === 'codex' ? 'codex' : 'claude';
-    const workspaceName = sessionWithModel?.workspace?.name
+    const workspace = this.opts.workspaceManager.get(entry.workspaceId);
+    const provider = session?.provider === 'codex' ? 'codex' : 'claude';
+    // TODO(T10): drop `entry.channels[0]?.session.workspaceName` fallback when
+    // legacy ChannelRenderers are removed; rely on workspaceManager.get(...).name only.
+    const workspaceName = workspace?.name
       ?? entry.channels[0]?.session.workspaceName
       ?? entry.workspaceId;
     return initialHudState({
       sessionShortId: sessionId.slice(0, 7),
       workspaceName,
-      gitBranch: sessionWithModel?.workspace?.gitBranch,
+      // gitBranch: not exposed on Workspace (only gitRemote) — deferred to later wiring.
       provider,
-      model: sessionWithModel?.model ?? 'unknown',
-      modelMaxContext: sessionWithModel?.modelMaxContext ?? 200_000,
+      model: workspace?.defaults.model ?? 'unknown',
+      // TODO: hardcoded 200_000 until a model→max-context table lands. The HUD
+      // copes with stale numbers (Context bar just shows wrong percentage).
+      modelMaxContext: 200_000,
       turnNumber: entry.turnCounter ?? 1,
       startedAtMs: Date.now(),
-      costSession: sessionWithModel?.costUsd ?? 0,
+      costSession: session?.cost.totalCost ?? 0,
     });
   }
 
