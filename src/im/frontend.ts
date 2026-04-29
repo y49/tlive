@@ -106,6 +106,8 @@ export class SessionFrontend {
   private readonly sessions = new Map<string, SessionEntry>();
   private readonly unsubscribers: Array<() => void> = [];
   private started = false;
+  /** Flat reqId → card index for O(1) callback routing across all sessions. */
+  private readonly cardsByReqId = new Map<string, PermissionCard>();
   /**
    * Pending inbound messageIds keyed by `chatKey(channelType, chatId)`.
    * Bootstrap calls `markInboundReceived` on every plain-text inbound BEFORE
@@ -310,6 +312,12 @@ export class SessionFrontend {
     this.sessions.delete(sessionId);
     try { entry.unsubscribeEvent(); } catch { /* isolate */ }
     try { entry.activeTurnUI?.destroy(); } catch { /* isolate */ }
+    if (entry.activePermCards) {
+      for (const reqId of entry.activePermCards.keys()) this.cardsByReqId.delete(reqId);
+    }
+    if (entry.activeAskCards) {
+      for (const reqId of entry.activeAskCards.keys()) this.cardsByReqId.delete(reqId);
+    }
   }
 
   // ---- Event dispatch -----------------------------------------------------
@@ -511,12 +519,14 @@ export class SessionFrontend {
         });
         await card.send();
         entry.activePermCards.set(req.id, card);
+        this.cardsByReqId.set(req.id, card);
       }
       return;
     }
 
     if (ev.kind === 'resolved') {
       entry.activePermCards.delete(ev.requestId);
+      this.cardsByReqId.delete(ev.requestId);
       return;
     }
   }
@@ -548,6 +558,7 @@ export class SessionFrontend {
         });
         await card.send();
         entry.activeAskCards.set(req.id, card);
+        this.cardsByReqId.set(req.id, card);
       }
       return;
     }
@@ -555,6 +566,7 @@ export class SessionFrontend {
     // resolved
     if (ev.kind === 'resolved') {
       entry.activeAskCards.delete(ev.requestId);
+      this.cardsByReqId.delete(ev.requestId);
       if (entry.pendingCustomInputCards) {
         for (const [chatId, c] of [...entry.pendingCustomInputCards.entries()]) {
           if (c.requestId === ev.requestId) entry.pendingCustomInputCards.delete(chatId);
@@ -564,30 +576,13 @@ export class SessionFrontend {
   }
 
   private async routeCallback(data: string): Promise<void> {
-    // AskUserQuestion cards: ask:<reqId>:(opt:N|confirm|custom).
-    const askMatch = data.match(/^ask:([^:]+):/);
-    if (askMatch) {
-      const reqId = askMatch[1]!;
-      for (const entry of this.sessions.values()) {
-        const card = entry.activeAskCards?.get(reqId);
-        if (card) {
-          await card.handleCallback(data);
-          return;
-        }
-      }
-    }
-    // Generic permission cards: perm:<reqId>:(allow|deny|always|learn).
-    const permMatch = data.match(/^perm:([^:]+):/);
-    if (permMatch) {
-      const reqId = permMatch[1]!;
-      for (const entry of this.sessions.values()) {
-        const card = entry.activePermCards?.get(reqId);
-        if (card) {
-          await card.handleCallback(data);
-          return;
-        }
-      }
-    }
+    // AskUserQuestion cards: ask:<reqId>:... and generic permission cards: perm:<reqId>:...
+    // O(1) lookup via flat cardsByReqId index (populated by handlePermissionEvent /
+    // handleAskEvent; cleaned up on resolved and detachSession).
+    const m = data.match(/^(?:ask|perm):([^:]+):/);
+    if (!m) return;
+    const card = this.cardsByReqId.get(m[1]!);
+    if (card) await card.handleCallback(data);
   }
 
   private async routePlaintext(chatId: string, text: string): Promise<void> {
