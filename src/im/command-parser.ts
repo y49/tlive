@@ -27,7 +27,7 @@ import type { McpRegistry } from '../mcp/registry.js';
 import type { PolicyStore } from '../permission/policy-store.js';
 import type { SessionPersistence } from '../session/persistence.js';
 import type { AttachmentStore } from '../attachment/store.js';
-import type { Logger } from '../util/logger.js';
+import { createLogger, type Logger } from '../util/logger.js';
 
 export interface CommandContext {
   /** The inbound event that carried the command text. */
@@ -89,7 +89,7 @@ export async function dispatch(
   userRole: Role,
   logger?: Logger,
 ): Promise<void> {
-  const log = logger ?? noopLogger();
+  const log = logger ?? createLogger({ level: 'error', sink: () => undefined });
   const [nameRaw, ...args] = rawText.replace(/^\/+/, '').trim().split(/\s+/);
   const name = (nameRaw ?? '').toLowerCase();
 
@@ -100,18 +100,18 @@ export async function dispatch(
   });
 
   if (!name) {
-    await safeReply(ctx, '空命令。发 /help 看全部。');
+    await safeReply(ctx, '空命令。发 /help 看全部。', log);
     return;
   }
   const def = registry.get(name);
   if (!def) {
     log.info('command unknown', { name });
-    await safeReply(ctx, `未知命令: /${name}。发 /help 看全部。`);
+    await safeReply(ctx, `未知命令: /${name}。发 /help 看全部。`, log);
     return;
   }
   if (!def.role.includes(userRole)) {
     log.info('command denied', { name, userRole });
-    await safeReply(ctx, `无权限使用 /${def.name}`);
+    await safeReply(ctx, `无权限使用 /${def.name}`, log);
     return;
   }
   try {
@@ -120,25 +120,23 @@ export async function dispatch(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error('command failed', { name, reason: msg });
-    await safeReply(ctx, `❌ /${def.name} 失败: ${msg}`);
+    await safeReply(ctx, `❌ /${def.name} 失败: ${msg}`, log);
   }
 }
 
-async function safeReply(ctx: CommandContext, text: string): Promise<void> {
-  try { await ctx.reply(text); }
-  catch {
-    try { await ctx.reply(text); } catch { /* swallow */ }
+async function safeReply(ctx: CommandContext, text: string, log: Logger): Promise<void> {
+  try {
+    await ctx.reply(text);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    log.warn('reply retry', { reason });
+    try {
+      await ctx.reply(text);
+    } catch (err2) {
+      const reason2 = err2 instanceof Error ? err2.message : String(err2);
+      log.error('reply failed', { reason: reason2 });
+    }
   }
-}
-
-function noopLogger(): Logger {
-  const noop = () => { /* */ };
-  const self: Logger = {
-    level: 'info',
-    debug: noop, info: noop, warn: noop, error: noop,
-    child: () => self,
-  };
-  return self;
 }
 
 // ---- Helpers for command implementations ---------------------------------
