@@ -1,18 +1,13 @@
 // src/im/commands/stop.ts
 //
-// `/stop` — interrupt the current turn (does NOT stop the session).
+// /stop — interrupt the current in-flight turn (Ctrl+C / ESC equivalent).
+// Stub — full implementation in Task 8.
 
 import type { CommandDef } from '../command-parser.js';
-import { activeLocalSession } from './_shared.js';
 
 export const stopCmd: CommandDef = {
   name: 'stop',
   role: ['admin', 'operator'],
-  description: 'Interrupt the current turn',
-  async run(ctx) {
-    const session = await activeLocalSession(ctx);
-    if (!session) return;
-    await session.interrupt();
-    await ctx.reply(`Interrupted ${session.shortAlias}.`);
-  },
+  description: '中断当前 turn (Ctrl+C 等价)',
+  async run(ctx) { await ctx.reply('TODO: stop'); },
 };
