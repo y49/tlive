@@ -22,7 +22,7 @@ const target = { channelType: 'telegram' as const, chatId: 'c1', role: 'primary'
 describe('TurnComposite — integration', () => {
   beforeEach(() => { vi.useFakeTimers(); });
 
-  it('start → 一次 send 占位 message', async () => {
+  it('start → 两次 send 占位 message (v3.2 dual: reply head + detail card)', async () => {
     const { adapter, sent } = makeFakeAdapter();
     const eq = new EditQueue({ refillMs: 2000, capacity: 5 });
     const state = initialHudState({
@@ -33,7 +33,10 @@ describe('TurnComposite — integration', () => {
     const tc = new TurnComposite(adapter as any, target, eq, state);
     await tc.start();
     await vi.runAllTimersAsync();
-    expect(sent.length).toBe(1);
+    // v3.2: ReplyDocument.start sends 2 messages on telegram — reply head (m1)
+    // and detail card (m2, replyTo m1). Detail contains <pre><code>.
+    expect(sent.length).toBe(2);
+    expect(sent[1].replyToMessageId).toBe('m1');
   });
 
   it('ingestEvent assistant_text_delta 累加 body 并 schedule edit', async () => {
@@ -51,8 +54,10 @@ describe('TurnComposite — integration', () => {
     tc.ingestEvent({ kind: 'assistant_text_delta', turnId: 't1', text: 'Hello ', partial: true });
     tc.ingestEvent({ kind: 'assistant_text_delta', turnId: 't1', text: 'world', partial: true });
     await vi.advanceTimersByTimeAsync(300);
-    const lastEdit = edited[edited.length - 1];
-    expect(lastEdit.text).toContain('Hello world');
+    // v3.2: body lives in m1 (reply head); m2 is detail card with no body.
+    const m1Edit = edited.find((e) => e.msgId === 'm1');
+    expect(m1Edit).toBeDefined();
+    expect(m1Edit!.text).toContain('Hello world');
   });
 
   it('turn_end 调 freeze 并 stop scheduler', async () => {
@@ -71,7 +76,9 @@ describe('TurnComposite — integration', () => {
       costUsd: 0.04, tokensIn: 1000, tokensOut: 500,
     });
     await vi.runAllTimersAsync();
-    const last = edited[edited.length - 1];
-    expect(last.text).toContain('done');
+    // v3.2: 'done' banner lives in m1 (reply head); m2 is detail card.
+    const m1Last = edited.filter((e) => e.msgId === 'm1').pop();
+    expect(m1Last).toBeDefined();
+    expect(m1Last!.text).toContain('done');
   });
 });

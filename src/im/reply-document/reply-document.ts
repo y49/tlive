@@ -1,21 +1,36 @@
 // src/im/reply-document/reply-document.ts
 //
-// ReplyDocument — owns the per-turn primary reply message (banner+body+footer
-// for Telegram, lark card 2.0 for Feishu). Body comes from assistant text
-// stream, state from HudState reducer. All edits go through EditQueue with
-// per-event priority. start() sends placeholder; setBody/setState mark dirty;
-// scheduler.schedule fires render→queue.enqueue; freeze/markError end the turn.
+// v3.2 (2026-04-30): Telegram path becomes 2-message structure
+//   m1 = reply head (banner + progress + body[0])
+//   m2 = detail card (<pre><code>) replyTo m1
+//   bodyChunkMsgIds[i] = overflow chunks (replyTo m1) when body >4096 chars
+//
+// On state-only changes (tool tally, elapsed tick), m1 + m2 + any
+// overflow chunks all get re-edited (live elapsed renders into all of
+// them via Date.now()).
+//
+// Feishu path stays single-card via sendCard/updateCard — lark supports
+// large multi-element bodies natively, no chunking required.
 
 import type { PlatformAdapter } from '../../platform/types.js';
 import type { RenderTarget } from '../render-target.js';
 import type { HudState } from '../hud/state.js';
 import { EditQueue, CRITICAL, type Priority } from './edit-queue.js';
 import { ReplyScheduler } from './scheduler.js';
-import { renderTelegram, type TelegramRender } from './format-telegram.js';
-import { renderFeishu, type FeishuRender } from './format-feishu.js';
+import { renderTelegramReply, renderTelegramDetail } from './format-telegram.js';
+import { renderFeishu } from './format-feishu.js';
+import { chunkHtmlForTelegram } from './markdown.js';
+
+const TELEGRAM_MAX = 4096;
 
 export class ReplyDocument {
-  private msgId: string | null = null;
+  // Telegram-only:
+  private bodyMsgId: string | null = null;
+  private bodyChunkMsgIds: string[] = [];
+  private detailMsgId: string | null = null;
+  // Feishu-only:
+  private cardMsgId: string | null = null;
+
   private body = '';
   public readonly scheduler: ReplyScheduler;
 
@@ -30,17 +45,27 @@ export class ReplyDocument {
 
   async start(): Promise<void> {
     if (this.target.channelType === 'telegram') {
-      const r = renderTelegram(this.state, this.body);
-      this.msgId = await this.adapter.send({
+      const reply = renderTelegramReply(this.state, this.body, Date.now());
+      this.bodyMsgId = await this.adapter.send({
         chatId: this.target.chatId,
         threadId: this.target.threadId,
-        text: r.html,
+        text: reply.html,
         parseMode: 'html',
       });
+      const detail = renderTelegramDetail(this.state);
+      this.detailMsgId = await this.adapter.send({
+        chatId: this.target.chatId,
+        threadId: this.target.threadId,
+        text: detail.html,
+        parseMode: 'html',
+        replyToMessageId: this.bodyMsgId,
+      });
     } else {
-      const r = renderFeishu(this.state, this.body);
-      if (typeof this.adapter.sendCard !== 'function') throw new Error('feishu adapter requires sendCard');
-      this.msgId = await this.adapter.sendCard({
+      if (typeof this.adapter.sendCard !== 'function') {
+        throw new Error('feishu adapter requires sendCard');
+      }
+      const r = renderFeishu(this.state, this.body, Date.now());
+      this.cardMsgId = await this.adapter.sendCard({
         chatId: this.target.chatId,
         threadId: this.target.threadId,
         card: r.card,
@@ -68,19 +93,75 @@ export class ReplyDocument {
   }
 
   private async flushOnce(prio: Priority): Promise<void> {
-    if (!this.msgId) return;
-    const msgId = this.msgId;
     if (this.target.channelType === 'telegram') {
-      const r: TelegramRender = renderTelegram(this.state, this.body);
-      this.editQueue.enqueue(this.target.chatId, msgId, async () => {
-        await this.adapter.edit(msgId, this.target.chatId, r.html, undefined, 'html');
-      }, prio);
+      await this.flushTelegram(prio);
     } else {
-      const r: FeishuRender = renderFeishu(this.state, this.body);
-      this.editQueue.enqueue(this.target.chatId, msgId, async () => {
-        if (typeof this.adapter.updateCard !== 'function') return;
-        await this.adapter.updateCard(msgId, this.target.chatId, r.card);
+      await this.flushFeishu(prio);
+    }
+  }
+
+  private async flushTelegram(prio: Priority): Promise<void> {
+    if (!this.bodyMsgId) return;
+    const bodyMsgId = this.bodyMsgId;
+    const detailMsgId = this.detailMsgId;
+    const chatId = this.target.chatId;
+    const adapter = this.adapter;
+
+    // Render reply (banner + progress + body) — chunk if >4096
+    const reply = renderTelegramReply(this.state, this.body, Date.now());
+    const chunks = chunkHtmlForTelegram(reply.html, TELEGRAM_MAX);
+
+    // Edit head chunk (always m1)
+    const headHtml = chunks[0];
+    this.editQueue.enqueue(chatId, bodyMsgId, async () => {
+      await adapter.edit(bodyMsgId, chatId, headHtml, undefined, 'html');
+    }, prio);
+
+    // Overflow chunks: append new ones via send, edit existing via EditQueue
+    for (let i = 1; i < chunks.length; i++) {
+      const chunkHtml = chunks[i];
+      const existing = this.bodyChunkMsgIds[i - 1];
+      if (existing) {
+        this.editQueue.enqueue(chatId, existing, async () => {
+          await adapter.edit(existing, chatId, chunkHtml, undefined, 'html');
+        }, prio);
+      } else {
+        // New overflow chunk — synchronous send to capture msgId
+        try {
+          const newId = await adapter.send({
+            chatId,
+            threadId: this.target.threadId,
+            text: chunkHtml,
+            parseMode: 'html',
+            replyToMessageId: bodyMsgId,
+          });
+          this.bodyChunkMsgIds.push(newId);
+        } catch (err) {
+          process.stderr.write(`[reply-doc] overflow send failed: ${(err as Error).message}\n`);
+          break;
+        }
+      }
+    }
+
+    // Edit detail card (always edited on every flush — elapsed/cost may have ticked)
+    if (detailMsgId) {
+      const detail = renderTelegramDetail(this.state);
+      const detailHtml = detail.html;
+      this.editQueue.enqueue(chatId, detailMsgId, async () => {
+        await adapter.edit(detailMsgId, chatId, detailHtml, undefined, 'html');
       }, prio);
     }
+  }
+
+  private async flushFeishu(prio: Priority): Promise<void> {
+    if (!this.cardMsgId) return;
+    const cardMsgId = this.cardMsgId;
+    const chatId = this.target.chatId;
+    const adapter = this.adapter;
+    const r = renderFeishu(this.state, this.body, Date.now());
+    this.editQueue.enqueue(chatId, cardMsgId, async () => {
+      if (typeof adapter.updateCard !== 'function') return;
+      await adapter.updateCard(cardMsgId, chatId, r.card);
+    }, prio);
   }
 }

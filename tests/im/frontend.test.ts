@@ -177,7 +177,7 @@ describe('SessionFrontend — TL_NEW_UX path', () => {
     // filter sends that happened after bootstrap.
     const newSends = adapter.calls.filter(c => c.kind === 'send').slice(sendsBefore);
     expect(newSends.length).toBeGreaterThanOrEqual(1);
-    // ReplyDocument's renderTelegram emits a banner like "<b>◐ thinking</b>".
+    // ReplyDocument's renderTelegramReply emits a banner like "<b>◐ thinking</b>".
     expect((newSends[0].args.text as string)).toMatch(/^<b>/);
   });
 
@@ -190,13 +190,13 @@ describe('SessionFrontend — TL_NEW_UX path', () => {
     await flushAsync();
     fakeSession.emit({ kind: 'turn_start', turnId: 't2', userInputPreview: 'b', at: 100 });
     await flushAsync();
-    // Each turn_start sends exactly one new ReplyDocument placeholder. Two
-    // turn_starts after bootstrap should yield two new sends — proves the
-    // previous TurnComposite was destroyed and a fresh one started.
+    // v3.2: Each turn_start sends 2 ReplyDocument messages (reply head + detail
+    // card). Two turn_starts = 4 new sends — proves the previous TurnComposite
+    // was destroyed and a fresh one started.
     const hudSendsAfter = adapter.calls.filter(
       c => c.kind === 'send' && typeof c.args.text === 'string',
     ).length;
-    expect(hudSendsAfter - hudSendsBefore).toBe(2);
+    expect(hudSendsAfter - hudSendsBefore).toBe(4);
   });
 
   it('session stopped destroys the active TurnComposite (no edits on late events)', async () => {

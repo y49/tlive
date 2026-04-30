@@ -113,12 +113,3 @@ export function renderTelegramDetail(state: HudState): TelegramRender {
   }
   return { html: `<pre><code>${lines.join('\n')}</code></pre>` };
 }
-
-// Backward-compat shim — REMOVE in T4 when ReplyDocument adopts the dual API.
-// Wraps the new APIs to keep current callers (ReplyDocument, possibly
-// integration tests) compiling until T4 properly upgrades them.
-export function renderTelegram(state: HudState, body: string): TelegramRender {
-  const reply = renderTelegramReply(state, body, Date.now());
-  const detail = renderTelegramDetail(state);
-  return { html: `${reply.html}\n\n${detail.html}` };
-}
