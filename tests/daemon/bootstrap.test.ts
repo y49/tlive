@@ -48,7 +48,7 @@ describe('bootstrapDaemon wiring', () => {
       expect(daemon.federation).toBeDefined();
       expect(daemon.frontend).toBeDefined();
       expect(daemon.callbackRouter).toBeDefined();
-      expect(daemon.autoResumeReport.attempted).toBe(0);
+      expect(daemon.pruneReport.scanned).toBe(0);
     } finally {
       await daemon.shutdown();
     }

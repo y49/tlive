@@ -1,16 +1,17 @@
 // tests/daemon/auto-resume.test.ts
 //
-// Verifies spec §13.2:
-//   - only workspaces with activeSessionId are considered
-//   - running + fresh → resumeLocal is called
-//   - running but stale (> cutoff) → skipped + cleared
-//   - stopped meta → skipped
-//   - resume failure → marked stopped + cleared
+// Verifies spec §5.4 — daemon startup is prune-only. No subprocesses are
+// spawned for recent snapshots; resume happens lazily on first inbound.
+//
+// Cases:
+//   - snapshot older than cutoff → deleted
+//   - snapshot within cutoff → kept
+//   - corrupt timestamp → pruned (treated as ancient)
+//   - deleteMeta error → recorded as pruneErrors but doesn't crash
+//   - empty store → no-op
 
 import { describe, it, expect, vi } from 'vitest';
-import { autoResumeOnStartup } from '../../src/daemon/auto-resume.js';
-import type { SessionManager } from '../../src/session/manager.js';
-import type { WorkspaceManager } from '../../src/workspace/manager.js';
+import { pruneStaleSnapshotsOnStartup } from '../../src/daemon/auto-resume.js';
 import type { SessionPersistence, SessionMeta } from '../../src/session/persistence.js';
 
 function mkMeta(overrides: Partial<SessionMeta>): SessionMeta {
@@ -30,85 +31,157 @@ function mkMeta(overrides: Partial<SessionMeta>): SessionMeta {
   };
 }
 
-describe('autoResumeOnStartup', () => {
-  it('resumes a fresh running activeSessionId', async () => {
-    const resumed: string[] = [];
-    const sessions = {
-      async resumeLocal(id: string) { resumed.push(id); return { id }; },
-    } as unknown as SessionManager;
-
-    const cleared: string[] = [];
-    const workspaces = {
-      list: () => [{ id: 'ws1', activeSessionId: 'sid-a' }],
-      clearActiveSession(id: string) { cleared.push(id); },
-    } as unknown as WorkspaceManager;
-
-    const persistence = {
-      async loadAllMeta() { return [mkMeta({ sdkSessionId: 'sid-a' })]; },
-      async writeMeta() { /* noop */ },
-    } as unknown as SessionPersistence;
-
-    const report = await autoResumeOnStartup({ sessions, workspaces, persistence });
-    expect(report.resumed).toEqual(['sid-a']);
-    expect(report.failed).toEqual([]);
-    expect(cleared).toEqual([]);
-  });
-
-  it('skips a stale (>24h) running session and clears the binding', async () => {
-    const resumed: string[] = [];
-    const sessions = {
-      async resumeLocal(id: string) { resumed.push(id); return { id }; },
-    } as unknown as SessionManager;
-
-    const cleared: string[] = [];
-    const workspaces = {
-      list: () => [{ id: 'ws1', activeSessionId: 'sid-stale' }],
-      clearActiveSession(id: string) { cleared.push(id); },
-    } as unknown as WorkspaceManager;
-
+describe('pruneStaleSnapshotsOnStartup', () => {
+  it('deletes snapshots older than cutoffHours', async () => {
     const now = Date.now();
-    const lastActivityAt = new Date(now - 48 * 60 * 60 * 1000).toISOString();
+    const stale = mkMeta({
+      sdkSessionId: 'sid-stale',
+      lastActivityAt: new Date(now - 200 * 60 * 60 * 1000).toISOString(), // 200h
+    });
+    const deleted: string[] = [];
     const persistence = {
-      async loadAllMeta() { return [mkMeta({ sdkSessionId: 'sid-stale', lastActivityAt })]; },
-      async writeMeta() { /* noop */ },
+      async loadAllMeta() { return [stale]; },
+      async deleteMeta(id: string) { deleted.push(id); },
     } as unknown as SessionPersistence;
 
-    const report = await autoResumeOnStartup({ sessions, workspaces, persistence, cutoffHours: 24, now: () => now });
-    expect(report.resumed).toEqual([]);
-    expect(report.skippedStale).toContain('sid-stale');
-    expect(resumed).toEqual([]);
-    expect(cleared).toEqual(['ws1']);
+    const report = await pruneStaleSnapshotsOnStartup({
+      persistence,
+      cutoffHours: 168, // 1 week
+      now: () => now,
+    });
+
+    expect(report.scanned).toBe(1);
+    expect(report.pruned).toEqual(['sid-stale']);
+    expect(report.pruneErrors).toEqual([]);
+    expect(deleted).toEqual(['sid-stale']);
   });
 
-  it('marks stopped + notifies when resume throws', async () => {
-    const notify = vi.fn();
-    const sessions = {
-      async resumeLocal() { throw new Error('sdk boom'); },
-    } as unknown as SessionManager;
-
-    const workspaces = {
-      list: () => [{ id: 'ws1', activeSessionId: 'sid-x' }],
-      clearActiveSession: vi.fn(),
-    } as unknown as WorkspaceManager;
-
-    const writeMeta = vi.fn().mockResolvedValue(undefined);
+  it('keeps snapshots within cutoffHours', async () => {
+    const now = Date.now();
+    const fresh = mkMeta({
+      sdkSessionId: 'sid-fresh',
+      lastActivityAt: new Date(now - 60 * 60 * 1000).toISOString(), // 1h ago
+    });
+    const deleted: string[] = [];
     const persistence = {
-      async loadAllMeta() { return [mkMeta({ sdkSessionId: 'sid-x' })]; },
-      writeMeta,
+      async loadAllMeta() { return [fresh]; },
+      async deleteMeta(id: string) { deleted.push(id); },
     } as unknown as SessionPersistence;
 
-    const report = await autoResumeOnStartup({ sessions, workspaces, persistence, notify });
-    expect(report.failed).toHaveLength(1);
-    expect(report.failed[0]!.reason).toContain('sdk boom');
-    expect(notify).toHaveBeenCalled();
-    expect(writeMeta).toHaveBeenCalled();
+    const report = await pruneStaleSnapshotsOnStartup({
+      persistence,
+      cutoffHours: 168,
+      now: () => now,
+    });
+
+    expect(report.scanned).toBe(1);
+    expect(report.pruned).toEqual([]);
+    expect(deleted).toEqual([]);
   });
 
-  it('does nothing when activeSessionId is unset', async () => {
-    const sessions = { async resumeLocal() { throw new Error('should not be called'); } } as unknown as SessionManager;
-    const workspaces = { list: () => [{ id: 'ws1', activeSessionId: null }], clearActiveSession: vi.fn() } as unknown as WorkspaceManager;
-    const persistence = { async loadAllMeta() { return []; } } as unknown as SessionPersistence;
-    const report = await autoResumeOnStartup({ sessions, workspaces, persistence });
-    expect(report.attempted).toBe(0);
+  it('mixes fresh + stale correctly', async () => {
+    const now = Date.now();
+    const fresh = mkMeta({
+      sdkSessionId: 'sid-fresh',
+      lastActivityAt: new Date(now - 30 * 60 * 1000).toISOString(),
+    });
+    const stale = mkMeta({
+      sdkSessionId: 'sid-stale',
+      lastActivityAt: new Date(now - 200 * 60 * 60 * 1000).toISOString(),
+    });
+    const deleted: string[] = [];
+    const persistence = {
+      async loadAllMeta() { return [fresh, stale]; },
+      async deleteMeta(id: string) { deleted.push(id); },
+    } as unknown as SessionPersistence;
+
+    const report = await pruneStaleSnapshotsOnStartup({
+      persistence,
+      cutoffHours: 168,
+      now: () => now,
+    });
+
+    expect(report.scanned).toBe(2);
+    expect(report.pruned).toEqual(['sid-stale']);
+    expect(deleted).toEqual(['sid-stale']);
+  });
+
+  it('treats unparseable timestamps as ancient and prunes', async () => {
+    const now = Date.now();
+    const corrupt = mkMeta({
+      sdkSessionId: 'sid-corrupt',
+      lastActivityAt: 'not a date',
+      createdAt: 'also not a date',
+    });
+    const deleted: string[] = [];
+    const persistence = {
+      async loadAllMeta() { return [corrupt]; },
+      async deleteMeta(id: string) { deleted.push(id); },
+    } as unknown as SessionPersistence;
+
+    const report = await pruneStaleSnapshotsOnStartup({
+      persistence,
+      cutoffHours: 168,
+      now: () => now,
+    });
+
+    expect(report.pruned).toEqual(['sid-corrupt']);
+    expect(deleted).toEqual(['sid-corrupt']);
+  });
+
+  it('records pruneErrors when deleteMeta throws but does not crash', async () => {
+    const now = Date.now();
+    const stale = mkMeta({
+      sdkSessionId: 'sid-doom',
+      lastActivityAt: new Date(now - 200 * 60 * 60 * 1000).toISOString(),
+    });
+    const persistence = {
+      async loadAllMeta() { return [stale]; },
+      async deleteMeta() { throw new Error('disk full'); },
+    } as unknown as SessionPersistence;
+
+    const warn = vi.fn();
+    const logger = {
+      level: 'info' as const,
+      debug: vi.fn(), info: vi.fn(), warn, error: vi.fn(), child: () => logger,
+    };
+
+    const report = await pruneStaleSnapshotsOnStartup({
+      persistence,
+      cutoffHours: 168,
+      now: () => now,
+      logger,
+    });
+
+    expect(report.pruned).toEqual([]);
+    expect(report.pruneErrors).toHaveLength(1);
+    expect(report.pruneErrors[0]!.sdkSessionId).toBe('sid-doom');
+    expect(report.pruneErrors[0]!.reason).toContain('disk full');
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it('returns empty report when no metas exist', async () => {
+    const persistence = {
+      async loadAllMeta() { return []; },
+      async deleteMeta() { /* unused */ },
+    } as unknown as SessionPersistence;
+    const report = await pruneStaleSnapshotsOnStartup({
+      persistence,
+      cutoffHours: 168,
+    });
+    expect(report.scanned).toBe(0);
+    expect(report.pruned).toEqual([]);
+    expect(report.pruneErrors).toEqual([]);
+  });
+
+  it('does NOT spawn subprocesses (no SessionManager / WorkspaceManager refs)', async () => {
+    // Sanity: the function signature should not require sessions/workspaces.
+    // If you accidentally re-add them, this test will fail at compile time.
+    const persistence = {
+      async loadAllMeta() { return []; },
+      async deleteMeta() { /* noop */ },
+    } as unknown as SessionPersistence;
+    const report = await pruneStaleSnapshotsOnStartup({ persistence, cutoffHours: 168 });
+    expect(report).toEqual({ scanned: 0, pruned: [], pruneErrors: [] });
   });
 });

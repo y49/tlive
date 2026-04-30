@@ -84,7 +84,7 @@ import { buildIpcDispatcher } from '../ipc/dispatcher.js';
 
 import { createLifecycle, type ShutdownStep, type LifecycleHandle } from './lifecycle.js';
 import { startHealthServer, type HealthServerHandle } from './health.js';
-import { autoResumeOnStartup, type AutoResumeReport } from './auto-resume.js';
+import { pruneStaleSnapshotsOnStartup, type PruneReport } from './auto-resume.js';
 import { startIdleStop, type IdleStopHandle } from './idle-stop.js';
 import { startApiThrottleRetry, bindManagerForRetry } from './api-throttle-retry.js';
 
@@ -130,7 +130,7 @@ export interface DaemonHandle {
   readonly federation: Federation;
   readonly config: TliveConfigV1;
   readonly configPath: string;
-  readonly autoResumeReport: AutoResumeReport;
+  readonly pruneReport: PruneReport;
   readonly idleStop: IdleStopHandle;
   shutdown(): Promise<void>;
 }
@@ -415,12 +415,13 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
   });
   const throttleRetry = startApiThrottleRetry({ sessions, logger });
 
-  // Auto-resume on startup (§13.2). Returns a report the handle exposes.
-  const autoResumeReport = await autoResumeOnStartup({
-    sessions,
-    workspaces,
+  // Prune stale snapshots on startup (spec §5.4). No subprocesses are spawned
+  // here — actual resume happens lazily via WorkspaceManager.lazyResumeOrCreate
+  // on first inbound (Task 10). This is just a janitorial sweep so stale
+  // jsonl artifacts don't accumulate forever.
+  const pruneReport = await pruneStaleSnapshotsOnStartup({
     persistence,
-    cutoffHours: cfg.daemon?.resumeCutoffHours ?? 24,
+    cutoffHours: cfg.daemon?.resumeCutoffHours ?? 24 * 7,
     logger,
   });
 
@@ -484,7 +485,7 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
   logger.info('daemon bootstrap complete', {
     workspaces: workspaces.list().length,
     adapters: Object.keys(adapters),
-    autoResumed: autoResumeReport.resumed.length,
+    pruned: pruneReport.pruned.length,
     ipcPath,
   });
 
@@ -508,7 +509,7 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
     federation,
     config: cfg,
     configPath: loaded.path,
-    autoResumeReport,
+    pruneReport,
     idleStop,
     async shutdown() { await lifecycle.shutdown(); },
   };
