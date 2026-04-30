@@ -54,3 +54,86 @@ export function markdownToTelegramHtml(md: string): string {
   out = out.replace(restoreRe, (_, i) => fences[Number(i)] ?? '');
   return out;
 }
+
+/**
+ * Split a Telegram-HTML string into chunks of <= maxLen characters where
+ * possible, never breaking inside an atomic HTML tag block.
+ *
+ * Atomic tags: <pre>, <code>, <a>, <b>, <i>, <u>, <s>, <blockquote>.
+ * If an atomic block exceeds maxLen on its own, it gets its own chunk
+ * that exceeds maxLen — Telegram will render it; the alternative (torn
+ * tags) is worse.
+ *
+ * Splitting strategy (greedy, in priority order):
+ *   1. Paragraph boundary (\n\n) — preferred
+ *   2. Line boundary (\n)
+ *   3. Hard cut at maxLen (only when outside any open tag)
+ */
+export function chunkHtmlForTelegram(html: string, maxLen: number): string[] {
+  if (html.length <= maxLen) return [html];
+
+  const ATOMIC_TAGS = ['pre', 'code', 'a', 'b', 'i', 'u', 's', 'blockquote'];
+  type Atom = { text: string; atomic: boolean };
+  const atoms: Atom[] = [];
+
+  let i = 0;
+  while (i < html.length) {
+    if (html[i] === '<') {
+      const tagMatch = html.slice(i).match(/^<(\w+)(\s[^>]*)?>/);
+      if (tagMatch) {
+        const tagName = tagMatch[1].toLowerCase();
+        if (ATOMIC_TAGS.includes(tagName)) {
+          const closeRe = new RegExp(`</${tagName}>`, 'i');
+          const rest = html.slice(i + tagMatch[0].length);
+          const closeMatch = rest.match(closeRe);
+          if (closeMatch) {
+            const endIdx = i + tagMatch[0].length + closeMatch.index! + closeMatch[0].length;
+            atoms.push({ text: html.slice(i, endIdx), atomic: true });
+            i = endIdx;
+            continue;
+          }
+        }
+      }
+    }
+    atoms.push({ text: html[i], atomic: false });
+    i++;
+  }
+
+  const chunks: string[] = [];
+  let cur = '';
+
+  function flushCurrent(): void {
+    if (cur.length > 0) {
+      chunks.push(cur);
+      cur = '';
+    }
+  }
+
+  for (const atom of atoms) {
+    if (cur.length + atom.text.length <= maxLen) {
+      cur += atom.text;
+      continue;
+    }
+    if (atom.atomic) {
+      flushCurrent();
+      chunks.push(atom.text);
+      continue;
+    }
+    const paraIdx = cur.lastIndexOf('\n\n');
+    const lineIdx = cur.lastIndexOf('\n');
+    if (paraIdx >= 0) {
+      chunks.push(cur.slice(0, paraIdx));
+      cur = cur.slice(paraIdx + 2);
+    } else if (lineIdx >= 0) {
+      chunks.push(cur.slice(0, lineIdx));
+      cur = cur.slice(lineIdx + 1);
+    } else {
+      flushCurrent();
+    }
+    cur += atom.text;
+  }
+  flushCurrent();
+
+  if (chunks.length === 0) chunks.push('');
+  return chunks;
+}
