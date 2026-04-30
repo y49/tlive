@@ -239,6 +239,17 @@ export class LocalSession implements SessionLike {
     this.budgetGuard.extend(extraUsd);
   }
 
+  /** Read the current session budget cap (USD). undefined = no cap. */
+  getMaxBudget(): number | undefined {
+    return this.budgetGuard.cap;
+  }
+
+  /** Replace the session budget cap (USD). undefined disables the guard.
+   *  Used by /budget command to mutate the cap BudgetGuard actually enforces. */
+  setMaxBudget(usd: number | undefined): void {
+    this.budgetGuard.setCap(usd);
+  }
+
   async interrupt(): Promise<void> {
     if (this.legacyStatus === 'stopped') return;
     // Reject every pending request (permission / ask / elicitation) so any

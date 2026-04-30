@@ -63,6 +63,13 @@ export class BudgetGuard {
     this.triggered = false;
   }
 
+  /** Replace the cap outright (used by /budget command). undefined disables the
+   *  guard. Re-arms so a newly-raised cap can fire again on the next turn_end. */
+  setCap(usd: number | undefined): void {
+    this.options = { ...this.options, maxBudgetUsd: usd };
+    this.triggered = false;
+  }
+
   reset(): void { this.triggered = false; }
 
   get cap(): number | undefined { return this.options.maxBudgetUsd; }

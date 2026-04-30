@@ -175,6 +175,26 @@ describe('LocalSession', () => {
     }
   });
 
+  it('getMaxBudget reads current cap', async () => {
+    const local = await setup({ maxBudgetUsd: 10 });
+    expect(local.session.getMaxBudget()).toBe(10);
+    await rm(local.root, { recursive: true, force: true });
+  });
+
+  it('setMaxBudget writes new cap', async () => {
+    const local = await setup({ maxBudgetUsd: 10 });
+    local.session.setMaxBudget(50);
+    expect(local.session.getMaxBudget()).toBe(50);
+    await rm(local.root, { recursive: true, force: true });
+  });
+
+  it('setMaxBudget(undefined) disables cap', async () => {
+    const local = await setup({ maxBudgetUsd: 10 });
+    local.session.setMaxBudget(undefined);
+    expect(local.session.getMaxBudget()).toBeUndefined();
+    await rm(local.root, { recursive: true, force: true });
+  });
+
   it('interrupt preserves errored phase set by BudgetGuard', async () => {
     // Fresh session with a cap so budget_exceeded trips during the turn_end.
     // The FakeRuntime's interrupt() throws UnsupportedByRuntimeError, which
