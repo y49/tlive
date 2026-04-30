@@ -9,13 +9,6 @@ describe('CAPABILITIES matrix', () => {
     expect(CAPABILITIES.telegram.callbackDataMaxBytes).toBe(64);
   });
 
-  it('Discord supports modal but not forceReply, and has no pin by default', () => {
-    expect(CAPABILITIES.discord.modalForm).toBe(true);
-    expect(CAPABILITIES.discord.forceReplyInput).toBe(false);
-    expect(CAPABILITIES.discord.pinMessage).toBe(false);
-    expect(CAPABILITIES.discord.maxTextLen).toBe(2000);
-  });
-
   it('Feishu lacks native reactions but supports modal cards', () => {
     expect(CAPABILITIES.feishu.reactions).toBe(false);
     expect(CAPABILITIES.feishu.modalForm).toBe(true);
@@ -25,7 +18,6 @@ describe('CAPABILITIES matrix', () => {
 
   it('capabilitiesOf returns the same object reference', () => {
     expect(capabilitiesOf('telegram')).toBe(CAPABILITIES.telegram);
-    expect(capabilitiesOf('discord')).toBe(CAPABILITIES.discord);
     expect(capabilitiesOf('feishu')).toBe(CAPABILITIES.feishu);
   });
 });

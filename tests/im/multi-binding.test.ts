@@ -3,7 +3,7 @@
 // CRITICAL regression guard for T6 review fix #1 — the N×M fan-out bug.
 // Before the fix: renderers iterated session.targets internally while
 // SessionFrontend also iterated channels, producing N×M calls often sent
-// through the wrong adapter (Telegram seeing Discord chatId).
+// through the wrong adapter (Telegram seeing Feishu chatId).
 //
 // After the fix (renderer-per-target): each adapter sees exactly one call
 // per event, scoped to its own chatId, with interactive buttons only on
@@ -29,10 +29,10 @@ function mkWm(): WorkspaceManager {
     partitionBindings(_: string) {
       return {
         primary: { channelType: 'telegram' as const, chatId: 'tg-100', role: 'primary' as const },
-        mirrors: [{ channelType: 'discord' as const, chatId: 'ds-200', role: 'mirror' as const }],
+        mirrors: [{ channelType: 'feishu' as const, chatId: 'fs-200', role: 'mirror' as const }],
         all: [
           { channelType: 'telegram' as const, chatId: 'tg-100', role: 'primary' as const },
-          { channelType: 'discord' as const, chatId: 'ds-200', role: 'mirror' as const },
+          { channelType: 'feishu' as const, chatId: 'fs-200', role: 'mirror' as const },
         ],
       };
     },
@@ -45,12 +45,12 @@ async function tick(ms = 10) { await new Promise((r) => setTimeout(r, ms)); }
 describe('multi-binding fan-out (T6 review #1)', () => {
   it('each adapter receives its own chatId only; no cross-sends', async () => {
     const tg = new FakeAdapter('telegram');
-    const ds = new FakeAdapter('discord');
+    const ds = new FakeAdapter('feishu');
     const sm = mkFakeSessionManager();
     const pb = mkPb();
     const frontend = new SessionFrontend({
       sessionManager: sm, workspaceManager: mkWm(), permissionBroker: pb,
-      adapters: { telegram: tg, discord: ds },
+      adapters: { telegram: tg, feishu: ds },
     });
     frontend.start();
 
@@ -62,7 +62,7 @@ describe('multi-binding fan-out (T6 review #1)', () => {
     expect(tg.byKind('send').length).toBe(0);
     expect(ds.byKind('send').length).toBe(0);
 
-    // Drive a turn — turn_start sends HUD to primary (Telegram); mirror (Discord)
+    // Drive a turn — turn_start sends HUD to primary (Telegram); mirror (Feishu)
     // gets a reply echo on assistant_text but no HUD (primary-only).
     session.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: 'hi', at: 1_000_000 });
     await tick();
@@ -71,10 +71,10 @@ describe('multi-binding fan-out (T6 review #1)', () => {
     session.emit({ kind: 'turn_end', turnId: 't1', durationMs: 100, costUsd: 0.05, tokensIn: 0, tokensOut: 0 });
     await tick(400); // wait past TurnUI turn_end 400ms reaction buffer
 
-    // Each adapter must have received AT LEAST one send (HUD for Telegram,
-    // reply-echo for Discord), all scoped to the correct chatId.
+    // Each adapter must have received AT LEAST one outbound (HUD for Telegram,
+    // reply-echo for Feishu via sendCard), all scoped to the correct chatId.
     expect(tg.byKind('send').length).toBeGreaterThan(0);
-    expect(ds.byKind('send').length).toBeGreaterThan(0);
+    expect(ds.byKind('sendCard').length + ds.byKind('send').length).toBeGreaterThan(0);
     for (const c of tg.calls) {
       if ('chatId' in (c.args as Record<string, unknown>)) {
         expect(String(c.args.chatId ?? 'tg-100')).toBe('tg-100');
@@ -82,7 +82,7 @@ describe('multi-binding fan-out (T6 review #1)', () => {
     }
     for (const c of ds.calls) {
       if ('chatId' in (c.args as Record<string, unknown>)) {
-        expect(String(c.args.chatId ?? 'ds-200')).toBe('ds-200');
+        expect(String(c.args.chatId ?? 'fs-200')).toBe('fs-200');
       }
     }
 
@@ -96,12 +96,12 @@ describe('multi-binding fan-out (T6 review #1)', () => {
 
   it('permission card: only primary gets interactive card; mirror receives nothing (new UX)', async () => {
     const tg = new FakeAdapter('telegram');
-    const ds = new FakeAdapter('discord');
+    const ds = new FakeAdapter('feishu');
     const sm = mkFakeSessionManager();
     const pb = mkPb();
     const frontend = new SessionFrontend({
       sessionManager: sm, workspaceManager: mkWm(), permissionBroker: pb,
-      adapters: { telegram: tg, discord: ds },
+      adapters: { telegram: tg, feishu: ds },
     });
     frontend.start();
 
@@ -126,7 +126,7 @@ describe('multi-binding fan-out (T6 review #1)', () => {
     expect(tgMarkup).toBeDefined();
     expect((tgMarkup!.buttons ?? []).length).toBeGreaterThan(0);
 
-    // Mirror (Discord) receives no permission card in the new UX path —
+    // Mirror (Feishu) receives no permission card in the new UX path —
     // only primaries get interactive cards (T10b: legacy mirror-tail renderer removed).
     const dsPermSends = ds.byKind('send').filter((c) => String(c.args.text ?? '').includes('Permission'));
     expect(dsPermSends).toHaveLength(0);

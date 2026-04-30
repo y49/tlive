@@ -13,7 +13,7 @@
 //     version: "1",
 //     daemon: { socketPath?, logLevel?, idleHours?, healthPort? },
 //     workspaces: [ WorkspaceConfig, ... ],
-//     channels: { telegram?, discord?, feishu? },
+//     channels: { telegram?, feishu? },
 //     permissions: { allowedUsers?, defaults? },
 //     schedules: [ ... ],
 //     mcpRegistry: Record<string, McpServerEntry>,
@@ -68,11 +68,6 @@ export interface TelegramChannelConfig {
   /** Optional single-chat binding for legacy config. */
   chatId?: string;
 }
-export interface DiscordChannelConfig {
-  token: string;
-  applicationId?: string;
-  channelId?: string;
-}
 export interface FeishuChannelConfig {
   appId: string;
   appSecret: string;
@@ -117,7 +112,6 @@ export interface TliveConfigV1 {
   workspaces: WorkspaceConfigEntry[];
   channels?: {
     telegram?: TelegramChannelConfig;
-    discord?: DiscordChannelConfig;
     feishu?: FeishuChannelConfig;
   };
   permissions?: PermissionsConfig;
@@ -328,17 +322,6 @@ export function parseConfig(raw: unknown): ParseResult<TliveConfigV1> {
           out.channels.telegram = {
             token: c.telegram.token,
             chatId: typeof c.telegram.chatId === 'string' ? c.telegram.chatId : undefined,
-          };
-        }
-      }
-      if (c.discord !== undefined) {
-        if (!isObject(c.discord) || typeof c.discord.token !== 'string' || c.discord.token.length === 0) {
-          issues.push({ path: 'channels.discord', message: 'requires token: string' });
-        } else {
-          out.channels.discord = {
-            token: c.discord.token,
-            applicationId: typeof c.discord.applicationId === 'string' ? c.discord.applicationId : undefined,
-            channelId: typeof c.discord.channelId === 'string' ? c.discord.channelId : undefined,
           };
         }
       }

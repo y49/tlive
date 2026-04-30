@@ -1,7 +1,7 @@
 // src/platform/types.ts
 //
 // PlatformAdapter — the platform-agnostic transport contract. Every concrete
-// adapter (Telegram/Discord/Feishu) implements this interface; the
+// adapter (Telegram/Feishu) implements this interface; the
 // SessionFrontend + renderers target it only, never the underlying SDK.
 //
 // Design rationale:
@@ -67,7 +67,7 @@ export interface OutboundAttachment {
 
 export interface OutboundMessage {
   chatId: string;
-  /** Thread / topic id (Telegram forum topic, Discord thread, Feishu topic). */
+  /** Thread / topic id (Telegram forum topic, Feishu topic). */
   threadId?: string;
   text?: string;
   parseMode?: ParseMode;
@@ -164,8 +164,8 @@ export function clampText(text: string, maxLen: number): string {
  * newline when possible to avoid mid-sentence cuts, and is fence-aware:
  * if a chunk has an odd number of ``` fences, the chunk is closed at the
  * boundary and the next chunk is opened with the same fence (preserving
- * the language tag when present). This prevents Discord/Telegram from
- * rendering "broken" markdown across chunk boundaries.
+ * the language tag when present). This prevents Telegram from rendering
+ * "broken" markdown across chunk boundaries.
  */
 export function splitText(text: string, maxLen: number): string[] {
   if (text.length <= maxLen) return [text];

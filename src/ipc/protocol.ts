@@ -60,7 +60,7 @@ export type IpcResponse =
       sessionCount: number;
       warmPoolCount: number;
       pid: number;
-      adapters?: Partial<Record<'telegram' | 'discord' | 'feishu', 'connected' | 'idle' | 'failed'>>;
+      adapters?: Partial<Record<'telegram' | 'feishu', 'connected' | 'idle' | 'failed'>>;
     }
   | { kind: 'daemon.stopped' }
   | { kind: 'session.list'; sessions: SessionListEntry[] }

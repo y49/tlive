@@ -2,8 +2,8 @@
 //
 // Renders MCP ElicitationRequest via the platform's native primitive
 // (spec §7.3 item 5 / §10). Three modes:
-//   - 'form'     → platform modal/form (Discord Modal, Feishu form card, or
-//                  Telegram forceReply sequence in ordered fields).
+//   - 'form'     → platform modal/form (Feishu form card, or Telegram
+//                  forceReply sequence in ordered fields).
 //   - 'confirm'  → two-button inline card.
 //   - 'url-auth' → card with a single URL button.
 //
@@ -13,17 +13,13 @@
 // v1.0 — renderer-per-target. Form mode dispatches per-platform:
 //   Feishu : calls FeishuAdapter.sendFormCard(...) directly (Feishu's form
 //            card can't be emitted through buildInlineCard).
-//   Discord: stashes the modal spec into DiscordAdapter.pendingModals and
-//            sends a "Open form" button; T7 CallbackRouter shows the modal
-//            inside the button interaction.
 //   Telegram: forceReply sequence (existing path).
 
 import type { ElicitationRequest } from '../../runtime/types.js';
 import type { RendererDeps, SessionRenderState, RenderTarget } from '../render/types.js';
 import { targetKey } from '../render/types.js';
-import type { FormField, InlineButton, ReplyMarkup } from '../../platform/types.js';
+import type { FormField, ReplyMarkup } from '../../platform/types.js';
 import type { FeishuAdapter } from '../../platform/feishu/adapter.js';
-import type { DiscordAdapter } from '../../platform/discord/adapter.js';
 
 export interface ElicitationFormRendererOptions extends RendererDeps {
   session: SessionRenderState;
@@ -108,18 +104,6 @@ function asFeishuAdapter(
   return adapter as { sendFormCard: FeishuAdapter['sendFormCard'] };
 }
 
-/**
- * Type guard: duck-typed detection of DiscordAdapter's `pendingModals`.
- */
-function asDiscordAdapter(
-  adapter: unknown,
-): { pendingModals: DiscordAdapter['pendingModals'] } | null {
-  if (typeof adapter !== 'object' || adapter === null) return null;
-  const pm = (adapter as { pendingModals?: unknown }).pendingModals;
-  if (!pm || typeof (pm as { set?: unknown }).set !== 'function') return null;
-  return adapter as { pendingModals: DiscordAdapter['pendingModals'] };
-}
-
 export class ElicitationFormRenderer {
   private readonly adapter: ElicitationFormRendererOptions['adapter'];
   private readonly capabilities: ElicitationFormRendererOptions['capabilities'];
@@ -184,32 +168,6 @@ export class ElicitationFormRenderer {
             fields,
             submitId: req.id,
             threadId: target.threadId,
-          });
-          this.recordMsgId(key, req.id, sent);
-          return;
-        }
-      } else if (target.channelType === 'discord') {
-        const d = asDiscordAdapter(this.adapter);
-        if (d) {
-          const fields = schemaToFields(req.schema);
-          // Store modal spec for T7 CallbackRouter to show on interaction.
-          d.pendingModals.set(req.id, {
-            title: req.mcpServerName,
-            fields,
-            createdAt: Date.now(),
-          } as unknown as { title: string; fields: unknown[] });
-          const openMarkup: ReplyMarkup = {
-            type: 'inline_keyboard',
-            buttons: [[
-              { text: '📝 Open form', callbackData: `elic:open:${req.id}`, style: 'primary' } satisfies InlineButton,
-              { text: '❌ Cancel', callbackData: `elic:decline:${req.id}`, style: 'danger' },
-            ]],
-          };
-          const sent = await this.adapter.send({
-            chatId: target.chatId,
-            threadId: target.threadId,
-            text,
-            replyMarkup: openMarkup,
           });
           this.recordMsgId(key, req.id, sent);
           return;

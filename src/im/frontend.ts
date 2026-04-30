@@ -463,10 +463,6 @@ export class SessionFrontend {
         const adapter = adaptersByKey.get(renderTargetKey(target));
         if (!adapter) throw new Error(`handleSessionEvent: no adapter for target ${renderTargetKey(target)}`);
         if (target.channelType === 'feishu') return new FeishuHudPanel(adapter, target);
-        if (target.channelType === 'discord') {
-          // TODO: Discord HUD panel not yet implemented; fail loudly until it is.
-          throw new Error('TurnUI: discord HUD panel not implemented');
-        }
         return new TelegramHudPanel(adapter, target);
       };
 

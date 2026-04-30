@@ -31,7 +31,7 @@ export function autoBindFromConfig(
 
     for (const [platform, ch] of Object.entries(channels) as Array<[ChannelType, ChannelEntryWithChatId | undefined]>) {
       const chatId = ch?.chatId;
-      if (!chatId) continue; // Feishu/Discord schema has no chatId; skip.
+      if (!chatId) continue; // Feishu schema has no chatId; skip.
       if (workspaces.findByChat(platform, chatId)) continue; // already bound somewhere
 
       // Multi-workspace ambiguity guard: if any other workspace also wants

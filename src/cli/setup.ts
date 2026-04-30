@@ -9,7 +9,7 @@
 //      up the original. Print a one-liner summary.
 //   2. Read git context (remote / branch / suggested name) via
 //      `src/workspace/git-aware.ts` for the current cwd. Prompt confirm.
-//   3. Ask for an IM platform (telegram / discord / feishu / skip). For each
+//   3. Ask for an IM platform (telegram / feishu / skip). For each
 //      selection, prompt for the required credential fields and write them
 //      into `channels.<platform>`.
 //   4. Persist the merged config as `~/.tlive/config.json` (atomic rename).
@@ -144,7 +144,7 @@ async function gatherWorkspace(io: Io, cwd: string, current: TliveConfigV1): Pro
 
 async function gatherPlatform(
   io: Io,
-  kind: 'telegram' | 'discord' | 'feishu',
+  kind: 'telegram' | 'feishu',
   current: TliveConfigV1['channels'] | undefined,
   workspace: WorkspaceConfigEntry | undefined,
 ): Promise<TliveConfigV1['channels']> {
@@ -164,11 +164,6 @@ async function gatherPlatform(
         const adminUserId = await askWithDefault(io, prompt, workspace.adminUserId ?? derived);
         if (adminUserId) workspace.adminUserId = adminUserId;
       }
-      break;
-    }
-    case 'discord': {
-      const token = await askWithDefault(io, '  Discord bot token', current?.discord?.token);
-      if (token) next.discord = { token, applicationId: current?.discord?.applicationId };
       break;
     }
     case 'feishu': {
@@ -239,9 +234,9 @@ export async function setupCommand(argv: string[] = []): Promise<void> {
     if (io.tty) {
       io.out('\nIM platforms (press enter to skip each):\n');
       const pickPlatform = argv.find((a) => a.startsWith('--platform='))?.split('=')[1];
-      const order: Array<'telegram' | 'discord' | 'feishu'> = pickPlatform
-        ? [pickPlatform as 'telegram' | 'discord' | 'feishu']
-        : ['telegram', 'discord', 'feishu'];
+      const order: Array<'telegram' | 'feishu'> = pickPlatform
+        ? [pickPlatform as 'telegram' | 'feishu']
+        : ['telegram', 'feishu'];
       const wsBeingConfigured = config.workspaces.find((w) => w.id === ws.id) ?? ws;
       for (const p of order) {
         io.out(`\n${p}:\n`);

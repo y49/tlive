@@ -27,7 +27,7 @@ describe('autoBindFromConfig', () => {
     expect(log.info).toHaveBeenCalledWith('auto-bound chat from config', expect.objectContaining({ platform: 'telegram', chatId: '123' }));
   });
 
-  it('skips Feishu/Discord (no chatId field on those channel configs)', () => {
+  it('skips Feishu (no chatId field on that channel config)', () => {
     const wm = new WorkspaceManager();
     wm.create({ name: 'w', workdir: '/tmp/w' });
     const c = cfg({ channels: { feishu: { appId: 'a', appSecret: 's' } } });

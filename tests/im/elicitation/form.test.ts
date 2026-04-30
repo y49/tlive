@@ -17,7 +17,7 @@ function makeState() {
   return newSessionRenderState({
     sessionId: 's1', shortAlias: 'abcd',
     workspaceId: 'w1', workspaceName: 'ws',
-    targets: [{ channelType: 'discord', chatId: '10', role: 'primary' }],
+    targets: [{ channelType: 'telegram', chatId: '10', role: 'primary' }],
   });
 }
 
@@ -48,10 +48,10 @@ describe('elicitation-form', () => {
   });
 
   it('renderer sends + edits on resolve', async () => {
-    const adapter = new FakeAdapter('discord');
+    const adapter = new FakeAdapter('telegram');
     const state = makeState();
     const target = state.targets[0]!;
-    const r = new ElicitationFormRenderer({ adapter, capabilities: CAPABILITIES.discord, session: state, target });
+    const r = new ElicitationFormRenderer({ adapter, capabilities: CAPABILITIES.telegram, session: state, target });
     const req = makeReq('confirm');
     await r.onPending(req);
     expect(adapter.byKind('send')).toHaveLength(1);
@@ -81,32 +81,6 @@ describe('elicitation-form', () => {
     expect(formCardCalls[0]!.chatId).toBe('42');
     // The generic send() should NOT have been used for the form card.
     expect(adapter.byKind('send')).toHaveLength(0);
-  });
-
-  it('discord form mode stashes spec in pendingModals and sends Open-form button', async () => {
-    const adapter = new FakeAdapter('discord');
-    // Discord adapter duck-type: add pendingModals Map.
-    const pendingModals = new Map<string, { title: string; fields: unknown[] }>();
-    (adapter as unknown as { pendingModals: typeof pendingModals }).pendingModals = pendingModals;
-    const state = newSessionRenderState({
-      sessionId: 's1', shortAlias: 'abcd',
-      workspaceId: 'w1', workspaceName: 'ws',
-      targets: [{ channelType: 'discord', chatId: '10', role: 'primary' }],
-    });
-    const target = state.targets[0]!;
-    const r = new ElicitationFormRenderer({ adapter, capabilities: CAPABILITIES.discord, session: state, target });
-    const req = makeReq('form', { token: { type: 'string', required: true } });
-    await r.onPending(req);
-    // Spec stashed for T7 CallbackRouter.
-    expect(pendingModals.has(req.id)).toBe(true);
-    // A regular send with an "Open form" button happened.
-    expect(adapter.byKind('send')).toHaveLength(1);
-    const markup = adapter.byKind('send')[0]!.args.replyMarkup as {
-      buttons?: Array<Array<{ text: string; callbackData?: string }>>;
-    };
-    const flat = (markup.buttons ?? []).flat();
-    const open = flat.find((b) => b.text.includes('Open form'));
-    expect(open?.callbackData).toBe(`elic:open:${req.id}`);
   });
 
   it('telegram form mode uses forceReply (no modal capability)', async () => {

@@ -17,8 +17,8 @@
 //   - SessionManager with RuntimeFactory (claude | codex)
 //   - McpRegistry + Federation (lazy downstream clients)
 //   - CronEngine driven by McpToolDeps
-//   - PlatformAdapters for every channel configured (Telegram / Discord /
-//     Feishu) — passed to SessionFrontend + CallbackRouter
+//   - PlatformAdapters for every channel configured (Telegram / Feishu)
+//     — passed to SessionFrontend + CallbackRouter
 //   - SessionFrontend (started after adapters + broker subscriptions)
 //   - CommandParser registration (registerAllCommands) + CallbackRouter
 //     inbound dispatch glued to every adapter's onInbound
@@ -71,7 +71,6 @@ import { CallbackRouter } from '../im/callback-router.js';
 import { registerAllBotCommands } from '../im/bot-commands-registrar.js';
 
 import { TelegramAdapter } from '../platform/telegram/adapter.js';
-import { DiscordAdapter } from '../platform/discord/adapter.js';
 import { FeishuAdapter } from '../platform/feishu/adapter.js';
 import type { PlatformAdapter, InboundEvent } from '../platform/types.js';
 import type { ChannelType } from '../workspace/bindings.js';
@@ -142,15 +141,12 @@ export type AdapterFactory = (
   logger: Logger,
 ) => PlatformAdapter | null;
 
-/** Default factory — constructs real grammy/discord.js/lark adapters. */
+/** Default factory — constructs real grammy/lark adapters. */
 export const defaultAdapterFactory: AdapterFactory = (channelType, cfg, logger) => {
   const ch = cfg.channels ?? {};
   try {
     if (channelType === 'telegram' && ch.telegram) {
       return new TelegramAdapter({ token: ch.telegram.token });
-    }
-    if (channelType === 'discord' && ch.discord) {
-      return new DiscordAdapter({ token: ch.discord.token });
     }
     if (channelType === 'feishu' && ch.feishu) {
       return new FeishuAdapter({
@@ -341,7 +337,7 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
   const adapters: Partial<Record<ChannelType, PlatformAdapter>> = {};
   const adapterFactory = opts.adapterFactory ?? defaultAdapterFactory;
   if (opts.startAdapters !== false) {
-    for (const ct of (['telegram', 'discord', 'feishu'] as const)) {
+    for (const ct of (['telegram', 'feishu'] as const)) {
       const a = adapterFactory(ct, cfg, logger);
       if (!a) continue;
       try {

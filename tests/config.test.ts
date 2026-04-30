@@ -16,7 +16,6 @@ describe('loadConfig', () => {
     expect(config.token).toBe('');
     expect(config.runtime).toBe('claude');
     expect(config.telegram).toBeUndefined();
-    expect(config.discord).toBeUndefined();
     expect(config.feishu).toBeUndefined();
   });
 

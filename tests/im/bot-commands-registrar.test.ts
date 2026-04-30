@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import { registerAllBotCommands, TOP_COMMANDS } from '../../src/im/bot-commands-registrar.js';
 import type { PlatformAdapter } from '../../src/platform/types.js';
 
-function fakeAdapter(channelType: 'telegram' | 'discord' | 'feishu', withHook = true): PlatformAdapter {
+function fakeAdapter(channelType: 'telegram' | 'feishu', withHook = true): PlatformAdapter {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const adapter = {
     channelType,
@@ -38,15 +38,8 @@ describe('bot-commands-registrar', () => {
     const tg = fakeAdapter('telegram');
     const out = await registerAllBotCommands({ telegram: tg });
     expect(out.telegram).toBe('registered');
-    expect(out.discord).toBe('skipped');
     expect(out.feishu).toBe('skipped');
     expect(((tg as unknown as { calls: Array<{ method: string }> }).calls[0]?.method)).toBe('registerBotCommands');
-  });
-
-  it('registers on Discord adapter via hook', async () => {
-    const dc = fakeAdapter('discord');
-    const out = await registerAllBotCommands({ discord: dc });
-    expect(out.discord).toBe('registered');
   });
 
   it('marks Feishu as skipped (no autocomplete)', async () => {

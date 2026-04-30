@@ -5,10 +5,6 @@
 //
 // Platforms:
 // - Telegram: setMyCommands via the grammy Bot instance.
-// - Discord: applications.commands.put via discord.js REST — deferred to
-//   T9 daemon bootstrap because it requires the ApplicationID, which the
-//   adapter doesn't expose directly. We emit a registrar descriptor here
-//   and T9 picks it up.
 // - Feishu: no-op (no first-party autocomplete surface).
 
 import type { PlatformAdapter } from '../platform/types.js';
@@ -57,7 +53,6 @@ export async function registerAllBotCommands(
 ): Promise<Record<ChannelType, 'registered' | 'skipped' | 'failed'>> {
   const outcome: Record<ChannelType, 'registered' | 'skipped' | 'failed'> = {
     telegram: 'skipped',
-    discord: 'skipped',
     feishu: 'skipped',
   };
 
@@ -75,19 +70,6 @@ export async function registerAllBotCommands(
       if (tg.registerBotCommands || tg.bot) outcome.telegram = 'registered';
     } catch {
       outcome.telegram = 'failed';
-    }
-  }
-
-  // Discord: handoff via `registerBotCommands` hook only. Actual REST call
-  // needs Application ID — wire from T9 bootstrap. Mark `registered` if
-  // the hook exists and returns without throwing.
-  const discord = adapters.discord as TelegramAdapterShape | undefined;
-  if (discord?.registerBotCommands) {
-    try {
-      await discord.registerBotCommands(TOP_COMMANDS);
-      outcome.discord = 'registered';
-    } catch {
-      outcome.discord = 'failed';
     }
   }
 

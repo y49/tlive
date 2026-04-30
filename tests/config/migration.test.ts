@@ -43,6 +43,19 @@ describe('migration (pure)', () => {
     expect(report.dropped).toContain('env.TL_PTY_SHELL');
   });
 
+  it('drops legacy discord channel block (v1.0 removed Discord support)', () => {
+    const { config, report } = migrateToV1({
+      envText: 'TL_DC_BOT_TOKEN=abc\nTL_DC_APP_ID=app',
+      jsonValue: { discord: { token: 'abc', applicationId: 'app' } },
+      defaultWorkdir: '/tmp',
+    });
+    expect(report.dropped).toContain('discord');
+    expect(report.dropped).toContain('env.TL_DC_BOT_TOKEN');
+    expect(report.dropped).toContain('env.TL_DC_APP_ID');
+    // Migrated config has no discord channel.
+    expect((config.channels as Record<string, unknown> | undefined)?.discord).toBeUndefined();
+  });
+
   it('isLegacyConfig treats missing version as legacy', () => {
     expect(isLegacyConfig({ jsonValue: { foo: 1 }, defaultWorkdir: '/x' })).toBe(true);
     expect(isLegacyConfig({ jsonValue: { version: '1' }, defaultWorkdir: '/x' })).toBe(false);

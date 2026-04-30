@@ -7,7 +7,7 @@
 //   - config         ~/.tlive/config.json present + parseable (schema validate)
 //   - anthropic      env keys OR Claude OAuth (~/.claude/.credentials.json) present
 //   - openai         env keys OR Codex OAuth (~/.codex/auth.json) present
-//   - platforms      telegram / discord / feishu tokens configured
+//   - platforms      telegram / feishu tokens configured
 //   - jsonl          ~/.claude/projects + ~/.codex/sessions writability
 //   - disk           free space on $HOME partition
 //   - warmpool       slot counts (via IPC daemon.status)
@@ -186,7 +186,7 @@ export function checkEnvKeys(findings: Finding[], opts: CheckEnvKeysOptions = {}
   }
 }
 
-type AdapterStatus = Partial<Record<'telegram' | 'discord' | 'feishu', 'connected' | 'idle' | 'failed'>>;
+type AdapterStatus = Partial<Record<'telegram' | 'feishu', 'connected' | 'idle' | 'failed'>>;
 
 export function checkPlatforms(
   findings: Finding[],
@@ -195,20 +195,19 @@ export function checkPlatforms(
 ): void {
   if (!parsed.ok) return;
   const c = parsed.value.channels ?? {};
-  const any = c.telegram || c.discord || c.feishu;
+  const any = c.telegram || c.feishu;
   if (!any) {
     findings.push({
       section: 'platforms',
       level: 'warn',
       message: 'no IM platforms configured',
-      hint: 'Run: tlive setup to add Telegram / Discord / Feishu',
+      hint: 'Run: tlive setup to add Telegram / Feishu',
     });
     return;
   }
 
-  const platforms: Array<['telegram' | 'discord' | 'feishu', boolean, string]> = [
+  const platforms: Array<['telegram' | 'feishu', boolean, string]> = [
     ['telegram', !!c.telegram, c.telegram ? 'token configured' : ''],
-    ['discord',  !!c.discord,  c.discord  ? 'token configured' : ''],
     ['feishu',   !!c.feishu,   c.feishu   ? 'appId + appSecret configured' : ''],
   ];
 

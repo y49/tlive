@@ -46,7 +46,6 @@ describe('parseConfig', () => {
       workspaces: [{ name: 'p', workdir: '/x' }],
       channels: {
         telegram: { token: 'abc' },
-        discord: { token: 'def', applicationId: 'app' },
         feishu: { appId: 'aid', appSecret: 'secret' },
       },
     });

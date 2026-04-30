@@ -6,7 +6,7 @@ import type { WorkspaceManager } from '../../src/workspace/manager.js';
 import { FakeAdapter } from '../im/fake-adapter.js';
 import { FakeSession, mkFakeSessionManager } from '../im/fake-session.js';
 
-function makeFrontend(channel: 'telegram' | 'discord' | 'feishu') {
+function makeFrontend(channel: 'telegram' | 'feishu') {
   const adapter = new FakeAdapter(channel);
   const sm = mkFakeSessionManager();
   const pbListeners = new Set<BrokerListener>();

@@ -17,7 +17,7 @@
 // TliveConfigV1 + a report. I/O is the caller's concern (loader.ts).
 
 import type {
-  TliveConfigV1, WorkspaceConfigEntry, TelegramChannelConfig, DiscordChannelConfig, FeishuChannelConfig,
+  TliveConfigV1, WorkspaceConfigEntry, TelegramChannelConfig, FeishuChannelConfig,
 } from './schema.js';
 
 export interface MigrationReport {
@@ -98,21 +98,26 @@ export function migrateToV1(input: MigrationInput): { config: TliveConfigV1; rep
   const channels: NonNullable<TliveConfigV1['channels']> = {};
   const tg = extractTelegram(env, legacy);
   if (tg) channels.telegram = tg;
-  const dc = extractDiscord(env, legacy);
-  if (dc) channels.discord = dc;
   const fs = extractFeishu(env, legacy);
   if (fs) channels.feishu = fs;
 
-  // Drop known deprecated sections + record them
+  // Drop known deprecated sections + record them. `discord` is dropped here
+  // (rather than migrated) because v1.0 removes Discord platform support
+  // entirely; legacy configs with a `discord:` block continue to load with
+  // a one-line warn rather than crashing schema validation.
   const DROPPED_SECTIONS = [
     'pty', 'webTerminal', 'web_terminal', 'hooks', 'hookBridge', 'hook_bridge',
-    'terminalRelay', 'terminal_relay', 'scanner',
+    'terminalRelay', 'terminal_relay', 'scanner', 'discord',
   ];
   for (const key of DROPPED_SECTIONS) {
     if (key in legacy) report.dropped.push(key);
   }
-  // Legacy env-only fields that no longer apply
-  const DROPPED_ENV = ['TL_PTY_SHELL', 'TL_WEB_PORT', 'TL_HOOK_URL'];
+  // Legacy env-only fields that no longer apply (Discord env keys included
+  // here so old config.env files don't surface as "unknown" warnings).
+  const DROPPED_ENV = [
+    'TL_PTY_SHELL', 'TL_WEB_PORT', 'TL_HOOK_URL',
+    'TL_DC_BOT_TOKEN', 'TL_DC_CHANNEL_ID', 'TL_DC_APP_ID',
+  ];
   for (const k of DROPPED_ENV) {
     if (k in env) report.dropped.push(`env.${k}`);
   }
@@ -121,7 +126,6 @@ export function migrateToV1(input: MigrationInput): { config: TliveConfigV1; rep
   const KNOWN_ENV = new Set([
     'TL_TOKEN', 'TL_DEFAULT_WORKDIR', 'TL_RUNTIME',
     'TL_TG_BOT_TOKEN', 'TL_TG_CHAT_ID',
-    'TL_DC_BOT_TOKEN', 'TL_DC_CHANNEL_ID', 'TL_DC_APP_ID',
     'TL_FS_APP_ID', 'TL_FS_APP_SECRET',
     'TL_PROXY', 'HTTPS_PROXY',
     ...DROPPED_ENV,
@@ -150,18 +154,6 @@ function extractTelegram(env: Record<string, string>, legacy: Record<string, unk
   if (typeof token !== 'string' || token.length === 0) return null;
   const chatId = env.TL_TG_CHAT_ID ?? readNested(legacy, ['telegram', 'chatId']);
   return { token, chatId: typeof chatId === 'string' && chatId.length > 0 ? chatId : undefined };
-}
-
-function extractDiscord(env: Record<string, string>, legacy: Record<string, unknown>): DiscordChannelConfig | null {
-  const token = env.TL_DC_BOT_TOKEN ?? readNested(legacy, ['discord', 'token']);
-  if (typeof token !== 'string' || token.length === 0) return null;
-  const channelId = env.TL_DC_CHANNEL_ID ?? readNested(legacy, ['discord', 'channelId']);
-  const applicationId = env.TL_DC_APP_ID ?? readNested(legacy, ['discord', 'applicationId']);
-  return {
-    token,
-    channelId: typeof channelId === 'string' && channelId.length > 0 ? channelId : undefined,
-    applicationId: typeof applicationId === 'string' && applicationId.length > 0 ? applicationId : undefined,
-  };
 }
 
 function extractFeishu(env: Record<string, string>, legacy: Record<string, unknown>): FeishuChannelConfig | null {

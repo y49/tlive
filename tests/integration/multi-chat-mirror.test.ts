@@ -1,7 +1,7 @@
 // tests/integration/multi-chat-mirror.test.ts
 //
 // Integration-level regression for the primary/mirror fan-out contract:
-//   - Bind a workspace to two chats: Telegram (primary) + Discord (mirror).
+//   - Bind a workspace to two chats: Telegram (primary) + Feishu (mirror).
 //   - Create a real LocalSession.
 //   - Drive a turn + a permission request.
 //   - Assert each adapter receives exactly one call per event with its OWN
@@ -41,15 +41,15 @@ async function boot() {
   const workspaces = new WorkspaceManager({ persistPath: join(home, 'workspaces.json') });
   const ws = workspaces.create({ name: 'mirrored', workdir: home });
   workspaces.addBinding(ws.id, { channelType: 'telegram', chatId: 'tg-1', role: 'primary' });
-  workspaces.addBinding(ws.id, { channelType: 'discord', chatId: 'ds-1', role: 'mirror' });
+  workspaces.addBinding(ws.id, { channelType: 'feishu', chatId: 'fs-1', role: 'mirror' });
 
   const tg = new FakeAdapter('telegram');
-  const ds = new FakeAdapter('discord');
+  const ds = new FakeAdapter('feishu');
   const frontend = new SessionFrontend({
     sessionManager: mgr,
     workspaceManager: workspaces,
     permissionBroker: broker,
-    adapters: { telegram: tg, discord: ds },
+    adapters: { telegram: tg, feishu: ds },
   });
   frontend.start();
 
@@ -99,7 +99,7 @@ describe('integration: multi-chat-mirror', () => {
     expect(tgMarkup?.buttons?.length ?? 0).toBeGreaterThan(0);
     expect((tgPerms[0]!.args as { chatId?: string }).chatId).toBe('tg-1');
 
-    // Mirror (Discord ds-1) receives no permission card in new UX
+    // Mirror (Feishu fs-1) receives no permission card in new UX
     // (legacy mirror-tail renderer was deleted in T10b).
     const dsPerms = env.ds.byKind('send').filter((c) => /Permission/i.test(String((c.args as { text?: string }).text ?? '')));
     expect(dsPerms.length).toBe(0);

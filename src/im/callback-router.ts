@@ -8,7 +8,6 @@
 //   ask:<optIdx>:<sid>:<reqId>       → AskUserQuestionBroker.resolve
 //   elic:submit:<sid>:<reqId>        → ElicitationBroker.resolve accept
 //   elic:cancel:<sid>:<reqId>        → ElicitationBroker.resolve decline
-//   elic:open:<sid>:<reqId>          → Discord-only modal-show shim
 //   suggest:<sid>:<sugId>            → SessionManager.get(sid).sendInput
 //   queue:cancel:<sid>:<itemId>      → session.queue.cancel
 //   budget:override:<sid>:<usd>      → (TODO T9) BudgetGuard.extend via session
@@ -51,8 +50,8 @@ export interface CallbackRouterDeps {
   askBroker: AskUserQuestionBroker;
   elicitationBroker: ElicitationBroker;
   /**
-   * Optional adapters map for `elic:open:` (Discord modal) and for stale-
-   * card edits. T9 wires this; tests pass stubs.
+   * Optional adapters map for stale-card edits. T9 wires this; tests
+   * pass stubs.
    */
   adapters?: Partial<Record<ChannelType, PlatformAdapter>>;
   /**
@@ -61,15 +60,6 @@ export interface CallbackRouterDeps {
    * requests. Daemon bootstrap wires a real provider; tests pass a fake.
    */
   policyStoreFor?: (workspaceId: string) => PolicyStore | Promise<PolicyStore>;
-  /**
-   * Optional callback invoked when Discord needs to show a pending modal
-   * for an elicitation. The real wiring requires a raw Discord Interaction
-   * instance; the router only hands off the modal spec + requestId.
-   */
-  showDiscordModal?: (
-    requestId: string,
-    modal: { title: string; fields: unknown[] },
-  ) => Promise<void>;
 }
 
 export interface CallbackContext {
@@ -272,20 +262,6 @@ export class CallbackRouter {
     }
     const reqId = reqParts.join(':');
     const sid = this.resolveSid(sidRaw);
-
-    if (verb === 'open') {
-      // Discord modal handoff.
-      if (!sid) return this.handleStaleSession(sidRaw, ctx);
-      const discordAdapter = this.deps.adapters?.discord as
-        | (PlatformAdapter & { pendingModals?: Map<string, { title: string; fields: unknown[] }> })
-        | undefined;
-      const modal = discordAdapter?.pendingModals?.get(reqId);
-      if (!modal) return { kind: 'unknown', reason: 'elic:open:no-modal' };
-      if (this.deps.showDiscordModal) {
-        await this.deps.showDiscordModal(reqId, modal);
-      }
-      return { kind: 'handled', action: 'elic:open' };
-    }
 
     if (!sid) return this.handleStaleSession(sidRaw, ctx);
 

@@ -7,7 +7,6 @@ export interface TLiveConfig {
   defaultWorkdir?: string;
   runtime: 'claude' | 'codex';
   telegram?: { token: string; chatId: string };
-  discord?: { token: string; channelId: string };
   feishu?: { appId: string; appSecret: string };
   proxy?: string;
 }
@@ -42,9 +41,6 @@ export function loadConfig(envPath?: string): TLiveConfig {
     runtime: runtime === 'codex' ? 'codex' : 'claude',
     telegram: env.TL_TG_BOT_TOKEN
       ? { token: env.TL_TG_BOT_TOKEN, chatId: env.TL_TG_CHAT_ID ?? '' }
-      : undefined,
-    discord: env.TL_DC_BOT_TOKEN
-      ? { token: env.TL_DC_BOT_TOKEN, channelId: env.TL_DC_CHANNEL_ID ?? '' }
       : undefined,
     feishu: env.TL_FS_APP_ID
       ? { appId: env.TL_FS_APP_ID, appSecret: env.TL_FS_APP_SECRET ?? '' }

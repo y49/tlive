@@ -6,7 +6,7 @@
 // permission cards show "Respond from <primary>"). This file owns the
 // type + array helpers so WorkspaceManager stays focused on orchestration.
 
-export type ChannelType = 'telegram' | 'discord' | 'feishu';
+export type ChannelType = 'telegram' | 'feishu';
 
 export interface ChatBinding {
   channelType: ChannelType;

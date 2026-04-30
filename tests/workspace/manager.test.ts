@@ -41,7 +41,7 @@ describe('WorkspaceManager create/lookup', () => {
     expect(wm.findByName('tlive')?.id).toBe(ws.id);
     wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1', role: 'primary' });
     expect(wm.findByChat('telegram', 'c1')?.id).toBe(ws.id);
-    expect(wm.findByChat('discord', 'c1')).toBeUndefined();
+    expect(wm.findByChat('feishu', 'c1')).toBeUndefined();
   });
 
   it('ensureForWorkdir auto-creates when absent, returns existing when present', () => {

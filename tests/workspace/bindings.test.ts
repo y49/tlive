@@ -13,7 +13,7 @@ describe('bindings', () => {
   it('addBinding promoting new primary demotes existing primary to mirror', () => {
     const initial: ChatBinding[] = [
       { channelType: 'telegram', chatId: 'c1', role: 'primary' },
-      { channelType: 'discord', chatId: 'c2', role: 'mirror' },
+      { channelType: 'feishu', chatId: 'c2', role: 'mirror' },
     ];
     const out = addBinding(initial, { channelType: 'feishu', chatId: 'c3', role: 'primary' });
     const primaries = out.filter((b) => b.role === 'primary');
@@ -36,7 +36,7 @@ describe('bindings', () => {
     const initial: ChatBinding[] = [
       { channelType: 'telegram', chatId: 'c1', role: 'primary' },
     ];
-    const out = addBinding(initial, { channelType: 'discord', chatId: 'c2', role: 'mirror' });
+    const out = addBinding(initial, { channelType: 'feishu', chatId: 'c2', role: 'mirror' });
     const primaries = out.filter((b) => b.role === 'primary');
     expect(primaries).toHaveLength(1);
     expect(primaries[0].chatId).toBe('c1');
@@ -55,16 +55,16 @@ describe('bindings', () => {
   it('findBinding by (channelType, chatId)', () => {
     const list: ChatBinding[] = [
       { channelType: 'telegram', chatId: 'c1', role: 'primary' },
-      { channelType: 'discord', chatId: 'c1', role: 'mirror' },
+      { channelType: 'feishu', chatId: 'c1', role: 'mirror' },
     ];
-    expect(findBinding(list, { channelType: 'discord', chatId: 'c1' })?.role).toBe('mirror');
-    expect(findBinding(list, { channelType: 'feishu', chatId: 'c1' })).toBeUndefined();
+    expect(findBinding(list, { channelType: 'feishu', chatId: 'c1' })?.role).toBe('mirror');
+    expect(findBinding(list, { channelType: 'feishu', chatId: 'cZ' })).toBeUndefined();
   });
 
   it('partitionBindings extracts primary and mirrors', () => {
     const list: ChatBinding[] = [
       { channelType: 'telegram', chatId: 'a', role: 'primary' },
-      { channelType: 'discord', chatId: 'b', role: 'mirror' },
+      { channelType: 'feishu', chatId: 'b', role: 'mirror' },
       { channelType: 'feishu', chatId: 'c', role: 'mirror' },
     ];
     const p = partitionBindings(list);

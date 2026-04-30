@@ -325,7 +325,7 @@ describe('CallbackRouter stale-card edits', () => {
     const sm = fakeSM(false, false); // no live, no prefix match, no resume
     const brokers = fakeBrokerCalls();
     const { adapter, edits } = fakeAdapter();
-    const adapters = new Map<'telegram' | 'discord' | 'feishu', PlatformAdapter>([['telegram', adapter]]);
+    const adapters = new Map<'telegram' | 'feishu', PlatformAdapter>([['telegram', adapter]]);
     const router = new CallbackRouter({
       sessionManager: sm,
       permissionBroker: brokers.permissionBroker,
@@ -350,7 +350,7 @@ describe('CallbackRouter stale-card edits', () => {
     (brokers.permissionBroker as unknown as { resolve: (...a: unknown[]) => boolean }).resolve =
       (...a: unknown[]) => { brokers.calls.push({ name: 'perm.resolve', args: a }); return false; };
     const { adapter, edits } = fakeAdapter();
-    const adapters = new Map<'telegram' | 'discord' | 'feishu', PlatformAdapter>([['telegram', adapter]]);
+    const adapters = new Map<'telegram' | 'feishu', PlatformAdapter>([['telegram', adapter]]);
     const router = new CallbackRouter({
       sessionManager: sm,
       permissionBroker: brokers.permissionBroker,
