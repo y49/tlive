@@ -52,13 +52,16 @@ export class ReplyDocument {
         text: reply.html,
         parseMode: 'html',
       });
+      // Detail card sent as a separate adjacent message WITHOUT replyTo.
+      // Telegram's replyTo creates an auto-quote bubble that duplicates
+      // the parent's content above the detail, visually redundant. The
+      // bot owns the conversation flow so adjacency is enough association.
       const detail = renderTelegramDetail(this.state);
       this.detailMsgId = await this.adapter.send({
         chatId: this.target.chatId,
         threadId: this.target.threadId,
         text: detail.html,
         parseMode: 'html',
-        replyToMessageId: this.bodyMsgId,
       });
     } else {
       if (typeof this.adapter.sendCard !== 'function') {

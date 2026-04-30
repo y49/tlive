@@ -41,7 +41,9 @@ describe('ReplyDocument — Telegram', () => {
     expect(sent[0].chatId).toBe('c1');
     expect(sent[0].parseMode).toBe('html');
     expect(sent[0].replyToMessageId).toBeUndefined();
-    expect(sent[1].replyToMessageId).toBe('m1');
+    // v3.2.1: detail no longer has replyToMessageId — avoids Telegram quote bubble
+    // duplicating the parent reply's content above the detail
+    expect(sent[1].replyToMessageId).toBeUndefined();
     expect(sent[1].text).toContain('<pre><code>');
   });
 

@@ -33,10 +33,11 @@ describe('TurnComposite — integration', () => {
     const tc = new TurnComposite(adapter as any, target, eq, state);
     await tc.start();
     await vi.runAllTimersAsync();
-    // v3.2: ReplyDocument.start sends 2 messages on telegram — reply head (m1)
-    // and detail card (m2, replyTo m1). Detail contains <pre><code>.
+    // v3.2.1: ReplyDocument.start sends 2 messages on telegram — reply head (m1)
+    // and detail card (m2, adjacent — NO replyTo to avoid Telegram quote bubble).
+    // Detail contains <pre><code>.
     expect(sent.length).toBe(2);
-    expect(sent[1].replyToMessageId).toBe('m1');
+    expect(sent[1].replyToMessageId).toBeUndefined();
   });
 
   it('ingestEvent assistant_text_delta 累加 body 并 schedule edit', async () => {

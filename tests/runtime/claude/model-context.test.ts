@@ -15,6 +15,13 @@ describe('modelMaxContextFor', () => {
     expect(modelMaxContextFor('claude-sonnet-4-5-1m-20250929')).toBe(1_000_000);
   });
 
+  it('returns 1M for SDK [1m] / (1m) suffix variants (v3.2.1)', () => {
+    // SDK exposes claude-opus-4-6[1m] when the anthropic-beta context-1m flag is set
+    expect(modelMaxContextFor('claude-opus-4-6[1m]')).toBe(1_000_000);
+    expect(modelMaxContextFor('claude-sonnet-4-5(1m)')).toBe(1_000_000);
+    expect(modelMaxContextFor('claude-sonnet-4_1m')).toBe(1_000_000);
+  });
+
   it('falls back to 200k for unknown / null / empty', () => {
     expect(modelMaxContextFor(null)).toBe(200_000);
     expect(modelMaxContextFor(undefined)).toBe(200_000);
