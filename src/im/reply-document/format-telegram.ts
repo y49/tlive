@@ -1,16 +1,13 @@
 // src/im/reply-document/format-telegram.ts
 //
-// renderTelegram — pure HudState + body → Telegram HTML.
-// 4-zone layout (v3.1 hotfix 2026-04-30):
-//   1. banner          — bold emoji status (◐ thinking / ◐ Read / ✓ done / ❌ error / ❓ awaiting / ⏸ waiting)
-//   2. progress line   — ALWAYS VISIBLE: tally chips · ⏱ duration · 💵 cost
-//                        so the user sees tool activity without expanding the footer
-//                        (Q5 — "HUD 折叠看不到 tool 调用,以为卡了")
-//   3. body            — assistant markdown rendered to HTML, fence code preserved
-//   4. detail footer   — <blockquote expandable> with turn header / branch / Context / Σ session
-//                        collapsed by default (1-line preview)
+// renderTelegramReply — banner + progress + body (the chat-bubble message)
+// renderTelegramDetail — <pre><code> monospace stats card (separate message)
 //
-// Inspired by claude-hud's multi-line statusline layout.
+// v3.2 hotfix 2026-04-30: split from a single render into two so the
+// detail card lives in its own Telegram message, freeing the body to
+// chunk on >4096 chars without touching the detail card. Also accepts
+// an injectable `now: number` for live-elapsed rendering — render is
+// called from scheduler's silence-tick (1.5s) so elapsed naturally ticks.
 
 import type { HudState } from '../hud/state.js';
 import { escapeHtml } from '../util/html.js';
@@ -25,12 +22,29 @@ function bar(pct: number): string {
   const filled = Math.max(0, Math.min(BAR_WIDTH, Math.round((safe / 100) * BAR_WIDTH)));
   return '▓'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled);
 }
-function fmtDur(ms: number): string { return `${(ms / 1000).toFixed(1)}s`; }
-function fmtCost(n: number): string { return `$${n.toFixed(2)}`; }
+
+function fmtDur(ms: number): string {
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60);
+  const rem = s - m * 60;
+  return `${m}m ${rem.toFixed(1)}s`;
+}
+
+function fmtCost(n: number, isFinal: boolean): string {
+  if (!isFinal) return '💵 –.--';
+  return `💵 $${n.toFixed(2)}`;
+}
+
 function fmtTok(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   return String(n);
+}
+
+function elapsedMs(state: HudState, now: number): number {
+  if (state.isFrozen || state.isErrored) return state.durationMs;
+  return Math.max(0, now - state.startedAtMs);
 }
 
 function banner(state: HudState): string {
@@ -48,7 +62,7 @@ function banner(state: HudState): string {
   return `<b>◐ thinking</b>`;
 }
 
-function progressLine(state: HudState): string {
+function progressLine(state: HudState, now: number): string {
   const parts: string[] = [];
   if (state.toolTally.size > 0) {
     const chips: string[] = [];
@@ -58,49 +72,53 @@ function progressLine(state: HudState): string {
   for (const t of state.todoList) {
     if (t.status === 'in_progress') parts.push(`▶ ${escapeHtml(t.text)}`);
   }
-  // Always show ⏱ + 💵 anchors so the line is never empty (e.g. first turn
-  // before any tool has finished).
-  parts.push(`⏱ ${fmtDur(state.durationMs)}`);
-  parts.push(`💵 ${fmtCost(state.costThisTurn)}`);
-  return parts.join(' · ');
+  parts.push(`⏱ ${fmtDur(elapsedMs(state, now))}`);
+  parts.push(fmtCost(state.costThisTurn, state.isFrozen || state.isErrored));
+  return `<i>${parts.join(' · ')}</i>`;
 }
 
-function footer(state: HudState): string {
-  const lines: string[] = [];
-  const sid = escapeHtml(state.sessionShortId);
-  const model = escapeHtml(state.model);
-  const maxK = fmtTok(state.modelMaxContext);
-  // L1 — turn / session / model. 💬 (chat bubble) matches "conversation turn"
-  // semantic better than 📊 (which read as "stats" and confused users).
-  // # prefix on turn number reads as "round 2" without ambiguity vs "session 2".
-  lines.push(`💬 #${state.turnNumber} · ${sid} · ${model} (${maxK})`);
-  if (state.gitBranch) {
-    lines.push(`🌳 ${escapeHtml(state.gitBranch)} · ${escapeHtml(state.workspaceName)}`);
-  }
-
-  const ctxPct = state.modelMaxContext > 0
-    ? Math.round((state.contextUsedTok / state.modelMaxContext) * 100)
-    : 0;
-  lines.push(`Context ${bar(ctxPct)} ${ctxPct}% (${fmtTok(state.contextUsedTok)}/${maxK})`);
-
-  for (const q of state.quotaBars) {
-    const reset = q.resetsIn ? ` (${escapeHtml(q.resetsIn)})` : '';
-    lines.push(`${escapeHtml(q.label)} ${bar(q.pct)} ${q.pct}%${reset}`);
-  }
-
-  lines.push(`Σ ${fmtCost(state.costSession)}`);
-  return `<blockquote expandable>\n${lines.join('\n')}\n</blockquote>`;
-}
-
-export function renderTelegram(state: HudState, body: string): TelegramRender {
+export function renderTelegramReply(
+  state: HudState,
+  body: string,
+  now: number = Date.now(),
+): TelegramRender {
   const bodyHtml = body.trim() ? markdownToTelegramHtml(body) : '<i>thinking…</i>';
   const html = [
     banner(state),
-    progressLine(state),
+    progressLine(state, now),
     '',
     bodyHtml,
-    '',
-    footer(state),
   ].join('\n');
   return { html };
+}
+
+export function renderTelegramDetail(state: HudState): TelegramRender {
+  const lines: string[] = [];
+  const sid = state.sessionShortId;
+  const model = state.model;
+  const maxTok = fmtTok(state.modelMaxContext);
+  lines.push(`💬 #${state.turnNumber} · ${sid} · ${model} (${maxTok} ctx)`);
+  if (state.gitBranch) {
+    lines.push(`🌳 ${state.gitBranch} · ${state.workspaceName}`);
+  }
+  const ctxPct = state.modelMaxContext > 0
+    ? Math.round((state.contextUsedTok / state.modelMaxContext) * 100)
+    : 0;
+  lines.push(
+    `${bar(ctxPct)} ${ctxPct}% · ${fmtTok(state.contextUsedTok)}/${maxTok} · Σ $${state.costSession.toFixed(2)}`,
+  );
+  for (const q of state.quotaBars) {
+    const reset = q.resetsIn ? ` (${q.resetsIn})` : '';
+    lines.push(`${bar(q.pct)} ${q.pct}% · ${q.label}${reset}`);
+  }
+  return { html: `<pre><code>${lines.join('\n')}</code></pre>` };
+}
+
+// Backward-compat shim — REMOVE in T4 when ReplyDocument adopts the dual API.
+// Wraps the new APIs to keep current callers (ReplyDocument, possibly
+// integration tests) compiling until T4 properly upgrades them.
+export function renderTelegram(state: HudState, body: string): TelegramRender {
+  const reply = renderTelegramReply(state, body, Date.now());
+  const detail = renderTelegramDetail(state);
+  return { html: `${reply.html}\n\n${detail.html}` };
 }

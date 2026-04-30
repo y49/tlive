@@ -1,97 +1,139 @@
 import { describe, it, expect } from 'vitest';
-import { renderTelegram } from '../../../src/im/reply-document/format-telegram.js';
+import { renderTelegramReply, renderTelegramDetail } from '../../../src/im/reply-document/format-telegram.js';
 import { initialHudState } from '../../../src/im/hud/state.js';
 
 const baseState = (overrides: Record<string, unknown> = {}) => ({
   ...initialHudState({
     sessionShortId: '8cdfcfb', workspaceName: 'tlive',
     gitBranch: 'feat/v1.0', provider: 'claude' as const,
-    model: 'opus-4-6', modelMaxContext: 200_000, turnNumber: 5,
-    startedAtMs: 0, costSession: 0.18,
+    model: 'claude-opus-4-7', modelMaxContext: 200_000, turnNumber: 5,
+    startedAtMs: 1_700_000_000_000, costSession: 0.18,
   }),
   ...overrides,
 });
 
-describe('renderTelegram — banner', () => {
-  it('thinking 状态:◐ thinking', () => {
-    const r = renderTelegram(baseState(), '');
+const NOW_5S = 1_700_000_005_000;
+
+describe('renderTelegramReply — banner', () => {
+  it('thinking 默认', () => {
+    const r = renderTelegramReply(baseState(), '', NOW_5S);
     expect(r.html).toContain('<b>◐ thinking</b>');
   });
-  it('tool_running:◐ <toolName>', () => {
-    const r = renderTelegram(baseState({
+  it('tool_running 显示 toolName', () => {
+    const r = renderTelegramReply(baseState({
       currentActivity: { kind: 'tool_running', toolName: 'Read', toolArg: 'README.md', elapsedMs: 1200 },
-    }), 'body');
+    }), 'body', NOW_5S);
     expect(r.html).toContain('<b>◐ Read</b>');
   });
-  it('askPending:❓ awaiting input', () => {
-    const r = renderTelegram(baseState({ askPending: true }), '');
+  it('askPending', () => {
+    const r = renderTelegramReply(baseState({ askPending: true }), '', NOW_5S);
     expect(r.html).toContain('<b>❓ awaiting input</b>');
   });
-  it('waiting_permission:⏸', () => {
-    const r = renderTelegram(baseState({
+  it('waiting_permission', () => {
+    const r = renderTelegramReply(baseState({
       currentActivity: { kind: 'waiting_permission', toolName: 'Bash', elapsedMs: 0 },
-    }), '');
+    }), '', NOW_5S);
     expect(r.html).toContain('<b>⏸ waiting for permission · Bash</b>');
   });
-  it('frozen done:✓ done', () => {
-    const r = renderTelegram(baseState({ isFrozen: true }), '');
+  it('frozen done', () => {
+    const r = renderTelegramReply(baseState({ isFrozen: true, durationMs: 4_100 }), '', NOW_5S);
     expect(r.html).toContain('<b>✓ done</b>');
   });
-  it('errored:❌ error · summary', () => {
-    const r = renderTelegram(baseState({ isErrored: true, errorSummary: 'oops' }), '');
+  it('errored', () => {
+    const r = renderTelegramReply(baseState({ isErrored: true, errorSummary: 'oops' }), '', NOW_5S);
     expect(r.html).toContain('<b>❌ error · oops</b>');
   });
 });
 
-describe('renderTelegram — progress (always visible)', () => {
-  it('tally chips + duration + cost on always-visible progress line', () => {
-    const r = renderTelegram(baseState({
-      toolTally: new Map([['Read', 3], ['Bash', 1]]),
-      durationMs: 12_300,
-      costThisTurn: 0.04,
-    }), 'body');
-    // Progress line lives BEFORE blockquote (i.e. visible without expanding)
-    const bqStart = r.html.indexOf('<blockquote expandable>');
-    const tallyAt = r.html.indexOf('Read×3');
-    expect(tallyAt).toBeGreaterThan(-1);
-    expect(tallyAt).toBeLessThan(bqStart);
-    expect(r.html).toContain('Bash×1');
-    expect(r.html).toContain('⏱ 12.3s');
-    expect(r.html).toContain('💵 $0.04');
+describe('renderTelegramReply — progress (always visible, live elapsed)', () => {
+  it('elapsed computed from now - startedAtMs when not frozen', () => {
+    const r = renderTelegramReply(baseState(), '', NOW_5S);
+    expect(r.html).toContain('⏱ 5.0s');
   });
-
-  it('progress line never empty — shows ⏱ + 💵 even when no tally', () => {
-    const r = renderTelegram(baseState(), '');
-    const bqStart = r.html.indexOf('<blockquote expandable>');
-    const durAt = r.html.indexOf('⏱ ');
-    expect(durAt).toBeGreaterThan(-1);
-    expect(durAt).toBeLessThan(bqStart);
+  it('elapsed uses durationMs when frozen', () => {
+    const r = renderTelegramReply(baseState({ isFrozen: true, durationMs: 4_100 }), '', NOW_5S);
+    expect(r.html).toContain('⏱ 4.1s');
+  });
+  it('cost shows placeholder during turn (not frozen)', () => {
+    const r = renderTelegramReply(baseState(), '', NOW_5S);
+    expect(r.html).toContain('💵 –.--');
+  });
+  it('cost shows real value when frozen', () => {
+    const r = renderTelegramReply(baseState({ isFrozen: true, durationMs: 4_100, costThisTurn: 0.06 }), '', NOW_5S);
+    expect(r.html).toContain('💵 $0.06');
+  });
+  it('tally chips appear in progress line', () => {
+    const r = renderTelegramReply(baseState({
+      toolTally: new Map([['Read', 3], ['Bash', 1]]),
+    }), '', NOW_5S);
+    expect(r.html).toContain('Read×3');
+    expect(r.html).toContain('Bash×1');
+  });
+  it('progress is on second line (line 1 = banner, line 2 = progress)', () => {
+    const r = renderTelegramReply(baseState(), '', NOW_5S);
+    const lines = r.html.split('\n');
+    expect(lines[0]).toMatch(/^<b>/);
+    expect(lines[1]).toMatch(/⏱/);
   });
 });
 
-describe('renderTelegram — footer (blockquote expandable, detail metadata)', () => {
-  it('包含 #N · sid · model + Context bar + Σ session', () => {
-    const r = renderTelegram(baseState({
-      contextUsedTok: 64_000,
-      durationMs: 12_300,
-      costThisTurn: 0.04,
-    }), 'body');
-    expect(r.html).toContain('<blockquote expandable>');
+describe('renderTelegramReply — body', () => {
+  it('empty body shows thinking placeholder', () => {
+    const r = renderTelegramReply(baseState(), '', NOW_5S);
+    expect(r.html).toContain('<i>thinking…</i>');
+  });
+  it('body markdown converted to HTML', () => {
+    const r = renderTelegramReply(baseState(), '**bold** text', NOW_5S);
+    expect(r.html).toContain('<b>bold</b>');
+  });
+  it('body fence code preserved as <pre><code>', () => {
+    const r = renderTelegramReply(baseState(), '```ts\nconst x = 1;\n```', NOW_5S);
+    expect(r.html).toContain('<pre><code');
+  });
+});
+
+describe('renderTelegramDetail — <pre><code> card', () => {
+  it('wraps content in <pre><code>...</code></pre>', () => {
+    const r = renderTelegramDetail(baseState());
+    expect(r.html.startsWith('<pre><code>')).toBe(true);
+    expect(r.html.endsWith('</code></pre>')).toBe(true);
+  });
+  it('line 1 — turn header with #N · sid · model (maxK ctx)', () => {
+    const r = renderTelegramDetail(baseState());
     expect(r.html).toContain('💬 #5');
     expect(r.html).toContain('8cdfcfb');
-    expect(r.html).toContain('opus-4-6');
-    expect(r.html).toContain('(200.0k)');
-    expect(r.html).toContain('Context');
-    expect(r.html).toContain('32%');
-    expect(r.html).toContain('Σ $0.18');
-    expect(r.html).toContain('</blockquote>');
+    expect(r.html).toContain('claude-opus-4-7');
+    expect(r.html).toContain('(200.0k ctx)');
   });
+  it('line 2 — git branch · workspace, omitted if no branch', () => {
+    const withBranch = renderTelegramDetail(baseState());
+    expect(withBranch.html).toContain('🌳 feat/v1.0 · tlive');
 
-  it('body 在 footer 之外,允许 fence code 不嵌套', () => {
-    const r = renderTelegram(baseState(), '```ts\nconst x = 1;\n```');
-    const bqStart = r.html.indexOf('<blockquote expandable>');
-    const preStart = r.html.indexOf('<pre>');
-    expect(preStart).toBeGreaterThan(-1);
-    expect(preStart).toBeLessThan(bqStart);
+    const noBranch = renderTelegramDetail({ ...baseState(), gitBranch: undefined });
+    expect(noBranch.html).not.toContain('🌳');
+  });
+  it('line 3 — context bar + tokens + Σ session', () => {
+    const r = renderTelegramDetail(baseState({
+      contextUsedTok: 44_200,
+      costSession: 0.25,
+    }));
+    expect(r.html).toContain('22%');
+    expect(r.html).toContain('44.2k/200.0k');
+    expect(r.html).toContain('Σ $0.25');
+  });
+  it('appends quota lines when state.quotaBars non-empty', () => {
+    const r = renderTelegramDetail(baseState({
+      quotaBars: [{ label: '5h', pct: 45, resetsIn: '3h 57m' }],
+    }));
+    expect(r.html).toContain('5h');
+    expect(r.html).toContain('45%');
+    expect(r.html).toContain('3h 57m');
+  });
+});
+
+describe('renderTelegramReply — defaults to Date.now() when now omitted', () => {
+  it('omitting now still produces valid output', () => {
+    const r = renderTelegramReply(baseState(), '', undefined);
+    expect(r.html).toContain('⏱');
   });
 });
