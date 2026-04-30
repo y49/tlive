@@ -33,6 +33,16 @@ function fmtTok(n: number): string {
   return String(n);
 }
 
+function elapsedMsForRender(state: HudState, now: number): number {
+  if (state.isFrozen || state.isErrored) return state.durationMs;
+  return Math.max(0, now - state.startedAtMs);
+}
+
+function fmtCostForFeishu(n: number, isFinal: boolean): string {
+  if (!isFinal) return '💵 –.--';
+  return `💵 $${n.toFixed(2)}`;
+}
+
 function templateAndPrefix(state: HudState): { template: string; prefix: string } {
   if (state.isErrored) return { template: 'red', prefix: '❌' };
   if (state.isFrozen) return { template: 'green', prefix: '✓' };
@@ -41,7 +51,7 @@ function templateAndPrefix(state: HudState): { template: string; prefix: string 
   return { template: 'blue', prefix: '◐' };
 }
 
-function progressMarkdown(state: HudState): string {
+function progressMarkdown(state: HudState, now: number): string {
   const parts: string[] = [];
   // Active activity line (if any)
   const a = state.currentActivity;
@@ -63,8 +73,9 @@ function progressMarkdown(state: HudState): string {
   for (const t of state.todoList) {
     if (t.status === 'in_progress') parts.push(`▶ ${t.text}`);
   }
-  // Always-visible time + cost anchors
-  parts.push(`⏱ ${fmtDur(state.durationMs)} · 💵 ${fmtCost(state.costThisTurn)}`);
+  // Always-visible time + cost anchors (live elapsed; cost shown only when final)
+  const isFinal = state.isFrozen || state.isErrored;
+  parts.push(`⏱ ${fmtDur(elapsedMsForRender(state, now))} · ${fmtCostForFeishu(state.costThisTurn, isFinal)}`);
   return parts.join('\n');
 }
 
@@ -84,7 +95,7 @@ function detailMarkdown(state: HudState): string {
   return lines.join('\n');
 }
 
-export function renderFeishu(state: HudState, body: string): FeishuRender {
+export function renderFeishu(state: HudState, body: string, now: number = Date.now()): FeishuRender {
   const { template, prefix } = templateAndPrefix(state);
   const card = {
     schema: '2.0',
@@ -95,7 +106,7 @@ export function renderFeishu(state: HudState, body: string): FeishuRender {
     },
     body: {
       elements: [
-        { tag: 'markdown', content: progressMarkdown(state) },
+        { tag: 'markdown', content: progressMarkdown(state, now) },
         { tag: 'hr' },
         { tag: 'markdown', content: body.trim() ? body : '_thinking…_' },
         { tag: 'hr' },

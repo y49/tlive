@@ -2,12 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { renderFeishu } from '../../../src/im/reply-document/format-feishu.js';
 import { initialHudState } from '../../../src/im/hud/state.js';
 
+const NOW_5S = 1_700_000_005_000;
+
 const baseState = (overrides: Record<string, unknown> = {}) => ({
   ...initialHudState({
     sessionShortId: '8cdfcfb', workspaceName: 'tlive',
     gitBranch: 'feat/v1.0', provider: 'claude' as const,
     model: 'opus-4-6', modelMaxContext: 200_000, turnNumber: 5,
-    startedAtMs: 0, costSession: 0.18,
+    startedAtMs: 1_700_000_000_000, costSession: 0.18,
   }),
   ...overrides,
 });
@@ -20,19 +22,19 @@ describe('renderFeishu — header.template', () => {
     [{ isFrozen: true }, 'green', '✓'],
     [{ isErrored: true, errorSummary: 'x' }, 'red', '❌'],
   ])('state=%j → template %s prefix %s', (overrides, template, prefix) => {
-    const r: any = renderFeishu(baseState(overrides), '');
+    const r: any = renderFeishu(baseState(overrides), '', NOW_5S);
     expect(r.card.header.template).toBe(template);
     expect(r.card.header.title.content).toContain(prefix);
   });
 
   it('header.title uses #N · sid (turn → conversation round)', () => {
-    const r: any = renderFeishu(baseState(), '');
+    const r: any = renderFeishu(baseState(), '', NOW_5S);
     expect(r.card.header.title.content).toContain('#5');
     expect(r.card.header.title.content).toContain('8cdfcfb');
   });
 
   it('header.subtitle is just the model id (model card label)', () => {
-    const r: any = renderFeishu(baseState(), '');
+    const r: any = renderFeishu(baseState(), '', NOW_5S);
     expect(r.card.header.subtitle.content).toBe('opus-4-6');
   });
 });
@@ -44,7 +46,8 @@ describe('renderFeishu — body element order (progress promoted)', () => {
       toolTally: new Map([['Read', 3]]),
       durationMs: 12_300,
       costThisTurn: 0.04,
-    }), 'hello');
+      isFrozen: true,
+    }), 'hello', NOW_5S);
     const tags = r.card.body.elements.map((e: any) => e.tag);
     expect(tags).toEqual(['markdown', 'hr', 'markdown', 'hr', 'markdown']);
     // Element 0 = progress (always visible) — has tally + ⏱ + 💵
@@ -61,7 +64,30 @@ describe('renderFeishu — body element order (progress promoted)', () => {
   });
 
   it('空 body 显示 placeholder', () => {
-    const r: any = renderFeishu(baseState(), '');
+    const r: any = renderFeishu(baseState(), '', NOW_5S);
     expect(r.card.body.elements[2].content).toBe('_thinking…_');
+  });
+});
+
+describe('renderFeishu — live elapsed via now injection', () => {
+  it('elapsed computed from now - startedAtMs when not frozen', () => {
+    const r: any = renderFeishu(baseState(), '', NOW_5S);
+    // Element 0 = progress markdown
+    expect(r.card.body.elements[0].content).toContain('⏱ 5.0s');
+  });
+
+  it('elapsed uses durationMs when frozen', () => {
+    const r: any = renderFeishu(baseState({ isFrozen: true, durationMs: 4_100 }), '', NOW_5S);
+    expect(r.card.body.elements[0].content).toContain('⏱ 4.1s');
+  });
+
+  it('cost shows placeholder during turn', () => {
+    const r: any = renderFeishu(baseState(), '', NOW_5S);
+    expect(r.card.body.elements[0].content).toContain('💵 –.--');
+  });
+
+  it('cost shows real value when frozen', () => {
+    const r: any = renderFeishu(baseState({ isFrozen: true, durationMs: 4_100, costThisTurn: 0.06 }), '', NOW_5S);
+    expect(r.card.body.elements[0].content).toContain('💵 $0.06');
   });
 });
