@@ -4,18 +4,17 @@
 至少一个已连接的 IM 机器人，以及一个可以从手机驱动的 Claude Code / Codex
 会话。
 
-**v1.0 变更说明：** tlive 不再是 PTY 终端包装器，也不再内置网页终端。它
-已经演进为**以 MCP 为核心的 agent 编排基座**。旧版的 agent 包装子命令、
-web terminal、hook 脚本全部移除。取而代之的是由守护进程持有一个 SDK
-支撑的 runtime，你通过 IM 或本地 `claude` / `codex`（作为 MCP 客户端）
-与之对话。
+**v1.0 变更说明：** tlive 不再是 PTY 终端包装器。它已经演进为**以 MCP
+为核心的 agent 编排基座**。旧版的 agent 包装子命令与 hook 脚本全部移除。
+取而代之的是由守护进程持有一个 SDK 支撑的 runtime，你通过 IM 或本地
+`claude` / `codex`（作为 MCP 客户端）与之对话。
 
 ## 前置条件
 
 - **Node.js 20+** 和 npm（推荐 Node 22）。
 - 本地已安装 **Claude Code** 或 **Codex**——Companion 模式以及
   `/handoff-to-me` 之后的本地续聊需要。
-- **Telegram / Discord / 飞书**任一平台的账号。可以同时启用多个。
+- **Telegram / 飞书**任一平台的账号。可以同时启用多个。
 
 ## 安装
 
@@ -69,7 +68,6 @@ chmod 600 ~/.tlive/config.json
 选择一个平台并按指南配置：
 
 - [Telegram](setup-telegram-cn.md) —— 最快，约 5 分钟
-- [Discord](setup-discord-cn.md) —— 约 10 分钟，需要服务器管理员权限
 - [飞书 / Lark](setup-feishu-cn.md) —— 约 15 分钟，需要企业管理员审批
 
 每个指南最终给出的 JSON 片段粘贴到 `~/.tlive/config.json` 的
@@ -159,7 +157,7 @@ MCP 启动、warm pool）。全部通过是发布 preflight，也是
 2. 告诉 Claude 跑测试：`请帮我跑 npm test`。
 3. Claude 想执行 `Bash(npm test)`。由于设置了
    `permissionPromptToolName`，SDK 把权限请求走到 `tlive` MCP 服务器，
-   而不是弹本地 TUI。
+   而不是弹本地权限提示。
 4. **手机收到推送**——IM 中出现一张权限卡，含 Bash 块、原因摘要、
    Allow/Deny 按钮。
 5. 你点 **Allow**。MCP 工具返回 `{allow: true}`，本地 `claude` 解除
@@ -206,8 +204,7 @@ MCP 启动、warm pool）。全部通过是发布 preflight，也是
   `tlive status` 无响应，很可能是僵尸 socket：
   `rm ~/.tlive/daemon.sock` 后重试。
 - **Token 看起来没问题但没收到消息** → `tlive doctor` 会做在线探测
-  （Telegram 的 `getMe`、Discord 的 gateway 鉴权、飞书的
-  `tenant_access_token`）。
+  （Telegram 的 `getMe`、飞书的 `tenant_access_token`）。
 - **权限卡按钮点了没反应** → `tlive daemon-logs --follow` 查看
   CallbackRouter 错误。常见原因：daemon 重启后旧卡失效——重新发一次
   触发消息即可。
@@ -223,5 +220,5 @@ MCP 启动、warm pool）。全部通过是发布 preflight，也是
 - [45 条 IM 命令参考](commands.md)
 - [手动 smoke test](smoke-test.md) —— 15 步发布前验证
 - 平台配置指南：[Telegram](setup-telegram-cn.md) ·
-  [Discord](setup-discord-cn.md) · [飞书](setup-feishu-cn.md)
+  [飞书](setup-feishu-cn.md)
 - 返回 [README.md](../README.md) 查看架构与完整 CLI 列表。

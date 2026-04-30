@@ -4,19 +4,19 @@ This guide takes you from zero to a working tlive setup. By the end you'll
 have the daemon running, at least one IM bot connected, and a Claude Code /
 Codex session driven from your phone.
 
-**Changed in v1.0:** tlive is no longer a PTY wrapper or a web-terminal. It
-is an MCP-native agent fabric. The legacy agent-wrapper subcommands, web
-terminal, and hook scripts are all gone. Instead the daemon owns an
-SDK-backed runtime that you talk to through IM or through plain `claude` /
-`codex` running locally as an MCP client.
+**Changed in v1.0:** tlive is no longer a PTY wrapper. It is an MCP-native
+agent fabric. The legacy agent-wrapper subcommands and hook scripts are all
+gone. Instead the daemon owns an SDK-backed runtime that you talk to
+through IM or through plain `claude` / `codex` running locally as an MCP
+client.
 
 ## Prerequisites
 
 - **Node.js 20+** and npm (Node 22 recommended).
 - **Claude Code** or **Codex** installed locally — needed for Companion mode
   and for locally-resumed sessions after `/handoff-to-me`.
-- An IM account on one of **Telegram**, **Discord**, or **Feishu**. You can
-  enable any combination.
+- An IM account on one of **Telegram** or **Feishu**. You can enable any
+  combination.
 
 ## Install
 
@@ -71,7 +71,6 @@ chmod 600 ~/.tlive/config.json
 Pick your platform and follow the detailed guide:
 
 - [Telegram](setup-telegram.md) — fastest, ~5 min
-- [Discord](setup-discord.md) — ~10 min, needs server admin
 - [Feishu / Lark](setup-feishu.md) — ~15 min, needs workspace admin approval
 
 Each guide ends with the JSON block to paste under `channels.<platform>` in
@@ -161,7 +160,7 @@ are routed to IM via `permissionPromptToolName`.
 2. Ask Claude to run tests: `npm test please`.
 3. Claude wants to run `Bash(npm test)`. Because
    `permissionPromptToolName` is set, the SDK routes the prompt through the
-   `tlive` MCP server instead of showing the local TUI prompt.
+   `tlive` MCP server instead of showing the local permission prompt.
 4. **Your phone buzzes** — a permission card arrives in IM with the Bash
    block, the "why" summary, and Allow/Deny buttons.
 5. You tap **Allow**. The MCP tool returns `{allow: true}` to the SDK, and
@@ -208,8 +207,8 @@ local claude exits cleanly, and IM takes over rendering.
   but `tlive status` disagrees, remove the stale socket:
   `rm ~/.tlive/daemon.sock` and retry.
 - **Bot token looks fine but no messages arrive** → `tlive doctor` runs a
-  live per-platform probe (`getMe` for Telegram, gateway auth for Discord,
-  `tenant_access_token` for Feishu).
+  live per-platform probe (`getMe` for Telegram, `tenant_access_token`
+  for Feishu).
 - **Permission card buttons do nothing** → check
   `tlive daemon-logs --follow` for CallbackRouter errors. Usually a stale
   card from before a daemon restart — resend the triggering message.
@@ -224,5 +223,5 @@ Full troubleshooting table: [references/troubleshooting.md](../references/troubl
 
 - [45-command IM reference](commands.md)
 - [Manual smoke test](smoke-test.md) — 15-step release verification
-- Platform setup guides: [Telegram](setup-telegram.md) · [Discord](setup-discord.md) · [Feishu](setup-feishu.md)
+- Platform setup guides: [Telegram](setup-telegram.md) · [Feishu](setup-feishu.md)
 - Back to [README.md](../README.md) for architecture and the full CLI surface.

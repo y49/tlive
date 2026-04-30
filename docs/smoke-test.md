@@ -161,7 +161,6 @@ use the ask-user-question tool to collect my name and favourite language
 
 **Expected.** The platform renders its native form:
 - **Telegram**: forceReply sequence — one question per reply message.
-- **Discord**: Modal popup with two fields.
 - **Feishu**: interactive card with form blocks.
 
 Submit values; they reach the tool call as structured output.
@@ -242,12 +241,12 @@ Locally:
 ```bash
 cd /tmp/tlive-smoke
 claude
-# (inside Claude's TUI)
+# (inside the local Claude session)
 please run `ls -la`
 ```
 
 **Expected.**
-- Local Claude TUI *pauses* (no local permission prompt).
+- Local Claude *pauses* (no local permission prompt).
 - IM receives the permission card tagged `💻 remote from local claude`.
 - Click Allow in IM. Local Claude unblocks and runs `ls -la`.
 - `/sessions` in IM lists the remote session with the 💻 badge.
