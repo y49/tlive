@@ -1,6 +1,6 @@
 // src/im/bot-commands-registrar.ts
 //
-// Registers the top-16 slash commands on every platform that supports
+// Registers the 12 v3.3 slash commands on every platform that supports
 // autocomplete. Called once on daemon start by T9 bootstrap.
 //
 // Platforms:
@@ -13,26 +13,22 @@ import type { BotCommandSpec } from '../platform/telegram/bot-commands.js';
 import { registerBotCommands as telegramRegister } from '../platform/telegram/bot-commands.js';
 
 /**
- * The 16 commands registered for autocomplete. Chosen for discoverability
- * and IM-mobile ergonomics: heavy use + short enough to type on a phone.
+ * The 12 commands registered for autocomplete — the entire v3.3 surface.
+ * Per spec §3.4: command name English, description Chinese for mobile readability.
  */
 export const TOP_COMMANDS: BotCommandSpec[] = [
-  { command: 'help',     description: 'Show command help' },
-  { command: 'bind',     description: 'Bind this chat to a workspace (admin)' },
-  { command: 'new',      description: 'Create a new session' },
-  { command: 'stop',     description: 'Interrupt the current turn' },
-  { command: 'kill',     description: 'Force kill session + release jsonl' },
-  { command: 'sessions', description: 'List sessions (paginated)' },
-  { command: 'resume',   description: 'Resume a stopped session by short-id' },
-  { command: 'status',   description: 'Show current session status' },
-  { command: 'model',    description: 'Show or change model' },
-  { command: 'mode',     description: 'Show or change permission mode' },
-  { command: 'search',   description: 'Search messages across sessions' },
-  { command: 'export',   description: 'Export a session to md/json/jsonl' },
-  { command: 'cost',     description: 'Show cost dashboard' },
-  { command: 'budget',   description: 'Set session budget (USD)' },
-  { command: 'fork',     description: 'Fork a session with a new title' },
-  { command: 'rename',   description: 'Rename a session' },
+  { command: 'help',      description: '查看帮助和命令列表' },
+  { command: 'new',       description: '起新会话' },
+  { command: 'sessions',  description: '当前工作区的会话列表' },
+  { command: 'workspace', description: '工作区: 看 / 切 / 加 / 退' },
+  { command: 'stop',      description: '中断当前生成 (Ctrl+C)' },
+  { command: 'model',     description: '查看 / 切换模型' },
+  { command: 'mode',      description: '查看 / 切换权限模式' },
+  { command: 'think',     description: '思考深度' },
+  { command: 'perm',      description: 'Session 权限规则' },
+  { command: 'cost',      description: '工作区累计成本' },
+  { command: 'budget',    description: '当前 session 预算上限' },
+  { command: 'find',      description: '搜索工作区会话历史' },
 ];
 
 interface TelegramAdapterShape extends PlatformAdapter {

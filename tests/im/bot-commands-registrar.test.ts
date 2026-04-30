@@ -27,11 +27,13 @@ function fakeAdapter(channelType: 'telegram' | 'feishu', withHook = true): Platf
 }
 
 describe('bot-commands-registrar', () => {
-  it('exports 16 top commands', () => {
-    expect(TOP_COMMANDS).toHaveLength(16);
+  it('exports 12 top commands (v3.3 surface)', () => {
+    expect(TOP_COMMANDS).toHaveLength(12);
     expect(TOP_COMMANDS.map((c) => c.command)).toContain('help');
     expect(TOP_COMMANDS.map((c) => c.command)).toContain('new');
     expect(TOP_COMMANDS.map((c) => c.command)).toContain('sessions');
+    expect(TOP_COMMANDS.map((c) => c.command)).toContain('workspace');
+    expect(TOP_COMMANDS.map((c) => c.command)).toContain('find');
   });
 
   it('registers on Telegram adapter via hook', async () => {
