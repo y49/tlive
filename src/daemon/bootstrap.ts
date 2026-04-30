@@ -701,7 +701,7 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
     },
   };
 
-  await dispatchCommand(ctx, text, userRole);
+  await dispatchCommand(ctx, text, userRole, deps.logger);
 }
 
 /**

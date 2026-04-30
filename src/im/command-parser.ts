@@ -27,6 +27,7 @@ import type { McpRegistry } from '../mcp/registry.js';
 import type { PolicyStore } from '../permission/policy-store.js';
 import type { SessionPersistence } from '../session/persistence.js';
 import type { AttachmentStore } from '../attachment/store.js';
+import type { Logger } from '../util/logger.js';
 
 export interface CommandContext {
   /** The inbound event that carried the command text. */
@@ -86,28 +87,58 @@ export async function dispatch(
   ctx: CommandContext,
   rawText: string,
   userRole: Role,
+  logger?: Logger,
 ): Promise<void> {
+  const log = logger ?? noopLogger();
   const [nameRaw, ...args] = rawText.replace(/^\/+/, '').trim().split(/\s+/);
   const name = (nameRaw ?? '').toLowerCase();
+
+  log.info('command dispatch start', {
+    name, args, userRole,
+    chatId: ctx.inbound.chatId,
+    userId: ctx.userId,
+  });
+
   if (!name) {
-    await ctx.reply('Empty command. Try /help.');
+    await safeReply(ctx, '空命令。发 /help 看全部。');
     return;
   }
   const def = registry.get(name);
   if (!def) {
-    await ctx.reply(`Unknown command: /${name}. Try /help.`);
+    log.info('command unknown', { name });
+    await safeReply(ctx, `未知命令: /${name}。发 /help 看全部。`);
     return;
   }
   if (!def.role.includes(userRole)) {
-    await ctx.reply(`You don't have permission to use /${def.name}.`);
+    log.info('command denied', { name, userRole });
+    await safeReply(ctx, `无权限使用 /${def.name}`);
     return;
   }
   try {
     await def.run(ctx, args);
+    log.info('command done', { name });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await ctx.reply(`Command /${def.name} failed: ${msg}`);
+    log.error('command failed', { name, reason: msg });
+    await safeReply(ctx, `❌ /${def.name} 失败: ${msg}`);
   }
+}
+
+async function safeReply(ctx: CommandContext, text: string): Promise<void> {
+  try { await ctx.reply(text); }
+  catch {
+    try { await ctx.reply(text); } catch { /* swallow */ }
+  }
+}
+
+function noopLogger(): Logger {
+  const noop = () => { /* */ };
+  const self: Logger = {
+    level: 'info',
+    debug: noop, info: noop, warn: noop, error: noop,
+    child: () => self,
+  };
+  return self;
 }
 
 // ---- Helpers for command implementations ---------------------------------
