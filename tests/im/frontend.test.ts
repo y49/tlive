@@ -152,7 +152,7 @@ async function bootstrapFrontend(): Promise<{
 async function flushAsync(): Promise<void> {
   // Drain microtasks first.
   await Promise.resolve();
-  // Then advance fake timers past TurnUI's 250ms debounce.
+  // Then advance fake timers past the ReplyScheduler debounce window.
   await vi.advanceTimersByTimeAsync(300);
 }
 
@@ -168,38 +168,38 @@ describe('SessionFrontend — TL_NEW_UX path', () => {
     else process.env.TL_NEW_UX = orig;
   });
 
-  it('on turn_start creates a TurnUI and sends a HUD via adapter', async () => {
+  it('on turn_start creates a TurnComposite and sends a HUD via adapter', async () => {
     const { adapter, fakeSession } = await bootstrapFrontend();
     const sendsBefore = adapter.calls.filter(c => c.kind === 'send').length;
     fakeSession.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: 'hi', at: 0 });
     await flushAsync();
-    // TurnUI.start() sends the HUD — filter sends that happened after bootstrap
+    // TurnComposite.start() sends the placeholder HUD via ReplyDocument —
+    // filter sends that happened after bootstrap.
     const newSends = adapter.calls.filter(c => c.kind === 'send').slice(sendsBefore);
     expect(newSends.length).toBeGreaterThanOrEqual(1);
-    // HUD text is formatted as a <pre><code> block by formatTelegramHud
-    expect((newSends[0].args.text as string)).toMatch(/^<pre><code>/);
+    // ReplyDocument's renderTelegram emits a banner like "<b>◐ thinking</b>".
+    expect((newSends[0].args.text as string)).toMatch(/^<b>/);
   });
 
-  it('a second turn_start destroys the previous TurnUI before creating a new one', async () => {
+  it('a second turn_start destroys the previous TurnComposite before creating a new one', async () => {
     const { adapter, fakeSession } = await bootstrapFrontend();
     const hudSendsBefore = adapter.calls.filter(
-      c => c.kind === 'send' && typeof c.args.text === 'string' && (c.args.text as string).startsWith('<pre><code>'),
+      c => c.kind === 'send' && typeof c.args.text === 'string',
     ).length;
     fakeSession.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: 'a', at: 0 });
     await flushAsync();
     fakeSession.emit({ kind: 'turn_start', turnId: 't2', userInputPreview: 'b', at: 100 });
     await flushAsync();
-    // Each turn_start sends one new v1 HUD message (<pre><code>...). Filter on
-    // that signature so the v2 dual-path TurnComposite placeholder (sent
-    // alongside) doesn't inflate the count. Exactly 2 v1 HUD sends after
-    // bootstrap proves "second turn_start destroyed the previous TurnUI".
+    // Each turn_start sends exactly one new ReplyDocument placeholder. Two
+    // turn_starts after bootstrap should yield two new sends — proves the
+    // previous TurnComposite was destroyed and a fresh one started.
     const hudSendsAfter = adapter.calls.filter(
-      c => c.kind === 'send' && typeof c.args.text === 'string' && (c.args.text as string).startsWith('<pre><code>'),
+      c => c.kind === 'send' && typeof c.args.text === 'string',
     ).length;
     expect(hudSendsAfter - hudSendsBefore).toBe(2);
   });
 
-  it('session stopped destroys the active TurnUI (no edits on late events)', async () => {
+  it('session stopped destroys the active TurnComposite (no edits on late events)', async () => {
     const { adapter, fakeSession, sessionManager } = await bootstrapFrontend();
     fakeSession.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: 'a', at: 0 });
     await flushAsync();
@@ -213,17 +213,24 @@ describe('SessionFrontend — TL_NEW_UX path', () => {
     expect(adapter.calls.filter(c => c.kind === 'edit').length).toBe(editCountAfterStop);
   });
 
-  it('forwards assistant_text to ReplyRenderer (one reply send per primary)', async () => {
+  it('forwards assistant_text to ReplyDocument (one reply edit per primary)', async () => {
     const { adapter, fakeSession } = await bootstrapFrontend();
     fakeSession.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: '', at: 0 });
-    // Flush turn_start so replyRenderers are initialised before assistant_text arrives.
+    // Flush turn_start so the TurnComposite is initialised before assistant_text arrives.
     await flushAsync();
     fakeSession.emit({ kind: 'assistant_text', turnId: 't1', text: 'hello world', complete: true });
     await flushAsync();
-    // 1 HUD send + 1 reply send; reply contains 'hello world'.
+    // ReplyDocument sends a placeholder on start() then edits to include the
+    // assistant body text. We assert one send (placeholder) and at least one
+    // edit whose text contains 'hello world'.
     const sends = adapter.calls.filter(c => c.kind === 'send');
-    expect(sends.length).toBeGreaterThanOrEqual(2);
-    expect(sends.some(s => /hello world/.test((s.args.text as string) ?? ''))).toBe(true);
+    const edits = adapter.calls.filter(c => c.kind === 'edit');
+    expect(sends.length).toBeGreaterThanOrEqual(1);
+    const haystacks = [
+      ...sends.map(s => (s.args.text as string) ?? ''),
+      ...edits.map(e => (e.args.text as string) ?? ''),
+    ];
+    expect(haystacks.some(h => /hello world/.test(h))).toBe(true);
   });
 
   // ---------------------------------------------------------------------------

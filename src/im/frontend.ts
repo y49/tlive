@@ -35,12 +35,8 @@ import {
 } from './render/types.js';
 import { ReactionTracker } from './reaction-tracker.js';
 import { ElicitationFormRenderer } from './elicitation/form.js';
-import { TurnUI, type HudPanelFactory } from './turn-ui.js';
-import { TelegramHudPanel } from './hud/telegram-panel.js';
-import { FeishuHudPanel } from './hud/feishu-panel.js';
 import { initialHudState, type HudState } from './hud/state.js';
 import { targetKey as renderTargetKey } from './render-target.js';
-import { ReplyRenderer } from './reply.js';
 import { AttachmentPreview } from './attachment.js';
 import { PermissionCard } from './permission/card.js';
 import { TurnComposite } from './turn-composite.js';
@@ -65,23 +61,8 @@ interface SessionEntry {
   workspaceId: string;
   unsubscribeEvent: () => void;
   channels: ChannelRenderers[];
-  /** Per-turn HUD ownership. Replaced on each turn_start. */
-  activeTurnUI?: TurnUI;
   /** Per-turn counter for HUD header display. */
   turnCounter?: number;
-  /** Per-turn reply renderers, keyed by targetKey. Reset on turn_start. */
-  replyRenderers?: Map<string, ReplyRenderer>;
-  /**
-   * Accumulated assistant text across deltas for the current turn.
-   * assistant_text_delta carries only the new portion (diff, partial:true); we
-   * accumulate here so ReplyRenderer receives the full text on each call.
-   * Reset to '' on turn_start.
-   */
-  replyAcc?: string;
-  /** Active AskUserQuestion cards keyed by requestId. */
-  activeAskCards?: Map<string, PermissionCard>;
-  /** Per-chatId pending custom-input cards for plaintext relay. */
-  pendingCustomInputCards?: Map<string, PermissionCard>;
   /** Active generic-permission cards keyed by requestId. */
   activePermCards?: Map<string, PermissionCard>;
   /** Generic permission cards waiting for plaintext fallback resolution (per chatId). */
@@ -89,15 +70,14 @@ interface SessionEntry {
   /**
    * Per-session promise chain to serialize handleSessionEvent invocations.
    * SDK fires events in order, but the onEvent callback is fire-and-forget.
-   * Without this chain, two assistant_text_delta would race in
-   * ReplyRenderer.renderTelegram (both see headMsgId === null and both
-   * `send`, producing duplicate IM messages).
+   * Without this chain concurrent events could race when ingesting into the
+   * TurnComposite / EditQueue pipeline.
    */
   dispatchChain: Promise<void>;
-  /** v2: per-turn TurnComposite + EditQueue per channel target. */
+  /** Per-turn TurnComposite + EditQueue per channel target. */
   activeTurnComposites?: Map<string, TurnComposite>;
   editQueues?: Map<string, EditQueue>;
-  /** v2: per-channel AskCardController (dual-path with v1 activeAskCards). */
+  /** Per-channel AskCardController. */
   askControllers?: Map<string, AskCardController>;
 }
 
@@ -164,7 +144,7 @@ export class SessionFrontend {
       }),
     );
 
-    // AskUserQuestionBroker (render as permission-card-like generic prompt).
+    // AskUserQuestionBroker → AskCardController.
     if (this.opts.askBroker) {
       this.unsubscribers.push(
         this.opts.askBroker.subscribe((ev) => {
@@ -183,8 +163,9 @@ export class SessionFrontend {
     }
 
     // Per-adapter inbound interceptor for PermissionCard callback format
-    // (ask:<reqId>:opt:<n>, ask:<reqId>:confirm, ask:<reqId>:custom) and
-    // for plaintext relay to pending custom-input cards.
+    // (ask:<reqId>:opt:<n>, ask:<reqId>:confirm, ask:<reqId>:custom and
+    // perm:<reqId>:<verb>) plus plaintext relay for fallback-pending generic
+    // permission cards and custom-input ask cards.
     for (const adapter of Object.values(this.opts.adapters)) {
       if (!adapter) continue;
       this.unsubscribers.push(
@@ -333,7 +314,6 @@ export class SessionFrontend {
     if (!entry) return;
     this.sessions.delete(sessionId);
     try { entry.unsubscribeEvent(); } catch { /* isolate */ }
-    try { entry.activeTurnUI?.destroy(); } catch { /* isolate */ }
     if (entry.activeTurnComposites) {
       for (const tc of entry.activeTurnComposites.values()) {
         try { tc.destroy(); } catch { /* isolate */ }
@@ -341,9 +321,6 @@ export class SessionFrontend {
     }
     if (entry.activePermCards) {
       for (const reqId of entry.activePermCards.keys()) this.cardsByReqId.delete(reqId);
-    }
-    if (entry.activeAskCards) {
-      for (const reqId of entry.activeAskCards.keys()) this.cardsByReqId.delete(reqId);
     }
     if (entry.askControllers) {
       for (const ctrl of entry.askControllers.values()) ctrl.cancelPending();
@@ -423,7 +400,7 @@ export class SessionFrontend {
       }
     } else if (ev.kind === 'runtime_error') {
       // Reaction anchor: 💔 for runtime errors. Same 400ms buffer as done_ok
-      // so any TurnUI error-banner render lands first.
+      // so any error-banner render lands first.
       const errAt = Date.now();
       const errInbounds: Array<{ c: ChannelRenderers; inbound: { chatId: string; messageId: string; threadId?: string } }> = [];
       for (const c of entry.channels) {
@@ -447,51 +424,30 @@ export class SessionFrontend {
       }
     }
 
-    // ---- TurnUI / HUD dispatch ---------------------------------------------
+    // ---- TurnComposite / HUD dispatch --------------------------------------
 
     const primaryTargets = entry.channels
       .filter(c => c.target.role === 'primary')
       .map(c => c.target);
 
     if (primaryTargets.length > 0) {
-      const adaptersByKey = new Map<string, PlatformAdapter>();
-      for (const c of entry.channels) {
-        if (c.target.role !== 'primary') continue;
-        adaptersByKey.set(renderTargetKey(c.target), c.adapter);
-      }
-      const factory: HudPanelFactory = (target) => {
-        const adapter = adaptersByKey.get(renderTargetKey(target));
-        if (!adapter) throw new Error(`handleSessionEvent: no adapter for target ${renderTargetKey(target)}`);
-        if (target.channelType === 'feishu') return new FeishuHudPanel(adapter, target);
-        return new TelegramHudPanel(adapter, target);
-      };
-
       if (ev.kind === 'turn_start') {
-        entry.activeTurnUI?.destroy();
         entry.turnCounter = (entry.turnCounter ?? 0) + 1;
         const initState = this.buildInitialHudState(sessionId, entry);
-        entry.activeTurnUI = new TurnUI(initState, primaryTargets, factory);
-        await entry.activeTurnUI.start();
-        // Reset reply renderers and accumulator for the fresh turn.
-        // Both primary and mirror targets get renderers: mirrors echo assistant text (spec §I5).
-        entry.replyRenderers = new Map<string, ReplyRenderer>();
-        entry.replyAcc = '';
-        for (const c of entry.channels) {
-          if (c.target.role !== 'primary' && c.target.role !== 'mirror') continue;
-          entry.replyRenderers.set(renderTargetKey(c.target), new ReplyRenderer(c.adapter, c.target));
-        }
 
-        // v2 dual-path: build TurnComposite alongside the v1 TurnUI/ReplyRenderer
-        // wiring. v1 path stays active until T9 cleanup; smoke can compare both
-        // layouts. EditQueue persists across turns (rate-limit state belongs to
-        // the chat, not the turn) so we cache it on the SessionEntry.
+        // Build TurnComposite per primary AND mirror channel. Primaries get
+        // the full HUD card with interactive ask/permission cards on top;
+        // mirrors get the same banner+body+footer ReplyDocument so users on
+        // the mirror channel see assistant text echoed (spec §I5). EditQueue
+        // persists across turns (rate-limit state belongs to the chat, not
+        // the turn) so we cache it on the SessionEntry.
         if (entry.activeTurnComposites) {
           for (const tc of entry.activeTurnComposites.values()) tc.destroy();
         }
         entry.activeTurnComposites = new Map<string, TurnComposite>();
         if (!entry.editQueues) entry.editQueues = new Map<string, EditQueue>();
         for (const c of entry.channels) {
-          if (c.target.role !== 'primary') continue;
+          if (c.target.role !== 'primary' && c.target.role !== 'mirror') continue;
           const tk = renderTargetKey(c.target);
           let eq = entry.editQueues.get(tk);
           if (!eq) {
@@ -506,10 +462,10 @@ export class SessionFrontend {
           void tc.start();
         }
 
-        // v2 dual-path: build AskCardController per primary channel. Cancel
-        // any cards from the previous turn (turn boundary forgets pending
-        // questions just like v1's activeAskCards reset on session
-        // teardown). Lives alongside v1 activeAskCards until T9.
+        // Build AskCardController per primary channel. Cancel any cards from
+        // the previous turn (turn boundary forgets pending questions). Each
+        // controller receives a broker-aware resolveFn so button clicks land
+        // back in askBroker.resolve (cleans pending registry + emits resolved).
         if (entry.askControllers) {
           for (const ctrl of entry.askControllers.values()) ctrl.cancelPending();
         }
@@ -517,17 +473,16 @@ export class SessionFrontend {
         for (const c of entry.channels) {
           if (c.target.role !== 'primary') continue;
           const tk = renderTargetKey(c.target);
-          entry.askControllers.set(tk, new AskCardController(c.adapter, c.target));
+          entry.askControllers.set(
+            tk,
+            new AskCardController(c.adapter, c.target, (reqId, chosen) => {
+              this.opts.askBroker?.resolve(sessionId, reqId, chosen);
+            }),
+          );
         }
       }
 
-      if (entry.activeTurnUI) {
-        await entry.activeTurnUI.ingestEvent(ev);
-      }
-
-      // v2 dual-path: broadcast every event to all live TurnComposites. v1
-      // continues to render the legacy HUD panel + ReplyRenderer in parallel
-      // (T9 deletes v1 once smoke confirms v2 layout).
+      // Broadcast every event to all live TurnComposites for HUD/reply update.
       if (entry.activeTurnComposites) {
         for (const tc of entry.activeTurnComposites.values()) {
           if (!tc.isDestroyed()) tc.ingestEvent(ev);
@@ -535,21 +490,7 @@ export class SessionFrontend {
       }
     }
 
-    // ---- Reply / attachment dispatch ----------------------------------------
-
-    if (entry.replyRenderers && entry.replyRenderers.size > 0) {
-      if (ev.kind === 'assistant_text_delta') {
-        entry.replyAcc = (entry.replyAcc ?? '') + ev.text;
-        for (const r of entry.replyRenderers.values()) {
-          await r.onTextDelta(entry.replyAcc);
-        }
-      } else if (ev.kind === 'assistant_text') {
-        for (const r of entry.replyRenderers.values()) {
-          await r.onTextComplete(ev.text);
-        }
-        entry.replyAcc = '';
-      }
-    }
+    // ---- Attachment dispatch ------------------------------------------------
 
     // Dispatch attachment previews to primary targets only (mirrors get text
     // echoes but not file previews per spec §I5).
@@ -566,10 +507,9 @@ export class SessionFrontend {
       await this.detachSession(sessionId);
     }
 
-    // All remaining event kinds are either consumed by TurnUI.ingestEvent above
-    // or are noop at the frontend layer (consumed by runtime, brokers, cost
-    // tracker elsewhere). Compile-time exhaustiveness is enforced by TurnUI's
-    // reducer; we don't need a full switch here.
+    // All other event kinds are consumed by TurnComposite.ingestEvent above or
+    // are noop at the frontend layer (consumed by runtime, brokers, cost
+    // tracker elsewhere).
   }
 
   private async handlePermissionEvent(ev: BrokerEvent): Promise<void> {
@@ -632,61 +572,41 @@ export class SessionFrontend {
   private async handleAskEvent(ev: AskBrokerEvent): Promise<void> {
     const entry = this.sessions.get(ev.sessionId);
     if (!entry) return;
-    if (!entry.activeAskCards) entry.activeAskCards = new Map<string, PermissionCard>();
-    if (!entry.pendingCustomInputCards) entry.pendingCustomInputCards = new Map<string, PermissionCard>();
 
     if (ev.kind === 'pending') {
-      // Determine mode from request shape. AskUserQuestionRequest has multiSelect?:boolean
-      // but no allowCustom — custom-input mode is deferred until the broker exposes the flag.
       const req = ev.request;
-      const mode: 'single' | 'multi' | 'custom-input' = req.allowCustom
-        ? 'custom-input'
-        : req.multiSelect ? 'multi' : 'single';
-
+      // Lazy init: askControllers is normally built on turn_start, but a
+      // session can receive ask events outside any turn boundary (e.g. tests
+      // or direct broker-driven prompts). Build per-primary controllers on
+      // demand so we always have a destination for the card.
+      if (!entry.askControllers) entry.askControllers = new Map<string, AskCardController>();
       for (const c of entry.channels) {
         if (c.target.role !== 'primary') continue;
-        const card = new PermissionCard(c.adapter, c.target, {
-          kind: 'ask',
-          requestId: req.id,
-          mode,
-          question: req.prompt,
-          header: req.header,
-          options: req.options,
-          onResolve: (chosen) => {
-            this.opts.askBroker?.resolve(ev.sessionId, req.id, chosen);
-            entry.pendingCustomInputCards?.delete(c.target.chatId);
-          },
-        });
-        await card.send();
-        entry.activeAskCards.set(req.id, card);
-        this.cardsByReqId.set(req.id, card);
-      }
-      // v2 dual-path: AskCardController open. Independent send (renders v2
-      // visual alongside v1 card; T9 removes v1 path). Run only when
-      // controllers exist — they're created on turn_start, so an ask event
-      // arriving before any turn has no v2 destination yet.
-      if (entry.askControllers) {
-        for (const ctrl of entry.askControllers.values()) {
-          void ctrl.open(req).catch(() => { /* isolate */ });
+        const tk = renderTargetKey(c.target);
+        let ctrl = entry.askControllers.get(tk);
+        if (!ctrl) {
+          ctrl = new AskCardController(c.adapter, c.target, (reqId, chosen) => {
+            this.opts.askBroker?.resolve(ev.sessionId, reqId, chosen);
+          });
+          entry.askControllers.set(tk, ctrl);
         }
+        await ctrl.open(req).catch(() => { /* isolate */ });
+        const card = ctrl.getCard(req.id);
+        // Register in the flat reqId index so routeCallback can dispatch
+        // ask:* callbacks. Last writer wins on duplicate keys (multi-channel
+        // primaries should be rare; PermissionCard.handleCallback is
+        // idempotent anyway).
+        if (card) this.cardsByReqId.set(req.id, card);
       }
       return;
     }
 
-    // resolved
     if (ev.kind === 'resolved') {
-      entry.activeAskCards.delete(ev.requestId);
       this.cardsByReqId.delete(ev.requestId);
-      if (entry.pendingCustomInputCards) {
-        for (const [chatId, c] of [...entry.pendingCustomInputCards.entries()]) {
-          if (c.requestId === ev.requestId) entry.pendingCustomInputCards.delete(chatId);
-        }
-      }
-      // v2 dual-path: AskCardController markResolved switches v2 visual to ✅.
       if (entry.askControllers) {
         for (const ctrl of entry.askControllers.values()) {
           if (ctrl.has(ev.requestId)) {
-            void ctrl.markResolved(ev.requestId, ev.chosen).catch(() => { /* isolate */ });
+            await ctrl.markResolved(ev.requestId, ev.chosen).catch(() => { /* isolate */ });
           }
         }
       }
@@ -716,13 +636,19 @@ export class SessionFrontend {
         return;
       }
     }
-    // Existing custom-input handling.
+    // Custom-input plaintext relay for ask cards. Walk active ask cards on
+    // controllers whose render target matches this chatId and offer the text
+    // to any card expecting a plaintext relay (mode='custom-input').
     for (const entry of this.sessions.values()) {
-      const card = entry.pendingCustomInputCards?.get(chatId);
-      if (card && card.expectsPlaintextRelay()) {
-        await card.resolveWithPlaintext(text);
-        entry.pendingCustomInputCards?.delete(chatId);
-        return;
+      if (!entry.askControllers) continue;
+      for (const ctrl of entry.askControllers.values()) {
+        if (ctrl.getTarget().chatId !== chatId) continue;
+        for (const card of ctrl.activeCards()) {
+          if (card.expectsPlaintextRelay()) {
+            await card.resolveWithPlaintext(text);
+            return;
+          }
+        }
       }
     }
   }

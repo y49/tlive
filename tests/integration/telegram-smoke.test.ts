@@ -88,17 +88,18 @@ describe('integration: Telegram end-to-end turn', () => {
     session.emit({ kind: 'session_complete', reason: 'ok', summary: 'done' });
     await tick();
 
-    // Assertions (new UX path):
-    // At least: HUD send (turn_start) + permission-card send + reply-message send.
+    // Assertions (v2 UX path):
+    // At least: ReplyDocument placeholder send (turn_start) + permission-card send.
     const sends = ctx.adapter.byKind('send');
     expect(sends.length).toBeGreaterThanOrEqual(2);
-    // Permission card send: new renderer uses 🔐 Permission prefix.
+    // Permission card send: PermissionCard uses 🔐 Permission prefix.
     expect(sends.some((s) => String(s.args.text ?? '').includes('Permission'))).toBe(true);
-    // Reply send contains agent text "Done".
-    expect(sends.some((s) => String(s.args.text).includes('Done'))).toBe(true);
+    // ReplyDocument streams the assistant text via edit() — "Done" lands in
+    // an edit of the placeholder, not a fresh send.
+    const edits = ctx.adapter.byKind('edit');
+    expect(edits.some((e) => String(e.args.text ?? '').includes('Done'))).toBe(true);
 
     // Cost accumulation: turn_end costUsd surfaced in HUD edit.
-    const edits = ctx.adapter.byKind('edit');
     const costShown = edits.some((e) => String(e.args.text ?? '').includes('$0.01'));
     expect(costShown).toBe(true);
   });
@@ -132,20 +133,20 @@ describe('integration: Telegram end-to-end turn', () => {
       text: String((c.args as { text?: unknown }).text ?? ''),
     }));
 
-    // First send is the HUD (new UX: <pre><code>📊 turn…).
+    // First send is the ReplyDocument placeholder (v2 banner starts with <b>).
     expect(sequence[0]!.kind).toBe('send');
-    expect(sequence[0]!.text).toMatch(/^<pre><code>📊/);
+    expect(sequence[0]!.text).toMatch(/^<b>/);
 
-    // Permission card send uses 🔐 Permission prefix (new PermissionCard).
+    // Permission card send uses 🔐 Permission prefix (PermissionCard).
     const permission = sequence.find((s) => s.kind === 'send' && s.text.includes('Permission'));
     expect(permission).toBeDefined();
     expect(permission!.text).toContain('Edit');
 
-    // Reply send contains the assistant text payload.
-    const replyMsg = sequence.find((s) => s.kind === 'send' && s.text.includes('Looking at the'));
-    expect(replyMsg).toBeDefined();
+    // Assistant text body lands in a ReplyDocument edit (not a fresh send).
+    const replyEdit = sequence.find((s) => s.kind === 'edit' && s.text.includes('Looking at the'));
+    expect(replyEdit).toBeDefined();
 
-    // A HUD edit with the accumulated cost appears after turn_end.
+    // The accumulated cost appears in a ReplyDocument edit after turn_end.
     const costEdit = sequence.find((s) => s.kind === 'edit' && /\$0\.07/.test(s.text));
     expect(costEdit).toBeDefined();
   });

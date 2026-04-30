@@ -110,10 +110,11 @@ describe('Session lifecycle — full stack', () => {
     //
     // NOTE: The new async SessionFrontend dispatches handleSessionEvent without
     // awaiting, so two events flushed synchronously run as concurrent async chains.
-    // turn_start (which awaits TurnUI.start()) and assistant_text (which reads
-    // entry.replyRenderers set by turn_start) can race. The HUD send from
-    // turn_start IS observable after one setImmediate drain; the reply text from
-    // assistant_text may arrive in a later microtask batch.
+    // turn_start (which builds TurnComposite and awaits its start()) and
+    // assistant_text (which broadcasts to entry.activeTurnComposites set by
+    // turn_start) can race. The placeholder send from turn_start IS observable
+    // after one setImmediate drain; the reply text from assistant_text may
+    // arrive in a later microtask batch.
     //
     // TODO(T12-smoke): verify full turn_start + assistant_text prepare-window
     // sequence works end-to-end in manual smoke after adding serialisation to

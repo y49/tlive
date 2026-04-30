@@ -1,8 +1,8 @@
 // src/im/turn-composite.ts
 //
-// TurnComposite — replaces TurnUI. Owns the per-turn primary reply through
-// ReplyDocument; routes NotificationEvents through reducer + setBody/setState.
-// Bounded by start()..destroy(); destroy is set on turn_end + 30s grace.
+// TurnComposite — owns the per-turn primary reply through ReplyDocument;
+// routes NotificationEvents through reducer + setBody/setState. Bounded by
+// start()..destroy(); destroy is set on turn_end + 30s grace.
 
 import type { PlatformAdapter } from '../platform/types.js';
 import type { RenderTarget } from './render-target.js';

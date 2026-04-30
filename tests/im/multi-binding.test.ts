@@ -69,7 +69,7 @@ describe('multi-binding fan-out (T6 review #1)', () => {
     session.emit({ kind: 'assistant_text', turnId: 't1', text: 'hello', complete: true });
     await tick();
     session.emit({ kind: 'turn_end', turnId: 't1', durationMs: 100, costUsd: 0.05, tokensIn: 0, tokensOut: 0 });
-    await tick(400); // wait past TurnUI turn_end 400ms reaction buffer
+    await tick(400); // wait past frontend's turn_end 400ms reaction buffer
 
     // Each adapter must have received AT LEAST one outbound (HUD for Telegram,
     // reply-echo for Feishu via sendCard), all scoped to the correct chatId.

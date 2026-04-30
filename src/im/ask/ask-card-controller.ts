@@ -5,10 +5,11 @@
 //   - markResolved(reqId, chosen): edit card to resolved visual, drop from store
 //   - cancelPending(): forget all in-flight cards (turn_end / session-stop)
 //
-// Decoupled from frontend.ts so the wiring is testable in isolation. v1's
-// activeAskCards path keeps running alongside this controller until T9
-// removes the legacy code; both paths populate independent state, which is
-// safe because PermissionCard's resolve is idempotent.
+// Decoupled from frontend.ts so the wiring is testable in isolation. The
+// frontend supplies the `resolve` callback so the broker is the single
+// resolution path (callbacks must run through broker.resolve to clean up the
+// pending registry and notify subscribers — calling req.resolve directly
+// leaks the broker's pending map).
 
 import type { PlatformAdapter } from '../../platform/types.js';
 import type { RenderTarget } from '../render-target.js';
@@ -16,16 +17,27 @@ import type { AskUserQuestionRequest } from '../../runtime/types.js';
 import { PermissionCard } from '../permission/card.js';
 import { decideAskMode } from './ask-hook-input.js';
 
+export type AskResolveFn = (requestId: string, chosen: string[]) => void;
+
 export class AskCardController {
   private readonly cards = new Map<string, PermissionCard>();
 
   constructor(
     private readonly adapter: PlatformAdapter,
     private readonly target: RenderTarget,
+    /**
+     * Resolution callback. Defaults to invoking `req.resolve` directly (the
+     * legacy behaviour preserved for the controller's own unit tests). The
+     * frontend overrides with a broker-aware variant.
+     */
+    private readonly resolveFn?: AskResolveFn,
   ) {}
 
   async open(req: AskUserQuestionRequest): Promise<void> {
     const mode = decideAskMode(req.multiSelect ?? false, req.allowCustom ?? false);
+    const onResolve = this.resolveFn
+      ? (chosen: string[]) => this.resolveFn!(req.id, chosen)
+      : req.resolve;
     const card = new PermissionCard(this.adapter, this.target, {
       kind: 'ask',
       requestId: req.id,
@@ -33,7 +45,7 @@ export class AskCardController {
       question: req.prompt,
       header: req.header,
       options: req.options,
-      onResolve: req.resolve,
+      onResolve,
     });
     this.cards.set(req.id, card);
     await card.send();
@@ -54,4 +66,10 @@ export class AskCardController {
 
   /** Optional accessor used by callback-router refactor (T9). */
   getCard(reqId: string): PermissionCard | undefined { return this.cards.get(reqId); }
+
+  /** Target this controller renders against — used by frontend routing. */
+  getTarget(): RenderTarget { return this.target; }
+
+  /** Iterable view of active cards — used by plaintext-relay routing. */
+  activeCards(): IterableIterator<PermissionCard> { return this.cards.values(); }
 }
