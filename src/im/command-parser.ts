@@ -173,3 +173,27 @@ export function parseFlags(args: string[]): { flags: Record<string, string | boo
   return { flags, positional };
 }
 
+export interface RegistryIssue {
+  name: string;
+  message: string;
+}
+
+export function validateRegistry(): RegistryIssue[] {
+  const issues: RegistryIssue[] = [];
+  const seen = new Set<CommandDef>();
+  for (const def of registry.values()) {
+    if (seen.has(def)) continue;
+    seen.add(def);
+    if (typeof def.run !== 'function') {
+      issues.push({ name: def.name, message: 'run is not a function' });
+    }
+    if (!Array.isArray(def.role) || def.role.length === 0) {
+      issues.push({ name: def.name, message: 'role must be non-empty array' });
+    }
+    if (!def.name || def.name !== def.name.toLowerCase()) {
+      issues.push({ name: def.name, message: 'name must be non-empty lowercase' });
+    }
+  }
+  return issues;
+}
+

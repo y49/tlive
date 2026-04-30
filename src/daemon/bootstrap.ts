@@ -66,7 +66,7 @@ import type { McpToolDeps, IMNotifier } from '../mcp/self/deps.js';
 
 import { SessionFrontend } from '../im/frontend.js';
 import { registerAllCommands } from '../im/commands/index.js';
-import { dispatch as dispatchCommand, type CommandContext } from '../im/command-parser.js';
+import { dispatch as dispatchCommand, validateRegistry, type CommandContext } from '../im/command-parser.js';
 import { CallbackRouter } from '../im/callback-router.js';
 import { registerAllBotCommands } from '../im/bot-commands-registrar.js';
 
@@ -365,6 +365,11 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
 
   // --- Command parser + Callback router ---------------------------------
   registerAllCommands();
+  const registryIssues = validateRegistry();
+  if (registryIssues.length > 0) {
+    logger.error('command registry invalid', { issues: registryIssues });
+    throw new Error(`Registry has ${registryIssues.length} broken commands: ${registryIssues.map(i => `${i.name}(${i.message})`).join(', ')}`);
+  }
   const callbackRouter = new CallbackRouter({
     sessionManager: sessions,
     permissionBroker: broker,

@@ -3,6 +3,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   dispatch, registerCommand, resetRegistryForTests, listCommands, parseQuotedTail, parseFlags,
+  validateRegistry,
   type CommandContext,
 } from '../../src/im/command-parser.js';
 import type { Logger } from '../../src/util/logger.js';
@@ -229,5 +230,45 @@ describe('dispatch logging', () => {
     const failedLog = logs.find((l) => l.level === 'error' && l.msg === 'reply failed');
     expect(failedLog).toBeDefined();
     expect(failedLog?.data).toMatchObject({ reason: 'always fail' });
+  });
+});
+
+describe('validateRegistry', () => {
+  it('returns no issues for valid commands', () => {
+    resetRegistryForTests();
+    registerCommand({ name: 'foo', role: ['admin'], async run() {} });
+    expect(validateRegistry()).toEqual([]);
+  });
+
+  it('detects missing run function', () => {
+    resetRegistryForTests();
+    registerCommand({ name: 'broken', role: ['admin'], run: undefined as never });
+    const issues = validateRegistry();
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.name).toBe('broken');
+    expect(issues[0]!.message).toContain('run');
+  });
+
+  it('detects empty role array', () => {
+    resetRegistryForTests();
+    registerCommand({ name: 'noroles', role: [], async run() {} });
+    const issues = validateRegistry();
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.message).toContain('role');
+  });
+
+  it('detects uppercase name', () => {
+    resetRegistryForTests();
+    registerCommand({ name: 'BadCase', role: ['admin'], async run() {} });
+    const issues = validateRegistry();
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.message).toContain('lowercase');
+  });
+
+  it('aliases do not double-report (each def counted once)', () => {
+    resetRegistryForTests();
+    registerCommand({ name: 'cmd', aliases: ['x', 'y', 'z'], role: [], async run() {} });
+    // Same broken def registered under 4 keys; should report once not 4 times
+    expect(validateRegistry()).toHaveLength(1);
   });
 });
