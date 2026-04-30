@@ -102,6 +102,48 @@ describe('BudgetGuard.setCap', () => {
     guard.setCap(50);
     expect(guard.cap).toBe(50);
   });
+
+  const turnEnd: NotificationEvent = {
+    kind: 'turn_end', turnId: 't1', durationMs: 1, costUsd: 0.01, tokensIn: 1, tokensOut: 1,
+  };
+
+  it('re-arms after fire when cap raised', () => {
+    const { guard, interrupt, setTotal } = makeGuard({ cap: 0.10, total: 0.11 });
+    // First fire
+    guard.onEvent(turnEnd);
+    expect(interrupt).toHaveBeenCalledTimes(1);
+    // Raise cap; total still > old cap but < new cap
+    guard.setCap(0.50);
+    setTotal(0.40);
+    guard.onEvent(turnEnd);
+    expect(interrupt).toHaveBeenCalledTimes(1); // no new fire
+    // Spend more, exceed new cap → re-fire
+    setTotal(0.60);
+    guard.onEvent(turnEnd);
+    expect(interrupt).toHaveBeenCalledTimes(2);
+  });
+
+  it('setCap(undefined) disables further fires', () => {
+    const { guard, interrupt, setTotal } = makeGuard({ cap: 0.10, total: 0.11 });
+    guard.onEvent(turnEnd);
+    expect(interrupt).toHaveBeenCalledTimes(1);
+    // Disable
+    guard.setCap(undefined);
+    setTotal(9999);
+    guard.onEvent(turnEnd);
+    expect(interrupt).toHaveBeenCalledTimes(1); // unchanged
+  });
+
+  it('setCap(lower) fires on next turn_end when total >= new cap', () => {
+    const { guard, interrupt } = makeGuard({ cap: 10, total: 5 });
+    // No fire under cap=10
+    guard.onEvent(turnEnd);
+    expect(interrupt).not.toHaveBeenCalled();
+    // Lower cap below current total
+    guard.setCap(1);
+    guard.onEvent(turnEnd);
+    expect(interrupt).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('withinDailyCap', () => {
