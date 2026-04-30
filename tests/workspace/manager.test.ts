@@ -97,9 +97,10 @@ describe('WorkspaceManager roles', () => {
 
 describe('WorkspaceManager.lazyResumeOrCreate', () => {
   function depsShell(overrides: Partial<LazyResumeDeps> = {}): { deps: LazyResumeDeps; calls: Record<string, unknown[]> } {
-    const calls: Record<string, unknown[]> = { isLive: [], resume: [], sendInput: [], createLocal: [] };
+    const calls: Record<string, unknown[]> = { isLive: [], hasPersistedSession: [], resume: [], sendInput: [], createLocal: [] };
     const deps: LazyResumeDeps = {
       isLive: (sid) => { calls.isLive.push(sid); return false; },
+      hasPersistedSession: (sid) => { calls.hasPersistedSession.push(sid); return true; },
       resume: async (sid) => { calls.resume.push(sid); return null; },
       sendInput: async (sid, text, src) => { calls.sendInput.push({ sid, text, src }); },
       createLocal: async (opts) => { calls.createLocal.push(opts); return fakeSession('sess-new'); },
@@ -253,6 +254,7 @@ describe('WorkspaceManager.lazyResumeOrCreate resume passes sessionId to runtime
 
     const deps: LazyResumeDeps = {
       isLive: () => false,
+      hasPersistedSession: (id) => persistence.hasSnapshot(id),
       resume: (id) => sessionMgr2.resumeLocal(id),
       sendInput: async () => { /* no-op */ },
       createLocal: async () => { throw new Error('should not create'); },
@@ -338,5 +340,97 @@ describe('isLive contract — precise active-only lookup (Spec X §I4 / §4.3)',
     expect(isLive(s.id)).toBe(false);
 
     await manager.stop(s.id);
+  });
+});
+
+describe('lazyResumeOrCreate — claude -r semantics (hasPersistedSession)', () => {
+  it('takes resumed branch when activeSessionId set, isLive false, hasPersistedSession true', async () => {
+    const wm = new WorkspaceManager();
+    const ws = wm.create({ name: 't', workdir: '/tmp/x' });
+    wm.bindActiveSession(ws.id, 'sid-1');
+
+    const branchEvents: Array<{ branch: string; sessionId: string; workspaceId: string }> = [];
+    let resumeCalledWith = '';
+    let createCalled = false;
+    const resumed = fakeSession('sid-1');
+
+    const out = await wm.lazyResumeOrCreate(ws.id, 'hello', 'im', {
+      isLive: () => false,
+      hasPersistedSession: () => true,
+      resume: async (id) => { resumeCalledWith = id; return resumed; },
+      sendInput: async () => { /* no-op */ },
+      createLocal: async () => { createCalled = true; return fakeSession('sid-new'); },
+      onBranch: (info) => branchEvents.push(info),
+    });
+
+    expect(resumeCalledWith).toBe('sid-1');
+    expect(createCalled).toBe(false);
+    expect(branchEvents[0]?.branch).toBe('resumed');
+    expect(out.action).toBe('resumed');
+  });
+
+  it('falls through to created when isLive false AND hasPersistedSession false', async () => {
+    const wm = new WorkspaceManager();
+    const ws = wm.create({ name: 't', workdir: '/tmp/x' });
+    wm.bindActiveSession(ws.id, 'sid-1');
+
+    let createCalled = false;
+    let resumeCalled = false;
+    const created = fakeSession('sid-2');
+
+    const out = await wm.lazyResumeOrCreate(ws.id, 'hello', 'im', {
+      isLive: () => false,
+      hasPersistedSession: () => false,
+      resume: async () => { resumeCalled = true; return null; },
+      sendInput: async () => { /* no-op */ },
+      createLocal: async () => { createCalled = true; return created; },
+      onBranch: () => { /* ignore */ },
+    });
+
+    expect(createCalled).toBe(true);
+    expect(resumeCalled).toBe(false);
+    expect(out.action).toBe('created');
+  });
+
+  it('still takes live branch when isLive true (does not consult hasPersistedSession)', async () => {
+    const wm = new WorkspaceManager();
+    const ws = wm.create({ name: 't', workdir: '/tmp/x' });
+    wm.bindActiveSession(ws.id, 'sid-1');
+
+    let sentTo = '';
+    const live = fakeSession('sid-1');
+
+    const out = await wm.lazyResumeOrCreate(ws.id, 'hello', 'im', {
+      isLive: () => true,
+      hasPersistedSession: () => { throw new Error('should not be called when live'); },
+      resume: async () => live, // fetchLiveOrThrow path
+      sendInput: async (id) => { sentTo = id; },
+      createLocal: async () => { throw new Error('should not create on live branch'); },
+      onBranch: () => { /* ignore */ },
+    });
+
+    expect(sentTo).toBe('sid-1');
+    expect(out.action).toBe('sent_to_live');
+  });
+
+  it('falls through to created when resume returns null (corrupt jsonl)', async () => {
+    const wm = new WorkspaceManager();
+    const ws = wm.create({ name: 't', workdir: '/tmp/x' });
+    wm.bindActiveSession(ws.id, 'sid-1');
+
+    let createCalled = false;
+    const created = fakeSession('sid-new');
+
+    const out = await wm.lazyResumeOrCreate(ws.id, 'hello', 'im', {
+      isLive: () => false,
+      hasPersistedSession: () => true,
+      resume: async () => null,  // jsonl exists but resume failed
+      sendInput: async () => { /* no-op */ },
+      createLocal: async () => { createCalled = true; return created; },
+      onBranch: () => { /* ignore */ },
+    });
+
+    expect(createCalled).toBe(true);
+    expect(out.action).toBe('created');
   });
 });

@@ -42,6 +42,15 @@ export interface WorkspaceManagerOptions {
 export interface LazyResumeDeps {
   /** Check whether a session id is still live. */
   isLive: (sdkSessionId: string) => boolean;
+  /**
+   * Cheap on-disk probe — does a persisted snapshot/jsonl exist for this
+   * session id? When isLive returns false but hasPersistedSession returns
+   * true, lazyResumeOrCreate takes the resume branch instead of silently
+   * creating a fresh session and losing history. Three triggers share this
+   * path: daemon restart (sessions Map empty), workspace switch (explicit
+   * stop), IdleStop 24h (auto stop).
+   */
+  hasPersistedSession: (sdkSessionId: string) => boolean | Promise<boolean>;
   /** Attempt to resume a stopped session; return the resumed SessionLike or null. */
   resume: (sdkSessionId: string) => Promise<SessionLike | null>;
   /** Forward a text input to the live session. */
@@ -248,8 +257,15 @@ export class WorkspaceManager {
   /**
    * Plain-text IM flow. Three branches:
    *   (1) activeSessionId set + live → sendInput
-   *   (2) activeSessionId set + stopped (meta exists) → resume; on success sendInput
+   *   (2) activeSessionId set + !isLive + hasPersistedSession → resume + sendInput
    *   (3) else → createLocal with workspace defaults
+   *
+   * Branch (2) is the `claude -r` semantic: process is ephemeral, jsonl is
+   * source of truth. After daemon restart / workspace switch / IdleStop the
+   * LocalSession instance is gone but the on-disk jsonl persists, so we
+   * resume rather than silently dropping the conversation history. If
+   * resume() returns null (corrupt jsonl etc.) we fall through to (3) as a
+   * final safety net.
    *
    * Returns a tagged outcome so callers can message the user contextually.
    *
@@ -298,8 +314,11 @@ export class WorkspaceManager {
       return { action: 'sent_to_live', session };
     }
 
-    // Branch 2: stopped session, try resume
-    if (active) {
+    // Branch 2: process is dead, but jsonl on disk → resume from persisted state.
+    // hasPersistedSession is a cheap probe (single fs.access in production);
+    // gating resume() on it avoids spurious runtime spin-up when activeSessionId
+    // points at a stale id that was wiped from disk.
+    if (active && (await deps.hasPersistedSession(active))) {
       const resumed = await deps.resume(active);
       if (resumed) {
         deps.onBranch?.({ branch: 'resumed', sessionId: resumed.id, workspaceId });
@@ -308,9 +327,13 @@ export class WorkspaceManager {
         await deps.sendInput(resumed.id, initialPrompt, source);
         return { action: 'resumed', session: resumed };
       }
+      // resume returned null (corrupt jsonl etc.) → fall through to createLocal
     }
 
-    // Branch 3: fresh create
+    // Branch 3: fresh create. If we fell through here while a stale activeSessionId
+    // is still bound (no jsonl on disk, or resume returned null), clear it first so
+    // the bindActiveSession below doesn't trip the single-writer conflict guard.
+    if (active) this.clearActiveSession(workspaceId);
     const created = await deps.createLocal({
       workspaceId,
       provider: ws.defaults.provider,

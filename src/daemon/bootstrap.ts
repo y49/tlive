@@ -651,6 +651,7 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
           if (s.kind !== 'local') return false;
           return (s as LocalSession).getStatus() === 'active';
         },
+        hasPersistedSession: (id) => deps.persistence.hasSnapshot(id),
         resume: async (id) => deps.sessions.resumeLocal(id),
         sendInput: async (id, t, src) => {
           const found = deps.sessions.get(id);

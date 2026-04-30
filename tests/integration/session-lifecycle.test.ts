@@ -34,6 +34,7 @@ interface Env {
   home: string;
   manager: SessionManager;
   workspaces: WorkspaceManager;
+  persistence: SessionPersistence;
   frontend: SessionFrontend;
   adapter: FakeAdapter;
   runtimes: FakeRuntime[];
@@ -73,7 +74,7 @@ async function setup(opts: SetupOpts = {}): Promise<Env> {
   });
   frontend.start();
 
-  return { home, manager, workspaces, frontend, adapter, runtimes, wsId: ws.id, workdir };
+  return { home, manager, workspaces, persistence, frontend, adapter, runtimes, wsId: ws.id, workdir };
 }
 
 async function teardown(env: Env): Promise<void> {
@@ -278,6 +279,7 @@ describe('Session lifecycle — full stack', () => {
           (found as unknown as { getStatus: () => string }).getStatus() === 'active'
         );
       },
+      hasPersistedSession: (id) => env.persistence.hasSnapshot(id),
       resume: (id) => env.manager.resumeLocal(id),
       sendInput: async (id, text, src) => {
         const found = env.manager.get(id);
@@ -363,6 +365,7 @@ describe('Session lifecycle — full stack', () => {
           (found as unknown as { getStatus: () => string }).getStatus() === 'active'
         );
       },
+      hasPersistedSession: (id) => env.persistence.hasSnapshot(id),
       resume: (id) => env.manager.resumeLocal(id),
       sendInput: async (id, text, src) => {
         const found = env.manager.get(id);
