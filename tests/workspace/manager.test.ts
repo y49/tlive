@@ -433,4 +433,67 @@ describe('lazyResumeOrCreate — claude -r semantics (hasPersistedSession)', () 
     expect(createCalled).toBe(true);
     expect(out.action).toBe('created');
   });
+
+  it('catches resume thrown error and falls through to created with onResumeFailed', async () => {
+    const wm = new WorkspaceManager();
+    const ws = wm.create({ name: 't', workdir: '/tmp/x' });
+    wm.bindActiveSession(ws.id, 'sid-1');
+
+    let createCalled = false;
+    let failedInfo: { workspaceId: string; sdkSessionId: string; reason: string } | null = null;
+    const fakeNewSession = fakeSession('sid-new');
+
+    await wm.lazyResumeOrCreate(ws.id, 'hello', 'im', {
+      isLive: () => false,
+      hasPersistedSession: () => true,
+      resume: async () => { throw new Error('disk-eio'); },
+      sendInput: async () => { /* no-op */ },
+      createLocal: async () => { createCalled = true; return fakeNewSession; },
+      onBranch: () => { /* ignore */ },
+      onResumeFailed: (info) => { failedInfo = info; },
+    } as never);
+
+    expect(createCalled).toBe(true);
+    expect(failedInfo).toMatchObject({ workspaceId: ws.id, sdkSessionId: 'sid-1', reason: 'disk-eio' });
+  });
+
+  it('fires onResumeFailed when resume returns null', async () => {
+    const wm = new WorkspaceManager();
+    const ws = wm.create({ name: 't', workdir: '/tmp/x' });
+    wm.bindActiveSession(ws.id, 'sid-1');
+
+    let failedInfo: { workspaceId: string; sdkSessionId: string; reason: string } | null = null;
+    const fakeNewSession = fakeSession('sid-new');
+
+    await wm.lazyResumeOrCreate(ws.id, 'hello', 'im', {
+      isLive: () => false,
+      hasPersistedSession: () => true,
+      resume: async () => null,
+      sendInput: async () => { /* no-op */ },
+      createLocal: async () => fakeNewSession,
+      onBranch: () => { /* ignore */ },
+      onResumeFailed: (info) => { failedInfo = info; },
+    } as never);
+
+    expect(failedInfo).toMatchObject({ workspaceId: ws.id, sdkSessionId: 'sid-1', reason: 'resume returned null' });
+  });
+
+  it('after resume null, getActiveSessionId returns the freshly-created session id', async () => {
+    const wm = new WorkspaceManager();
+    const ws = wm.create({ name: 't', workdir: '/tmp/x' });
+    wm.bindActiveSession(ws.id, 'sid-1');
+
+    const fakeNewSession = fakeSession('sid-new');
+    await wm.lazyResumeOrCreate(ws.id, 'hello', 'im', {
+      isLive: () => false,
+      hasPersistedSession: () => true,
+      resume: async () => null,
+      sendInput: async () => { /* no-op */ },
+      createLocal: async () => fakeNewSession,
+      onBranch: () => { /* ignore */ },
+    } as never);
+
+    // bindActiveSession should have updated to the new id, not thrown WorkspaceConflictError
+    expect(wm.getActiveSessionId(ws.id)).toBe('sid-new');
+  });
 });

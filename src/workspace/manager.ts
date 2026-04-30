@@ -66,6 +66,14 @@ export interface LazyResumeDeps {
   /** Optional log hook fired right after the branch decision. Bootstrap wires
    *  to its structured logger; tests may omit. */
   onBranch?: (info: { branch: 'live' | 'resumed' | 'created'; sessionId: string; workspaceId: string }) => void;
+  /** Called when resume was attempted (jsonl exists) but failed (null
+   *  or thrown). Fired before fall-through to createLocal so callers
+   *  can log/alert. Best-effort — must not throw. */
+  onResumeFailed?: (info: {
+    workspaceId: string;
+    sdkSessionId: string;
+    reason: string;
+  }) => void;
 }
 
 export type LazyResumeOutcome =
@@ -319,7 +327,13 @@ export class WorkspaceManager {
     // gating resume() on it avoids spurious runtime spin-up when activeSessionId
     // points at a stale id that was wiped from disk.
     if (active && (await deps.hasPersistedSession(active))) {
-      const resumed = await deps.resume(active);
+      let resumed: SessionLike | null = null;
+      let resumeError: Error | null = null;
+      try {
+        resumed = await deps.resume(active);
+      } catch (err) {
+        resumeError = err instanceof Error ? err : new Error(String(err));
+      }
       if (resumed) {
         deps.onBranch?.({ branch: 'resumed', sessionId: resumed.id, workspaceId });
         try { this.bindActiveSession(workspaceId, resumed.id); }
@@ -327,7 +341,15 @@ export class WorkspaceManager {
         await deps.sendInput(resumed.id, initialPrompt, source);
         return { action: 'resumed', session: resumed };
       }
-      // resume returned null (corrupt jsonl etc.) → fall through to createLocal
+      // resume returned null OR threw — log the abandonment via the
+      // optional onResumeFailed hook so operators have a forensic trail
+      // (otherwise the user silently gets a fresh session).
+      deps.onResumeFailed?.({
+        workspaceId,
+        sdkSessionId: active,
+        reason: resumeError ? resumeError.message : 'resume returned null',
+      });
+      // fall through to createLocal (safety net)
     }
 
     // Branch 3: fresh create. If we fell through here while a stale activeSessionId

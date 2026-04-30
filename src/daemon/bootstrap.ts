@@ -669,6 +669,9 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
           source: opts.source,
         }),
         onBranch: (info) => deps.logger.info('lazyResumeOrCreate branch', info),
+        onResumeFailed: (info) => {
+          deps.logger.warn('lazyResume: resume failed, creating fresh', info);
+        },
       });
     } catch (err) {
       await deps.adapter.send({
