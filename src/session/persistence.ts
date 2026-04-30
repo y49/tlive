@@ -14,7 +14,7 @@
 // Atomic writes via write-to-tmp-then-rename guard against torn writes on
 // daemon crash.
 
-import { mkdir, writeFile, readFile, appendFile, readdir, unlink, stat, rename } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, appendFile, readdir, unlink, stat, rename, access } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -135,6 +135,22 @@ export class SessionPersistence {
     const tmp = this.metaPath(snap.id) + '.' + randomBytes(4).toString('hex') + '.tmp';
     await writeFile(tmp, JSON.stringify(snap, null, 2), 'utf-8');
     await rename(tmp, this.metaPath(snap.id));
+  }
+
+  /**
+   * Cheap probe: does a snapshot/meta file exist on disk for this session id?
+   * Returns false on any error (ENOENT or otherwise) — used by
+   * lazyResumeOrCreate to decide between resume vs createLocal when the
+   * in-memory LocalSession instance is gone (daemon restart, IdleStop,
+   * workspace switch).
+   */
+  async hasSnapshot(sdkSessionId: string): Promise<boolean> {
+    try {
+      await access(this.metaPath(sdkSessionId));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async loadSnapshot(sessionId: string): Promise<SessionSnapshot | null> {

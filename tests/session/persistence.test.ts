@@ -94,4 +94,15 @@ describe('SessionPersistence', () => {
     const files = await readdir(root);
     expect(files.filter((f) => f.includes('.tmp'))).toHaveLength(0);
   });
+
+  describe('hasSnapshot', () => {
+    it('returns true when snapshot file exists', async () => {
+      await p.saveSnapshot(makeSnap('sess-abc-123'));
+      expect(await p.hasSnapshot('sess-abc-123')).toBe(true);
+    });
+
+    it('returns false when not present', async () => {
+      expect(await p.hasSnapshot('nonexistent-id')).toBe(false);
+    });
+  });
 });
