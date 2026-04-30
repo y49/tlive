@@ -101,6 +101,10 @@ export class RemoteSession implements SessionLike {
     this.emitStatus(next);
   }
   get isReady(): boolean { return this._isReady; }
+  // RemoteSession does not surface SDK init metadata (no local runtime).
+  // Remote daemon owns the system event; cross-IPC propagation deferred.
+  readonly sdkModel: string | undefined = undefined;
+  readonly sdkMaxContextTokens: number | undefined = undefined;
 
   onEvent(cb: (e: NotificationEvent) => void): () => void {
     this.eventListeners.add(cb);

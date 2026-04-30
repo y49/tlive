@@ -97,6 +97,10 @@ export class LocalSession implements SessionLike {
   private lastActivityAt: number;
   private abortCtrl = new AbortController();
   private _isReady = false;
+  private _sdkModel?: string;
+  private _sdkMaxContextTokens?: number;
+  get sdkModel(): string | undefined { return this._sdkModel; }
+  get sdkMaxContextTokens(): number | undefined { return this._sdkMaxContextTokens; }
 
   constructor(init: SessionInit) {
     this.ctx = init.ctx;
@@ -348,6 +352,13 @@ export class LocalSession implements SessionLike {
   private handleEvent(event: NotificationEvent): void {
     this.touch();
     this.history.push(event);
+    // Capture SDK init metadata onto the session so a late-attaching frontend
+    // (which subscribes AFTER firstInitMessage has already fired) can still
+    // read the real model + maxContext via session.sdkModel / sdkMaxContextTokens.
+    if (event.kind === 'system') {
+      this._sdkModel = event.model;
+      this._sdkMaxContextTokens = event.maxContextTokens;
+    }
     void this.persistence.appendEvent(this.id, event).catch(() => { /* surface via logger */ });
     this.emitEvent(event);
 

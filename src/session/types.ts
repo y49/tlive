@@ -54,6 +54,10 @@ export interface SessionLike {
   readonly cost: CostTracker;
   /** True once the SDK-assigned sdkSessionId is known (post-runtime.prepare). */
   readonly isReady: boolean;
+  /** Real SDK-reported model id (set on first `system` event). undefined until init. */
+  readonly sdkModel?: string;
+  /** Max context window for sdkModel (set alongside sdkModel). */
+  readonly sdkMaxContextTokens?: number;
 
   onEvent(cb: (e: NotificationEvent) => void): () => void;
   onStatusChange(cb: (s: AgentStatus) => void): () => void;

@@ -342,15 +342,16 @@ export class SessionFrontend {
     const workspaceName = workspace?.name
       ?? entry.channels[0]?.session.workspaceName
       ?? entry.workspaceId;
+    // Prefer the SDK-reported model (captured on system event during init —
+    // before frontend subscribed) over the workspace default. resolveModelLabel
+    // chains: sdk truth → workspace pref → 'claude-sonnet-4' fallback.
     return initialHudState({
       sessionShortId: sessionId.slice(0, 7),
       workspaceName,
       // gitBranch: not exposed on Workspace (only gitRemote) — deferred to later wiring.
       provider,
-      model: resolveModelLabel(undefined, workspace?.defaults.model, undefined),
-      // TODO: hardcoded 200_000 until a model→max-context table lands. The HUD
-      // copes with stale numbers (Context bar just shows wrong percentage).
-      modelMaxContext: 200_000,
+      model: resolveModelLabel(session?.sdkModel, workspace?.defaults.model, undefined),
+      modelMaxContext: session?.sdkMaxContextTokens ?? 200_000,
       turnNumber: entry.turnCounter ?? 1,
       startedAtMs: Date.now(),
       costSession: session?.cost.totalCost ?? 0,
