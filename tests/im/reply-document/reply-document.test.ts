@@ -44,7 +44,7 @@ describe('ReplyDocument — Telegram', () => {
     // v3.2.1: detail no longer has replyToMessageId — avoids Telegram quote bubble
     // duplicating the parent reply's content above the detail
     expect(sent[1].replyToMessageId).toBeUndefined();
-    expect(sent[1].text).toContain('<pre><code>');
+    expect(sent[1].text).toContain('<blockquote>');
   });
 
   it('setBody → edits reply (m1) only, not detail (m2)', async () => {
@@ -62,7 +62,7 @@ describe('ReplyDocument — Telegram', () => {
     expect(m2Edits.length).toBeGreaterThanOrEqual(1);
     expect(m1Edits[0].text).toContain('Hello world');
     expect(m2Edits[0].text).not.toContain('Hello world');
-    expect(m2Edits[0].text).toContain('<pre><code>');
+    expect(m2Edits[0].text).toContain('<blockquote>');
   });
 
   it('freeze() edits both messages with frozen state', async () => {
@@ -76,7 +76,7 @@ describe('ReplyDocument — Telegram', () => {
     const m1Last = edited.filter((e) => e.msgId === 'm1').pop();
     const m2Last = edited.filter((e) => e.msgId === 'm2').pop();
     expect(m1Last!.text).toContain('done');
-    expect(m2Last!.text).toContain('<pre><code>');
+    expect(m2Last!.text).toContain('<blockquote>');
   });
 
   it('body >4096 chars → splits into reply chunks (replyTo head)', async () => {

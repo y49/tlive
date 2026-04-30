@@ -606,13 +606,30 @@ export class SessionFrontend {
           });
           entry.askControllers.set(tk, ctrl);
         }
-        await ctrl.open(req).catch(() => { /* isolate */ });
+        // v3.2.3: surface real errors instead of swallowing — pre-fix the
+        // multi-select bug couldn't even be diagnosed because failures here
+        // were silent.
+        await ctrl.open(req).catch((err) => {
+          this.opts.logger?.error('askController.open failed', {
+            sessionId: ev.sessionId, reqId: req.id,
+            err: (err as Error).message,
+            stack: (err as Error).stack,
+          });
+        });
         const card = ctrl.getCard(req.id);
         // Register in the flat reqId index so routeCallback can dispatch
         // ask:* callbacks. Last writer wins on duplicate keys (multi-channel
         // primaries should be rare; PermissionCard.handleCallback is
         // idempotent anyway).
         if (card) this.cardsByReqId.set(req.id, card);
+      }
+      // v3.2.3: signal askPending to every active TurnComposite so the
+      // banner switches to "❓ awaiting input" — without this it stays on
+      // tool_running ("◐ AskUserQuestion") because tool_use_start fired first.
+      if (entry.activeTurnComposites) {
+        for (const tc of entry.activeTurnComposites.values()) {
+          if (!tc.isDestroyed()) tc.replyDocument.setAskPending(true);
+        }
       }
       return;
     }
@@ -622,8 +639,19 @@ export class SessionFrontend {
       if (entry.askControllers) {
         for (const ctrl of entry.askControllers.values()) {
           if (ctrl.has(ev.requestId)) {
-            await ctrl.markResolved(ev.requestId, ev.chosen).catch(() => { /* isolate */ });
+            await ctrl.markResolved(ev.requestId, ev.chosen).catch((err) => {
+              this.opts.logger?.error('askController.markResolved failed', {
+                sessionId: ev.sessionId, reqId: ev.requestId,
+                err: (err as Error).message,
+              });
+            });
           }
+        }
+      }
+      // Banner back to ◐ thinking after the user answered
+      if (entry.activeTurnComposites) {
+        for (const tc of entry.activeTurnComposites.values()) {
+          if (!tc.isDestroyed()) tc.replyDocument.setAskPending(false);
         }
       }
     }

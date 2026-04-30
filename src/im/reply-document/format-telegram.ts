@@ -103,36 +103,48 @@ export function renderTelegramReply(
 }
 
 export function renderTelegramDetail(state: HudState): TelegramRender {
+  // v3.2.3: switched container from <pre><code> (gray "code block" with
+  // copy button — looked like pasted code) to <blockquote> with inline tag
+  // styling. Visual hierarchy via <b> (key numbers), <code> (data: sid /
+  // branch), <i> (auxiliary: model id / max ctx). emoji as line anchors.
+  // Character progress bar (▓░░...) retired — '📊 5%' is more chat-native;
+  // the number itself carries the information without ASCII art.
   const lines: string[] = [];
-  const sid = state.sessionShortId;
-  const model = state.model;
+  const sid = escapeHtml(state.sessionShortId);
+  const model = escapeHtml(state.model);
   const ctxKnown = state.modelMaxContext > 0;
-  // L1 — turn header. Append `(maxK ctx)` only when we know it.
-  const ctxLabel = ctxKnown ? ` (${fmtTok(state.modelMaxContext)} ctx)` : '';
-  lines.push(`💬 #${state.turnNumber} · ${sid} · ${model}${ctxLabel}`);
+  // L1 — turn header.
+  // 💬 <b>#N</b> · <code>sid</code>  <i>model · maxLabel</i>
+  const modelParts = [model];
+  if (ctxKnown) modelParts.push(fmtTok(state.modelMaxContext));
+  const modelInfo = `<i>${modelParts.join(' · ')}</i>`;
+  lines.push(`💬 <b>#${state.turnNumber}</b> · <code>${sid}</code>  ${modelInfo}`);
   // L2 — git context (omit if no branch)
   if (state.gitBranch) {
-    lines.push(`🌳 ${state.gitBranch} · ${state.workspaceName}`);
+    lines.push(
+      `🌳 <code>${escapeHtml(state.gitBranch)}</code> · <i>${escapeHtml(state.workspaceName)}</i>`,
+    );
   }
-  // L3 — context + Σ session, adaptive truth (v3.2.2):
-  //   - ctx known: '{bar} {pct}% · {used}/{max}'
-  //   - ctx unknown but tokens consumed: '📊 {used} tokens'
-  //   - Σ shown only when costSession > 0 (provider supplied cost data)
+  // L3 — context + cost (adaptive truth):
+  //   - ctx known:        '📊 <b>5%</b> <i>(47.2k/1M)</i>  💰 <b>$1.16</b>'
+  //   - ctx unknown:      '📊 <b>47.2k</b> <i>tokens</i>     💰 <b>$1.16</b>'
+  //   - cost 0 (provider didn't surface): segment omitted
   const segs: string[] = [];
   if (ctxKnown) {
     const pct = Math.round((state.contextUsedTok / state.modelMaxContext) * 100);
-    segs.push(`${bar(pct)} ${pct}% · ${fmtTok(state.contextUsedTok)}/${fmtTok(state.modelMaxContext)}`);
+    const detail = `${fmtTok(state.contextUsedTok)}/${fmtTok(state.modelMaxContext)}`;
+    segs.push(`📊 <b>${pct}%</b> <i>(${detail})</i>`);
   } else if (state.contextUsedTok > 0) {
-    segs.push(`📊 ${fmtTok(state.contextUsedTok)} tokens`);
+    segs.push(`📊 <b>${fmtTok(state.contextUsedTok)}</b> <i>tokens</i>`);
   }
   if (state.costSession > 0) {
-    segs.push(`Σ $${state.costSession.toFixed(2)}`);
+    segs.push(`💰 <b>$${state.costSession.toFixed(2)}</b>`);
   }
-  if (segs.length > 0) lines.push(segs.join(' · '));
-  // Quota lines (only ever populated by Anthropic — if absent, skipped)
+  if (segs.length > 0) lines.push(segs.join('  '));
+  // Quota lines (Anthropic-supplied)
   for (const q of state.quotaBars) {
-    const reset = q.resetsIn ? ` (${q.resetsIn})` : '';
-    lines.push(`${bar(q.pct)} ${q.pct}% · ${q.label}${reset}`);
+    const reset = q.resetsIn ? ` <i>(${escapeHtml(q.resetsIn)})</i>` : '';
+    lines.push(`📈 <b>${q.pct}%</b> <i>${escapeHtml(q.label)}</i>${reset}`);
   }
-  return { html: `<pre><code>${lines.join('\n')}</code></pre>` };
+  return { html: `<blockquote>${lines.join('\n')}</blockquote>` };
 }

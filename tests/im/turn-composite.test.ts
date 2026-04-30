@@ -35,7 +35,7 @@ describe('TurnComposite — integration', () => {
     await vi.runAllTimersAsync();
     // v3.2.1: ReplyDocument.start sends 2 messages on telegram — reply head (m1)
     // and detail card (m2, adjacent — NO replyTo to avoid Telegram quote bubble).
-    // Detail contains <pre><code>.
+    // Detail contains <blockquote> (v3.2.3 visual redesign).
     expect(sent.length).toBe(2);
     expect(sent[1].replyToMessageId).toBeUndefined();
   });

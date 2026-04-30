@@ -92,41 +92,42 @@ describe('renderTelegramReply — body', () => {
   });
 });
 
-describe('renderTelegramDetail — <pre><code> card', () => {
-  it('wraps content in <pre><code>...</code></pre>', () => {
+describe('renderTelegramDetail — v3.2.3 <blockquote> card with inline styles', () => {
+  it('wraps content in <blockquote>...</blockquote>', () => {
     const r = renderTelegramDetail(baseState());
-    expect(r.html.startsWith('<pre><code>')).toBe(true);
-    expect(r.html.endsWith('</code></pre>')).toBe(true);
+    expect(r.html.startsWith('<blockquote>')).toBe(true);
+    expect(r.html.endsWith('</blockquote>')).toBe(true);
   });
-  it('line 1 — turn header with #N · sid · model (maxK ctx)', () => {
+  it('line 1 — 💬 <b>#N</b> · <code>sid</code> + <i>model · maxK</i>', () => {
     const r = renderTelegramDetail(baseState());
-    expect(r.html).toContain('💬 #5');
-    expect(r.html).toContain('8cdfcfb');
-    expect(r.html).toContain('claude-opus-4-7');
-    expect(r.html).toContain('(200.0k ctx)');
+    expect(r.html).toContain('💬 <b>#5</b>');
+    expect(r.html).toContain('<code>8cdfcfb</code>');
+    expect(r.html).toContain('<i>claude-opus-4-7 · 200.0k</i>');
   });
-  it('line 2 — git branch · workspace, omitted if no branch', () => {
+  it('line 2 — 🌳 <code>branch</code> · <i>workspace</i>, omitted if no branch', () => {
     const withBranch = renderTelegramDetail(baseState());
-    expect(withBranch.html).toContain('🌳 feat/v1.0 · tlive');
+    expect(withBranch.html).toContain('🌳 <code>feat/v1.0</code> · <i>tlive</i>');
 
     const noBranch = renderTelegramDetail({ ...baseState(), gitBranch: undefined });
     expect(noBranch.html).not.toContain('🌳');
   });
-  it('line 3 — context bar + tokens + Σ session', () => {
+  it('line 3 — 📊 <b>%</b> + 💰 <b>$X.XX</b>', () => {
     const r = renderTelegramDetail(baseState({
       contextUsedTok: 44_200,
       costSession: 0.25,
     }));
-    expect(r.html).toContain('22%');
-    expect(r.html).toContain('44.2k/200.0k');
-    expect(r.html).toContain('Σ $0.25');
+    expect(r.html).toContain('📊 <b>22%</b>');
+    expect(r.html).toContain('<i>(44.2k/200.0k)</i>');
+    expect(r.html).toContain('💰 <b>$0.25</b>');
+    // No character progress bar anymore (▓░░ retired)
+    expect(r.html).not.toContain('▓');
   });
-  it('appends quota lines when state.quotaBars non-empty', () => {
+  it('appends quota lines with 📈 anchor + percent + label', () => {
     const r = renderTelegramDetail(baseState({
       quotaBars: [{ label: '5h', pct: 45, resetsIn: '3h 57m' }],
     }));
-    expect(r.html).toContain('5h');
-    expect(r.html).toContain('45%');
+    expect(r.html).toContain('📈 <b>45%</b>');
+    expect(r.html).toContain('<i>5h</i>');
     expect(r.html).toContain('3h 57m');
   });
 });
@@ -154,20 +155,21 @@ describe('v3.2.2 adaptive truth — unknown model / 0 cost', () => {
     expect(r.html).toContain('💵 –.--');
   });
 
-  it('detail: unknown maxContext (=0) drops "(... ctx)" suffix from title line', () => {
+  it('detail: unknown maxContext (=0) drops max-tok suffix from title line', () => {
     const r = renderTelegramDetail({ ...baseState(), modelMaxContext: 0 });
-    expect(r.html).not.toContain('ctx');
-    expect(r.html).toContain('claude-opus-4-7');  // model name still present
+    // Title becomes: 💬 <b>#5</b> · <code>sid</code>  <i>claude-opus-4-7</i> (no max)
+    expect(r.html).toContain('<i>claude-opus-4-7</i>');
+    expect(r.html).not.toContain('200.0k');
   });
 
-  it('detail: unknown maxContext shows "📊 X tokens" instead of "% bar"', () => {
+  it('detail: unknown maxContext shows "📊 <b>X</b> <i>tokens</i>" instead of %', () => {
     const r = renderTelegramDetail({
       ...baseState(),
       modelMaxContext: 0,
       contextUsedTok: 28_400,
     });
-    expect(r.html).toContain('📊 28.4k tokens');
-    expect(r.html).not.toContain('%');
+    expect(r.html).toContain('📊 <b>28.4k</b> <i>tokens</i>');
+    expect(r.html).not.toMatch(/<b>\d+%<\/b>/);
   });
 
   it('detail: 0 contextUsedTok AND unknown maxContext omits the context segment entirely', () => {
@@ -175,17 +177,16 @@ describe('v3.2.2 adaptive truth — unknown model / 0 cost', () => {
       ...baseState(),
       modelMaxContext: 0,
       contextUsedTok: 0,
-      costSession: 0,  // also no cost so nothing on line 3
+      costSession: 0,
     });
-    // Title (L1) and branch (L2) still present, but no L3
     expect(r.html).toContain('💬');
     expect(r.html).toContain('🌳');
     expect(r.html).not.toContain('📊');
-    expect(r.html).not.toContain('Σ');
+    expect(r.html).not.toContain('💰');
   });
 
-  it('detail: costSession 0 suppresses "Σ $0.00"', () => {
+  it('detail: costSession 0 suppresses "💰 $0.00"', () => {
     const r = renderTelegramDetail({ ...baseState(), costSession: 0 });
-    expect(r.html).not.toContain('Σ');
+    expect(r.html).not.toContain('💰');
   });
 });
