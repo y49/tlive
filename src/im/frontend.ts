@@ -268,7 +268,12 @@ export class SessionFrontend {
     const unsubscribeEvent = session.onEvent((ev) => {
       entry.dispatchChain = entry.dispatchChain
         .then(() => this.handleSessionEvent(session.id, ev))
-        .catch(() => { /* isolate */ });
+        .catch((err) => {
+          this.opts.logger?.error('frontend dispatch failed', {
+            sessionId: session.id, kind: ev.kind, err: (err as Error).message,
+            stack: (err as Error).stack,
+          });
+        });
     });
     entry.unsubscribeEvent = unsubscribeEvent;
     this.sessions.set(session.id, entry);
@@ -355,6 +360,7 @@ export class SessionFrontend {
   private async handleSessionEvent(sessionId: string, ev: NotificationEvent): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (!entry) return;
+    this.opts.logger?.info?.('frontend dispatch', { sessionId, kind: ev.kind });
 
     // ---- Reaction phases (per-channel) ------------------------------------
     if (ev.kind === 'turn_start') {
@@ -446,6 +452,7 @@ export class SessionFrontend {
         }
         entry.activeTurnComposites = new Map<string, TurnComposite>();
         if (!entry.editQueues) entry.editQueues = new Map<string, EditQueue>();
+        const startPromises: Promise<void>[] = [];
         for (const c of entry.channels) {
           if (c.target.role !== 'primary' && c.target.role !== 'mirror') continue;
           const tk = renderTargetKey(c.target);
@@ -459,8 +466,16 @@ export class SessionFrontend {
           }
           const tc = new TurnComposite(c.adapter, c.target, eq, initState);
           entry.activeTurnComposites.set(tk, tc);
-          void tc.start();
+          // Await placeholder send so msgId is set before subsequent events
+          // (assistant_text_delta / turn_end) fire flushOnce — otherwise the
+          // race causes flushOnce to short-circuit on null msgId, dropping the edit.
+          startPromises.push(tc.start().catch((err) => {
+            this.opts.logger?.error('TurnComposite.start failed', {
+              sessionId, channelType: c.target.channelType, err: (err as Error).message,
+            });
+          }));
         }
+        await Promise.all(startPromises);
 
         // Build AskCardController per primary channel. Cancel any cards from
         // the previous turn (turn boundary forgets pending questions). Each

@@ -24,10 +24,21 @@ describe('renderFeishu — header.template', () => {
     expect(r.card.header.template).toBe(template);
     expect(r.card.header.title.content).toContain(prefix);
   });
+
+  it('header.title uses #N · sid (turn → conversation round)', () => {
+    const r: any = renderFeishu(baseState(), '');
+    expect(r.card.header.title.content).toContain('#5');
+    expect(r.card.header.title.content).toContain('8cdfcfb');
+  });
+
+  it('header.subtitle is just the model id (model card label)', () => {
+    const r: any = renderFeishu(baseState(), '');
+    expect(r.card.header.subtitle.content).toBe('opus-4-6');
+  });
 });
 
-describe('renderFeishu — body order: markdown / hr / status / note', () => {
-  it('elements 顺序固定', () => {
+describe('renderFeishu — body element order (progress promoted)', () => {
+  it('elements 顺序: progress / hr / body / hr / detail', () => {
     const r: any = renderFeishu(baseState({
       contextUsedTok: 64_000,
       toolTally: new Map([['Read', 3]]),
@@ -35,14 +46,22 @@ describe('renderFeishu — body order: markdown / hr / status / note', () => {
       costThisTurn: 0.04,
     }), 'hello');
     const tags = r.card.body.elements.map((e: any) => e.tag);
-    expect(tags).toEqual(['markdown', 'hr', 'markdown', 'note']);
-    expect(r.card.body.elements[0].content).toContain('hello');
-    expect(r.card.body.elements[2].content).toContain('Context');
-    expect(r.card.body.elements[2].content).toContain('Read×3');
-    expect(r.card.body.elements[3].elements[0].content).toContain('$0.04');
+    expect(tags).toEqual(['markdown', 'hr', 'markdown', 'hr', 'markdown']);
+    // Element 0 = progress (always visible) — has tally + ⏱ + 💵
+    expect(r.card.body.elements[0].content).toContain('Read×3');
+    expect(r.card.body.elements[0].content).toContain('⏱ 12.3s');
+    expect(r.card.body.elements[0].content).toContain('💵 $0.04');
+    // Element 2 = body
+    expect(r.card.body.elements[2].content).toContain('hello');
+    // Element 4 = detail (turn header + Context + Σ session)
+    expect(r.card.body.elements[4].content).toContain('💬 #5');
+    expect(r.card.body.elements[4].content).toContain('Context');
+    expect(r.card.body.elements[4].content).toContain('opus-4-6');
+    expect(r.card.body.elements[4].content).toContain('Σ $0.18');
   });
+
   it('空 body 显示 placeholder', () => {
     const r: any = renderFeishu(baseState(), '');
-    expect(r.card.body.elements[0].content).toBe('_thinking…_');
+    expect(r.card.body.elements[2].content).toBe('_thinking…_');
   });
 });

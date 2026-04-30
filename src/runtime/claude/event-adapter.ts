@@ -23,6 +23,7 @@
 import { randomBytes } from 'node:crypto';
 import type { NotificationEvent, UsageStats } from '../events.js';
 import type { AskUserQuestionRequest } from '../types.js';
+import { modelMaxContextFor } from './model-context.js';
 
 type SdkMessage = { type: string; [k: string]: unknown };
 
@@ -54,7 +55,20 @@ export class ClaudeEventAdapter {
         // SDKSystemMessage / SDKCompactBoundaryMessage / hook_* / task_* /
         // files_persisted / elicitation_complete / auth_status all arrive
         // with type === 'system' and a discriminating subtype.
-        if (sub === 'init') break; // consumed by runtime to capture sdkSessionId
+        if (sub === 'init') {
+          // Init frame carries the model id. Emit a `system` event so the
+          // HUD reducer can replace the workspace-default model label with
+          // the truth, and look up the corresponding context window size.
+          const init = msg as { model?: string };
+          if (typeof init.model === 'string' && init.model) {
+            events.push({
+              kind: 'system',
+              model: init.model,
+              maxContextTokens: modelMaxContextFor(init.model),
+            });
+          }
+          break; // session_id consumed by runtime upstream
+        }
         if (sub === 'compact_boundary') {
           const meta = (msg as { compact_metadata?: { trigger?: string; pre_tokens?: number } }).compact_metadata;
           events.push({

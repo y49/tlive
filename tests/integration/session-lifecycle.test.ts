@@ -145,7 +145,7 @@ describe('Session lifecycle — full stack', () => {
       .filter((c) => c.kind === 'send' || c.kind === 'edit')
       .map((c) => String((c.args as { text?: string }).text ?? ''));
     expect(allTexts.length).toBeGreaterThan(0);
-    expect(allTexts.some((t) => t.includes('📊'))).toBe(true); // HUD header emoji
+    expect(allTexts.some((t) => t.includes('💬'))).toBe(true); // v3.1 HUD turn header (was 📊)
   });
 
   // ---- createLocal ordering --------------------------------------------------

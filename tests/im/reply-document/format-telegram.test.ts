@@ -31,7 +31,7 @@ describe('renderTelegram — banner', () => {
     const r = renderTelegram(baseState({
       currentActivity: { kind: 'waiting_permission', toolName: 'Bash', elapsedMs: 0 },
     }), '');
-    expect(r.html).toContain('<b>⏸ waiting for permission</b>');
+    expect(r.html).toContain('<b>⏸ waiting for permission · Bash</b>');
   });
   it('frozen done:✓ done', () => {
     const r = renderTelegram(baseState({ isFrozen: true }), '');
@@ -43,24 +43,46 @@ describe('renderTelegram — banner', () => {
   });
 });
 
-describe('renderTelegram — footer (blockquote expandable)', () => {
-  it('包含 turn header + context bar + cost line', () => {
+describe('renderTelegram — progress (always visible)', () => {
+  it('tally chips + duration + cost on always-visible progress line', () => {
     const r = renderTelegram(baseState({
-      contextUsedTok: 64_000,
       toolTally: new Map([['Read', 3], ['Bash', 1]]),
       durationMs: 12_300,
       costThisTurn: 0.04,
     }), 'body');
+    // Progress line lives BEFORE blockquote (i.e. visible without expanding)
+    const bqStart = r.html.indexOf('<blockquote expandable>');
+    const tallyAt = r.html.indexOf('Read×3');
+    expect(tallyAt).toBeGreaterThan(-1);
+    expect(tallyAt).toBeLessThan(bqStart);
+    expect(r.html).toContain('Bash×1');
+    expect(r.html).toContain('⏱ 12.3s');
+    expect(r.html).toContain('💵 $0.04');
+  });
+
+  it('progress line never empty — shows ⏱ + 💵 even when no tally', () => {
+    const r = renderTelegram(baseState(), '');
+    const bqStart = r.html.indexOf('<blockquote expandable>');
+    const durAt = r.html.indexOf('⏱ ');
+    expect(durAt).toBeGreaterThan(-1);
+    expect(durAt).toBeLessThan(bqStart);
+  });
+});
+
+describe('renderTelegram — footer (blockquote expandable, detail metadata)', () => {
+  it('包含 #N · sid · model + Context bar + Σ session', () => {
+    const r = renderTelegram(baseState({
+      contextUsedTok: 64_000,
+      durationMs: 12_300,
+      costThisTurn: 0.04,
+    }), 'body');
     expect(r.html).toContain('<blockquote expandable>');
-    expect(r.html).toContain('📊 turn 5');
+    expect(r.html).toContain('💬 #5');
     expect(r.html).toContain('8cdfcfb');
     expect(r.html).toContain('opus-4-6');
+    expect(r.html).toContain('(200.0k)');
     expect(r.html).toContain('Context');
     expect(r.html).toContain('32%');
-    expect(r.html).toContain('Read×3');
-    expect(r.html).toContain('Bash×1');
-    expect(r.html).toContain('12.3s');
-    expect(r.html).toContain('$0.04');
     expect(r.html).toContain('Σ $0.18');
     expect(r.html).toContain('</blockquote>');
   });

@@ -16,6 +16,7 @@ export interface UsageStats {
 }
 
 export type NotificationEvent =
+  | { kind: 'system'; model: string; maxContextTokens: number }
   | { kind: 'turn_start'; turnId: string; userInputPreview: string; at: number }
   | { kind: 'turn_end'; turnId: string; durationMs: number; costUsd: number; tokensIn: number; tokensOut: number }
   | { kind: 'status_change'; status: AgentStatus }

@@ -327,6 +327,43 @@ describe('ClaudeEventAdapter', () => {
     expect(txIdx).toBeGreaterThan(tsIdx);
   });
 
+  it('init frame emits a system event with model + maxContextTokens', () => {
+    const adapter = new ClaudeEventAdapter();
+    const r = adapter.adapt({
+      type: 'system',
+      subtype: 'init',
+      session_id: 'sess-1',
+      model: 'claude-opus-4-7',
+      cwd: '/tmp',
+    } as unknown as Parameters<typeof adapter.adapt>[0]);
+    const sys = r.events.find((e) => e.kind === 'system') as Extract<NotificationEvent, { kind: 'system' }> | undefined;
+    expect(sys).toBeDefined();
+    expect(sys!.model).toBe('claude-opus-4-7');
+    expect(sys!.maxContextTokens).toBe(200_000);
+  });
+
+  it('init frame with 1M variant looks up 1M context', () => {
+    const adapter = new ClaudeEventAdapter();
+    const r = adapter.adapt({
+      type: 'system',
+      subtype: 'init',
+      session_id: 'sess-1',
+      model: 'claude-sonnet-4-5-1m',
+    } as unknown as Parameters<typeof adapter.adapt>[0]);
+    const sys = r.events.find((e) => e.kind === 'system') as Extract<NotificationEvent, { kind: 'system' }> | undefined;
+    expect(sys?.maxContextTokens).toBe(1_000_000);
+  });
+
+  it('init frame without model field emits no system event', () => {
+    const adapter = new ClaudeEventAdapter();
+    const r = adapter.adapt({
+      type: 'system',
+      subtype: 'init',
+      session_id: 'sess-1',
+    } as unknown as Parameters<typeof adapter.adapt>[0]);
+    expect(r.events.some((e) => e.kind === 'system')).toBe(false);
+  });
+
   it('assistant frames after a real user-frame turn do NOT synthesize a duplicate turn_start', () => {
     const adapter = new ClaudeEventAdapter();
     // Establish a real turn via user frame (simulates tool_result relay path).

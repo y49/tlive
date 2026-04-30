@@ -236,17 +236,19 @@ describe('reducer — usage event', () => {
     startedAtMs: 0, costSession: 0,
   });
 
-  it('累加 input + output + cacheRead + cacheCreate 到 contextUsedTok', () => {
+  it('累加 tokensTotal — contextUsedTok 只算 input + cacheRead + cacheCreate(去 output)', () => {
     const next = applyEventToHudState(baseState, {
       kind: 'usage', turnId: 't1',
       inputTokens: 1000, outputTokens: 500,
       cacheReadTokens: 200, cacheCreateTokens: 100,
     });
-    expect(next.contextUsedTok).toBe(1800);
+    // input + cacheRead + cacheCreate = 1300 (output excluded — it's freshly
+    // generated and only enters context as history on the next turn)
+    expect(next.contextUsedTok).toBe(1300);
     expect(next.tokensTotal).toEqual({ input: 1000, output: 500, cacheRead: 200, cacheCreate: 100 });
   });
 
-  it('多次 usage event 累加 tokensTotal,contextUsedTok 取最新一次总额', () => {
+  it('多次 usage event 累加 tokensTotal,contextUsedTok 取最新一次 input-side 总额', () => {
     const s1 = applyEventToHudState(baseState, {
       kind: 'usage', turnId: 't1',
       inputTokens: 1000, outputTokens: 500, cacheReadTokens: 0, cacheCreateTokens: 0,
@@ -256,7 +258,36 @@ describe('reducer — usage event', () => {
       inputTokens: 200, outputTokens: 300, cacheReadTokens: 0, cacheCreateTokens: 0,
     });
     expect(s2.tokensTotal).toEqual({ input: 1200, output: 800, cacheRead: 0, cacheCreate: 0 });
-    expect(s2.contextUsedTok).toBe(2000);
+    // input(1200) + cacheRead(0) + cacheCreate(0) — output excluded
+    expect(s2.contextUsedTok).toBe(1200);
+  });
+});
+
+describe('reducer — system event (model + maxContext)', () => {
+  const baseState = initialHudState({
+    sessionShortId: 's1', workspaceName: 'w', provider: 'claude',
+    model: 'unknown', modelMaxContext: 0, turnNumber: 1,
+    startedAtMs: 0, costSession: 0,
+  });
+
+  it('replaces model and modelMaxContext', () => {
+    const next = applyEventToHudState(baseState, {
+      kind: 'system',
+      model: 'claude-opus-4-7',
+      maxContextTokens: 200_000,
+    });
+    expect(next.model).toBe('claude-opus-4-7');
+    expect(next.modelMaxContext).toBe(200_000);
+  });
+
+  it('1M context variant honored', () => {
+    const next = applyEventToHudState(baseState, {
+      kind: 'system',
+      model: 'claude-sonnet-4-5-1m',
+      maxContextTokens: 1_000_000,
+    });
+    expect(next.model).toBe('claude-sonnet-4-5-1m');
+    expect(next.modelMaxContext).toBe(1_000_000);
   });
 });
 
