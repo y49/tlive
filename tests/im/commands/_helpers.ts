@@ -31,6 +31,8 @@ export interface FakeCtxSpec {
 export interface FakeCtxResult {
   ctx: CommandContext;
   replies: string[];
+  /** Parallel to `replies`: the replyMarkup arg (if any) for each reply. */
+  replyMarkups: Array<ReplyMarkup | undefined>;
   sessionCalls: Array<{ method: string; args: unknown[] }>;
   workspaceCalls: Array<{ method: string; args: unknown[] }>;
   brokerCalls: Array<{ method: string; args: unknown[] }>;
@@ -38,6 +40,7 @@ export interface FakeCtxResult {
 
 export function buildCtx(spec: FakeCtxSpec = {}): FakeCtxResult {
   const replies: string[] = [];
+  const replyMarkups: Array<ReplyMarkup | undefined> = [];
   const sessionCalls: Array<{ method: string; args: unknown[] }> = [];
   const workspaceCalls: Array<{ method: string; args: unknown[] }> = [];
   const brokerCalls: Array<{ method: string; args: unknown[] }> = [];
@@ -241,8 +244,11 @@ export function buildCtx(spec: FakeCtxSpec = {}): FakeCtxResult {
     permissionBroker,
     askBroker,
     elicitationBroker,
-    async reply(text: string, _opts?: { replyMarkup?: ReplyMarkup }) { replies.push(text); },
+    async reply(text: string, opts?: { replyMarkup?: ReplyMarkup }) {
+      replies.push(text);
+      replyMarkups.push(opts?.replyMarkup);
+    },
   };
 
-  return { ctx, replies, sessionCalls, workspaceCalls, brokerCalls };
+  return { ctx, replies, replyMarkups, sessionCalls, workspaceCalls, brokerCalls };
 }
