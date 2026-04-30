@@ -15,7 +15,6 @@ import type { PlatformAdapter } from '../../platform/types.js';
 import type { RenderTarget } from '../render-target.js';
 import type { AskUserQuestionRequest } from '../../runtime/types.js';
 import { PermissionCard } from '../permission/card.js';
-import { decideAskMode } from './ask-hook-input.js';
 
 export type AskResolveFn = (requestId: string, chosen: string[]) => void;
 
@@ -34,14 +33,16 @@ export class AskCardController {
   ) {}
 
   async open(req: AskUserQuestionRequest): Promise<void> {
-    const mode = decideAskMode(req.multiSelect ?? false, req.allowCustom ?? false);
+    // v3.2.4: pass multi + allowCustom directly so PermissionCard handles
+    // all 4 combinations (single, single+custom, multi, multi+custom).
     const onResolve = this.resolveFn
       ? (chosen: string[]) => this.resolveFn!(req.id, chosen)
       : req.resolve;
     const card = new PermissionCard(this.adapter, this.target, {
       kind: 'ask',
       requestId: req.id,
-      mode,
+      multi: req.multiSelect ?? false,
+      allowCustom: req.allowCustom ?? false,
       question: req.prompt,
       header: req.header,
       options: req.options,

@@ -63,9 +63,10 @@ describe('AskCardController', () => {
     };
     await ctrl.open(req);
     const send = adapter.calls.find(c => c.kind === 'send')!;
-    // multi mode renders a confirm row.
+    // v3.2.4: multi mode renders submit + skip row ("✓ 提交 (N)" + "❌ 跳过")
     const buttonsText = ((send.args.replyMarkup as any).buttons as Array<Array<{ text: string }>>)
       .flat().map(b => b.text).join('|');
-    expect(buttonsText).toMatch(/确认提交/);
+    expect(buttonsText).toMatch(/提交/);
+    expect(buttonsText).toMatch(/跳过/);
   });
 });

@@ -82,7 +82,7 @@ describe('PermissionCard — ask single', () => {
   it('one button per option', async () => {
     const adapter = new FakeAdapter('telegram');
     const card = new PermissionCard(adapter, tgt(), {
-      kind: 'ask', requestId: 'a1', mode: 'single', question: 'pick one',
+      kind: 'ask', requestId: 'a1', multi: false, allowCustom: false, question: 'pick one',
       options: [{ label: '茶' }, { label: '咖啡' }, { label: '水' }],
       onResolve: vi.fn(),
     });
@@ -95,7 +95,7 @@ describe('PermissionCard — ask single', () => {
     const adapter = new FakeAdapter('telegram');
     const onResolve = vi.fn();
     const card = new PermissionCard(adapter, tgt(), {
-      kind: 'ask', requestId: 'a1', mode: 'single', question: 'q',
+      kind: 'ask', requestId: 'a1', multi: false, allowCustom: false, question: 'q',
       options: [{ label: '茶' }, { label: '水' }], onResolve,
     });
     await card.send();
@@ -109,7 +109,7 @@ describe('PermissionCard — ask multi', () => {
     const adapter = new FakeAdapter('telegram');
     const onResolve = vi.fn();
     const card = new PermissionCard(adapter, tgt(), {
-      kind: 'ask', requestId: 'a2', mode: 'multi', question: 'pick many',
+      kind: 'ask', requestId: 'a2', multi: true, allowCustom: false, question: 'pick many',
       options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }], onResolve,
     });
     await card.send();
@@ -130,7 +130,7 @@ describe('PermissionCard — ask multi', () => {
     const adapter = new FakeAdapter('telegram');
     const onResolve = vi.fn();
     const card = new PermissionCard(adapter, tgt(), {
-      kind: 'ask', requestId: 'a2', mode: 'multi', question: 'q',
+      kind: 'ask', requestId: 'a2', multi: true, allowCustom: false, question: 'q',
       options: [{ label: 'A' }], onResolve,
     });
     await card.send();
@@ -157,7 +157,7 @@ describe('PermissionCard — race guard', () => {
   it('resolveWithPlaintext after click is a no-op', async () => {
     const onResolve = vi.fn();
     const card = new PermissionCard(new FakeAdapter('telegram'), tgt(), {
-      kind: 'ask', requestId: 'ar', mode: 'single', question: 'q',
+      kind: 'ask', requestId: 'ar', multi: false, allowCustom: false, question: 'q',
       options: [{ label: 'A' }], onResolve,
     });
     await card.send();
@@ -169,7 +169,7 @@ describe('PermissionCard — race guard', () => {
   it('multi-mode toggle clicks do NOT trigger the race guard', async () => {
     const onResolve = vi.fn();
     const card = new PermissionCard(new FakeAdapter('telegram'), tgt(), {
-      kind: 'ask', requestId: 'am', mode: 'multi', question: 'q',
+      kind: 'ask', requestId: 'am', multi: true, allowCustom: false, question: 'q',
       options: [{ label: 'A' }, { label: 'B' }], onResolve,
     });
     await card.send();
@@ -265,7 +265,7 @@ describe('PermissionCard — §7.5 retry + fallback (generic)', () => {
     vi.useRealTimers();
     const onResolve = vi.fn();
     const card = new PermissionCard(new FakeAdapter('telegram'), tgt(), {
-      kind: 'ask', requestId: 'a', mode: 'single', question: 'q',
+      kind: 'ask', requestId: 'a', multi: false, allowCustom: false, question: 'q',
       options: [{ label: 'A' }], onResolve,
     });
     await card.send();
@@ -279,7 +279,7 @@ describe('PermissionCard — ask custom-input', () => {
   it('switches to pending state on custom button click', async () => {
     const adapter = new FakeAdapter('telegram');
     const card = new PermissionCard(adapter, tgt(), {
-      kind: 'ask', requestId: 'a3', mode: 'custom-input', question: 'q',
+      kind: 'ask', requestId: 'a3', multi: false, allowCustom: true, question: 'q',
       options: [{ label: 'A' }], onResolve: vi.fn(),
     });
     await card.send();
@@ -294,7 +294,7 @@ describe('PermissionCard — ask custom-input', () => {
     const adapter = new FakeAdapter('telegram');
     const onResolve = vi.fn();
     const card = new PermissionCard(adapter, tgt(), {
-      kind: 'ask', requestId: 'a3', mode: 'custom-input', question: 'q',
+      kind: 'ask', requestId: 'a3', multi: false, allowCustom: true, question: 'q',
       options: [{ label: 'A' }], onResolve,
     });
     await card.send();
@@ -306,7 +306,7 @@ describe('PermissionCard — ask custom-input', () => {
   it('resolveWithPlaintext on single mode parses integer / label / substring', async () => {
     const onResolve = vi.fn();
     const card = new PermissionCard(new FakeAdapter('telegram'), tgt(), {
-      kind: 'ask', requestId: 'as', mode: 'single', question: 'q',
+      kind: 'ask', requestId: 'as', multi: false, allowCustom: false, question: 'q',
       options: [{ label: '茶' }, { label: '咖啡' }], onResolve,
     });
     await card.send();
@@ -317,7 +317,7 @@ describe('PermissionCard — ask custom-input', () => {
   it('resolveWithPlaintext on multi mode parses comma-separated', async () => {
     const onResolve = vi.fn();
     const card = new PermissionCard(new FakeAdapter('telegram'), tgt(), {
-      kind: 'ask', requestId: 'am', mode: 'multi', question: 'q',
+      kind: 'ask', requestId: 'am', multi: true, allowCustom: false, question: 'q',
       options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }], onResolve,
     });
     await card.send();
@@ -330,7 +330,7 @@ describe('PermissionCard kind=ask — resolved 视觉', () => {
   it('multi 模式 resolve 后 edit 显示 ✅ 已选: ...', async () => {
     const adapter = new FakeAdapter('telegram');
     const card = new PermissionCard(adapter, tgt(), {
-      kind: 'ask', requestId: 'r1', mode: 'multi',
+      kind: 'ask', requestId: 'r1', multi: true, allowCustom: false,
       question: '选模块', options: [{ label: '认证' }, { label: '看板' }],
       onResolve: vi.fn(),
     });
@@ -347,7 +347,7 @@ describe('PermissionCard kind=ask — resolved 视觉', () => {
   it('空 chosen 显示 (已跳过)', async () => {
     const adapter = new FakeAdapter('telegram');
     const card = new PermissionCard(adapter, tgt(), {
-      kind: 'ask', requestId: 'r2', mode: 'multi',
+      kind: 'ask', requestId: 'r2', multi: true, allowCustom: false,
       question: 'q', options: [{ label: 'a' }, { label: 'b' }],
       onResolve: vi.fn(),
     });
@@ -372,7 +372,7 @@ describe('PermissionCard kind=ask — resolved 视觉', () => {
   it('markResolvedAsk is idempotent (second call is a no-op)', async () => {
     const adapter = new FakeAdapter('telegram');
     const card = new PermissionCard(adapter, tgt(), {
-      kind: 'ask', requestId: 'r3', mode: 'multi', question: 'q',
+      kind: 'ask', requestId: 'r3', multi: true, allowCustom: false, question: 'q',
       options: [{ label: 'a' }], onResolve: vi.fn(),
     });
     await card.send();
@@ -381,5 +381,110 @@ describe('PermissionCard kind=ask — resolved 视觉', () => {
     await card.markResolvedAsk(['a']);
     const editsAfterSecond = adapter.calls.filter(c => c.kind === 'edit').length;
     expect(editsAfterSecond).toBe(editsAfterFirst);
+  });
+});
+
+describe('PermissionCard — v3.2.4 multi + custom combinations', () => {
+  function buildAsk(opts: { multi: boolean; allowCustom: boolean; onResolve?: any }) {
+    return {
+      kind: 'ask' as const, requestId: 'r1', question: 'pick',
+      multi: opts.multi, allowCustom: opts.allowCustom,
+      options: [{ label: 'A' }, { label: 'B' }],
+      onResolve: opts.onResolve ?? vi.fn(),
+    };
+  }
+
+  function btnLabels(adapter: FakeAdapter): string[] {
+    const send = adapter.calls.find(c => c.kind === 'send')!;
+    const buttons = ((send.args.replyMarkup as any).buttons as Array<Array<{ text: string }>>);
+    return buttons.flat().map(b => b.text);
+  }
+
+  it('!multi !allowCustom → option buttons only, no custom, no submit/skip', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const card = new PermissionCard(adapter, tgt(), buildAsk({ multi: false, allowCustom: false }));
+    await card.send();
+    const labels = btnLabels(adapter);
+    expect(labels).toEqual(['A', 'B']);
+    expect(labels.some(l => l.includes('自定义'))).toBe(false);
+    expect(labels.some(l => l.includes('提交'))).toBe(false);
+  });
+
+  it('!multi allowCustom → option buttons + ✏️ custom (no submit row)', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const card = new PermissionCard(adapter, tgt(), buildAsk({ multi: false, allowCustom: true }));
+    await card.send();
+    const labels = btnLabels(adapter);
+    expect(labels).toContain('A');
+    expect(labels).toContain('B');
+    expect(labels.some(l => l.includes('自己输入'))).toBe(true);
+    expect(labels.some(l => l.includes('提交'))).toBe(false);
+  });
+
+  it('multi !allowCustom → ☑/⬜ toggles + 提交/跳过 (no custom)', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const card = new PermissionCard(adapter, tgt(), buildAsk({ multi: true, allowCustom: false }));
+    await card.send();
+    const labels = btnLabels(adapter);
+    expect(labels.some(l => l.includes('⬜ A'))).toBe(true);
+    expect(labels.some(l => l.includes('⬜ B'))).toBe(true);
+    expect(labels.some(l => l.includes('提交'))).toBe(true);
+    expect(labels.some(l => l.includes('跳过'))).toBe(true);
+    expect(labels.some(l => l.includes('自定义'))).toBe(false);
+  });
+
+  it('multi allowCustom → ☑/⬜ + ✏️ 加自定义 + 提交/跳过 (full matrix)', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const card = new PermissionCard(adapter, tgt(), buildAsk({ multi: true, allowCustom: true }));
+    await card.send();
+    const labels = btnLabels(adapter);
+    expect(labels.some(l => l.includes('⬜ A'))).toBe(true);
+    expect(labels.some(l => l.includes('加自定义'))).toBe(true);
+    expect(labels.some(l => l.includes('提交'))).toBe(true);
+    expect(labels.some(l => l.includes('跳过'))).toBe(true);
+  });
+
+  it('multi+custom: plaintext during customInputPending appends to customs[], confirm sends both', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const onResolve = vi.fn();
+    const card = new PermissionCard(adapter, tgt(), buildAsk({
+      multi: true, allowCustom: true, onResolve,
+    }));
+    await card.send();
+    // Toggle option A
+    await card.handleCallback('ask:r1:opt:0');
+    // Click custom — enters pending state
+    await card.handleCallback('ask:r1:custom');
+    // User sends plaintext
+    await card.resolveWithPlaintext('our own answer');
+    // Should NOT have resolved yet; expect custom appended + edit re-rendered
+    expect(onResolve).not.toHaveBeenCalled();
+    // Confirm
+    await card.handleCallback('ask:r1:confirm');
+    expect(onResolve).toHaveBeenCalledWith(['A', 'our own answer']);
+  });
+
+  it('multi+custom: skip resolves with empty array regardless of toggles', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const onResolve = vi.fn();
+    const card = new PermissionCard(adapter, tgt(), buildAsk({
+      multi: true, allowCustom: true, onResolve,
+    }));
+    await card.send();
+    await card.handleCallback('ask:r1:opt:0');
+    await card.handleCallback('ask:r1:skip');
+    expect(onResolve).toHaveBeenCalledWith([]);
+  });
+
+  it('single+custom: plaintext during customInputPending resolves immediately', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const onResolve = vi.fn();
+    const card = new PermissionCard(adapter, tgt(), buildAsk({
+      multi: false, allowCustom: true, onResolve,
+    }));
+    await card.send();
+    await card.handleCallback('ask:r1:custom');
+    await card.resolveWithPlaintext('my answer');
+    expect(onResolve).toHaveBeenCalledWith(['my answer']);
   });
 });

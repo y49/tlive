@@ -20,7 +20,11 @@ export type PermissionCardOptions =
   | {
       kind: 'ask';
       requestId: string;
-      mode: 'single' | 'multi' | 'custom-input';
+      // v3.2.4: replace 'mode' string with two orthogonal booleans so
+      // `multi: true, allowCustom: true` is expressible (was lost in the
+      // old 3-mode union which treated multi/custom as mutually exclusive).
+      multi: boolean;
+      allowCustom: boolean;
       question: string;
       /** Optional short chip/tag (max ~12 chars per Claude SDK convention). */
       header?: string;
@@ -39,6 +43,7 @@ function jsonPreview(input: unknown, max = 500): string {
 export class PermissionCard {
   private msgId: string | null = null;
   private selected = new Set<number>();
+  private customs: string[] = []; // v3.2.4: free-text custom answers (multi+custom path)
   private customInputPending = false;
   private resolved = false;
   private fallbackPending = false;
@@ -80,8 +85,8 @@ export class PermissionCard {
     if (!this.msgId) return;
     const summary = chosen.length === 0
       ? '(已跳过)'
-      : `已选: ${chosen.join('、')}`;
-    const text = `❓ <b>${escapeHtml(this.opts.question)}</b>\n\n✅ ${escapeHtml(summary)}`;
+      : `已选: ${chosen.map((c) => escapeHtml(c)).join('、')}`;
+    const text = `❓ <b>${escapeHtml(this.opts.question)}</b>\n\n✅ ${summary}`;
     try {
       await this.adapter.edit(this.msgId, this.target.chatId, text, undefined, 'html');
     } catch (err) {
@@ -147,17 +152,22 @@ export class PermissionCard {
       await this.markResolved(`✅ ${verb}`);
       return;
     }
-    // ask
+    // ask — v3.2.4: 4 mode combinations driven by (multi, allowCustom):
+    //   F,F (single):       option click → resolve immediately
+    //   F,T (single+custom): option click → resolve, OR "✏️ 自定义" → plaintext → resolve
+    //   T,F (multi):         option click → toggle, "✓ 提交" / "❌ 跳过"
+    //   T,T (multi+custom):  option click → toggle, "✏️ 加自定义" → plaintext → push to customs[],
+    //                        "✓ 提交" / "❌ 跳过" — confirm sends [...toggled, ...customs]
+    const askOpts = this.opts as Extract<PermissionCardOptions, { kind: 'ask' }>;
     const optMatch = data.match(/^ask:([^:]+):opt:(\d+)$/);
     if (optMatch) {
-      if (optMatch[1] !== this.opts.requestId) return;
+      if (optMatch[1] !== askOpts.requestId) return;
       const idx = Number(optMatch[2]);
-      if (this.opts.mode === 'single' || this.opts.mode === 'custom-input') {
-        // custom-input mode also resolves immediately on a direct option click
-        // — the "✏️ 自己输入" button is the *fallback*, not the only path.
-        const label = this.opts.options[idx]?.label ?? '';
+      if (!askOpts.multi) {
+        // single (with or without allowCustom): direct click resolves immediately.
+        const label = askOpts.options[idx]?.label ?? '';
         this.resolved = true;
-        this.opts.onResolve([label]);
+        askOpts.onResolve([label]);
         await this.markResolved(`✅ ${escapeHtml(label)}`);
         return;
       }
@@ -167,21 +177,33 @@ export class PermissionCard {
       await this.editKeyboard();
       return;
     }
-    const askOpts = this.opts as Extract<PermissionCardOptions, { kind: 'ask' }>;
     const confirmMatch = data.match(/^ask:([^:]+):confirm$/);
     if (confirmMatch) {
       if (confirmMatch[1] !== askOpts.requestId) return;
-      const labels = [...this.selected]
+      if (!askOpts.multi) return; // confirm button only exists for multi
+      const toggledLabels = [...this.selected]
         .sort((a, b) => a - b)
-        .map(i => askOpts.options[i]?.label ?? '');
+        .map(i => askOpts.options[i]?.label ?? '')
+        .filter(Boolean);
+      const all = [...toggledLabels, ...this.customs];
       this.resolved = true;
-      askOpts.onResolve(labels);
-      await this.markResolved(labels.length > 0 ? `✅ ${escapeHtml(labels.join(', '))}` : '✅ (空提交)');
+      askOpts.onResolve(all);
+      const summary = all.length > 0 ? `✅ ${all.map((c) => escapeHtml(c)).join(', ')}` : '✅ (空提交)';
+      await this.markResolved(summary);
+      return;
+    }
+    const skipMatch = data.match(/^ask:([^:]+):skip$/);
+    if (skipMatch) {
+      if (skipMatch[1] !== askOpts.requestId) return;
+      this.resolved = true;
+      askOpts.onResolve([]);
+      await this.markResolved('✅ (已跳过)');
       return;
     }
     const customMatch = data.match(/^ask:([^:]+):custom$/);
     if (customMatch) {
       if (customMatch[1] !== askOpts.requestId) return;
+      if (!askOpts.allowCustom) return; // custom button only when allowed
       this.customInputPending = true;
       await this.editKeyboard();
     }
@@ -191,14 +213,30 @@ export class PermissionCard {
   async resolveWithPlaintext(text: string): Promise<void> {
     if (this.resolved) return;
     if (this.opts.kind !== 'ask') return;
-    if (this.opts.mode === 'custom-input' && this.customInputPending) {
+    const askOpts = this.opts;
+
+    // v3.2.4: customInputPending is set when user clicked the [✏️ 自定义]
+    // button and we're awaiting their text.
+    if (this.customInputPending) {
+      this.customInputPending = false;
+      const trimmed = text.trim();
+      if (askOpts.multi) {
+        // Multi+custom: push the text to customs[], re-edit keyboard.
+        // User can keep toggling, add more customs, then confirm.
+        if (trimmed) this.customs.push(trimmed);
+        await this.editKeyboard();
+        return;
+      }
+      // Single+custom: resolve immediately with the typed text.
       this.resolved = true;
-      this.opts.onResolve([text]);
-      await this.markResolved(`✅ ${escapeHtml(text)}`);
+      askOpts.onResolve([trimmed]);
+      await this.markResolved(`✅ ${escapeHtml(trimmed)}`);
       return;
     }
-    if (this.opts.mode === 'single') {
-      const labels = this.opts.options.map(o => o.label);
+
+    // No custom-input pending — interpret plaintext as option keyword/index match.
+    if (!askOpts.multi) {
+      const labels = askOpts.options.map(o => o.label);
       const trimmed = text.trim();
       const asInt = Number(trimmed);
       let chosen: string | undefined;
@@ -210,30 +248,29 @@ export class PermissionCard {
       }
       if (chosen) {
         this.resolved = true;
-        this.opts.onResolve([chosen]);
+        askOpts.onResolve([chosen]);
         await this.markResolved(`✅ ${escapeHtml(chosen)}`);
       }
       return;
     }
-    if (this.opts.mode === 'multi') {
-      const parts = text.split(/[,，]/).map(s => s.trim()).filter(Boolean);
-      const labels = this.opts.options.map(o => o.label);
-      const chosen: string[] = [];
-      for (const p of parts) {
-        const asInt = Number(p);
-        if (Number.isInteger(asInt) && asInt >= 1 && asInt <= labels.length) {
-          chosen.push(labels[asInt - 1]);
-          continue;
-        }
-        const match = labels.find(l => l.toLowerCase() === p.toLowerCase())
-          ?? labels.find(l => l.toLowerCase().includes(p.toLowerCase()));
-        if (match) chosen.push(match);
+    // multi: comma-separated keywords match labels
+    const parts = text.split(/[,,]/).map(s => s.trim()).filter(Boolean);
+    const labels = askOpts.options.map(o => o.label);
+    const chosen: string[] = [];
+    for (const p of parts) {
+      const asInt = Number(p);
+      if (Number.isInteger(asInt) && asInt >= 1 && asInt <= labels.length) {
+        chosen.push(labels[asInt - 1]);
+        continue;
       }
-      if (chosen.length > 0) {
-        this.resolved = true;
-        this.opts.onResolve(chosen);
-        await this.markResolved(`✅ ${escapeHtml(chosen.join(', '))}`);
-      }
+      const match = labels.find(l => l.toLowerCase() === p.toLowerCase())
+        ?? labels.find(l => l.toLowerCase().includes(p.toLowerCase()));
+      if (match) chosen.push(match);
+    }
+    if (chosen.length > 0) {
+      this.resolved = true;
+      askOpts.onResolve(chosen);
+      await this.markResolved(`✅ ${chosen.map((c) => escapeHtml(c)).join(', ')}`);
     }
   }
 
@@ -254,13 +291,18 @@ export class PermissionCard {
       ];
       return { text, markup: { type: 'inline_keyboard', buttons } };
     }
-    // ask
+    // ask — v3.2.4: 4 mode combinations from (multi, allowCustom)
     const askOpts = this.opts as Extract<PermissionCardOptions, { kind: 'ask' }>;
     const headerChip = askOpts.header ? ` <i>[${escapeHtml(askOpts.header)}]</i>` : '';
     const lines = [`❓ <b>${escapeHtml(askOpts.question)}</b>${headerChip}`];
-    if (askOpts.mode === 'multi') lines.push('<i>多选 — 点选/取消,然后确认提交</i>');
+    if (askOpts.multi) lines.push('<i>多选 — 点选/取消,然后确认提交</i>');
     if (this.customInputPending) lines.push('⌛ 等你输入...');
-    // Append per-option descriptions inline below the question (compact, monospace).
+    // Show added customs (multi+custom) as a "已加自定义" line so user
+    // sees what they've added even if they keep toggling.
+    if (askOpts.multi && this.customs.length > 0) {
+      lines.push(`✏️ 已加自定义: ${this.customs.map((c) => escapeHtml(c)).join('、')}`);
+    }
+    // Append per-option descriptions
     const optsWithDesc = askOpts.options.filter((o) => o.description);
     if (!this.customInputPending && optsWithDesc.length > 0) {
       lines.push('');
@@ -274,24 +316,35 @@ export class PermissionCard {
     }
     const buttons: InlineButton[][] = [];
     if (!this.customInputPending) {
+      // Option buttons (with toggle prefix in multi mode)
       askOpts.options.forEach((o, i) => {
-        const prefix = askOpts.mode === 'multi' ? (this.selected.has(i) ? '✅ ' : '⬜ ') : '';
+        const prefix = askOpts.multi ? (this.selected.has(i) ? '✅ ' : '⬜ ') : '';
         buttons.push([{
           text: `${prefix}${o.label}`,
           callbackData: `ask:${askOpts.requestId}:opt:${i}`,
         }]);
       });
-      if (askOpts.mode === 'multi') {
+      // Custom-input button (when allowed)
+      if (askOpts.allowCustom) {
+        const label = askOpts.multi ? '✏️ 加自定义(发文本)' : '✏️ 自己输入(发文本)';
         buttons.push([{
-          text: `✓ 确认提交 (已选 ${this.selected.size})`,
-          callbackData: `ask:${askOpts.requestId}:confirm`,
-        }]);
-      }
-      if (askOpts.mode === 'custom-input') {
-        buttons.push([{
-          text: '✏️ 自己输入(发文本)',
+          text: label,
           callbackData: `ask:${askOpts.requestId}:custom`,
         }]);
+      }
+      // Submit row (multi only) — confirm + skip
+      if (askOpts.multi) {
+        const totalChosen = this.selected.size + this.customs.length;
+        buttons.push([
+          {
+            text: `✓ 提交 (${totalChosen})`,
+            callbackData: `ask:${askOpts.requestId}:confirm`,
+          },
+          {
+            text: '❌ 跳过',
+            callbackData: `ask:${askOpts.requestId}:skip`,
+          },
+        ]);
       }
     }
     return { text: lines.join('\n'), markup: { type: 'inline_keyboard', buttons } };
