@@ -38,8 +38,13 @@ function elapsedMsForRender(state: HudState, now: number): number {
   return Math.max(0, now - state.startedAtMs);
 }
 
-function fmtCostForFeishu(n: number, isFinal: boolean): string {
+/**
+ * v3.2.2 adaptive truth: returns null when frozen with 0 cost (provider
+ * didn't surface cost data) so caller can suppress the entire segment.
+ */
+function fmtCostForFeishu(n: number, isFinal: boolean): string | null {
   if (!isFinal) return '💵 –.--';
+  if (n <= 0) return null;
   return `💵 $${n.toFixed(2)}`;
 }
 
@@ -73,25 +78,36 @@ function progressMarkdown(state: HudState, now: number): string {
   for (const t of state.todoList) {
     if (t.status === 'in_progress') parts.push(`▶ ${t.text}`);
   }
-  // Always-visible time + cost anchors (live elapsed; cost shown only when final)
+  // Always-visible time anchor + cost (suppressed when frozen with 0 cost)
   const isFinal = state.isFrozen || state.isErrored;
-  parts.push(`⏱ ${fmtDur(elapsedMsForRender(state, now))} · ${fmtCostForFeishu(state.costThisTurn, isFinal)}`);
+  const elapsed = `⏱ ${fmtDur(elapsedMsForRender(state, now))}`;
+  const cost = fmtCostForFeishu(state.costThisTurn, isFinal);
+  parts.push(cost !== null ? `${elapsed} · ${cost}` : elapsed);
   return parts.join('\n');
 }
 
 function detailMarkdown(state: HudState): string {
   const lines: string[] = [];
-  const maxK = fmtTok(state.modelMaxContext);
-  lines.push(`💬 #${state.turnNumber} · ${state.sessionShortId} · ${state.model} (${maxK})`);
+  const ctxKnown = state.modelMaxContext > 0;
+  // L1 — turn header. `(maxK)` only when we know the max.
+  const ctxLabel = ctxKnown ? ` (${fmtTok(state.modelMaxContext)})` : '';
+  lines.push(`💬 #${state.turnNumber} · ${state.sessionShortId} · ${state.model}${ctxLabel}`);
   if (state.gitBranch) lines.push(`🌳 ${state.gitBranch} · ${state.workspaceName}`);
-  const ctxPct = state.modelMaxContext > 0
-    ? Math.round((state.contextUsedTok / state.modelMaxContext) * 100) : 0;
-  lines.push(`**Context** ${bar(ctxPct)} ${ctxPct}% (${fmtTok(state.contextUsedTok)}/${maxK})`);
+  // Context line — adaptive (v3.2.2):
+  if (ctxKnown) {
+    const ctxPct = Math.round((state.contextUsedTok / state.modelMaxContext) * 100);
+    lines.push(`**Context** ${bar(ctxPct)} ${ctxPct}% (${fmtTok(state.contextUsedTok)}/${fmtTok(state.modelMaxContext)})`);
+  } else if (state.contextUsedTok > 0) {
+    lines.push(`**Context** ${fmtTok(state.contextUsedTok)} tokens`);
+  }
   for (const q of state.quotaBars) {
     const reset = q.resetsIn ? ` (${q.resetsIn})` : '';
     lines.push(`**${q.label}** ${bar(q.pct)} ${q.pct}%${reset}`);
   }
-  lines.push(`Σ ${fmtCost(state.costSession)}`);
+  // Σ session cost — only when provider supplied real cost data
+  if (state.costSession > 0) {
+    lines.push(`Σ ${fmtCost(state.costSession)}`);
+  }
   return lines.join('\n');
 }
 

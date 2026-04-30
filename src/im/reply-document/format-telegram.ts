@@ -31,8 +31,17 @@ function fmtDur(ms: number): string {
   return `${m}m ${rem.toFixed(1)}s`;
 }
 
-function fmtCost(n: number, isFinal: boolean): string {
+/**
+ * Cost segment for the progress line. v3.2.2 adaptive truth:
+ * - During turn (!isFinal): always show '💵 –.--' placeholder so user
+ *   knows cost is being computed.
+ * - Frozen (isFinal): show '💵 $X.XX' if there's any cost; otherwise
+ *   return null — caller suppresses the segment entirely. Provider didn't
+ *   surface cost (or truly 0) — don't fake '$0.00'.
+ */
+function fmtCost(n: number, isFinal: boolean): string | null {
   if (!isFinal) return '💵 –.--';
+  if (n <= 0) return null;
   return `💵 $${n.toFixed(2)}`;
 }
 
@@ -73,7 +82,8 @@ function progressLine(state: HudState, now: number): string {
     if (t.status === 'in_progress') parts.push(`▶ ${escapeHtml(t.text)}`);
   }
   parts.push(`⏱ ${fmtDur(elapsedMs(state, now))}`);
-  parts.push(fmtCost(state.costThisTurn, state.isFrozen || state.isErrored));
+  const costSeg = fmtCost(state.costThisTurn, state.isFrozen || state.isErrored);
+  if (costSeg !== null) parts.push(costSeg);
   return `<i>${parts.join(' · ')}</i>`;
 }
 
@@ -96,17 +106,30 @@ export function renderTelegramDetail(state: HudState): TelegramRender {
   const lines: string[] = [];
   const sid = state.sessionShortId;
   const model = state.model;
-  const maxTok = fmtTok(state.modelMaxContext);
-  lines.push(`💬 #${state.turnNumber} · ${sid} · ${model} (${maxTok} ctx)`);
+  const ctxKnown = state.modelMaxContext > 0;
+  // L1 — turn header. Append `(maxK ctx)` only when we know it.
+  const ctxLabel = ctxKnown ? ` (${fmtTok(state.modelMaxContext)} ctx)` : '';
+  lines.push(`💬 #${state.turnNumber} · ${sid} · ${model}${ctxLabel}`);
+  // L2 — git context (omit if no branch)
   if (state.gitBranch) {
     lines.push(`🌳 ${state.gitBranch} · ${state.workspaceName}`);
   }
-  const ctxPct = state.modelMaxContext > 0
-    ? Math.round((state.contextUsedTok / state.modelMaxContext) * 100)
-    : 0;
-  lines.push(
-    `${bar(ctxPct)} ${ctxPct}% · ${fmtTok(state.contextUsedTok)}/${maxTok} · Σ $${state.costSession.toFixed(2)}`,
-  );
+  // L3 — context + Σ session, adaptive truth (v3.2.2):
+  //   - ctx known: '{bar} {pct}% · {used}/{max}'
+  //   - ctx unknown but tokens consumed: '📊 {used} tokens'
+  //   - Σ shown only when costSession > 0 (provider supplied cost data)
+  const segs: string[] = [];
+  if (ctxKnown) {
+    const pct = Math.round((state.contextUsedTok / state.modelMaxContext) * 100);
+    segs.push(`${bar(pct)} ${pct}% · ${fmtTok(state.contextUsedTok)}/${fmtTok(state.modelMaxContext)}`);
+  } else if (state.contextUsedTok > 0) {
+    segs.push(`📊 ${fmtTok(state.contextUsedTok)} tokens`);
+  }
+  if (state.costSession > 0) {
+    segs.push(`Σ $${state.costSession.toFixed(2)}`);
+  }
+  if (segs.length > 0) lines.push(segs.join(' · '));
+  // Quota lines (only ever populated by Anthropic — if absent, skipped)
   for (const q of state.quotaBars) {
     const reset = q.resetsIn ? ` (${q.resetsIn})` : '';
     lines.push(`${bar(q.pct)} ${q.pct}% · ${q.label}${reset}`);

@@ -137,3 +137,55 @@ describe('renderTelegramReply — defaults to Date.now() when now omitted', () =
     expect(r.html).toContain('⏱');
   });
 });
+
+describe('v3.2.2 adaptive truth — unknown model / 0 cost', () => {
+  it('progress line: frozen with 0 cost suppresses 💵 segment', () => {
+    const r = renderTelegramReply(
+      baseState({ isFrozen: true, durationMs: 4_100, costThisTurn: 0 }),
+      '',
+      NOW_5S,
+    );
+    expect(r.html).not.toContain('💵');
+    expect(r.html).toContain('⏱ 4.1s');
+  });
+
+  it('progress line: turn-running still shows 💵 –.-- placeholder regardless of cost', () => {
+    const r = renderTelegramReply(baseState({ costThisTurn: 0 }), '', NOW_5S);
+    expect(r.html).toContain('💵 –.--');
+  });
+
+  it('detail: unknown maxContext (=0) drops "(... ctx)" suffix from title line', () => {
+    const r = renderTelegramDetail({ ...baseState(), modelMaxContext: 0 });
+    expect(r.html).not.toContain('ctx');
+    expect(r.html).toContain('claude-opus-4-7');  // model name still present
+  });
+
+  it('detail: unknown maxContext shows "📊 X tokens" instead of "% bar"', () => {
+    const r = renderTelegramDetail({
+      ...baseState(),
+      modelMaxContext: 0,
+      contextUsedTok: 28_400,
+    });
+    expect(r.html).toContain('📊 28.4k tokens');
+    expect(r.html).not.toContain('%');
+  });
+
+  it('detail: 0 contextUsedTok AND unknown maxContext omits the context segment entirely', () => {
+    const r = renderTelegramDetail({
+      ...baseState(),
+      modelMaxContext: 0,
+      contextUsedTok: 0,
+      costSession: 0,  // also no cost so nothing on line 3
+    });
+    // Title (L1) and branch (L2) still present, but no L3
+    expect(r.html).toContain('💬');
+    expect(r.html).toContain('🌳');
+    expect(r.html).not.toContain('📊');
+    expect(r.html).not.toContain('Σ');
+  });
+
+  it('detail: costSession 0 suppresses "Σ $0.00"', () => {
+    const r = renderTelegramDetail({ ...baseState(), costSession: 0 });
+    expect(r.html).not.toContain('Σ');
+  });
+});

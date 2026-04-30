@@ -69,6 +69,39 @@ describe('renderFeishu — body element order (progress promoted)', () => {
   });
 });
 
+describe('v3.2.2 adaptive truth — unknown model / 0 cost (Feishu)', () => {
+  it('progress: frozen with 0 cost suppresses 💵 segment', () => {
+    const r: any = renderFeishu(
+      baseState({ isFrozen: true, durationMs: 4_100, costThisTurn: 0 }),
+      '',
+      NOW_5S,
+    );
+    expect(r.card.body.elements[0].content).not.toContain('💵');
+    expect(r.card.body.elements[0].content).toContain('⏱ 4.1s');
+  });
+
+  it('detail: unknown maxContext drops "(...)" suffix from title and shows tokens', () => {
+    const r: any = renderFeishu(
+      { ...baseState(), modelMaxContext: 0, contextUsedTok: 28_400 },
+      '',
+      NOW_5S,
+    );
+    const detail = r.card.body.elements[4].content;
+    expect(detail).not.toMatch(/\(\d/);  // no "(200k)" parenthetical
+    expect(detail).toContain('28.4k tokens');
+    expect(detail).not.toContain('%');
+  });
+
+  it('detail: costSession 0 suppresses "Σ"', () => {
+    const r: any = renderFeishu(
+      { ...baseState(), costSession: 0 },
+      '',
+      NOW_5S,
+    );
+    expect(r.card.body.elements[4].content).not.toContain('Σ');
+  });
+});
+
 describe('renderFeishu — live elapsed via now injection', () => {
   it('elapsed computed from now - startedAtMs when not frozen', () => {
     const r: any = renderFeishu(baseState(), '', NOW_5S);

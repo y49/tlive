@@ -22,10 +22,14 @@ describe('modelMaxContextFor', () => {
     expect(modelMaxContextFor('claude-sonnet-4_1m')).toBe(1_000_000);
   });
 
-  it('falls back to 200k for unknown / null / empty', () => {
-    expect(modelMaxContextFor(null)).toBe(200_000);
-    expect(modelMaxContextFor(undefined)).toBe(200_000);
-    expect(modelMaxContextFor('')).toBe(200_000);
-    expect(modelMaxContextFor('some-future-model-x')).toBe(200_000);
+  it('returns 0 (unknown signal) for non-Anthropic / null / empty (v3.2.2)', () => {
+    // 0 = "unknown" signal; HUD renderer drops % and shows absolute tokens
+    expect(modelMaxContextFor(null)).toBe(0);
+    expect(modelMaxContextFor(undefined)).toBe(0);
+    expect(modelMaxContextFor('')).toBe(0);
+    expect(modelMaxContextFor('gpt-4o')).toBe(0);
+    expect(modelMaxContextFor('deepseek-chat')).toBe(0);
+    expect(modelMaxContextFor('llama-3.1-8b')).toBe(0);
+    expect(modelMaxContextFor('some-future-model-x')).toBe(0);
   });
 });
