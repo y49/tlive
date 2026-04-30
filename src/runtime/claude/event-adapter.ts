@@ -279,6 +279,18 @@ export class ClaudeEventAdapter {
         } : undefined;
         const turnId = this.currentTurnId ?? 'unknown';
         const duration = raw.duration_ms ?? (this.turnStartedAt ? Date.now() - this.turnStartedAt : 0);
+        // Emit `usage` BEFORE turn_end so the HUD reducer updates
+        // contextUsedTok + tokensTotal in time for the freeze render.
+        if (u) {
+          events.push({
+            kind: 'usage',
+            turnId,
+            inputTokens: u.input_tokens ?? 0,
+            outputTokens: u.output_tokens ?? 0,
+            cacheReadTokens: u.cache_read_input_tokens ?? 0,
+            cacheCreateTokens: u.cache_creation_input_tokens ?? 0,
+          });
+        }
         events.push({
           kind: 'turn_end',
           turnId,

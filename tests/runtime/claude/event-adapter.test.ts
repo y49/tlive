@@ -25,7 +25,13 @@ describe('ClaudeEventAdapter', () => {
       duration_ms: 500,
       usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 5, cache_creation_input_tokens: 2 },
     });
+    // v3 hotfix: usage emitted before turn_end so reducer updates contextUsedTok
+    // in time for the freeze render.
     expect(frame.events[0]).toMatchObject({
+      kind: 'usage', inputTokens: 10, outputTokens: 20,
+      cacheReadTokens: 5, cacheCreateTokens: 2,
+    });
+    expect(frame.events[1]).toMatchObject({
       kind: 'turn_end', costUsd: 0.03, tokensIn: 10, tokensOut: 20, durationMs: 500,
     });
     expect(frame.usage).toMatchObject({

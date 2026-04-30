@@ -35,7 +35,7 @@ import {
 } from './render/types.js';
 import { ReactionTracker } from './reaction-tracker.js';
 import { ElicitationFormRenderer } from './elicitation/form.js';
-import { initialHudState, type HudState } from './hud/state.js';
+import { initialHudState, resolveModelLabel, type HudState } from './hud/state.js';
 import { targetKey as renderTargetKey } from './render-target.js';
 import { AttachmentPreview } from './attachment.js';
 import { PermissionCard } from './permission/card.js';
@@ -342,7 +342,7 @@ export class SessionFrontend {
       workspaceName,
       // gitBranch: not exposed on Workspace (only gitRemote) — deferred to later wiring.
       provider,
-      model: workspace?.defaults.model ?? 'unknown',
+      model: resolveModelLabel(undefined, workspace?.defaults.model, undefined),
       // TODO: hardcoded 200_000 until a model→max-context table lands. The HUD
       // copes with stale numbers (Context bar just shows wrong percentage).
       modelMaxContext: 200_000,
