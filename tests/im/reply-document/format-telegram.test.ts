@@ -132,6 +132,35 @@ describe('renderTelegramDetail — v3.2.3 <blockquote> card with inline styles',
   });
 });
 
+describe('renderTelegramDetail — inline keyboard (Task 28)', () => {
+  it('returns default 4-button keyboard with new/list/stop/⋯', () => {
+    const r = renderTelegramDetail(baseState());
+    expect(r.replyMarkup?.type).toBe('inline_keyboard');
+    const labels = (r.replyMarkup?.buttons ?? []).flat().map(b => b.text);
+    expect(labels).toEqual(['🆕 new', '📋 list', '⏸ 中断', '⋯']);
+  });
+
+  it('callbackData matches spec namespace', () => {
+    const r = renderTelegramDetail(baseState());
+    const cbs = (r.replyMarkup?.buttons ?? []).flat().map(b => b.callbackData);
+    expect(cbs).toEqual(['session:new', 'session:list', 'turn:stop', 'menu:expand']);
+  });
+
+  it('stop button degrades to ⏸ + turn:stop:idle when frozen', () => {
+    const r = renderTelegramDetail(baseState({ isFrozen: true }));
+    const stopBtn = (r.replyMarkup?.buttons ?? []).flat().find(b => b.text.startsWith('⏸'));
+    expect(stopBtn?.text).toBe('⏸');
+    expect(stopBtn?.callbackData).toBe('turn:stop:idle');
+  });
+
+  it('stop button degrades when errored', () => {
+    const r = renderTelegramDetail(baseState({ isErrored: true, errorSummary: 'oops' }));
+    const stopBtn = (r.replyMarkup?.buttons ?? []).flat().find(b => b.text.startsWith('⏸'));
+    expect(stopBtn?.text).toBe('⏸');
+    expect(stopBtn?.callbackData).toBe('turn:stop:idle');
+  });
+});
+
 describe('renderTelegramReply — defaults to Date.now() when now omitted', () => {
   it('omitting now still produces valid output', () => {
     const r = renderTelegramReply(baseState(), '', undefined);

@@ -10,10 +10,15 @@
 // called from scheduler's silence-tick (1.5s) so elapsed naturally ticks.
 
 import type { HudState } from '../hud/state.js';
+import type { ReplyMarkup } from '../../platform/types.js';
 import { escapeHtml } from '../util/html.js';
 import { markdownToTelegramHtml } from './markdown.js';
 
-export interface TelegramRender { html: string; }
+export interface TelegramRender {
+  html: string;
+  /** Optional inline-keyboard markup. Only set on the detail card. */
+  replyMarkup?: ReplyMarkup;
+}
 
 const BAR_WIDTH = 10;
 
@@ -146,5 +151,30 @@ export function renderTelegramDetail(state: HudState): TelegramRender {
     const reset = q.resetsIn ? ` <i>(${escapeHtml(q.resetsIn)})</i>` : '';
     lines.push(`📈 <b>${q.pct}%</b> <i>${escapeHtml(q.label)}</i>${reset}`);
   }
-  return { html: `<blockquote>${lines.join('\n')}</blockquote>` };
+  return {
+    html: `<blockquote>${lines.join('\n')}</blockquote>`,
+    replyMarkup: defaultDetailKeyboard(state),
+  };
+}
+
+/**
+ * Default 4-button keyboard for the detail card. Stop button visual + callback
+ * differ by turn state:
+ *   - in-flight (not frozen, not errored) → '⏸ 中断' / 'turn:stop'
+ *   - idle (frozen or errored)             → '⏸'    / 'turn:stop:idle'
+ * The router uses the suffix to send a softer "no active turn" reply.
+ */
+function defaultDetailKeyboard(state: HudState): ReplyMarkup {
+  const inFlight = !state.isFrozen && !state.isErrored;
+  const stopText = inFlight ? '⏸ 中断' : '⏸';
+  const stopCb = inFlight ? 'turn:stop' : 'turn:stop:idle';
+  return {
+    type: 'inline_keyboard',
+    buttons: [[
+      { text: '🆕 new', callbackData: 'session:new' },
+      { text: '📋 list', callbackData: 'session:list' },
+      { text: stopText, callbackData: stopCb },
+      { text: '⋯', callbackData: 'menu:expand' },
+    ]],
+  };
 }

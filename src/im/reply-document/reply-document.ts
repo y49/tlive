@@ -62,6 +62,7 @@ export class ReplyDocument {
         threadId: this.target.threadId,
         text: detail.html,
         parseMode: 'html',
+        replyMarkup: detail.replyMarkup,
       });
     } else {
       if (typeof this.adapter.sendCard !== 'function') {
@@ -150,8 +151,9 @@ export class ReplyDocument {
     if (detailMsgId) {
       const detail = renderTelegramDetail(this.state);
       const detailHtml = detail.html;
+      const detailMarkup = detail.replyMarkup;
       this.editQueue.enqueue(chatId, detailMsgId, async () => {
-        await adapter.edit(detailMsgId, chatId, detailHtml, undefined, 'html');
+        await adapter.edit(detailMsgId, chatId, detailHtml, detailMarkup, 'html');
       }, prio);
     }
   }
