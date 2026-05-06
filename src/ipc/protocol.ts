@@ -29,7 +29,9 @@ export type IpcRequest =
   | { kind: 'doctor.report' }
   | { kind: 'handoff.release'; alias: string }
   | { kind: 'handoff.take'; sdkId: string }
-  | { kind: 'workspace.add'; workspace: TliveConfigV1['workspaces'][number] };
+  | { kind: 'workspace.add'; workspace: TliveConfigV1['workspaces'][number] }
+  | { kind: 'workspace.list' }
+  | { kind: 'workspace.remove'; idOrName: string };
 
 // ---- Response union --------------------------------------------------------
 
@@ -53,6 +55,15 @@ export interface DoctorFinding {
   detail?: string;
 }
 
+export interface WorkspaceListEntry {
+  id: string;
+  name: string;
+  workdir: string;
+  admin: string | null;     // first userId with role 'admin', or null
+  bindings: number;
+  activeSessionId: string | null;
+}
+
 export type IpcResponse =
   | {
       kind: 'daemon.status';
@@ -71,6 +82,8 @@ export type IpcResponse =
   | { kind: 'handoff.released'; sdkId: string }
   | { kind: 'handoff.taken'; sdkId: string }
   | { kind: 'workspace.added'; workspaceId: string }
+  | { kind: 'workspace.list'; workspaces: WorkspaceListEntry[] }
+  | { kind: 'workspace.removed'; ok: boolean; reason?: string }
   | { kind: 'error'; message: string; code?: string };
 
 // ---- Envelope --------------------------------------------------------------

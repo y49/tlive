@@ -156,6 +156,33 @@ export function buildIpcDispatcher(deps: IpcDispatcherDeps): IpcServerHandler {
           reply({ kind: 'workspace.added', workspaceId: created.id });
           return;
         }
+        case 'workspace.list': {
+          const workspaces = deps.workspaces.list().map(ws => {
+            const adminEntry = Object.entries(ws.roles).find(([, r]) => r === 'admin');
+            return {
+              id: ws.id,
+              name: ws.name,
+              workdir: ws.workdir,
+              admin: adminEntry ? adminEntry[0] : null,
+              bindings: ws.bindings.length,
+              activeSessionId: ws.activeSessionId ?? null,
+            };
+          });
+          reply({ kind: 'workspace.list', workspaces });
+          return;
+        }
+        case 'workspace.remove': {
+          const all = deps.workspaces.list();
+          const target = all.find(w => w.id === req.idOrName || w.name === req.idOrName);
+          if (!target) {
+            reply({ kind: 'workspace.removed', ok: false, reason: `not found: ${req.idOrName}` });
+            return;
+          }
+          deps.workspaces.delete(target.id);
+          await deps.workspaces.save().catch(() => undefined);
+          reply({ kind: 'workspace.removed', ok: true });
+          return;
+        }
         default: {
           const exhaustive: never = req;
           reply({ kind: 'error', message: `unsupported request: ${JSON.stringify(exhaustive)}` });
