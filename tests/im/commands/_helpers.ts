@@ -36,6 +36,8 @@ export interface FakeCtxResult {
   sessionCalls: Array<{ method: string; args: unknown[] }>;
   workspaceCalls: Array<{ method: string; args: unknown[] }>;
   brokerCalls: Array<{ method: string; args: unknown[] }>;
+  /** The primary workspace bound to this chat (null when spec.workspace=null). */
+  ws: Workspace | null;
 }
 
 export function buildCtx(spec: FakeCtxSpec = {}): FakeCtxResult {
@@ -250,5 +252,5 @@ export function buildCtx(spec: FakeCtxSpec = {}): FakeCtxResult {
     },
   };
 
-  return { ctx, replies, replyMarkups, sessionCalls, workspaceCalls, brokerCalls };
+  return { ctx, replies, replyMarkups, sessionCalls, workspaceCalls, brokerCalls, ws: workspace };
 }
