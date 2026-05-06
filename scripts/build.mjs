@@ -64,6 +64,8 @@ const cliEntries = [
   // Handoff
   'handoff',
   'takeback',
+  // Workspace registration
+  'workspace',
   // MCP subsystem
   'mcp',
   // Wizards / meta

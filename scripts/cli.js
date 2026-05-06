@@ -86,6 +86,7 @@ const DISPATCH = {
   'daemon-logs': 'daemon-logs',
   handoff: 'handoff',
   takeback: 'takeback',
+  workspace: 'workspace',
   mcp: 'mcp',
   setup: 'setup',
   'install-integrations': 'install-integrations',
@@ -133,6 +134,11 @@ Daemon lifecycle:
 Handoff (daemon <-> local claude/codex):
   tlive handoff <alias>            Release a session to local claude --resume
   tlive takeback <sdkSessionId>    Daemon re-adopts a locally-driven session
+
+Workspaces:
+  tlive workspace add [<path>]     Register a workspace (path defaults to cwd)
+  tlive workspace list             List all registered workspaces
+  tlive workspace remove <id|name> Remove a workspace (use -y to skip prompt)
 
 Wizards:
   tlive setup                      Git-aware first-time / add-workspace wizard
