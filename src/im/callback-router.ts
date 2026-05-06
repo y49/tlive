@@ -535,6 +535,10 @@ export class CallbackRouter {
     }
 
     // Stop current session if any (interrupt + stop, claude -r semantics).
+    // We use sessionManager.stop (not session.stop directly) so the dead
+    // LocalSession is removed from the manager map — otherwise resumeLocal
+    // on switch-back would short-circuit on the stopped instance instead of
+    // reconstructing from the persisted snapshot.
     if (current && current.id !== target.id) {
       if (current.activeSessionId) {
         const session = this.deps.sessionManager.get(current.activeSessionId);
@@ -548,7 +552,7 @@ export class CallbackRouter {
             });
           }
           try {
-            await (session as LocalSession).stop();
+            await this.deps.sessionManager.stop(current.activeSessionId);
           } catch (err) {
             this.deps.logger?.warn('workspace:switch stop failed', {
               sid: current.activeSessionId,
