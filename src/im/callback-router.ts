@@ -148,9 +148,48 @@ export class CallbackRouter {
         return this.handleTakeback(parts, ctx);
       case 'workspace':
         return this.handleWorkspace(parts, ctx);
+      case 'menu':
+        return this.handleMenu(parts, ctx);
       default:
         return { kind: 'unknown', reason: `unknown kind: ${kind}` };
     }
+  }
+
+  // ---- Menu (Task 30) — detail-card keyboard expand/collapse -------------
+
+  /**
+   * `menu:expand` swaps the detail card's keyboard to the 12-button second
+   * level; `menu:collapse` restores the default 4-button row. Text is left
+   * untouched (`adapter.edit(text=undefined)` keeps the existing body).
+   *
+   * Missing `messageId` or adapter is treated as `unknown` — the click is
+   * a no-op rather than a stale-card error since menu changes are purely
+   * cosmetic (no broker state at risk).
+   */
+  private async handleMenu(parts: string[], ctx: CallbackContext): Promise<CallbackOutcome> {
+    const [verb] = parts;
+    if (verb !== 'expand' && verb !== 'collapse') {
+      return { kind: 'unknown', reason: `menu:bad-verb:${verb ?? ''}` };
+    }
+    if (!ctx.messageId) {
+      return { kind: 'unknown', reason: 'menu:no-messageId' };
+    }
+    const adapter = ctx.adapters?.get(ctx.channelType) ?? this.deps.adapters?.[ctx.channelType];
+    if (!adapter) return { kind: 'unknown', reason: 'menu:no-adapter' };
+
+    const newMarkup = verb === 'expand' ? secondLevelKeyboard() : defaultLevelKeyboard();
+    try {
+      await adapter.edit(ctx.messageId, ctx.chatId, undefined, newMarkup);
+    } catch (err) {
+      this.deps.logger?.warn('menu edit failed', {
+        chatId: ctx.chatId,
+        messageId: ctx.messageId,
+        verb,
+        reason: (err as Error).message,
+      });
+      return { kind: 'unknown', reason: 'menu:edit-failed' };
+    }
+    return { kind: 'handled', action: `menu:${verb}` };
   }
 
   // ---- Permission --------------------------------------------------------
@@ -712,6 +751,55 @@ function derivePolicyPattern(
     }
   }
   return { toolName: req.toolName };
+}
+
+/**
+ * Default 4-button keyboard for the detail card. Mirrors
+ * `defaultDetailKeyboard` in format-telegram.ts (kept in two places so the
+ * renderer doesn't import from callback-router).
+ */
+function defaultLevelKeyboard(): ReplyMarkup {
+  return {
+    type: 'inline_keyboard',
+    buttons: [[
+      { text: '🆕 new', callbackData: 'session:new' },
+      { text: '📋 list', callbackData: 'session:list' },
+      { text: '⏸ 中断', callbackData: 'turn:stop' },
+      { text: '⋯', callbackData: 'menu:expand' },
+    ]],
+  };
+}
+
+/**
+ * Second-level 12-button + collapse-row keyboard surfaced via
+ * `menu:expand` (spec §10.1). Every callback is namespaced so the router
+ * can dispatch to the right subsystem.
+ */
+function secondLevelKeyboard(): ReplyMarkup {
+  return {
+    type: 'inline_keyboard',
+    buttons: [
+      [
+        { text: '🔄 model', callbackData: 'runtime:model:open' },
+        { text: '🎚 mode', callbackData: 'runtime:mode:open' },
+        { text: '🧠 think', callbackData: 'runtime:think:open' },
+        { text: '💰 cost', callbackData: 'cost:open' },
+      ],
+      [
+        { text: '✨ perm', callbackData: 'runtime:perm:open' },
+        { text: '💸 budget', callbackData: 'runtime:budget:open' },
+        { text: '📁 切ws', callbackData: 'workspace:open' },
+        { text: '🔍 find', callbackData: 'find:prompt' },
+      ],
+      [
+        { text: '🍴 fork', callbackData: 'session:fork' },
+        { text: '📝 rename', callbackData: 'session:rename' },
+        { text: '☠ kill', callbackData: 'session:kill:confirm' },
+        { text: '📤 export', callbackData: 'session:export' },
+      ],
+      [{ text: '↩ 关闭菜单', callbackData: 'menu:collapse' }],
+    ],
+  };
 }
 
 function permVerbToDecision(verb: string): { decision: PermissionDecision; learn?: boolean } | null {

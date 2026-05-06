@@ -189,6 +189,119 @@ describe('CallbackRouter', () => {
   });
 });
 
+describe('CallbackRouter — menu:expand / menu:collapse (Task 30)', () => {
+  function setup() {
+    const edits: Array<{ messageId: string; chatId: string; text?: string; markup?: ReplyMarkup }> = [];
+    const adapter = {
+      channelType: 'telegram',
+      async start() {},
+      async stop() {},
+      async send() { return 'm'; },
+      async edit(messageId: string, chatId: string, text?: string, markup?: ReplyMarkup) {
+        edits.push({ messageId, chatId, text, markup });
+      },
+      async delete() {},
+      async pin() {},
+      async setReaction() {},
+      async sendAttachment() { return 'm'; },
+      async downloadAttachment() { return Buffer.from(''); },
+      onInbound: () => () => undefined,
+    } as unknown as PlatformAdapter;
+    const brokers = fakeBrokerCalls();
+    const router = new CallbackRouter({
+      sessionManager: fakeSM(false),
+      permissionBroker: brokers.permissionBroker,
+      askBroker: brokers.askBroker,
+      elicitationBroker: brokers.elicitationBroker,
+      adapters: { telegram: adapter },
+    });
+    return { router, edits };
+  }
+
+  it('menu:expand swaps keyboard to 12-button second-level + collapse row', async () => {
+    const { router, edits } = setup();
+    const out = await router.route({
+      data: 'menu:expand', userId: 'u1', chatId: 'c1', messageId: 'm-detail',
+      channelType: 'telegram',
+    });
+    expect(out).toEqual({ kind: 'handled', action: 'menu:expand' });
+    expect(edits).toHaveLength(1);
+    expect(edits[0]?.messageId).toBe('m-detail');
+    expect(edits[0]?.text).toBeUndefined();
+    const buttons = (edits[0]?.markup?.buttons ?? []).flat();
+    // 12 second-level + 1 collapse row = 13 buttons.
+    expect(buttons.length).toBe(13);
+    const labels = buttons.map((b) => b.text);
+    expect(labels).toContain('🔄 model');
+    expect(labels).toContain('🎚 mode');
+    expect(labels).toContain('🧠 think');
+    expect(labels).toContain('💰 cost');
+    expect(labels).toContain('✨ perm');
+    expect(labels).toContain('💸 budget');
+    expect(labels).toContain('📁 切ws');
+    expect(labels).toContain('🔍 find');
+    expect(labels).toContain('🍴 fork');
+    expect(labels).toContain('📝 rename');
+    expect(labels).toContain('☠ kill');
+    expect(labels).toContain('📤 export');
+    expect(labels).toContain('↩ 关闭菜单');
+  });
+
+  it('menu:collapse swaps back to default 4-button row', async () => {
+    const { router, edits } = setup();
+    const out = await router.route({
+      data: 'menu:collapse', userId: 'u1', chatId: 'c1', messageId: 'm-detail',
+      channelType: 'telegram',
+    });
+    expect(out).toEqual({ kind: 'handled', action: 'menu:collapse' });
+    expect(edits).toHaveLength(1);
+    const buttons = (edits[0]?.markup?.buttons ?? []).flat();
+    expect(buttons).toHaveLength(4);
+    expect(buttons.map((b) => b.text)).toEqual(['🆕 new', '📋 list', '⏸ 中断', '⋯']);
+    expect(buttons.map((b) => b.callbackData)).toEqual([
+      'session:new', 'session:list', 'turn:stop', 'menu:expand',
+    ]);
+  });
+
+  it('menu without messageId returns unknown (no-op)', async () => {
+    const { router, edits } = setup();
+    const out = await router.route({
+      data: 'menu:expand', userId: 'u1', chatId: 'c1',
+      channelType: 'telegram',
+    });
+    expect(out.kind).toBe('unknown');
+    expect((out as { reason: string }).reason).toBe('menu:no-messageId');
+    expect(edits).toHaveLength(0);
+  });
+
+  it('menu without adapter returns unknown', async () => {
+    const brokers = fakeBrokerCalls();
+    const router = new CallbackRouter({
+      sessionManager: fakeSM(false),
+      permissionBroker: brokers.permissionBroker,
+      askBroker: brokers.askBroker,
+      elicitationBroker: brokers.elicitationBroker,
+      // no adapters
+    });
+    const out = await router.route({
+      data: 'menu:expand', userId: 'u1', chatId: 'c1', messageId: 'm-detail',
+      channelType: 'telegram',
+    });
+    expect(out.kind).toBe('unknown');
+    expect((out as { reason: string }).reason).toBe('menu:no-adapter');
+  });
+
+  it('menu:bad-verb returns unknown', async () => {
+    const { router } = setup();
+    const out = await router.route({
+      data: 'menu:nope', userId: 'u1', chatId: 'c1', messageId: 'm-detail',
+      channelType: 'telegram',
+    });
+    expect(out.kind).toBe('unknown');
+    expect((out as { reason: string }).reason).toBe('menu:bad-verb:nope');
+  });
+});
+
 describe('CallbackRouter perm:learn policy persistence', () => {
   it('persists PolicyRule with exec command pattern on perm:learn', async () => {
     const policyAdd: Array<Parameters<PolicyStore['add']>> = [];
