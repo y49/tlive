@@ -38,7 +38,7 @@
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { writeFile } from 'node:fs/promises';
+import { writeFile, stat } from 'node:fs/promises';
 
 import { loadConfig, type LoadConfigResult } from '../config/loader.js';
 import type { TliveConfigV1 } from '../config/schema.js';
@@ -69,6 +69,7 @@ import { registerAllCommands } from '../im/commands/index.js';
 import { dispatch as dispatchCommand, validateRegistry, type CommandContext } from '../im/command-parser.js';
 import { CallbackRouter } from '../im/callback-router.js';
 import { registerAllBotCommands } from '../im/bot-commands-registrar.js';
+import { WorkspaceCreateBroker, type PendingCreate } from '../im/workspace-create-broker.js';
 
 import { TelegramAdapter } from '../platform/telegram/adapter.js';
 import { FeishuAdapter } from '../platform/feishu/adapter.js';
@@ -232,6 +233,7 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
   const broker = new PermissionBroker({ policyStoreFor });
   const askBroker = new AskUserQuestionBroker();
   const elicitBroker = new ElicitationBroker();
+  const workspaceCreateBroker = new WorkspaceCreateBroker();
 
   // --- Attachments -------------------------------------------------------
   const attachments = new AttachmentStore({ rootDir: join(home, 'attachments') });
@@ -393,6 +395,7 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
         broker,
         askBroker,
         elicitBroker,
+        workspaceCreateBroker,
         mcpRegistry,
         rollups,
         persistence,
@@ -414,6 +417,14 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
     logger,
   });
   const throttleRetry = startApiThrottleRetry({ sessions, logger });
+
+  // Prune expired workspace-create pending entries every minute (5-min TTL).
+  // Mirrors the AskUserQuestionBroker timeout pattern; .unref() so the
+  // interval doesn't keep the process alive on its own.
+  const workspaceCreatePruner = setInterval(() => {
+    workspaceCreateBroker.pruneExpired(5 * 60 * 1000);
+  }, 60 * 1000);
+  workspaceCreatePruner.unref?.();
 
   // Prune stale snapshots on startup (spec §5.4). No subprocesses are spawned
   // here — actual resume happens lazily via WorkspaceManager.lazyResumeOrCreate
@@ -464,6 +475,7 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
     { name: 'cron', async run() { cron.stop(); } },
     { name: 'throttle-retry', async run() { throttleRetry.stop(); } },
     { name: 'idle-stop', async run() { idleStop.stop(); } },
+    { name: 'workspace-create-pruner', async run() { clearInterval(workspaceCreatePruner); } },
     { name: 'inbound-unsubs', async run() { for (const u of inboundUnsubs) { try { u(); } catch { /* isolate */ } } } },
     { name: 'adapters', async run() {
       for (const a of Object.values(adapters)) {
@@ -553,6 +565,7 @@ interface InboundDeps {
   broker: PermissionBroker;
   askBroker: AskUserQuestionBroker;
   elicitBroker: ElicitationBroker;
+  workspaceCreateBroker: WorkspaceCreateBroker;
   mcpRegistry: McpRegistry;
   rollups: CostRollupStore;
   persistence: SessionPersistence;
@@ -598,6 +611,25 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
     // round-trip completes. The frontend owns pending-inbound state and
     // applies it to whichever session ends up attached.
     deps.frontend.markInboundReceived(ev.channelType, ev.chatId, ev.messageId, ev.threadId);
+
+    // Workspace creation pending state — if the user clicked [➕ 新增工作区]
+    // and we asked for a path, treat the next plain text as the workdir.
+    // Sister branch to AskUserQuestion relay below; runs first because the
+    // path may itself look like a candidate ask-answer ("/Users/foo" etc.).
+    const pendingCreate = deps.workspaceCreateBroker.pendingFor(ev.channelType, ev.chatId);
+    if (pendingCreate && pendingCreate.userId === ev.userId) {
+      if (text === '/cancel' || text.toLowerCase() === 'cancel') {
+        deps.workspaceCreateBroker.cancel(ev.channelType, ev.chatId);
+        await deps.adapter.send({
+          chatId: ev.chatId,
+          threadId: ev.threadId,
+          text: '已取消新增工作区',
+        }).catch(() => undefined);
+        return;
+      }
+      await tryCreateWorkspaceFromPath(text, pendingCreate, deps, ev);
+      return;
+    }
 
     // AskUserQuestion answer relay: if the agent has a pending question on
     // this chat's active session, treat plain text like "2", "Tea", or
@@ -746,4 +778,93 @@ export function parseAskAnswer(text: string, options: string[]): string | null {
   if (subs.length === 1) return subs[0]!;
 
   return null;
+}
+
+/**
+ * Attempt to create a workspace from a freeform path the user typed in
+ * response to the [➕ 新增工作区] prompt. Validation order:
+ *   1. expand `~`/`$HOME`
+ *   2. fs.stat + isDirectory
+ *   3. WorkspaceManager.findByWorkdir guard (already-registered)
+ *   4. WorkspaceManager.createFromIM (atomic create + claimAdmin + addBinding)
+ *
+ * On any failure (1-4) we reply an error message but PRESERVE the pending
+ * state so the user can simply re-send the corrected path without re-clicking
+ * the button. Success: resolve() removes pending state, reply success.
+ */
+async function tryCreateWorkspaceFromPath(
+  rawPath: string,
+  pending: PendingCreate,
+  deps: InboundDeps,
+  ev: InboundEvent,
+): Promise<void> {
+  const expanded = expandHome(rawPath.trim());
+
+  try {
+    const st = await stat(expanded);
+    if (!st.isDirectory()) {
+      await deps.adapter.send({
+        chatId: ev.chatId,
+        threadId: ev.threadId,
+        text: `❌ ${expanded} 不是目录，请重发或 /cancel`,
+      }).catch(() => undefined);
+      return;
+    }
+  } catch {
+    await deps.adapter.send({
+      chatId: ev.chatId,
+      threadId: ev.threadId,
+      text: `❌ 无法访问 ${expanded}，请重发或 /cancel`,
+    }).catch(() => undefined);
+    return;
+  }
+
+  if (deps.workspaces.findByWorkdir(expanded)) {
+    await deps.adapter.send({
+      chatId: ev.chatId,
+      threadId: ev.threadId,
+      text: '❌ 该目录已注册为工作区，请用 /workspace 切换',
+    }).catch(() => undefined);
+    return;
+  }
+
+  let ws;
+  try {
+    ws = deps.workspaces.createFromIM({
+      workdir: expanded,
+      adminUserId: pending.userId,
+      channelType: pending.channelType,
+      chatId: pending.chatId,
+      threadId: ev.threadId,
+    });
+    await deps.workspaces.save();
+  } catch (err) {
+    deps.logger.warn('createFromIM failed', { reason: (err as Error).message });
+    await deps.adapter.send({
+      chatId: ev.chatId,
+      threadId: ev.threadId,
+      text: `❌ 创建失败: ${(err as Error).message}`,
+    }).catch(() => undefined);
+    return;
+  }
+
+  deps.workspaceCreateBroker.resolve(pending.channelType, pending.chatId);
+  await deps.adapter.send({
+    chatId: ev.chatId,
+    threadId: ev.threadId,
+    text: [
+      `✅ 工作区 "${ws.name}" 已创建并关联此 chat`,
+      `   📂 ${ws.workdir}`,
+      `   🤖 默认: ${ws.defaults.provider} · ${ws.defaults.permissionMode}`,
+    ].join('\n'),
+  }).catch(() => undefined);
+  deps.logger.info('workspace created from IM', { workspaceId: ws.id, workdir: ws.workdir });
+}
+
+function expandHome(p: string): string {
+  if (p === '~') return process.env.HOME ?? '';
+  if (p.startsWith('~/')) return join(process.env.HOME ?? '', p.slice(2));
+  if (p.startsWith('$HOME/')) return join(process.env.HOME ?? '', p.slice(6));
+  if (p === '$HOME') return process.env.HOME ?? '';
+  return p;
 }
