@@ -14,6 +14,7 @@ import type { ElicitationBroker } from '../../../src/permission/elicitation-brok
 import type { Workspace } from '../../../src/workspace/config.js';
 import type { LocalSession } from '../../../src/session/local-session.js';
 import type { ChatBinding, ChannelType } from '../../../src/workspace/bindings.js';
+import type { PolicyStore } from '../../../src/permission/policy-store.js';
 
 export interface FakeCtxSpec {
   workspace?: Partial<Workspace> | null;
@@ -26,6 +27,8 @@ export interface FakeCtxSpec {
   chatId?: string;
   userId?: string;
   username?: string;
+  /** Optional policy store provider for /perm tests. */
+  policyStoreFor?: (workspaceId: string) => PolicyStore | undefined;
 }
 
 export interface FakeCtxResult {
@@ -246,6 +249,7 @@ export function buildCtx(spec: FakeCtxSpec = {}): FakeCtxResult {
     permissionBroker,
     askBroker,
     elicitationBroker,
+    policyStoreFor: spec.policyStoreFor,
     async reply(text: string, opts?: { replyMarkup?: ReplyMarkup }) {
       replies.push(text);
       replyMarkups.push(opts?.replyMarkup);
