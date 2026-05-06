@@ -2,6 +2,8 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { CallbackRouter, parseCallbackData } from '../../src/im/callback-router.js';
+import { WorkspaceManager } from '../../src/workspace/manager.js';
+import { WorkspaceCreateBroker } from '../../src/im/workspace-create-broker.js';
 import type { PermissionBroker } from '../../src/permission/broker.js';
 import type { AskUserQuestionBroker } from '../../src/permission/ask-broker.js';
 import type { ElicitationBroker } from '../../src/permission/elicitation-broker.js';
@@ -9,7 +11,7 @@ import type { SessionManager } from '../../src/session/manager.js';
 import type { LocalSession } from '../../src/session/local-session.js';
 import type { PermissionRequest } from '../../src/runtime/types.js';
 import type { PolicyStore, PolicyRule } from '../../src/permission/policy-store.js';
-import type { PlatformAdapter } from '../../src/platform/types.js';
+import type { PlatformAdapter, ReplyMarkup, OutboundMessage } from '../../src/platform/types.js';
 
 function fakeBrokerCalls() {
   const calls: Array<{ name: string; args: unknown[] }> = [];
@@ -380,5 +382,185 @@ describe('CallbackRouter stale-card edits', () => {
       data: 'perm:allow:gone:r1', userId: 'u', chatId: 'c', channelType: 'telegram',
     });
     expect(out.kind).toBe('stale');
+  });
+});
+
+describe('CallbackRouter — workspace:*', () => {
+  function setup() {
+    const wm = new WorkspaceManager();
+    const wcb = new WorkspaceCreateBroker();
+    const sm = {
+      get: () => null,
+      getByPrefix: () => ({ resolved: null, ambiguous: [] }),
+      listInfo: () => [],
+      resumeLocal: async () => null,
+    } as unknown as SessionManager;
+    const sentMsgs: OutboundMessage[] = [];
+    const adapter = {
+      channelType: 'telegram',
+      async start() {},
+      async stop() {},
+      async send(m: OutboundMessage) { sentMsgs.push(m); return 'msg-1'; },
+      async edit() {},
+      async delete() {},
+      async pin() {},
+      async setReaction() {},
+      async sendAttachment() { return 'm'; },
+      async downloadAttachment() { return Buffer.from(''); },
+      onInbound: () => () => undefined,
+    } as unknown as PlatformAdapter;
+    const brokers = fakeBrokerCalls();
+    const router = new CallbackRouter({
+      sessionManager: sm,
+      permissionBroker: brokers.permissionBroker,
+      askBroker: brokers.askBroker,
+      elicitationBroker: brokers.elicitationBroker,
+      adapters: { telegram: adapter },
+      workspaceManager: wm,
+      workspaceCreateBroker: wcb,
+    });
+    return { router, wm, wcb, sm, sentMsgs };
+  }
+
+  function ctx(data: string) {
+    return {
+      data,
+      userId: 'u1',
+      chatId: 'c1',
+      messageId: 'm1',
+      channelType: 'telegram' as const,
+    };
+  }
+
+  it('workspace:bind binds chat to the target workspace', async () => {
+    const { router, wm, sentMsgs } = setup();
+    const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
+    const result = await router.route(ctx(`workspace:bind:${ws.id}`));
+    expect(result).toEqual({ kind: 'handled', action: 'workspace:bind:tlive' });
+    expect(wm.findByChat('telegram', 'c1')?.id).toBe(ws.id);
+    expect(sentMsgs[0]?.text).toMatch(/已绑定/);
+  });
+
+  it('workspace:bind replaces existing binding for the chat', async () => {
+    const { router, wm } = setup();
+    const w1 = wm.create({ name: 'a', workdir: '/p/a' });
+    const w2 = wm.create({ name: 'b', workdir: '/p/b' });
+    wm.addBinding(w1.id, { channelType: 'telegram', chatId: 'c1', role: 'primary' });
+    await router.route(ctx(`workspace:bind:${w2.id}`));
+    expect(wm.findByChat('telegram', 'c1')?.id).toBe(w2.id);
+    // w1 binding removed
+    expect(wm.listBindings(w1.id).find((b) => b.chatId === 'c1')).toBeUndefined();
+  });
+
+  it('workspace:bind with unknown id replies error and returns unknown', async () => {
+    const { router, wm, sentMsgs } = setup();
+    const result = await router.route(ctx('workspace:bind:does-not-exist'));
+    expect(result.kind).toBe('unknown');
+    expect((result as { reason: string }).reason).toBe('workspace:bind:not-found');
+    expect(wm.findByChat('telegram', 'c1')).toBeUndefined();
+    expect(sentMsgs[0]?.text).toMatch(/不存在/);
+  });
+
+  it('workspace:create:start opens broker pending state with cancel button', async () => {
+    const { router, wcb, sentMsgs } = setup();
+    await router.route(ctx('workspace:create:start'));
+    const pending = wcb.pendingFor('telegram', 'c1');
+    expect(pending).toBeDefined();
+    expect(pending?.userId).toBe('u1');
+    expect(sentMsgs[0]?.text).toMatch(/请发送项目根目录/);
+    const markup = sentMsgs[0]?.replyMarkup as ReplyMarkup;
+    expect(markup.type).toBe('inline_keyboard');
+    expect(markup.buttons?.[0]?.[0]?.callbackData).toBe('workspace:create:cancel');
+  });
+
+  it('workspace:create:cancel clears broker pending', async () => {
+    const { router, wcb } = setup();
+    wcb.start({ channelType: 'telegram', chatId: 'c1', userId: 'u1', triggerMessageId: 'm0' });
+    await router.route(ctx('workspace:create:cancel'));
+    expect(wcb.pendingFor('telegram', 'c1')).toBeUndefined();
+  });
+
+  it('workspace:exit:confirm sends confirmation card with [✅] and [❌] buttons', async () => {
+    const { router, wm, sentMsgs } = setup();
+    const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
+    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1', role: 'primary' });
+    await router.route(ctx('workspace:exit:confirm'));
+    expect(sentMsgs[0]?.text).toMatch(/确定退出/);
+    const markup = sentMsgs[0]?.replyMarkup as ReplyMarkup;
+    const labels = (markup.buttons ?? []).flat().map((b) => b.text);
+    expect(labels).toContain('✅ 确定');
+    expect(labels).toContain('❌ 取消');
+    const datas = (markup.buttons ?? []).flat().map((b) => b.callbackData);
+    expect(datas).toContain('workspace:exit:do');
+    expect(datas).toContain('workspace:exit:cancel');
+  });
+
+  it('workspace:exit:do removes binding and replies', async () => {
+    const { router, wm, sentMsgs } = setup();
+    const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
+    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1', role: 'primary' });
+    await router.route(ctx('workspace:exit:do'));
+    expect(wm.findByChat('telegram', 'c1')).toBeUndefined();
+    expect(sentMsgs[0]?.text).toMatch(/已退出/);
+  });
+
+  it('workspace:exit:cancel acknowledges without changing bindings', async () => {
+    const { router, wm } = setup();
+    const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
+    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1', role: 'primary' });
+    await router.route(ctx('workspace:exit:cancel'));
+    expect(wm.findByChat('telegram', 'c1')?.id).toBe(ws.id);
+  });
+
+  it('workspace:config:open replies placeholder', async () => {
+    const { router, sentMsgs } = setup();
+    const result = await router.route(ctx('workspace:config:open'));
+    expect(result).toEqual({ kind: 'handled', action: 'workspace:config:open' });
+    expect(sentMsgs[0]?.text).toMatch(/Task 22|配置/);
+  });
+
+  it('workspace:switch swaps binding (no live session)', async () => {
+    const { router, wm, sentMsgs } = setup();
+    const w1 = wm.create({ name: 'a', workdir: '/p/a' });
+    const w2 = wm.create({ name: 'b', workdir: '/p/b' });
+    wm.addBinding(w1.id, { channelType: 'telegram', chatId: 'c1', role: 'primary' });
+    const result = await router.route(ctx(`workspace:switch:${w2.id}`));
+    expect(result.kind).toBe('handled');
+    expect((result as { action: string }).action).toBe('workspace:switch:b');
+    expect(wm.findByChat('telegram', 'c1')?.id).toBe(w2.id);
+    expect(sentMsgs[0]?.text).toMatch(/已切到工作区/);
+    expect(sentMsgs[0]?.text).toMatch(/暂无活跃会话/);
+  });
+
+  it('workspace:switch with unknown target replies error', async () => {
+    const { router, wm } = setup();
+    const w1 = wm.create({ name: 'a', workdir: '/p/a' });
+    wm.addBinding(w1.id, { channelType: 'telegram', chatId: 'c1', role: 'primary' });
+    const result = await router.route(ctx('workspace:switch:does-not-exist'));
+    expect(result.kind).toBe('unknown');
+    // Original binding intact
+    expect(wm.findByChat('telegram', 'c1')?.id).toBe(w1.id);
+  });
+
+  it('returns unknown on bad workspace verb', async () => {
+    const { router } = setup();
+    const result = await router.route(ctx('workspace:nosuch:foo'));
+    expect(result.kind).toBe('unknown');
+    expect((result as { reason: string }).reason).toBe('workspace:bad-verb:nosuch');
+  });
+
+  it('returns unknown when workspaceManager dep is absent', async () => {
+    const brokers = fakeBrokerCalls();
+    const router = new CallbackRouter({
+      sessionManager: fakeSM(false),
+      permissionBroker: brokers.permissionBroker,
+      askBroker: brokers.askBroker,
+      elicitationBroker: brokers.elicitationBroker,
+    });
+    const result = await router.route({
+      data: 'workspace:bind:abc', userId: 'u', chatId: 'c', channelType: 'telegram',
+    });
+    expect(result.kind).toBe('unknown');
+    expect((result as { reason: string }).reason).toBe('workspace:no-manager');
   });
 });

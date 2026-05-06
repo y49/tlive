@@ -379,6 +379,9 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
     elicitationBroker: elicitBroker,
     adapters,
     policyStoreFor,
+    workspaceManager: workspaces,
+    workspaceCreateBroker,
+    persistence,
   });
 
   // --- Inbound → command/callback dispatch ------------------------------

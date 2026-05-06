@@ -39,10 +39,13 @@ import type { PermissionBroker } from '../permission/broker.js';
 import type { AskUserQuestionBroker } from '../permission/ask-broker.js';
 import type { ElicitationBroker } from '../permission/elicitation-broker.js';
 import type { LocalSession } from '../session/local-session.js';
-import type { PlatformAdapter } from '../platform/types.js';
+import type { PlatformAdapter, ReplyMarkup } from '../platform/types.js';
 import type { PermissionDecision, PermissionRequest } from '../runtime/types.js';
 import type { PolicyStore } from '../permission/policy-store.js';
 import type { ChannelType } from '../workspace/bindings.js';
+import type { WorkspaceManager } from '../workspace/manager.js';
+import type { WorkspaceCreateBroker } from './workspace-create-broker.js';
+import type { SessionPersistence } from '../session/persistence.js';
 
 export interface CallbackRouterDeps {
   sessionManager: SessionManager;
@@ -60,6 +63,21 @@ export interface CallbackRouterDeps {
    * requests. Daemon bootstrap wires a real provider; tests pass a fake.
    */
   policyStoreFor?: (workspaceId: string) => PolicyStore | Promise<PolicyStore>;
+  /**
+   * Optional WorkspaceManager — required for `workspace:*` callbacks
+   * (Task 16). Existing tests omit it; bootstrap supplies the real instance.
+   */
+  workspaceManager?: WorkspaceManager;
+  /**
+   * Optional WorkspaceCreateBroker — required for `workspace:create:*`
+   * callbacks (Task 16). Bootstrap supplies the real instance.
+   */
+  workspaceCreateBroker?: WorkspaceCreateBroker;
+  /**
+   * Optional SessionPersistence — used by `workspace:switch` to gate
+   * resumeLocal on hasSnapshot probe (claude -r semantics, see spec §4.2).
+   */
+  persistence?: SessionPersistence;
 }
 
 export interface CallbackContext {
@@ -120,6 +138,8 @@ export class CallbackRouter {
         return this.handleBudget(parts, ctx);
       case 'takeback':
         return this.handleTakeback(parts, ctx);
+      case 'workspace':
+        return this.handleWorkspace(parts, ctx);
       default:
         return { kind: 'unknown', reason: `unknown kind: ${kind}` };
     }
@@ -382,6 +402,183 @@ export class CallbackRouter {
     return resumed
       ? { kind: 'handled', action: 'takeback:resumed' }
       : { kind: 'stale', action: 'invalidated' };
+  }
+
+  // ---- Workspace (Task 16) ---------------------------------------------
+
+  private async handleWorkspace(parts: string[], ctx: CallbackContext): Promise<CallbackOutcome> {
+    const [verb, ...rest] = parts;
+    if (!verb) return { kind: 'unknown', reason: 'workspace:malformed' };
+
+    if (!this.deps.workspaceManager) return { kind: 'unknown', reason: 'workspace:no-manager' };
+
+    switch (verb) {
+      case 'bind':   return this.handleWorkspaceBind(rest, ctx);
+      case 'switch': return this.handleWorkspaceSwitch(rest, ctx);
+      case 'create': return this.handleWorkspaceCreate(rest, ctx);
+      case 'exit':   return this.handleWorkspaceExit(rest, ctx);
+      case 'config': return this.handleWorkspaceConfig(rest, ctx);
+      default:       return { kind: 'unknown', reason: `workspace:bad-verb:${verb}` };
+    }
+  }
+
+  private async handleWorkspaceBind(rest: string[], ctx: CallbackContext): Promise<CallbackOutcome> {
+    const wm = this.deps.workspaceManager!;
+    const wsId = rest.join(':');
+    if (!wsId) return { kind: 'unknown', reason: 'workspace:bind:malformed' };
+    const target = wm.get(wsId);
+    if (!target) {
+      await this.sendReply(ctx, '❌ 工作区不存在');
+      return { kind: 'unknown', reason: 'workspace:bind:not-found' };
+    }
+    // Single-binding-per-chat: remove existing if any.
+    const existing = wm.findByChat(ctx.channelType, ctx.chatId);
+    if (existing) {
+      wm.removeBinding(existing.id, { channelType: ctx.channelType, chatId: ctx.chatId });
+    }
+    wm.addBinding(target.id, {
+      channelType: ctx.channelType,
+      chatId: ctx.chatId,
+      role: 'primary',
+    });
+    await wm.save().catch(() => undefined);
+    await this.sendReply(ctx, `✅ 已绑定到 "${target.name}"`);
+    return { kind: 'handled', action: `workspace:bind:${target.name}` };
+  }
+
+  private async handleWorkspaceSwitch(rest: string[], ctx: CallbackContext): Promise<CallbackOutcome> {
+    const wm = this.deps.workspaceManager!;
+    const targetId = rest.join(':');
+    if (!targetId) return { kind: 'unknown', reason: 'workspace:switch:malformed' };
+    const target = wm.get(targetId);
+    if (!target) {
+      await this.sendReply(ctx, '❌ 目标工作区不存在');
+      return { kind: 'unknown', reason: 'workspace:switch:not-found' };
+    }
+    // Stop current session if any (interrupt + stop, claude -r semantics).
+    const current = wm.findByChat(ctx.channelType, ctx.chatId);
+    if (current && current.id !== target.id) {
+      if (current.activeSessionId) {
+        const session = this.deps.sessionManager.get(current.activeSessionId);
+        if (session && session.kind === 'local') {
+          try { await (session as LocalSession).interrupt(); } catch { /* ignore */ }
+          try { await (session as LocalSession).stop(); } catch { /* ignore */ }
+        }
+      }
+      wm.removeBinding(current.id, { channelType: ctx.channelType, chatId: ctx.chatId });
+    }
+    wm.addBinding(target.id, {
+      channelType: ctx.channelType,
+      chatId: ctx.chatId,
+      role: 'primary',
+    });
+    await wm.save().catch(() => undefined);
+
+    // Try resume target's activeSession (claude -r semantics) when jsonl exists.
+    const lines = [`✅ 已切到工作区 "${target.name}"`, `📂 ${target.workdir}`];
+    const persistence = this.deps.persistence;
+    if (target.activeSessionId && persistence) {
+      let hasSnap = false;
+      try { hasSnap = await persistence.hasSnapshot(target.activeSessionId); }
+      catch { hasSnap = false; }
+      if (hasSnap) {
+        try {
+          await this.deps.sessionManager.resumeLocal(target.activeSessionId);
+          lines.push('📌 已恢复上次会话,继续对话即可');
+        } catch (err) {
+          lines.push(`⚠ 上次会话恢复失败: ${(err as Error).message}`);
+        }
+      } else {
+        lines.push('暂无活跃会话');
+      }
+    } else {
+      lines.push('暂无活跃会话');
+    }
+    await this.sendReply(ctx, lines.join('\n'));
+    return { kind: 'handled', action: `workspace:switch:${target.name}` };
+  }
+
+  private async handleWorkspaceCreate(rest: string[], ctx: CallbackContext): Promise<CallbackOutcome> {
+    const broker = this.deps.workspaceCreateBroker;
+    if (!broker) return { kind: 'unknown', reason: 'workspace:create:no-broker' };
+    const [subverb] = rest;
+    if (subverb === 'start') {
+      broker.start({
+        channelType: ctx.channelType,
+        chatId: ctx.chatId,
+        userId: ctx.userId,
+        triggerMessageId: ctx.messageId ?? '',
+      });
+      const text = '📁 新增工作区\n请发送项目根目录的绝对路径\n\n例如:\n  /home/y/Project/foo\n  ~/Project/foo\n\n回 /cancel 退出';
+      const markup: ReplyMarkup = {
+        type: 'inline_keyboard',
+        buttons: [[{ text: '❌ 取消', callbackData: 'workspace:create:cancel' }]],
+      };
+      await this.sendReply(ctx, text, markup);
+      return { kind: 'handled', action: 'workspace:create:start' };
+    }
+    if (subverb === 'cancel') {
+      broker.cancel(ctx.channelType, ctx.chatId);
+      await this.sendReply(ctx, '已取消新增工作区');
+      return { kind: 'handled', action: 'workspace:create:cancel' };
+    }
+    return { kind: 'unknown', reason: `workspace:create:bad-verb:${subverb ?? ''}` };
+  }
+
+  private async handleWorkspaceExit(rest: string[], ctx: CallbackContext): Promise<CallbackOutcome> {
+    const wm = this.deps.workspaceManager!;
+    const [subverb] = rest;
+    if (subverb === 'confirm') {
+      const ws = wm.findByChat(ctx.channelType, ctx.chatId);
+      if (!ws) {
+        await this.sendReply(ctx, '此 chat 未绑定工作区');
+        return { kind: 'handled', action: 'workspace:exit:not-bound' };
+      }
+      const text = `确定退出工作区 "${ws.name}"?\n当前会话进程会停止,jsonl 保留;此 chat 解除绑定。`;
+      const markup: ReplyMarkup = {
+        type: 'inline_keyboard',
+        buttons: [[
+          { text: '✅ 确定', callbackData: 'workspace:exit:do' },
+          { text: '❌ 取消', callbackData: 'workspace:exit:cancel' },
+        ]],
+      };
+      await this.sendReply(ctx, text, markup);
+      return { kind: 'handled', action: 'workspace:exit:confirm' };
+    }
+    if (subverb === 'do') {
+      const ws = wm.findByChat(ctx.channelType, ctx.chatId);
+      if (!ws) {
+        await this.sendReply(ctx, '此 chat 未绑定');
+        return { kind: 'handled', action: 'workspace:exit:not-bound' };
+      }
+      if (ws.activeSessionId) {
+        const s = this.deps.sessionManager.get(ws.activeSessionId);
+        if (s && s.kind === 'local') {
+          try { await (s as LocalSession).stop(); } catch { /* ignore */ }
+        }
+      }
+      wm.removeBinding(ws.id, { channelType: ctx.channelType, chatId: ctx.chatId });
+      await wm.save().catch(() => undefined);
+      await this.sendReply(ctx, `✅ 已退出工作区 "${ws.name}"`);
+      return { kind: 'handled', action: `workspace:exit:do:${ws.name}` };
+    }
+    if (subverb === 'cancel') {
+      await this.sendReply(ctx, '已取消');
+      return { kind: 'handled', action: 'workspace:exit:cancel' };
+    }
+    return { kind: 'unknown', reason: `workspace:exit:bad-verb:${subverb ?? ''}` };
+  }
+
+  private async handleWorkspaceConfig(_rest: string[], ctx: CallbackContext): Promise<CallbackOutcome> {
+    await this.sendReply(ctx, '⚙ 工作区配置面板 — 待 Task 22 实现');
+    return { kind: 'handled', action: 'workspace:config:open' };
+  }
+
+  /** Send a fresh reply via the resolved adapter. No-op when adapter unavailable. */
+  private async sendReply(ctx: CallbackContext, text: string, replyMarkup?: ReplyMarkup): Promise<void> {
+    const adapter = ctx.adapters?.get(ctx.channelType) ?? this.deps.adapters?.[ctx.channelType];
+    if (!adapter) return;
+    await adapter.send({ chatId: ctx.chatId, text, replyMarkup }).catch(() => undefined);
   }
 
   // ---- Helpers ---------------------------------------------------------
