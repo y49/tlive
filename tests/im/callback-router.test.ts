@@ -302,6 +302,292 @@ describe('CallbackRouter — menu:expand / menu:collapse (Task 30)', () => {
   });
 });
 
+describe('CallbackRouter — turn/session/runtime/cost/find handlers (Task 31)', () => {
+  function setupAdvanced(opts: {
+    activeSessionId?: string | null;
+    sessionShape?: Partial<{
+      interrupt: () => Promise<void>;
+      stop: () => Promise<void>;
+      setModel: (id: string) => Promise<void>;
+      setPermissionMode: (m: string) => Promise<void>;
+      setMaxBudget: (n: number | undefined) => void;
+      forkSession: () => Promise<{ sdkSessionId: string }>;
+      kind: string;
+    }>;
+    resumeReturns?: 'session' | 'null' | 'throw';
+    policyStore?: { list: () => unknown[]; remove: (id: string) => Promise<boolean> };
+  } = {}) {
+    const calls: Array<{ name: string; args: unknown[] }> = [];
+    const sessionId = 'sess-active-abc1234';
+    const sessionShape = opts.sessionShape ?? {};
+    const session = opts.activeSessionId !== null
+      ? {
+          id: sessionId,
+          kind: sessionShape.kind ?? 'local',
+          interrupt: sessionShape.interrupt ?? (async () => { calls.push({ name: 'interrupt', args: [] }); }),
+          stop: sessionShape.stop ?? (async () => { calls.push({ name: 'stop', args: [] }); }),
+          setModel: sessionShape.setModel ?? (async (id: string) => { calls.push({ name: 'setModel', args: [id] }); }),
+          setPermissionMode: sessionShape.setPermissionMode ?? (async (m: string) => { calls.push({ name: 'setPermissionMode', args: [m] }); }),
+          setMaxBudget: sessionShape.setMaxBudget ?? ((n: number | undefined) => { calls.push({ name: 'setMaxBudget', args: [n] }); }),
+          forkSession: sessionShape.forkSession ?? (async () => {
+            calls.push({ name: 'forkSession', args: [] });
+            return { sdkSessionId: 'sess-forked-xyz7890' };
+          }),
+        }
+      : null;
+
+    const wm = new WorkspaceManager();
+    const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
+    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1', role: 'primary' });
+    if (opts.activeSessionId !== null && opts.activeSessionId !== undefined) {
+      wm.bindActiveSession(ws.id, opts.activeSessionId);
+    } else if (opts.activeSessionId === undefined && session) {
+      wm.bindActiveSession(ws.id, session.id);
+    }
+
+    const sm = {
+      get: (id: string) => session && id === session.id ? session : null,
+      getByPrefix: (p: string) =>
+        session && session.id.startsWith(p) ? { resolved: session, ambiguous: [] } : { resolved: null, ambiguous: [] },
+      listInfo: () => [],
+      resumeLocal: async (id: string) => {
+        if (opts.resumeReturns === 'throw') throw new Error('resume failed');
+        if (opts.resumeReturns === 'null') return null;
+        return { id, kind: 'local' } as unknown as LocalSession;
+      },
+    } as unknown as SessionManager;
+
+    const sentMsgs: OutboundMessage[] = [];
+    const adapter = {
+      channelType: 'telegram',
+      async start() {},
+      async stop() {},
+      async send(m: OutboundMessage) { sentMsgs.push(m); return 'msg-1'; },
+      async edit() {},
+      async delete() {},
+      async pin() {},
+      async setReaction() {},
+      async sendAttachment() { return 'm'; },
+      async downloadAttachment() { return Buffer.from(''); },
+      onInbound: () => () => undefined,
+    } as unknown as PlatformAdapter;
+
+    const brokers = fakeBrokerCalls();
+    const policyStoreFor = opts.policyStore
+      ? () => opts.policyStore as unknown as PolicyStore
+      : undefined;
+    const router = new CallbackRouter({
+      sessionManager: sm,
+      permissionBroker: brokers.permissionBroker,
+      askBroker: brokers.askBroker,
+      elicitationBroker: brokers.elicitationBroker,
+      adapters: { telegram: adapter },
+      workspaceManager: wm,
+      policyStoreFor,
+    });
+
+    return { router, wm, ws, sm, sentMsgs, calls, session };
+  }
+
+  function ctx(data: string) {
+    return {
+      data,
+      userId: 'u1',
+      chatId: 'c1',
+      messageId: 'm1',
+      channelType: 'telegram' as const,
+    };
+  }
+
+  it('turn:stop interrupts the active session', async () => {
+    const { router, calls, sentMsgs } = setupAdvanced();
+    const out = await router.route(ctx('turn:stop'));
+    expect(out).toEqual({ kind: 'handled', action: 'turn:stop' });
+    expect(calls.find((c) => c.name === 'interrupt')).toBeDefined();
+    expect(sentMsgs[0]?.text).toMatch(/已中断/);
+  });
+
+  it('turn:stop:idle replies softly without touching session', async () => {
+    const { router, calls, sentMsgs } = setupAdvanced();
+    const out = await router.route(ctx('turn:stop:idle'));
+    expect(out).toEqual({ kind: 'handled', action: 'turn:stop:idle' });
+    expect(calls).toHaveLength(0);
+    expect(sentMsgs[0]?.text).toMatch(/没有进行中的对话/);
+  });
+
+  it('runtime:model:set:<id> calls setModel + persists default + replies', async () => {
+    const { router, calls, ws, sentMsgs } = setupAdvanced();
+    const out = await router.route(ctx('runtime:model:set:claude-opus-4-7'));
+    expect(out.kind).toBe('handled');
+    expect((out as { action: string }).action).toBe('runtime:model:set:claude-opus-4-7');
+    expect(calls.find((c) => c.name === 'setModel')?.args[0]).toBe('claude-opus-4-7');
+    expect(ws.defaults.model).toBe('claude-opus-4-7');
+    expect(sentMsgs[0]?.text).toMatch(/模型已切到/);
+  });
+
+  it('runtime:mode:set:<m> calls setPermissionMode + persists', async () => {
+    const { router, calls, ws } = setupAdvanced();
+    const out = await router.route(ctx('runtime:mode:set:plan'));
+    expect(out.kind).toBe('handled');
+    expect(calls.find((c) => c.name === 'setPermissionMode')?.args[0]).toBe('plan');
+    expect(ws.defaults.permissionMode).toBe('plan');
+  });
+
+  it('runtime:think:set:<l> persists ws.defaults.thinking (no session call)', async () => {
+    const { router, calls, ws } = setupAdvanced();
+    const out = await router.route(ctx('runtime:think:set:expanded'));
+    expect(out.kind).toBe('handled');
+    expect(ws.defaults.thinking).toBe('expanded');
+    // No setPermissionMode/setModel call — thinking is workspace-only.
+    expect(calls.find((c) => c.name === 'setPermissionMode')).toBeUndefined();
+    expect(calls.find((c) => c.name === 'setModel')).toBeUndefined();
+  });
+
+  it('runtime:budget:set:25 calls setMaxBudget(25)', async () => {
+    const { router, calls, sentMsgs } = setupAdvanced();
+    const out = await router.route(ctx('runtime:budget:set:25'));
+    expect(out.kind).toBe('handled');
+    expect(calls.find((c) => c.name === 'setMaxBudget')?.args[0]).toBe(25);
+    expect(sentMsgs[0]?.text).toMatch(/\$25\.00/);
+  });
+
+  it('runtime:budget:set:unlimited calls setMaxBudget(undefined)', async () => {
+    const { router, calls, sentMsgs } = setupAdvanced();
+    const out = await router.route(ctx('runtime:budget:set:unlimited'));
+    expect(out.kind).toBe('handled');
+    expect(calls.find((c) => c.name === 'setMaxBudget')?.args[0]).toBeUndefined();
+    expect(sentMsgs[0]?.text).toMatch(/无上限/);
+  });
+
+  it('session:fork calls forkSession + bindActiveSession + replies', async () => {
+    const { router, calls, wm, ws, sentMsgs } = setupAdvanced();
+    const out = await router.route(ctx('session:fork'));
+    expect(out.kind).toBe('handled');
+    expect(calls.find((c) => c.name === 'forkSession')).toBeDefined();
+    expect(wm.get(ws.id)?.activeSessionId).toBe('sess-forked-xyz7890');
+    expect(sentMsgs[0]?.text).toMatch(/已 fork/);
+  });
+
+  it('session:kill:confirm sends confirmation card', async () => {
+    const { router, sentMsgs } = setupAdvanced();
+    const out = await router.route(ctx('session:kill:confirm'));
+    expect(out.kind).toBe('handled');
+    expect((out as { action: string }).action).toBe('session:kill:prompt');
+    expect(sentMsgs[0]?.text).toMatch(/确定杀死/);
+    const markup = sentMsgs[0]?.replyMarkup as ReplyMarkup;
+    const datas = (markup.buttons ?? []).flat().map((b) => b.callbackData);
+    expect(datas).toContain('session:kill:do');
+    expect(datas).toContain('session:kill:cancel');
+  });
+
+  it('session:kill:do stops session + clears active + replies', async () => {
+    const { router, calls, wm, ws, sentMsgs } = setupAdvanced();
+    const out = await router.route(ctx('session:kill:do'));
+    expect(out).toEqual({ kind: 'handled', action: 'session:kill:do' });
+    expect(calls.find((c) => c.name === 'stop')).toBeDefined();
+    expect(wm.get(ws.id)?.activeSessionId).toBeNull();
+    expect(sentMsgs[0]?.text).toMatch(/已杀死/);
+  });
+
+  it('session:kill:cancel acknowledges without changes', async () => {
+    const { router, calls, wm, ws } = setupAdvanced();
+    const before = wm.get(ws.id)?.activeSessionId;
+    const out = await router.route(ctx('session:kill:cancel'));
+    expect(out.kind).toBe('handled');
+    expect(calls).toHaveLength(0);
+    expect(wm.get(ws.id)?.activeSessionId).toBe(before);
+  });
+
+  it('session:new prompts for confirm when active session exists', async () => {
+    const { router, sentMsgs } = setupAdvanced();
+    const out = await router.route(ctx('session:new'));
+    expect(out.kind).toBe('handled');
+    expect((out as { action: string }).action).toBe('session:new:prompt');
+    const markup = sentMsgs[0]?.replyMarkup as ReplyMarkup;
+    const datas = (markup.buttons ?? []).flat().map((b) => b.callbackData);
+    expect(datas).toContain('session:new:confirm');
+    expect(datas).toContain('session:new:cancel');
+  });
+
+  it('session:new:confirm stops + clears active', async () => {
+    const { router, calls, wm, ws } = setupAdvanced();
+    const out = await router.route(ctx('session:new:confirm'));
+    expect(out.kind).toBe('handled');
+    expect(calls.find((c) => c.name === 'stop')).toBeDefined();
+    expect(wm.get(ws.id)?.activeSessionId).toBeNull();
+  });
+
+  it('session:resume:<sid> resumes + binds + replies', async () => {
+    const { router, wm, ws, sentMsgs } = setupAdvanced({ activeSessionId: null });
+    const out = await router.route(ctx('session:resume:sess-resumed-aaa9999'));
+    expect(out.kind).toBe('handled');
+    expect((out as { action: string }).action).toMatch(/^session:resume:/);
+    expect(wm.get(ws.id)?.activeSessionId).toBe('sess-resumed-aaa9999');
+    expect(sentMsgs[0]?.text).toMatch(/已恢复会话/);
+  });
+
+  it('runtime:model:open replies with hint', async () => {
+    const { router, sentMsgs } = setupAdvanced();
+    const out = await router.route(ctx('runtime:model:open'));
+    expect(out).toEqual({ kind: 'handled', action: 'runtime:model:open' });
+    expect(sentMsgs[0]?.text).toMatch(/请发 \/model/);
+  });
+
+  it('cost:open replies with hint', async () => {
+    const { router, sentMsgs } = setupAdvanced();
+    const out = await router.route(ctx('cost:open'));
+    expect(out).toEqual({ kind: 'handled', action: 'cost:open' });
+    expect(sentMsgs[0]?.text).toMatch(/\/cost/);
+  });
+
+  it('find:prompt replies with hint', async () => {
+    const { router, sentMsgs } = setupAdvanced();
+    const out = await router.route(ctx('find:prompt'));
+    expect(out).toEqual({ kind: 'handled', action: 'find:prompt' });
+    expect(sentMsgs[0]?.text).toMatch(/\/find/);
+  });
+
+  it('workspace:open replies with hint', async () => {
+    const { router, sentMsgs } = setupAdvanced();
+    const out = await router.route(ctx('workspace:open'));
+    expect(out).toEqual({ kind: 'handled', action: 'workspace:open:hint' });
+    expect(sentMsgs[0]?.text).toMatch(/\/workspace/);
+  });
+
+  it('runtime:perm:clear:do iterates list + removes rules', async () => {
+    const removed: string[] = [];
+    const policyStore = {
+      list: () => [{ id: 'r1' }, { id: 'r2' }, { id: 'r3' }],
+      remove: async (id: string) => { removed.push(id); return true; },
+    };
+    const { router, sentMsgs } = setupAdvanced({ policyStore });
+    const out = await router.route(ctx('runtime:perm:clear:do'));
+    expect(out.kind).toBe('handled');
+    expect((out as { action: string }).action).toBe('runtime:perm:clear:do:3');
+    expect(removed).toEqual(['r1', 'r2', 'r3']);
+    expect(sentMsgs[0]?.text).toMatch(/已清空 3 条规则/);
+  });
+
+  it('runtime:perm:clear:confirm sends confirmation card', async () => {
+    const { router, sentMsgs } = setupAdvanced();
+    const out = await router.route(ctx('runtime:perm:clear:confirm'));
+    expect(out).toEqual({ kind: 'handled', action: 'runtime:perm:clear:prompt' });
+    const markup = sentMsgs[0]?.replyMarkup as ReplyMarkup;
+    const datas = (markup.buttons ?? []).flat().map((b) => b.callbackData);
+    expect(datas).toContain('runtime:perm:clear:do');
+    expect(datas).toContain('runtime:perm:clear:cancel');
+  });
+
+  it('runtime:perm:add:allow / :deny → hint replies', async () => {
+    const { router, sentMsgs } = setupAdvanced();
+    await router.route(ctx('runtime:perm:add:allow'));
+    expect(sentMsgs[0]?.text).toMatch(/\/perm allow/);
+    sentMsgs.length = 0;
+    await router.route(ctx('runtime:perm:add:deny'));
+    expect(sentMsgs[0]?.text).toMatch(/\/perm deny/);
+  });
+});
+
 describe('CallbackRouter perm:learn policy persistence', () => {
   it('persists PolicyRule with exec command pattern on perm:learn', async () => {
     const policyAdd: Array<Parameters<PolicyStore['add']>> = [];
