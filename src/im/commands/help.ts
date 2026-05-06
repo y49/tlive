@@ -1,28 +1,42 @@
 // src/im/commands/help.ts
 //
-// `/help` — aggregates tlive-native commands (from the CommandParser
-// registry) with the runtime's dynamic `supportedCommands()` list, if any
-// active session exists. Observer role is allowed to read help too.
+// /help — grouped command catalog. Static groupings since v3.3
+// surface is fixed at 12 commands.
 
 import type { CommandDef } from '../command-parser.js';
-import { listCommands } from '../command-parser.js';
 import type { LocalSession } from '../../session/local-session.js';
 
 export const helpCmd: CommandDef = {
   name: 'help',
   aliases: ['h', '?'],
   role: ['admin', 'operator', 'observer'],
-  description: 'Show available commands',
+  description: '查看帮助和命令列表',
   async run(ctx) {
+    const lines = [
+      '📖 tlive 命令 (v3.3)',
+      '',
+      '🗂  会话 (workspace-scoped)',
+      '   /new           起新会话',
+      '   /sessions      会话列表',
+      '   /workspace     工作区: 看 / 切 / 加 / 退',
+      '   /cost          累计成本',
+      '   /find <kw>     搜历史',
+      '',
+      '🎛  当前对话 (session-scoped)',
+      '   /stop          中断当前生成 (Ctrl+C)',
+      '   /model         查看 / 切模型',
+      '   /mode          权限模式',
+      '   /think         思考深度',
+      '   /perm          权限规则',
+      '   /budget        预算上限',
+      '',
+      '💡 大部分操作不用打字 — 看每条回复下面的按钮',
+    ];
+
+    // Optionally append SDK supportedCommands if a session is alive
     const ws = ctx.workspaceManager.findByChat(ctx.inbound.channelType, ctx.inbound.chatId);
     const activeId = ws?.activeSessionId ?? null;
     const activeSession = activeId ? ctx.sessionManager.get(activeId) : undefined;
-
-    const tliveCmds = listCommands()
-      .map((c) => `/${c.name}`)
-      .sort();
-
-    let sdkCmds: string[] = [];
     if (activeSession && activeSession.kind === 'local') {
       try {
         const maybe = (activeSession as LocalSession & {
@@ -30,19 +44,13 @@ export const helpCmd: CommandDef = {
         }).supportedCommands;
         if (typeof maybe === 'function') {
           const list = await maybe.call(activeSession);
-          sdkCmds = list.map((c) => `/${c.name}`);
+          if (list.length > 0) {
+            lines.push('', 'SDK 内置命令:', '   ' + list.map((c) => `/${c.name}`).join(' '));
+          }
         }
-      } catch {
-        // swallow — help is read-only, don't fail
-      }
+      } catch { /* swallow */ }
     }
 
-    const parts: string[] = [];
-    parts.push('tlive commands:');
-    parts.push(tliveCmds.join(', '));
-    parts.push('');
-    parts.push('Session commands:');
-    parts.push(sdkCmds.length > 0 ? sdkCmds.join(', ') : '(no active session)');
-    await ctx.reply(parts.join('\n'));
+    await ctx.reply(lines.join('\n'));
   },
 };
