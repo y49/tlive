@@ -382,6 +382,7 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
     workspaceManager: workspaces,
     workspaceCreateBroker,
     persistence,
+    logger,
   });
 
   // --- Inbound → command/callback dispatch ------------------------------

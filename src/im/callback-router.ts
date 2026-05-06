@@ -46,6 +46,7 @@ import type { ChannelType } from '../workspace/bindings.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
 import type { WorkspaceCreateBroker } from './workspace-create-broker.js';
 import type { SessionPersistence } from '../session/persistence.js';
+import type { Logger } from '../util/logger.js';
 
 export interface CallbackRouterDeps {
   sessionManager: SessionManager;
@@ -78,6 +79,13 @@ export interface CallbackRouterDeps {
    * resumeLocal on hasSnapshot probe (claude -r semantics, see spec §4.2).
    */
   persistence?: SessionPersistence;
+  /**
+   * Optional structured logger. When wired, callback handlers surface
+   * otherwise-silent failures (interrupt/stop/save/hasSnapshot/resume/
+   * adapter.send) via `logger.warn` with workspaceId/sessionId/reason
+   * payload. Bootstrap supplies the daemon logger; tests pass a fake.
+   */
+  logger?: Logger;
 }
 
 export interface CallbackContext {
@@ -441,7 +449,12 @@ export class CallbackRouter {
       chatId: ctx.chatId,
       role: 'primary',
     });
-    await wm.save().catch(() => undefined);
+    await wm.save().catch((err) => {
+      this.deps.logger?.warn('workspace:bind save failed', {
+        wsId: target.id,
+        reason: (err as Error).message,
+      });
+    });
     await this.sendReply(ctx, `✅ 已绑定到 "${target.name}"`);
     return { kind: 'handled', action: `workspace:bind:${target.name}` };
   }
@@ -455,14 +468,38 @@ export class CallbackRouter {
       await this.sendReply(ctx, '❌ 目标工作区不存在');
       return { kind: 'unknown', reason: 'workspace:switch:not-found' };
     }
-    // Stop current session if any (interrupt + stop, claude -r semantics).
+
+    // Already on this workspace — short-circuit with a distinct reply
+    // rather than falling through to bind-and-reply (which would say
+    // "已切到 X / 暂无活跃会话" even when the user is already on X with
+    // a live session).
     const current = wm.findByChat(ctx.channelType, ctx.chatId);
+    if (current?.id === target.id) {
+      await this.sendReply(ctx, `已经在工作区 "${target.name}",无需切换`);
+      return { kind: 'handled', action: `workspace:switch:noop:${target.name}` };
+    }
+
+    // Stop current session if any (interrupt + stop, claude -r semantics).
     if (current && current.id !== target.id) {
       if (current.activeSessionId) {
         const session = this.deps.sessionManager.get(current.activeSessionId);
         if (session && session.kind === 'local') {
-          try { await (session as LocalSession).interrupt(); } catch { /* ignore */ }
-          try { await (session as LocalSession).stop(); } catch { /* ignore */ }
+          try {
+            await (session as LocalSession).interrupt();
+          } catch (err) {
+            this.deps.logger?.warn('workspace:switch interrupt failed', {
+              sid: current.activeSessionId,
+              reason: (err as Error).message,
+            });
+          }
+          try {
+            await (session as LocalSession).stop();
+          } catch (err) {
+            this.deps.logger?.warn('workspace:switch stop failed', {
+              sid: current.activeSessionId,
+              reason: (err as Error).message,
+            });
+          }
         }
       }
       wm.removeBinding(current.id, { channelType: ctx.channelType, chatId: ctx.chatId });
@@ -472,21 +509,39 @@ export class CallbackRouter {
       chatId: ctx.chatId,
       role: 'primary',
     });
-    await wm.save().catch(() => undefined);
+    await wm.save().catch((err) => {
+      this.deps.logger?.warn('workspace:switch save failed', {
+        wsId: target.id,
+        reason: (err as Error).message,
+      });
+    });
 
     // Try resume target's activeSession (claude -r semantics) when jsonl exists.
     const lines = [`✅ 已切到工作区 "${target.name}"`, `📂 ${target.workdir}`];
     const persistence = this.deps.persistence;
     if (target.activeSessionId && persistence) {
       let hasSnap = false;
-      try { hasSnap = await persistence.hasSnapshot(target.activeSessionId); }
-      catch { hasSnap = false; }
+      try {
+        hasSnap = await persistence.hasSnapshot(target.activeSessionId);
+      } catch (err) {
+        this.deps.logger?.warn('workspace:switch hasSnapshot failed', {
+          sid: target.activeSessionId,
+          reason: (err as Error).message,
+        });
+        hasSnap = false;
+      }
       if (hasSnap) {
         try {
           await this.deps.sessionManager.resumeLocal(target.activeSessionId);
           lines.push('📌 已恢复上次会话,继续对话即可');
         } catch (err) {
-          lines.push(`⚠ 上次会话恢复失败: ${(err as Error).message}`);
+          const reason = (err as Error).message;
+          this.deps.logger?.warn('workspace:switch resume failed', {
+            sid: target.activeSessionId,
+            workspaceId: target.id,
+            reason,
+          });
+          lines.push(`⚠ 上次会话恢复失败: ${reason}`);
         }
       } else {
         lines.push('暂无活跃会话');
@@ -554,11 +609,23 @@ export class CallbackRouter {
       if (ws.activeSessionId) {
         const s = this.deps.sessionManager.get(ws.activeSessionId);
         if (s && s.kind === 'local') {
-          try { await (s as LocalSession).stop(); } catch { /* ignore */ }
+          try {
+            await (s as LocalSession).stop();
+          } catch (err) {
+            this.deps.logger?.warn('workspace:exit stop failed', {
+              sid: ws.activeSessionId,
+              reason: (err as Error).message,
+            });
+          }
         }
       }
       wm.removeBinding(ws.id, { channelType: ctx.channelType, chatId: ctx.chatId });
-      await wm.save().catch(() => undefined);
+      await wm.save().catch((err) => {
+        this.deps.logger?.warn('workspace:exit save failed', {
+          wsId: ws.id,
+          reason: (err as Error).message,
+        });
+      });
       await this.sendReply(ctx, `✅ 已退出工作区 "${ws.name}"`);
       return { kind: 'handled', action: `workspace:exit:do:${ws.name}` };
     }
@@ -578,7 +645,13 @@ export class CallbackRouter {
   private async sendReply(ctx: CallbackContext, text: string, replyMarkup?: ReplyMarkup): Promise<void> {
     const adapter = ctx.adapters?.get(ctx.channelType) ?? this.deps.adapters?.[ctx.channelType];
     if (!adapter) return;
-    await adapter.send({ chatId: ctx.chatId, text, replyMarkup }).catch(() => undefined);
+    await adapter.send({ chatId: ctx.chatId, text, replyMarkup }).catch((err) => {
+      this.deps.logger?.warn('callback sendReply failed', {
+        chatId: ctx.chatId,
+        channelType: ctx.channelType,
+        reason: (err as Error).message,
+      });
+    });
   }
 
   // ---- Helpers ---------------------------------------------------------

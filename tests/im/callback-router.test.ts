@@ -563,4 +563,96 @@ describe('CallbackRouter — workspace:*', () => {
     expect(result.kind).toBe('unknown');
     expect((result as { reason: string }).reason).toBe('workspace:no-manager');
   });
+
+  it('workspace:switch on current workspace short-circuits with "already-on" reply', async () => {
+    const { router, wm, sentMsgs } = setup();
+    const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
+    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1', role: 'primary' });
+    const result = await router.route(ctx(`workspace:switch:${ws.id}`));
+    expect(result.kind).toBe('handled');
+    expect((result as { action: string }).action).toMatch(/noop/);
+    expect(sentMsgs[0]?.text).toMatch(/已经在工作区/);
+    // Binding unchanged
+    expect(wm.findByChat('telegram', 'c1')?.id).toBe(ws.id);
+  });
+
+  it('workspace:switch resume failure is logged and replied with warning', async () => {
+    const logs: Array<{ msg: string; data: unknown }> = [];
+    const fakeLogger = {
+      level: 'info' as const,
+      info: () => undefined,
+      warn: (msg: string, data?: unknown) => { logs.push({ msg, data }); },
+      error: () => undefined,
+      debug: () => undefined,
+      child() { return fakeLogger; },
+    };
+
+    const wm = new WorkspaceManager();
+    const wcb = new WorkspaceCreateBroker();
+    const w1 = wm.create({ name: 'a', workdir: '/p/a' });
+    const w2 = wm.create({ name: 'b', workdir: '/p/b' });
+    wm.addBinding(w1.id, { channelType: 'telegram', chatId: 'c1', role: 'primary' });
+    // Plant an active session id on w2 so switch attempts a resume.
+    wm.bindActiveSession(w2.id, 'sess-stale');
+
+    const sentMsgs: OutboundMessage[] = [];
+    const adapter = {
+      channelType: 'telegram',
+      async start() {},
+      async stop() {},
+      async send(m: OutboundMessage) { sentMsgs.push(m); return 'msg-1'; },
+      async edit() {},
+      async delete() {},
+      async pin() {},
+      async setReaction() {},
+      async sendAttachment() { return 'm'; },
+      async downloadAttachment() { return Buffer.from(''); },
+      onInbound: () => () => undefined,
+    } as unknown as PlatformAdapter;
+
+    const sm = {
+      get: () => null,
+      getByPrefix: () => ({ resolved: null, ambiguous: [] }),
+      listInfo: () => [],
+      resumeLocal: async () => { throw new Error('boom: jsonl missing'); },
+    } as unknown as SessionManager;
+
+    const persistence = {
+      hasSnapshot: async (sid: string) => sid === 'sess-stale',
+    } as unknown as import('../../src/session/persistence.js').SessionPersistence;
+
+    const brokers = fakeBrokerCalls();
+    const router = new CallbackRouter({
+      sessionManager: sm,
+      permissionBroker: brokers.permissionBroker,
+      askBroker: brokers.askBroker,
+      elicitationBroker: brokers.elicitationBroker,
+      adapters: { telegram: adapter },
+      workspaceManager: wm,
+      workspaceCreateBroker: wcb,
+      persistence,
+      logger: fakeLogger,
+    });
+
+    const result = await router.route({
+      data: `workspace:switch:${w2.id}`,
+      userId: 'u1',
+      chatId: 'c1',
+      messageId: 'm1',
+      channelType: 'telegram',
+    });
+
+    expect(result.kind).toBe('handled');
+    // Reply surfaces the warning to the user.
+    expect(sentMsgs[0]?.text).toMatch(/上次会话恢复失败/);
+    expect(sentMsgs[0]?.text).toMatch(/boom: jsonl missing/);
+    // Logger captured the failure.
+    const resumeLog = logs.find((l) => l.msg === 'workspace:switch resume failed');
+    expect(resumeLog).toBeDefined();
+    expect(resumeLog?.data).toMatchObject({
+      sid: 'sess-stale',
+      workspaceId: w2.id,
+      reason: 'boom: jsonl missing',
+    });
+  });
 });
