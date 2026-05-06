@@ -127,6 +127,38 @@ export class WorkspaceManager {
     return ws;
   }
 
+  /**
+   * Atomic helper for IM-driven onboarding (spec §8 step 5). Creates the
+   * workspace, claims the user as admin, and adds the primary chat binding
+   * in one call so callers (bootstrap inbound dialog, IPC workspace.add)
+   * don't repeat the 4-line dance.
+   */
+  createFromIM(opts: {
+    workdir: string;
+    adminUserId: string;
+    channelType: ChannelType;
+    chatId: string;
+    threadId?: string;
+    /** Defaults to basename(workdir) */
+    name?: string;
+    /** Optional partial defaults override (e.g. provider, model) */
+    defaults?: Partial<WorkspaceDefaults>;
+  }): Workspace {
+    const ws = this.create({
+      name: opts.name ?? basename(opts.workdir),
+      workdir: opts.workdir,
+      defaults: opts.defaults,
+    });
+    this.setRole(ws.id, opts.adminUserId, 'admin');
+    this.addBinding(ws.id, {
+      channelType: opts.channelType,
+      chatId: opts.chatId,
+      threadId: opts.threadId,
+      role: 'primary',
+    });
+    return ws;
+  }
+
   get(id: string): Workspace | undefined { return this.byId.get(id); }
 
   findByName(name: string): Workspace | undefined {

@@ -497,3 +497,72 @@ describe('lazyResumeOrCreate — claude -r semantics (hasPersistedSession)', () 
     expect(wm.getActiveSessionId(ws.id)).toBe('sid-new');
   });
 });
+
+describe('WorkspaceManager.createFromIM', () => {
+  it('creates workspace + claims admin + adds primary binding', () => {
+    const wm = new WorkspaceManager();
+    const ws = wm.createFromIM({
+      workdir: '/tmp/foo',
+      adminUserId: 'u1',
+      channelType: 'telegram',
+      chatId: 'c1',
+    });
+    expect(ws.workdir).toBe('/tmp/foo');
+    expect(ws.name).toBe('foo'); // basename
+    expect(wm.getRole(ws.id, 'u1')).toBe('admin');
+    expect(ws.bindings).toHaveLength(1);
+    expect(ws.bindings[0]).toMatchObject({
+      channelType: 'telegram',
+      chatId: 'c1',
+      role: 'primary',
+    });
+  });
+
+  it('respects custom name override', () => {
+    const wm = new WorkspaceManager();
+    const ws = wm.createFromIM({
+      workdir: '/tmp/foo',
+      adminUserId: 'u1',
+      channelType: 'telegram',
+      chatId: 'c1',
+      name: 'custom-name',
+    });
+    expect(ws.name).toBe('custom-name');
+  });
+
+  it('threadId carries through to binding', () => {
+    const wm = new WorkspaceManager();
+    const ws = wm.createFromIM({
+      workdir: '/tmp/foo',
+      adminUserId: 'u1',
+      channelType: 'telegram',
+      chatId: 'c1',
+      threadId: 't42',
+    });
+    expect(ws.bindings[0]?.threadId).toBe('t42');
+  });
+
+  it('respects defaults override', () => {
+    const wm = new WorkspaceManager();
+    const ws = wm.createFromIM({
+      workdir: '/tmp/foo',
+      adminUserId: 'u1',
+      channelType: 'telegram',
+      chatId: 'c1',
+      defaults: { provider: 'codex' },
+    });
+    expect(ws.defaults.provider).toBe('codex');
+  });
+
+  it('findByChat picks up the new workspace immediately', () => {
+    const wm = new WorkspaceManager();
+    wm.createFromIM({
+      workdir: '/tmp/foo',
+      adminUserId: 'u1',
+      channelType: 'telegram',
+      chatId: 'c1',
+    });
+    const found = wm.findByChat('telegram', 'c1');
+    expect(found?.workdir).toBe('/tmp/foo');
+  });
+});
