@@ -438,7 +438,13 @@ export class WorkspaceManager {
       if (!Array.isArray(parsed.workspaces)) return;
       for (const ws of parsed.workspaces) {
         if (typeof ws.id === 'string' && typeof ws.name === 'string' && typeof ws.workdir === 'string') {
-          this.byId.set(ws.id, { ...ws, activeSessionId: null });
+          // activeSessionId IS preserved on load — its persistence (added in
+          // de2c6db) only matters if load() round-trips it. lazyResumeOrCreate
+          // observes isLive=false on a freshly-booted daemon (sessions Map
+          // empty) and takes branch 2 (hasPersistedSession → resume) using
+          // this id. If the id is stale, branch 2 falls through to branch 3
+          // createLocal — so preserving it is robust against crashed sessions.
+          this.byId.set(ws.id, { ...ws, activeSessionId: ws.activeSessionId ?? null });
         }
       }
     } catch {
