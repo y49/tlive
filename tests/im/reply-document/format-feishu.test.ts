@@ -40,7 +40,7 @@ describe('renderFeishu — header.template', () => {
 });
 
 describe('renderFeishu — body element order (progress promoted)', () => {
-  it('elements 顺序: progress / hr / body / hr / detail', () => {
+  it('elements 顺序: progress / hr / body / hr / detail / action', () => {
     const r: any = renderFeishu(baseState({
       contextUsedTok: 64_000,
       toolTally: new Map([['Read', 3]]),
@@ -49,7 +49,7 @@ describe('renderFeishu — body element order (progress promoted)', () => {
       isFrozen: true,
     }), 'hello', NOW_5S);
     const tags = r.card.body.elements.map((e: any) => e.tag);
-    expect(tags).toEqual(['markdown', 'hr', 'markdown', 'hr', 'markdown']);
+    expect(tags).toEqual(['markdown', 'hr', 'markdown', 'hr', 'markdown', 'action']);
     // Element 0 = progress (always visible) — has tally + ⏱ + 💵
     expect(r.card.body.elements[0].content).toContain('Read×3');
     expect(r.card.body.elements[0].content).toContain('⏱ 12.3s');
@@ -99,6 +99,38 @@ describe('v3.2.2 adaptive truth — unknown model / 0 cost (Feishu)', () => {
       NOW_5S,
     );
     expect(r.card.body.elements[4].content).not.toContain('Σ');
+  });
+});
+
+describe('renderFeishu — default detail action buttons (Task 29)', () => {
+  it('appends action element with 4 buttons new/list/stop/⋯', () => {
+    const r: any = renderFeishu(baseState(), '', NOW_5S);
+    const last = r.card.body.elements.at(-1);
+    expect(last.tag).toBe('action');
+    expect(last.actions).toHaveLength(4);
+    const labels = last.actions.map((a: any) => a.text.content);
+    expect(labels).toEqual(['🆕 new', '📋 list', '⏸ 中断', '⋯']);
+  });
+
+  it('callback values match spec namespace', () => {
+    const r: any = renderFeishu(baseState(), '', NOW_5S);
+    const last = r.card.body.elements.at(-1);
+    const cbs = last.actions.map((a: any) => a.value.callback);
+    expect(cbs).toEqual(['session:new', 'session:list', 'turn:stop', 'menu:expand']);
+  });
+
+  it('first button uses primary style', () => {
+    const r: any = renderFeishu(baseState(), '', NOW_5S);
+    const last = r.card.body.elements.at(-1);
+    expect(last.actions[0].type).toBe('primary');
+  });
+
+  it('stop button degrades to ⏸ + turn:stop:idle when frozen', () => {
+    const r: any = renderFeishu(baseState({ isFrozen: true }), '', NOW_5S);
+    const last = r.card.body.elements.at(-1);
+    const stop = last.actions.find((a: any) => a.text.content.startsWith('⏸'));
+    expect(stop.text.content).toBe('⏸');
+    expect(stop.value.callback).toBe('turn:stop:idle');
   });
 });
 

@@ -111,6 +111,29 @@ function detailMarkdown(state: HudState): string {
   return lines.join('\n');
 }
 
+/**
+ * Default 4-button action row for the detail card. Stop button label/value
+ * differ by turn state (mirrors Telegram's `defaultDetailKeyboard`):
+ *   in-flight → '⏸ 中断' / 'turn:stop'
+ *   idle      → '⏸'    / 'turn:stop:idle'
+ * Lark card 2.0 `action` element with `button` actions; `value.callback`
+ * is what the inbound listener relays back to CallbackRouter.
+ */
+function defaultDetailActions(state: HudState): object {
+  const inFlight = !state.isFrozen && !state.isErrored;
+  const stopText = inFlight ? '⏸ 中断' : '⏸';
+  const stopCb = inFlight ? 'turn:stop' : 'turn:stop:idle';
+  return {
+    tag: 'action',
+    actions: [
+      { tag: 'button', text: { tag: 'plain_text', content: '🆕 new' }, value: { callback: 'session:new' }, type: 'primary' },
+      { tag: 'button', text: { tag: 'plain_text', content: '📋 list' }, value: { callback: 'session:list' } },
+      { tag: 'button', text: { tag: 'plain_text', content: stopText }, value: { callback: stopCb } },
+      { tag: 'button', text: { tag: 'plain_text', content: '⋯' }, value: { callback: 'menu:expand' } },
+    ],
+  };
+}
+
 export function renderFeishu(state: HudState, body: string, now: number = Date.now()): FeishuRender {
   const { template, prefix } = templateAndPrefix(state);
   const card = {
@@ -127,6 +150,7 @@ export function renderFeishu(state: HudState, body: string, now: number = Date.n
         { tag: 'markdown', content: body.trim() ? body : '_thinking…_' },
         { tag: 'hr' },
         { tag: 'markdown', content: detailMarkdown(state) },
+        defaultDetailActions(state),
       ],
     },
   };
