@@ -604,6 +604,8 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
     userId: ev.userId,
     messageId: ev.messageId,
     text: typeof ev.text === 'string' ? ev.text.slice(0, 40) : undefined,
+    callbackData: ev.callbackData,
+    formValues: ev.formValues,
   });
 
   // Callback (inline button click) → CallbackRouter.
