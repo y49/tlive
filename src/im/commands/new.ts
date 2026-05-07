@@ -61,7 +61,12 @@ export const newCmd: CommandDef = {
       const existing = ctx.sessionManager.get(ws.activeSessionId);
       if (existing && existing.kind === 'local') {
         try { await (existing as never as { stop: () => Promise<void> }).stop(); }
-        catch { /* ignore */ }
+        catch (err) {
+          ctx.logger?.warn('new: force-stop existing session failed', {
+            sid: ws.activeSessionId,
+            reason: (err as Error).message,
+          });
+        }
       }
       ctx.workspaceManager.clearActiveSession(ws.id);
     }
@@ -77,7 +82,11 @@ export const newCmd: CommandDef = {
       source: 'im',
     });
     try { ctx.workspaceManager.bindActiveSession(ws.id, session.id); }
-    catch { /* race — non-fatal */ }
+    catch (err) {
+      ctx.logger?.debug('new: bindActiveSession race', {
+        reason: (err as Error).message,
+      });
+    }
 
     const tag = ephemeral ? ' (ephemeral)' : '';
     await ctx.reply(`✅ 会话 ${session.shortAlias} 已起${tag} · ${ws.name}`);

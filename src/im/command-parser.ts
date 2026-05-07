@@ -51,6 +51,8 @@ export interface CommandContext {
   attachments?: AttachmentStore;
   /** Reply text back to the user; T9 wires this to the resolved adapter. */
   reply: (text: string, opts?: { replyMarkup?: ReplyMarkup }) => Promise<void>;
+  /** Optional logger for command-side observability (silent-catch sites). */
+  logger?: Logger;
 }
 
 export interface CommandDef {

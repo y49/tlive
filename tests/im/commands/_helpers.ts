@@ -15,6 +15,13 @@ import type { Workspace } from '../../../src/workspace/config.js';
 import type { LocalSession } from '../../../src/session/local-session.js';
 import type { ChatBinding, ChannelType } from '../../../src/workspace/bindings.js';
 import type { PolicyStore } from '../../../src/permission/policy-store.js';
+import type { Logger, LogLevel } from '../../../src/util/logger.js';
+
+export interface CapturedLog {
+  level: LogLevel;
+  msg: string;
+  fields?: Record<string, unknown>;
+}
 
 export interface FakeCtxSpec {
   workspace?: Partial<Workspace> | null;
@@ -29,6 +36,8 @@ export interface FakeCtxSpec {
   username?: string;
   /** Optional policy store provider for /perm tests. */
   policyStoreFor?: (workspaceId: string) => PolicyStore | undefined;
+  /** Pass `true` to install a capturing logger fake; logs surface via FakeCtxResult.logs. */
+  withLogger?: boolean;
 }
 
 export interface FakeCtxResult {
@@ -41,6 +50,8 @@ export interface FakeCtxResult {
   brokerCalls: Array<{ method: string; args: unknown[] }>;
   /** The primary workspace bound to this chat (null when spec.workspace=null). */
   ws: Workspace | null;
+  /** Captured logger output when spec.withLogger=true; otherwise empty. */
+  logs: CapturedLog[];
 }
 
 export function buildCtx(spec: FakeCtxSpec = {}): FakeCtxResult {
@@ -241,6 +252,18 @@ export function buildCtx(spec: FakeCtxSpec = {}): FakeCtxResult {
     userId, username, text: '', kind: 'message', at: Date.now(),
   };
 
+  const logs: CapturedLog[] = [];
+  const logger: Logger | undefined = spec.withLogger
+    ? {
+        level: 'debug',
+        debug: (msg, fields) => { logs.push({ level: 'debug', msg, fields }); },
+        info: (msg, fields) => { logs.push({ level: 'info', msg, fields }); },
+        warn: (msg, fields) => { logs.push({ level: 'warn', msg, fields }); },
+        error: (msg, fields) => { logs.push({ level: 'error', msg, fields }); },
+        child: () => logger!,
+      }
+    : undefined;
+
   const ctx: CommandContext = {
     inbound,
     userId,
@@ -254,7 +277,8 @@ export function buildCtx(spec: FakeCtxSpec = {}): FakeCtxResult {
       replies.push(text);
       replyMarkups.push(opts?.replyMarkup);
     },
+    logger,
   };
 
-  return { ctx, replies, replyMarkups, sessionCalls, workspaceCalls, brokerCalls, ws: workspace };
+  return { ctx, replies, replyMarkups, sessionCalls, workspaceCalls, brokerCalls, ws: workspace, logs };
 }

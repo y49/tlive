@@ -746,6 +746,7 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
         replyMarkup: opts?.replyMarkup,
       });
     },
+    logger: deps.logger,
   };
 
   await dispatchCommand(ctx, text, userRole, deps.logger);

@@ -82,4 +82,26 @@ describe('/new', () => {
     expect(replies[0]).toMatch(/✅ 会话 .* 已起/);
   });
 
+  it('--force: warn-logs when existing.stop() throws (still proceeds)', async () => {
+    const { ctx, replies, sessionCalls, logs } = buildCtx({
+      withLogger: true,
+      workspace: { activeSessionId: 'sess-active' },
+      activeSession: {
+        id: 'sess-active',
+        shortAlias: 'aaaaaaaa',
+        stop: async () => { throw new Error('stop boom'); },
+      } as never,
+    });
+    await newCmd.run(ctx, ['--force', 'hi']);
+    // Still proceeded to create the new session despite the stop() failure
+    expect(sessionCalls.find((c) => c.method === 'createLocal')).toBeDefined();
+    expect(replies[0]).toMatch(/✅ 会话 .* 已起/);
+    // And the silent-catch is now observable
+    const warned = logs.find((l) => l.msg === 'new: force-stop existing session failed');
+    expect(warned).toBeDefined();
+    expect(warned!.level).toBe('warn');
+    expect(warned!.fields?.reason).toBe('stop boom');
+    expect(warned!.fields?.sid).toBe('sess-active');
+  });
+
 });

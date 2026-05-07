@@ -69,4 +69,23 @@ describe('/help', () => {
     expect(replies[0]).toContain('tlive 命令');
     expect(replies[0]).not.toContain('SDK 内置命令');
   });
+
+  it('warn-logs when supportedCommands throws (observability dead zone fix)', async () => {
+    const fakeSession = {
+      id: 'sess1',
+      kind: 'local',
+      shortAlias: 'sess1',
+      supportedCommands: async () => { throw new Error('sdk down'); },
+    };
+    const { ctx, logs } = buildCtx({
+      withLogger: true,
+      workspace: { activeSessionId: 'sess1' },
+      activeSession: fakeSession as never,
+    });
+    await helpCmd.run(ctx, []);
+    const warned = logs.find((l) => l.msg === 'help: SDK supportedCommands failed');
+    expect(warned).toBeDefined();
+    expect(warned!.level).toBe('warn');
+    expect(warned!.fields?.reason).toBe('sdk down');
+  });
 });

@@ -48,7 +48,11 @@ export const helpCmd: CommandDef = {
             lines.push('', 'SDK 内置命令:', '   ' + list.map((c) => `/${c.name}`).join(' '));
           }
         }
-      } catch { /* swallow */ }
+      } catch (err) {
+        ctx.logger?.warn('help: SDK supportedCommands failed', {
+          reason: (err as Error).message,
+        });
+      }
     }
 
     await ctx.reply(lines.join('\n'));
