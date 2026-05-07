@@ -116,21 +116,38 @@ function detailMarkdown(state: HudState): string {
  * differ by turn state (mirrors Telegram's `defaultDetailKeyboard`):
  *   in-flight → '⏸ 中断' / 'turn:stop'
  *   idle      → '⏸'    / 'turn:stop:idle'
- * Lark card 2.0 `action` element with `button` actions; `value.callback`
- * is what the inbound listener relays back to CallbackRouter.
+ *
+ * Lark card 2.0 dropped `tag: 'action'` (the legacy v1 wrapper). Buttons
+ * in v2 must live inside a `column_set` so each button gets its own
+ * column for horizontal layout. value.callback is what the inbound
+ * listener relays back to CallbackRouter (see parseCardAction).
  */
 function defaultDetailActions(state: HudState): object {
   const inFlight = !state.isFrozen && !state.isErrored;
   const stopText = inFlight ? '⏸ 中断' : '⏸';
   const stopCb = inFlight ? 'turn:stop' : 'turn:stop:idle';
+  const buttons: Array<{ text: string; cb: string; primary?: boolean }> = [
+    { text: '🆕 new', cb: 'session:new', primary: true },
+    { text: '📋 list', cb: 'session:list' },
+    { text: stopText, cb: stopCb },
+    { text: '⋯', cb: 'menu:expand' },
+  ];
   return {
-    tag: 'action',
-    actions: [
-      { tag: 'button', text: { tag: 'plain_text', content: '🆕 new' }, value: { callback: 'session:new' }, type: 'primary' },
-      { tag: 'button', text: { tag: 'plain_text', content: '📋 list' }, value: { callback: 'session:list' } },
-      { tag: 'button', text: { tag: 'plain_text', content: stopText }, value: { callback: stopCb } },
-      { tag: 'button', text: { tag: 'plain_text', content: '⋯' }, value: { callback: 'menu:expand' } },
-    ],
+    tag: 'column_set',
+    flex_mode: 'none',
+    horizontal_spacing: 'small',
+    columns: buttons.map((b) => ({
+      tag: 'column',
+      width: 'weighted',
+      weight: 1,
+      vertical_align: 'top',
+      elements: [{
+        tag: 'button',
+        text: { tag: 'plain_text', content: b.text },
+        type: b.primary ? 'primary' : 'default',
+        value: { callback_data: b.cb },
+      }],
+    })),
   };
 }
 

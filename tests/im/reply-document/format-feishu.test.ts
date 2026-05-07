@@ -49,7 +49,7 @@ describe('renderFeishu — body element order (progress promoted)', () => {
       isFrozen: true,
     }), 'hello', NOW_5S);
     const tags = r.card.body.elements.map((e: any) => e.tag);
-    expect(tags).toEqual(['markdown', 'hr', 'markdown', 'hr', 'markdown', 'action']);
+    expect(tags).toEqual(['markdown', 'hr', 'markdown', 'hr', 'markdown', 'column_set']);
     // Element 0 = progress (always visible) — has tally + ⏱ + 💵
     expect(r.card.body.elements[0].content).toContain('Read×3');
     expect(r.card.body.elements[0].content).toContain('⏱ 12.3s');
@@ -102,35 +102,45 @@ describe('v3.2.2 adaptive truth — unknown model / 0 cost (Feishu)', () => {
   });
 });
 
-describe('renderFeishu — default detail action buttons (Task 29)', () => {
-  it('appends action element with 4 buttons new/list/stop/⋯', () => {
+describe('renderFeishu — default detail action buttons (Task 29 + v2 column_set fix)', () => {
+  // Helper: extract the buttons from a column_set element. Each column
+  // wraps one button under elements[0].
+  function extractButtons(columnSet: any): Array<any> {
+    return (columnSet.columns as Array<any>).map((c) => c.elements[0]);
+  }
+
+  it('appends column_set element with 4 buttons new/list/stop/⋯', () => {
     const r: any = renderFeishu(baseState(), '', NOW_5S);
     const last = r.card.body.elements.at(-1);
-    expect(last.tag).toBe('action');
-    expect(last.actions).toHaveLength(4);
-    const labels = last.actions.map((a: any) => a.text.content);
+    expect(last.tag).toBe('column_set');
+    const btns = extractButtons(last);
+    expect(btns).toHaveLength(4);
+    const labels = btns.map((b: any) => b.text.content);
     expect(labels).toEqual(['🆕 new', '📋 list', '⏸ 中断', '⋯']);
   });
 
-  it('callback values match spec namespace', () => {
+  it('callback values use callback_data field (matching parseCardAction)', () => {
     const r: any = renderFeishu(baseState(), '', NOW_5S);
     const last = r.card.body.elements.at(-1);
-    const cbs = last.actions.map((a: any) => a.value.callback);
+    const btns = extractButtons(last);
+    const cbs = btns.map((b: any) => b.value.callback_data);
     expect(cbs).toEqual(['session:new', 'session:list', 'turn:stop', 'menu:expand']);
   });
 
   it('first button uses primary style', () => {
     const r: any = renderFeishu(baseState(), '', NOW_5S);
     const last = r.card.body.elements.at(-1);
-    expect(last.actions[0].type).toBe('primary');
+    const btns = extractButtons(last);
+    expect(btns[0].type).toBe('primary');
   });
 
   it('stop button degrades to ⏸ + turn:stop:idle when frozen', () => {
     const r: any = renderFeishu(baseState({ isFrozen: true }), '', NOW_5S);
     const last = r.card.body.elements.at(-1);
-    const stop = last.actions.find((a: any) => a.text.content.startsWith('⏸'));
+    const btns = extractButtons(last);
+    const stop = btns.find((b: any) => b.text.content.startsWith('⏸'));
     expect(stop.text.content).toBe('⏸');
-    expect(stop.value.callback).toBe('turn:stop:idle');
+    expect(stop.value.callback_data).toBe('turn:stop:idle');
   });
 });
 
