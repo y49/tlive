@@ -635,4 +635,9 @@ describe('WorkspaceManager — chat-level session APIs (Iso #2)', () => {
       wm.bindActiveSessionForChat('telegram', 'nonexistent', 'sid'),
     ).toThrow(/no binding/i);
   });
+
+  it('clearActiveSessionForChat on unknown chat is a no-op (does not throw)', () => {
+    const wm = new WorkspaceManager();
+    expect(() => wm.clearActiveSessionForChat('telegram', 'unknown-chat')).not.toThrow();
+  });
 });

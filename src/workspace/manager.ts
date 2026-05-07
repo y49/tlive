@@ -263,7 +263,7 @@ export class WorkspaceManager {
     chatId: string,
     sdkSessionId: string,
   ): void {
-    const found = this.findBindingMutable(channelType, chatId);
+    const found = this.findBindingWithWorkspace(channelType, chatId);
     if (!found) {
       throw new Error(`bindActiveSessionForChat: no binding for ${channelType}:${chatId}`);
     }
@@ -273,14 +273,14 @@ export class WorkspaceManager {
   }
 
   clearActiveSessionForChat(channelType: ChannelType, chatId: string): void {
-    const found = this.findBindingMutable(channelType, chatId);
+    const found = this.findBindingWithWorkspace(channelType, chatId);
     if (!found) return;
     found.binding.activeSessionId = null;
     void this.save().catch(() => undefined);
   }
 
   getActiveSessionIdForChat(channelType: ChannelType, chatId: string): string | null {
-    const found = this.findBindingMutable(channelType, chatId);
+    const found = this.findBindingWithWorkspace(channelType, chatId);
     return found?.binding.activeSessionId ?? null;
   }
 
@@ -319,16 +319,13 @@ export class WorkspaceManager {
     return out;
   }
 
-  private findBindingMutable(
+  private findBindingWithWorkspace(
     channelType: ChannelType,
     chatId: string,
   ): { workspace: Workspace; binding: ChatBinding } | undefined {
     for (const ws of this.byId.values()) {
-      for (const b of ws.bindings) {
-        if (b.channelType === channelType && b.chatId === chatId) {
-          return { workspace: ws, binding: b };
-        }
-      }
+      const binding = findBinding(ws.bindings, { channelType, chatId });
+      if (binding) return { workspace: ws, binding };
     }
     return undefined;
   }
