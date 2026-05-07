@@ -1,50 +1,27 @@
 // tests/workspace/bindings.test.ts
 
 import { describe, it, expect } from 'vitest';
-import { addBinding, removeBinding, findBinding, partitionBindings, type ChatBinding } from '../../src/workspace/bindings.js';
+import { addBinding, removeBinding, findBinding, type ChatBinding } from '../../src/workspace/bindings.js';
 
 describe('bindings', () => {
   it('addBinding appends to empty array', () => {
-    const out = addBinding([], { channelType: 'telegram', chatId: 'c1', role: 'primary' });
+    const out = addBinding([], { channelType: 'telegram', chatId: 'c1' });
     expect(out).toHaveLength(1);
-    expect(out[0].role).toBe('primary');
-  });
-
-  it('addBinding promoting new primary demotes existing primary to mirror', () => {
-    const initial: ChatBinding[] = [
-      { channelType: 'telegram', chatId: 'c1', role: 'primary' },
-      { channelType: 'feishu', chatId: 'c2', role: 'mirror' },
-    ];
-    const out = addBinding(initial, { channelType: 'feishu', chatId: 'c3', role: 'primary' });
-    const primaries = out.filter((b) => b.role === 'primary');
-    expect(primaries).toHaveLength(1);
-    expect(primaries[0].chatId).toBe('c3');
-    const demoted = out.find((b) => b.chatId === 'c1');
-    expect(demoted?.role).toBe('mirror');
+    expect(out[0]!.chatId).toBe('c1');
   });
 
   it('addBinding dedupes by (channelType, chatId)', () => {
     const initial: ChatBinding[] = [
-      { channelType: 'telegram', chatId: 'c1', role: 'primary' },
+      { channelType: 'telegram', chatId: 'c1', activeSessionId: null },
     ];
-    const out = addBinding(initial, { channelType: 'telegram', chatId: 'c1', role: 'mirror' });
+    const out = addBinding(initial, { channelType: 'telegram', chatId: 'c1', activeSessionId: 'sid-2' });
     expect(out).toHaveLength(1);
-    expect(out[0].role).toBe('mirror');
-  });
-
-  it('addBinding mirror does not demote existing primary', () => {
-    const initial: ChatBinding[] = [
-      { channelType: 'telegram', chatId: 'c1', role: 'primary' },
-    ];
-    const out = addBinding(initial, { channelType: 'feishu', chatId: 'c2', role: 'mirror' });
-    const primaries = out.filter((b) => b.role === 'primary');
-    expect(primaries).toHaveLength(1);
-    expect(primaries[0].chatId).toBe('c1');
+    expect(out[0]!.activeSessionId).toBe('sid-2');
   });
 
   it('removeBinding is idempotent', () => {
     const initial: ChatBinding[] = [
-      { channelType: 'telegram', chatId: 'c1', role: 'primary' },
+      { channelType: 'telegram', chatId: 'c1', activeSessionId: null },
     ];
     const out1 = removeBinding(initial, { channelType: 'telegram', chatId: 'c1' });
     const out2 = removeBinding(out1, { channelType: 'telegram', chatId: 'c1' });
@@ -54,31 +31,30 @@ describe('bindings', () => {
 
   it('findBinding by (channelType, chatId)', () => {
     const list: ChatBinding[] = [
-      { channelType: 'telegram', chatId: 'c1', role: 'primary' },
-      { channelType: 'feishu', chatId: 'c1', role: 'mirror' },
+      { channelType: 'telegram', chatId: 'c1', activeSessionId: null },
+      { channelType: 'feishu', chatId: 'c1', activeSessionId: 'sid-x' },
     ];
-    expect(findBinding(list, { channelType: 'feishu', chatId: 'c1' })?.role).toBe('mirror');
+    expect(findBinding(list, { channelType: 'feishu', chatId: 'c1' })?.activeSessionId).toBe('sid-x');
     expect(findBinding(list, { channelType: 'feishu', chatId: 'cZ' })).toBeUndefined();
   });
+});
 
-  it('partitionBindings extracts primary and mirrors', () => {
-    const list: ChatBinding[] = [
-      { channelType: 'telegram', chatId: 'a', role: 'primary' },
-      { channelType: 'feishu', chatId: 'b', role: 'mirror' },
-      { channelType: 'feishu', chatId: 'c', role: 'mirror' },
-    ];
-    const p = partitionBindings(list);
-    expect(p.primary?.chatId).toBe('a');
-    expect(p.mirrors).toHaveLength(2);
-    expect(p.all).toHaveLength(3);
+describe('addBinding — activeSessionId defaulting (Iso #1)', () => {
+  it('addBinding sets activeSessionId=null and no role field', () => {
+    const list = addBinding([], { channelType: 'telegram', chatId: 'c1' });
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({
+      channelType: 'telegram',
+      chatId: 'c1',
+      activeSessionId: null,
+    });
+    expect(list[0]).not.toHaveProperty('role');
   });
 
-  it('partitionBindings with no primary returns null', () => {
-    const list: ChatBinding[] = [
-      { channelType: 'telegram', chatId: 'a', role: 'mirror' },
-    ];
-    const p = partitionBindings(list);
-    expect(p.primary).toBeNull();
-    expect(p.mirrors).toHaveLength(1);
+  it('addBinding preserves activeSessionId when caller supplies it', () => {
+    const list = addBinding([], {
+      channelType: 'telegram', chatId: 'c1', activeSessionId: 'sid-1',
+    });
+    expect(list[0]!.activeSessionId).toBe('sid-1');
   });
 });

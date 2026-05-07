@@ -1,53 +1,48 @@
 // src/workspace/bindings.ts
 //
-// Multi-chat binding model (spec §6.2). A workspace may fan out to multiple
-// IM chats; exactly one is `primary` (receives interactive buttons /
-// elicitation forms) and the rest are `mirror` (read-only renders,
-// permission cards show "Respond from <primary>"). This file owns the
-// type + array helpers so WorkspaceManager stays focused on orchestration.
+// Per-chat binding model (spec docs/superpowers/specs/2026-05-07-isolated-chat-sessions-design.md §3).
+// A workspace may bind multiple IM chats; each chat owns its own SDK session
+// (`activeSessionId`) so conversations stay independent across chats. The
+// previous primary/mirror model is gone — there is no fan-out.
+// This file owns the type + array helpers so WorkspaceManager stays focused
+// on orchestration.
 
 export type ChannelType = 'telegram' | 'feishu';
 
 export interface ChatBinding {
   channelType: ChannelType;
   chatId: string;
-  role: 'primary' | 'mirror';
   /** Set when thread-per-session mode is enabled. */
   threadId?: string;
-}
-
-export interface BindingsResult {
-  primary: ChatBinding | null;
-  mirrors: ChatBinding[];
-  all: ChatBinding[];
-}
-
-/** Sort bindings into `primary` (at most one) and `mirror` arrays. */
-export function partitionBindings(bindings: readonly ChatBinding[]): BindingsResult {
-  let primary: ChatBinding | null = null;
-  const mirrors: ChatBinding[] = [];
-  for (const b of bindings) {
-    if (b.role === 'primary' && !primary) primary = b;
-    else mirrors.push({ ...b, role: 'mirror' });
-  }
-  return { primary, mirrors, all: [...bindings] };
+  /**
+   * SDK session id currently active for this chat. null when the chat
+   * has no live conversation. Persisted across daemon restarts so
+   * lazyResumeOrCreate can pick up where the chat left off.
+   */
+  activeSessionId: string | null;
+  /** ISO 8601 timestamp of last inbound or session event. */
+  lastActiveAt?: string;
 }
 
 /**
- * Add a binding. Policy:
- * - Pushing a `primary` while another primary exists demotes the old one to mirror.
- * - Duplicate (channelType, chatId) entries are deduplicated by replacing in place.
+ * Add a binding. Duplicate (channelType, chatId) entries are deduplicated
+ * by replacing the existing entry. Callers may omit `activeSessionId`; it
+ * defaults to null (no live session yet).
  */
 export function addBinding(
   bindings: ChatBinding[],
-  next: ChatBinding,
+  binding: Omit<ChatBinding, 'activeSessionId'> & { activeSessionId?: string | null },
 ): ChatBinding[] {
-  const deduped = bindings.filter((b) => !(b.channelType === next.channelType && b.chatId === next.chatId));
-  const result = next.role === 'primary'
-    ? deduped.map((b) => (b.role === 'primary' ? { ...b, role: 'mirror' as const } : b))
-    : deduped;
-  result.push(next);
-  return result;
+  const dedup = bindings.filter(
+    (b) => !(b.channelType === binding.channelType && b.chatId === binding.chatId),
+  );
+  return [
+    ...dedup,
+    {
+      ...binding,
+      activeSessionId: binding.activeSessionId ?? null,
+    },
+  ];
 }
 
 /** Remove a binding by (channelType, chatId). Idempotent. */

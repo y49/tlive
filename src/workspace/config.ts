@@ -34,7 +34,9 @@ export interface Workspace {
   name: string;
   workdir: string;
   gitRemote?: string;
-  activeSessionId: string | null;
+  // activeSessionId removed — moved to ChatBinding.activeSessionId per
+  // docs/superpowers/specs/2026-05-07-isolated-chat-sessions-design.md §3.
+  // Each chat owns its own SDK session so conversations stay independent.
   defaults: WorkspaceDefaults;
   budget: WorkspaceBudget;
   mcpServers: Record<string, McpServerConfig>;
