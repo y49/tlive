@@ -566,3 +566,73 @@ describe('WorkspaceManager.createFromIM', () => {
     expect(found?.workdir).toBe('/tmp/foo');
   });
 });
+
+describe('WorkspaceManager — chat-level session APIs (Iso #2)', () => {
+  it('bindActiveSessionForChat writes to the matching binding', () => {
+    const wm = new WorkspaceManager();
+    const ws = wm.create({ name: 't', workdir: '/tmp/t' });
+    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
+    wm.addBinding(ws.id, { channelType: 'feishu', chatId: 'c2' });
+    wm.bindActiveSessionForChat('telegram', 'c1', 'sid-tg');
+    expect(wm.getActiveSessionIdForChat('telegram', 'c1')).toBe('sid-tg');
+    expect(wm.getActiveSessionIdForChat('feishu', 'c2')).toBeNull();
+  });
+
+  it('clearActiveSessionForChat resets the matching binding', () => {
+    const wm = new WorkspaceManager();
+    const ws = wm.create({ name: 't', workdir: '/tmp/t' });
+    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
+    wm.bindActiveSessionForChat('telegram', 'c1', 'sid-tg');
+    wm.clearActiveSessionForChat('telegram', 'c1');
+    expect(wm.getActiveSessionIdForChat('telegram', 'c1')).toBeNull();
+  });
+
+  it('getActiveSessionIdForChat returns null for unknown chat', () => {
+    const wm = new WorkspaceManager();
+    expect(wm.getActiveSessionIdForChat('telegram', 'nope')).toBeNull();
+  });
+
+  it('listActiveBindings returns only non-null actives across workspaces', () => {
+    const wm = new WorkspaceManager();
+    const ws1 = wm.create({ name: 'a', workdir: '/tmp/a' });
+    const ws2 = wm.create({ name: 'b', workdir: '/tmp/b' });
+    wm.addBinding(ws1.id, { channelType: 'telegram', chatId: 'c1' });
+    wm.addBinding(ws1.id, { channelType: 'feishu', chatId: 'c2' });
+    wm.addBinding(ws2.id, { channelType: 'telegram', chatId: 'c3' });
+    wm.bindActiveSessionForChat('telegram', 'c1', 'sid-1');
+    wm.bindActiveSessionForChat('telegram', 'c3', 'sid-3');
+    // c2 left null
+
+    const actives = wm.listActiveBindings();
+    expect(actives).toHaveLength(2);
+    const ids = actives.map((a) => a.activeSessionId).sort();
+    expect(ids).toEqual(['sid-1', 'sid-3']);
+    const c1 = actives.find((a) => a.chatId === 'c1');
+    expect(c1).toMatchObject({
+      channelType: 'telegram', chatId: 'c1',
+      workspaceId: ws1.id, activeSessionId: 'sid-1',
+    });
+    expect(c1?.lastActiveAt).toBeTruthy();
+  });
+
+  it('bindActiveSessionForChat updates lastActiveAt to ISO 8601 timestamp', () => {
+    const wm = new WorkspaceManager();
+    const ws = wm.create({ name: 't', workdir: '/tmp/t' });
+    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
+    const before = Date.now();
+    wm.bindActiveSessionForChat('telegram', 'c1', 'sid-tg');
+    const after = Date.now();
+    const actives = wm.listActiveBindings();
+    expect(actives).toHaveLength(1);
+    const ts = new Date(actives[0]!.lastActiveAt).getTime();
+    expect(ts).toBeGreaterThanOrEqual(before);
+    expect(ts).toBeLessThanOrEqual(after);
+  });
+
+  it('bindActiveSessionForChat throws when chat has no binding', () => {
+    const wm = new WorkspaceManager();
+    expect(() =>
+      wm.bindActiveSessionForChat('telegram', 'nonexistent', 'sid'),
+    ).toThrow(/no binding/i);
+  });
+});

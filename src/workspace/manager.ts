@@ -249,6 +249,90 @@ export class WorkspaceManager {
     return ws;
   }
 
+  // ---- Chat-level session APIs (spec §4.1) ---------------------------------
+  //
+  // Per docs/superpowers/specs/2026-05-07-isolated-chat-sessions-design.md §4.1.
+  // Each chat owns its own SDK session via ChatBinding.activeSessionId, so
+  // these are the per-binding analogues of the (deprecated) ws-level
+  // bindActiveSession / clearActiveSession / getActiveSessionId trio. The
+  // ws-level methods remain in place for one task window so callers can
+  // migrate; Iso #3 deletes them.
+
+  bindActiveSessionForChat(
+    channelType: ChannelType,
+    chatId: string,
+    sdkSessionId: string,
+  ): void {
+    const found = this.findBindingMutable(channelType, chatId);
+    if (!found) {
+      throw new Error(`bindActiveSessionForChat: no binding for ${channelType}:${chatId}`);
+    }
+    found.binding.activeSessionId = sdkSessionId;
+    found.binding.lastActiveAt = new Date().toISOString();
+    void this.save().catch(() => undefined);
+  }
+
+  clearActiveSessionForChat(channelType: ChannelType, chatId: string): void {
+    const found = this.findBindingMutable(channelType, chatId);
+    if (!found) return;
+    found.binding.activeSessionId = null;
+    void this.save().catch(() => undefined);
+  }
+
+  getActiveSessionIdForChat(channelType: ChannelType, chatId: string): string | null {
+    const found = this.findBindingMutable(channelType, chatId);
+    return found?.binding.activeSessionId ?? null;
+  }
+
+  /**
+   * Flat list of every binding with a non-null activeSessionId across all
+   * workspaces. Drives IdleStop's per-binding scan and the daemon-restart
+   * auto-resume sweep — both want a single iteration regardless of how
+   * many workspaces or chats are configured.
+   */
+  listActiveBindings(): Array<{
+    channelType: ChannelType;
+    chatId: string;
+    workspaceId: string;
+    activeSessionId: string;
+    lastActiveAt: string;
+  }> {
+    const out: Array<{
+      channelType: ChannelType;
+      chatId: string;
+      workspaceId: string;
+      activeSessionId: string;
+      lastActiveAt: string;
+    }> = [];
+    for (const ws of this.byId.values()) {
+      for (const b of ws.bindings) {
+        if (!b.activeSessionId) continue;
+        out.push({
+          channelType: b.channelType,
+          chatId: b.chatId,
+          workspaceId: ws.id,
+          activeSessionId: b.activeSessionId,
+          lastActiveAt: b.lastActiveAt ?? new Date(0).toISOString(),
+        });
+      }
+    }
+    return out;
+  }
+
+  private findBindingMutable(
+    channelType: ChannelType,
+    chatId: string,
+  ): { workspace: Workspace; binding: ChatBinding } | undefined {
+    for (const ws of this.byId.values()) {
+      for (const b of ws.bindings) {
+        if (b.channelType === channelType && b.chatId === chatId) {
+          return { workspace: ws, binding: b };
+        }
+      }
+    }
+    return undefined;
+  }
+
   listBindings(workspaceId: string): ChatBinding[] {
     return this.byId.get(workspaceId)?.bindings ?? [];
   }
