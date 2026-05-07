@@ -300,6 +300,77 @@ describe('CallbackRouter — menu:expand / menu:collapse (Task 30)', () => {
     expect(out.kind).toBe('unknown');
     expect((out as { reason: string }).reason).toBe('menu:bad-verb:nope');
   });
+
+  it('feishu menu:expand sends new menu message (lark API rejects v2 patch)', async () => {
+    const sentMsgs: Array<{ chatId: string; text?: string; markup?: ReplyMarkup }> = [];
+    const adapter = {
+      channelType: 'feishu',
+      async start() {},
+      async stop() {},
+      async send(m: { chatId: string; text?: string; replyMarkup?: ReplyMarkup }) {
+        sentMsgs.push({ chatId: m.chatId, text: m.text, markup: m.replyMarkup });
+        return 'menu-msg-1';
+      },
+      async edit() {},
+      async delete() {},
+      async pin() {},
+      async setReaction() {},
+      async sendAttachment() { return 'm'; },
+      async downloadAttachment() { return Buffer.from(''); },
+      onInbound: () => () => undefined,
+    } as unknown as PlatformAdapter;
+    const brokers = fakeBrokerCalls();
+    const router = new CallbackRouter({
+      sessionManager: fakeSM(false),
+      permissionBroker: brokers.permissionBroker,
+      askBroker: brokers.askBroker,
+      elicitationBroker: brokers.elicitationBroker,
+      adapters: { feishu: adapter },
+    });
+    const out = await router.route({
+      data: 'menu:expand', userId: 'u1', chatId: 'oc_chat', messageId: 'om_card',
+      channelType: 'feishu',
+    });
+    expect(out).toEqual({ kind: 'handled', action: 'menu:expand' });
+    expect(sentMsgs).toHaveLength(1);
+    expect(sentMsgs[0]?.chatId).toBe('oc_chat');
+    const labels = (sentMsgs[0]?.markup?.buttons ?? []).flat().map((b) => b.text);
+    expect(labels).toContain('🔄 model');
+    expect(labels).toContain('↩ 关闭菜单');
+  });
+
+  it('feishu menu:collapse deletes the menu message', async () => {
+    const deleted: Array<{ messageId: string; chatId: string }> = [];
+    const adapter = {
+      channelType: 'feishu',
+      async start() {},
+      async stop() {},
+      async send() { return 'm'; },
+      async edit() {},
+      async delete(messageId: string, chatId: string) {
+        deleted.push({ messageId, chatId });
+      },
+      async pin() {},
+      async setReaction() {},
+      async sendAttachment() { return 'm'; },
+      async downloadAttachment() { return Buffer.from(''); },
+      onInbound: () => () => undefined,
+    } as unknown as PlatformAdapter;
+    const brokers = fakeBrokerCalls();
+    const router = new CallbackRouter({
+      sessionManager: fakeSM(false),
+      permissionBroker: brokers.permissionBroker,
+      askBroker: brokers.askBroker,
+      elicitationBroker: brokers.elicitationBroker,
+      adapters: { feishu: adapter },
+    });
+    const out = await router.route({
+      data: 'menu:collapse', userId: 'u1', chatId: 'oc_chat', messageId: 'om_menu',
+      channelType: 'feishu',
+    });
+    expect(out).toEqual({ kind: 'handled', action: 'menu:collapse' });
+    expect(deleted).toEqual([{ messageId: 'om_menu', chatId: 'oc_chat' }]);
+  });
 });
 
 describe('CallbackRouter — turn/session/runtime/cost/find handlers (Task 31)', () => {

@@ -193,6 +193,42 @@ export class CallbackRouter {
     const adapter = ctx.adapters?.get(ctx.channelType) ?? this.deps.adapters?.[ctx.channelType];
     if (!adapter) return { kind: 'unknown', reason: 'menu:no-adapter' };
 
+    // Telegram: swap the inline keyboard on the existing detail card.
+    // Feishu: API rejects patching a v2 card with a v1-shape one (400),
+    // so we handle expand/collapse via send/delete on a separate menu
+    // message instead. The menu message has its own messageId; collapse
+    // is wired to delete the message that triggered the callback (which
+    // for Feishu IS the menu message).
+    if (ctx.channelType === 'feishu') {
+      if (verb === 'expand') {
+        try {
+          await adapter.send({
+            chatId: ctx.chatId,
+            text: '⋯ 二级菜单',
+            replyMarkup: secondLevelKeyboard(),
+          });
+        } catch (err) {
+          this.deps.logger?.warn('menu send (feishu) failed', {
+            chatId: ctx.chatId, verb, reason: (err as Error).message,
+          });
+          return { kind: 'unknown', reason: 'menu:send-failed' };
+        }
+        return { kind: 'handled', action: 'menu:expand' };
+      }
+      // verb === 'collapse' → delete the menu message itself.
+      try {
+        await adapter.delete(ctx.messageId, ctx.chatId);
+      } catch (err) {
+        this.deps.logger?.warn('menu delete (feishu) failed', {
+          chatId: ctx.chatId, messageId: ctx.messageId,
+          reason: (err as Error).message,
+        });
+        return { kind: 'unknown', reason: 'menu:delete-failed' };
+      }
+      return { kind: 'handled', action: 'menu:collapse' };
+    }
+
+    // Telegram path — edit reply markup in place.
     const newMarkup = verb === 'expand' ? secondLevelKeyboard() : defaultLevelKeyboard();
     try {
       await adapter.edit(ctx.messageId, ctx.chatId, undefined, newMarkup);
