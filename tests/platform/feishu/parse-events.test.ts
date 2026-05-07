@@ -52,6 +52,24 @@ describe('FeishuAdapter inbound parsing (RequestHandle.parse-flattened payloads)
     });
   });
 
+  it('handleCardAction reads chat_id from event.context (card 2.0 shape)', () => {
+    const { adapter, events } = newTestAdapter();
+    adapter.handleCardAction({
+      action: { value: { callback_data: 'workspace:create:start' }, tag: 'button' },
+      operator: { open_id: 'ou_admin', user_id: 'admin_id' },
+      context: { open_chat_id: 'oc_real_chat', open_message_id: 'om_real_msg' },
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      channelType: 'feishu',
+      chatId: 'oc_real_chat',
+      messageId: 'om_real_msg',
+      userId: 'ou_admin',
+      callbackData: 'workspace:create:start',
+      kind: 'callback',
+    });
+  });
+
   it('handleCardAction emits form_submit when form_value present', () => {
     const { adapter, events } = newTestAdapter();
     adapter.handleCardAction(fixture('card-form-submit'));

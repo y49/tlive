@@ -305,21 +305,32 @@ export class FeishuAdapter implements PlatformAdapter {
   }
 
   private parseCardAction(payload: unknown): InboundEvent | null {
+    // Feishu card 2.0 'card.action.trigger' event has open_chat_id /
+    // open_message_id under `event.context.*`, not at top level. Lark
+    // EventDispatcher flattens header+event to top-level (so `action`,
+    // `operator`, `context` are reachable directly), but `context`
+    // itself stays nested. We accept BOTH shapes (top-level fallback)
+    // so the legacy test fixture and real production payload both work.
     const p = payload as {
       action?: { value?: { callback_data?: string } };
       form_value?: Record<string, string>;
       operator?: { open_id?: string; user_id?: string };
+      // card 2.0 (production) — fields live here:
+      context?: { open_chat_id?: string; open_message_id?: string };
+      // legacy / fixture fallback:
       open_message_id?: string;
       open_chat_id?: string;
     };
     const userId = p.operator?.open_id ?? p.operator?.user_id ?? '';
+    const chatId = p.context?.open_chat_id ?? p.open_chat_id ?? '';
+    const messageId = p.context?.open_message_id ?? p.open_message_id ?? '';
     const callbackData = p.action?.value?.callback_data;
     const formValues = p.form_value;
     if (formValues && Object.keys(formValues).length > 0) {
       return {
         channelType: 'feishu',
-        chatId: p.open_chat_id ?? '',
-        messageId: p.open_message_id ?? '',
+        chatId,
+        messageId,
         userId,
         callbackData,
         formValues,
@@ -330,8 +341,8 @@ export class FeishuAdapter implements PlatformAdapter {
     if (!callbackData) return null;
     return {
       channelType: 'feishu',
-      chatId: p.open_chat_id ?? '',
-      messageId: p.open_message_id ?? '',
+      chatId,
+      messageId,
       userId,
       callbackData,
       kind: 'callback',
