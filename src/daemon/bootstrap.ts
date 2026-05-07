@@ -666,18 +666,14 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
         chatId: ev.chatId,
         threadId: ev.threadId,
         text: [
-          "This chat isn't bound to any workspace yet.",
+          '👋 此 chat 还没进入工作区',
           '',
-          "If you're the admin:",
-          '  • Send /bind to attach me to your workspace',
-          '  • Multiple workspaces? Use /bind <name>',
-          '',
-          "Not sure if you're the admin?",
-          '  • Send /whoami to see what I know about you',
-          '  • Or pre-configure ~/.tlive/config.json with',
-          '    workspaces[].adminUserId and channels.<platform>.chatId,',
-          "    then restart the daemon — I'll auto-bind on next start.",
+          '发 /workspace 选择或新增工作区',
         ].join('\n'),
+        replyMarkup: {
+          type: 'inline_keyboard',
+          buttons: [[{ text: '📁 选工作区', callbackData: 'workspace:open' }]],
+        },
       }).catch(() => undefined);
       return;
     }
