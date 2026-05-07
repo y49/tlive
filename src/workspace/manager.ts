@@ -230,6 +230,14 @@ export class WorkspaceManager {
   addBinding(workspaceId: string, binding: ChatBinding): Workspace {
     const ws = this.byId.get(workspaceId);
     if (!ws) throw new Error(`addBinding: workspace ${workspaceId} not found`);
+    // Defensive: refuse empty chatId. A previous bug where the Feishu
+    // adapter parsed open_chat_id from the wrong payload location (fixed
+    // in 4e5724e) silently stored chatId="" entries here, which then
+    // crashed the frontend fan-out with API 400. Rejecting at this
+    // boundary prevents data corruption regardless of caller hygiene.
+    if (!binding.chatId) {
+      throw new Error(`addBinding: chatId is required (got empty for ${binding.channelType})`);
+    }
     ws.bindings = addBindingPure(ws.bindings, binding);
     return ws;
   }
