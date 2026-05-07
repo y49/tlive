@@ -92,6 +92,18 @@ export interface CallbackRouterDeps {
    * payload. Bootstrap supplies the daemon logger; tests pass a fake.
    */
   logger?: Logger;
+  /**
+   * Optional ask-card lookup. Frontend implements by walking its session
+   * map's askControllers (per channel). When wired, ask:* callbacks
+   * delegate to PermissionCard.handleClick which owns the verb routing
+   * (opt/confirm/skip/custom) and visual state (toggle, mark-resolved).
+   * Without it, ask:* falls through to the legacy broker-resolve path.
+   */
+  findAskCard?: (
+    channelType: ChannelType,
+    chatId: string,
+    requestId: string,
+  ) => { handleClick: (data: string) => Promise<void> } | undefined;
 }
 
 export interface CallbackContext {
@@ -331,30 +343,66 @@ export class CallbackRouter {
   // ---- AskUserQuestion ---------------------------------------------------
 
   private async handleAsk(parts: string[], ctx: CallbackContext): Promise<CallbackOutcome> {
-    // Legacy form in frontend.ts: `ask:<requestId>:<optIdx>` (no sid). We
-    // accept both shapes — new form is `ask:<optIdx>:<sid>:<reqId>`.
+    // PermissionCard (v3.2.4) emits 4 ask shapes:
+    //   ask:<reqId>:opt:<idx>     — option click (single resolves; multi toggles)
+    //   ask:<reqId>:confirm       — multi-select submit
+    //   ask:<reqId>:skip          — skip (resolve with empty)
+    //   ask:<reqId>:custom        — enter custom-input dialog state
+    // The card itself owns the verb routing via card.handleClick(data) — it
+    // also handles toggle visual state for multi-select. Delegate when we
+    // can find the card via the frontend hook; otherwise fall through to
+    // the legacy 2-part broker-resolve path for back-compat.
+    // PermissionCard format (v3.2.4): ask:<reqId>:<opt|confirm|skip|custom>...
+    // SessionFrontend.routeCallback subscribes to the same adapter.onInbound
+    // and handles these cards via cardsByReqId — that's the canonical path.
+    // CallbackRouter is a secondary subscriber; for these new-format clicks
+    // we recognize them and return 'handled' silently (no stale reply) since
+    // frontend already processed (or will process) the click.
+    const reqId = parts[0];
+    const verb = parts[1];
+    if (reqId && verb && (verb === 'opt' || verb === 'confirm' || verb === 'skip' || verb === 'custom')) {
+      // If a findAskCard hook is wired (test) and returns a card, delegate
+      // (matches frontend's handleCallback behavior). Otherwise just ack —
+      // frontend's parallel subscriber handles the visual + broker.
+      const card = this.deps.findAskCard?.(ctx.channelType, ctx.chatId, reqId);
+      if (card) {
+        const data = `ask:${parts.join(':')}`;
+        try {
+          await card.handleClick(data);
+        } catch (err) {
+          this.deps.logger?.warn('ask handleClick failed', {
+            reqId, verb, reason: (err as Error).message,
+          });
+          return { kind: 'unknown', reason: 'ask:card-handle-failed' };
+        }
+      }
+      return { kind: 'handled', action: `ask:${verb}` };
+    }
+
+    // Legacy / spec-v1 broker-resolve path (no card hook wired). Kept for
+    // back-compat with tests + older callers.
     let optIdx: number;
     let sidRaw: string | undefined;
-    let reqId: string;
+    let legacyReqId: string;
     if (parts.length === 2) {
-      // frontend v1: ask:<reqId>:<optIdx>
-      reqId = parts[0]!;
+      // legacy: ask:<reqId>:<idx>
+      legacyReqId = parts[0]!;
       optIdx = Number(parts[1]);
       sidRaw = undefined;
     } else if (parts.length >= 3) {
-      // spec v1: ask:<optIdx>:<sid>:<reqId...>
+      // spec v1: ask:<idx>:<sid>:<reqId>
       optIdx = Number(parts[0]);
       sidRaw = parts[1];
-      reqId = parts.slice(2).join(':');
+      legacyReqId = parts.slice(2).join(':');
     } else {
       return { kind: 'unknown', reason: 'ask:malformed' };
     }
 
     if (!Number.isFinite(optIdx)) return { kind: 'unknown', reason: 'ask:bad-idx' };
-    const sid = sidRaw ? this.resolveSid(sidRaw) : this.findSessionForAskRequest(reqId);
+    const sid = sidRaw ? this.resolveSid(sidRaw) : this.findSessionForAskRequest(legacyReqId);
     if (!sid) return this.handleStaleSession(sidRaw ?? '', ctx);
 
-    const req = this.deps.askBroker.pendingFor(sid).find((r) => r.id === reqId);
+    const req = this.deps.askBroker.pendingFor(sid).find((r) => r.id === legacyReqId);
     if (!req) {
       await this.editStaleCard(ctx, 'already_resolved');
       return { kind: 'stale', action: 'already_resolved' };
@@ -363,7 +411,7 @@ export class CallbackRouter {
     if (!chosenOpt) return { kind: 'unknown', reason: 'ask:idx-out-of-range' };
     const chosen = chosenOpt.label;
 
-    const ok = this.deps.askBroker.resolve(sid, reqId, [chosen], ctx.userId);
+    const ok = this.deps.askBroker.resolve(sid, legacyReqId, [chosen], ctx.userId);
     if (!ok) {
       await this.editStaleCard(ctx, 'already_resolved');
       return { kind: 'stale', action: 'already_resolved' };
