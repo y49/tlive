@@ -21,6 +21,7 @@ import type {
 } from './protocol.js';
 
 import type { SessionManager } from '../session/manager.js';
+import type { LocalSession } from '../session/local-session.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
 import type { SessionPersistence } from '../session/persistence.js';
 import type { CostRollupStore } from '../cost/rollups.js';
@@ -177,6 +178,16 @@ export function buildIpcDispatcher(deps: IpcDispatcherDeps): IpcServerHandler {
           if (!target) {
             reply({ kind: 'workspace.removed', ok: false, reason: `not found: ${req.idOrName}` });
             return;
+          }
+          // Stop active session if alive — prevents a dangling LocalSession in
+          // SessionManager with an orphaned workspaceId after the workspace
+          // record is deleted. Mirrors handleWorkspaceExit in callback-router.ts.
+          if (target.activeSessionId) {
+            const live = deps.sessions.get(target.activeSessionId);
+            if (live && live.kind === 'local') {
+              try { await (live as LocalSession).stop(); }
+              catch { /* best-effort — workspace deletion proceeds regardless */ }
+            }
           }
           deps.workspaces.delete(target.id);
           await deps.workspaces.save().catch(() => undefined);

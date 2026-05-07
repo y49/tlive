@@ -7,8 +7,14 @@ describe('IPC dispatcher — workspace.list / .remove', () => {
   function setup() {
     const wm = new WorkspaceManager();
     const responses: IpcResponse[] = [];
+    const stopCalls: string[] = [];
+    const liveSessions = new Map<string, { kind: 'local'; stop: () => Promise<void> }>();
+    const sessionsStub = {
+      get: (id: string) => liveSessions.get(id),
+      stop: async (id: string) => { stopCalls.push(id); liveSessions.delete(id); },
+    };
     const handler = buildIpcDispatcher({
-      sessions: {} as never,
+      sessions: sessionsStub as never,
       workspaces: wm,
       persistence: {} as never,
       startedAt: Date.now(),
@@ -17,6 +23,17 @@ describe('IPC dispatcher — workspace.list / .remove', () => {
     return {
       wm,
       responses,
+      stopCalls,
+      addLiveSession: (id: string, opts?: { failStop?: boolean }) => {
+        liveSessions.set(id, {
+          kind: 'local',
+          stop: async () => {
+            stopCalls.push(id);
+            if (opts?.failStop) throw new Error('boom');
+            liveSessions.delete(id);
+          },
+        });
+      },
       send: async (req: IpcRequest) => {
         await handler(req, (r) => responses.push(r));
       },
@@ -81,5 +98,40 @@ describe('IPC dispatcher — workspace.list / .remove', () => {
       ok: false,
       reason: expect.stringContaining('not found'),
     });
+  });
+
+  it('workspace.remove stops active session before deletion', async () => {
+    const { wm, send, responses, stopCalls, addLiveSession } = setup();
+    const ws = wm.create({ name: 'foo', workdir: '/p/f' });
+    const sdkId = 'sid-foo';
+    wm.bindActiveSession(ws.id, sdkId);
+    addLiveSession(sdkId);
+
+    await send({ kind: 'workspace.remove', idOrName: 'foo' });
+    expect(responses[0]).toMatchObject({ kind: 'workspace.removed', ok: true });
+    expect(wm.list()).toHaveLength(0);
+    expect(stopCalls).toEqual([sdkId]);
+  });
+
+  it('workspace.remove without active session does not attempt stop', async () => {
+    const { wm, send, responses, stopCalls } = setup();
+    wm.create({ name: 'foo', workdir: '/p/f' });
+    await send({ kind: 'workspace.remove', idOrName: 'foo' });
+    expect(responses[0]).toMatchObject({ kind: 'workspace.removed', ok: true });
+    expect(wm.list()).toHaveLength(0);
+    expect(stopCalls).toEqual([]);
+  });
+
+  it('workspace.remove proceeds with deletion even if session stop throws', async () => {
+    const { wm, send, responses, stopCalls, addLiveSession } = setup();
+    const ws = wm.create({ name: 'foo', workdir: '/p/f' });
+    const sdkId = 'sid-foo';
+    wm.bindActiveSession(ws.id, sdkId);
+    addLiveSession(sdkId, { failStop: true });
+
+    await send({ kind: 'workspace.remove', idOrName: 'foo' });
+    expect(responses[0]).toMatchObject({ kind: 'workspace.removed', ok: true });
+    expect(wm.list()).toHaveLength(0);
+    expect(stopCalls).toEqual([sdkId]);
   });
 });
