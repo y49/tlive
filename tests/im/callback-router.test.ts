@@ -911,11 +911,65 @@ describe('CallbackRouter — workspace:*', () => {
     expect(wm.findByChat('telegram', 'c1')?.id).toBe(ws.id);
   });
 
-  it('workspace:config:open replies placeholder', async () => {
-    const { router, sentMsgs } = setup();
+  it('workspace:config:open shows workspace defaults + edit buttons (admin)', async () => {
+    const { router, wm, sentMsgs } = setup();
+    const ws = wm.create({
+      name: 'tlive',
+      workdir: '/p/t',
+      defaults: { provider: 'claude', model: 'claude-sonnet-4-6', permissionMode: 'default', thinking: 'collapsed' },
+    });
+    wm.setRole(ws.id, 'u1', 'admin');
+    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1', role: 'primary' });
+
     const result = await router.route(ctx('workspace:config:open'));
     expect(result).toEqual({ kind: 'handled', action: 'workspace:config:open' });
-    expect(sentMsgs[0]?.text).toMatch(/Task 22|配置/);
+    expect(sentMsgs[0]?.text).toMatch(/工作区配置.*tlive/);
+    expect(sentMsgs[0]?.text).toMatch(/claude-sonnet-4-6/);
+    expect(sentMsgs[0]?.text).toMatch(/默认 mode.*default/);
+    expect(sentMsgs[0]?.text).toMatch(/workspace 默认值/);
+
+    const markup = sentMsgs[0]?.replyMarkup as ReplyMarkup;
+    const flat = (markup.buttons ?? []).flat();
+    const labels = flat.map((b) => b.text);
+    expect(labels).toContain('改 model');
+    expect(labels).toContain('改 mode');
+    expect(labels).toContain('改 budget');
+    expect(labels).toContain('改 think');
+    expect(labels).toContain('↩ 返回');
+    const datas = flat.map((b) => b.callbackData);
+    expect(datas).toContain('runtime:model:open');
+    expect(datas).toContain('runtime:mode:open');
+    expect(datas).toContain('runtime:budget:open');
+    expect(datas).toContain('runtime:think:open');
+    expect(datas).toContain('workspace:open');
+  });
+
+  it('workspace:config:open replies "not admin" for observer role', async () => {
+    const { router, wm, sentMsgs } = setup();
+    const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
+    // No setRole — defaults to observer (default defaultRole is 'observer')
+    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1', role: 'primary' });
+
+    const result = await router.route(ctx('workspace:config:open'));
+    expect(result).toEqual({ kind: 'handled', action: 'workspace:config:not-admin' });
+    expect(sentMsgs[0]?.text).toMatch(/只有管理员/);
+  });
+
+  it('workspace:config:open replies "not bound" when chat unbound', async () => {
+    const { router, sentMsgs } = setup();
+    const result = await router.route(ctx('workspace:config:open'));
+    expect(result).toEqual({ kind: 'handled', action: 'workspace:config:not-bound' });
+    expect(sentMsgs[0]?.text).toMatch(/未绑定工作区/);
+  });
+
+  it('workspace:config with bad subverb returns unknown (admin)', async () => {
+    const { router, wm } = setup();
+    const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
+    wm.setRole(ws.id, 'u1', 'admin');
+    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1', role: 'primary' });
+    const result = await router.route(ctx('workspace:config:bogus'));
+    expect(result.kind).toBe('unknown');
+    expect((result as { reason: string }).reason).toBe('workspace:config:bad-verb:bogus');
   });
 
   it('workspace:switch swaps binding (no live session)', async () => {

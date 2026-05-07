@@ -48,6 +48,7 @@ import type {
 } from '../runtime/types.js';
 import type { PolicyStore } from '../permission/policy-store.js';
 import type { ChannelType } from '../workspace/bindings.js';
+import type { Workspace } from '../workspace/config.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
 import type { WorkspaceCreateBroker } from './workspace-create-broker.js';
 import type { SessionPersistence } from '../session/persistence.js';
@@ -695,9 +696,63 @@ export class CallbackRouter {
     return { kind: 'unknown', reason: `workspace:exit:bad-verb:${subverb ?? ''}` };
   }
 
-  private async handleWorkspaceConfig(_rest: string[], ctx: CallbackContext): Promise<CallbackOutcome> {
-    await this.sendReply(ctx, '⚙ 工作区配置面板 — 待 Task 22 实现');
-    return { kind: 'handled', action: 'workspace:config:open' };
+  /**
+   * `workspace:config:open` — render the workspace defaults panel
+   * (spec §4.5). Admin-only. Each `[改 X]` button routes to the existing
+   * `runtime:<x>:open` hint (Task 31), which prompts the user to type the
+   * matching slash command. The panel reflects workspace defaults — what
+   * new sessions inherit — not the current dialog's runtime state.
+   */
+  private async handleWorkspaceConfig(rest: string[], ctx: CallbackContext): Promise<CallbackOutcome> {
+    const wm = this.deps.workspaceManager;
+    if (!wm) return { kind: 'unknown', reason: 'workspace:config:no-manager' };
+
+    const ws = wm.findByChat(ctx.channelType, ctx.chatId);
+    if (!ws) {
+      await this.sendReply(ctx, '此 chat 未绑定工作区');
+      return { kind: 'handled', action: 'workspace:config:not-bound' };
+    }
+
+    const role = wm.getRole(ws.id, ctx.userId);
+    if (role !== 'admin') {
+      await this.sendReply(ctx, '只有管理员可以查看配置');
+      return { kind: 'handled', action: 'workspace:config:not-admin' };
+    }
+
+    const subverb = rest[0];
+    if (subverb === 'open' || !subverb) {
+      await this.renderConfigPanel(ctx, ws);
+      return { kind: 'handled', action: 'workspace:config:open' };
+    }
+    return { kind: 'unknown', reason: `workspace:config:bad-verb:${subverb}` };
+  }
+
+  private async renderConfigPanel(ctx: CallbackContext, ws: Workspace): Promise<void> {
+    const lines = [
+      `⚙ 工作区配置: ${ws.name}`,
+      `   📂 workdir: ${ws.workdir}`,
+      `   🤖 默认 provider: ${ws.defaults.provider}`,
+      `   🤖 默认 model: ${ws.defaults.model ?? '(default)'}`,
+      `   🛡 默认 mode: ${ws.defaults.permissionMode}`,
+      `   🧠 默认 think: ${ws.defaults.thinking}`,
+      `   💸 默认 budget: ${ws.defaults.budgetUsd !== undefined ? `$${ws.defaults.budgetUsd.toFixed(2)} / session` : '无限'}`,
+      '',
+      '注: 此处改的是 workspace 默认值,新会话继承;',
+      '不影响当前对话的 runtime 状态。',
+    ];
+    const replyMarkup: ReplyMarkup = {
+      type: 'inline_keyboard',
+      buttons: [
+        [
+          { text: '改 model', callbackData: 'runtime:model:open' },
+          { text: '改 mode', callbackData: 'runtime:mode:open' },
+          { text: '改 budget', callbackData: 'runtime:budget:open' },
+          { text: '改 think', callbackData: 'runtime:think:open' },
+        ],
+        [{ text: '↩ 返回', callbackData: 'workspace:open' }],
+      ],
+    };
+    await this.sendReply(ctx, lines.join('\n'), replyMarkup);
   }
 
   private async handleWorkspaceOpenHint(ctx: CallbackContext): Promise<CallbackOutcome> {
