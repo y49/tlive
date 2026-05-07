@@ -459,7 +459,19 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
     startedAt: Date.now(),
     warmPool,
     adapters,
-    requestDaemonShutdown: () => { void lifecycle.shutdown(); },
+    // IPC-driven shutdown: must call process.exit(0) after teardown
+    // completes; otherwise the event loop is held open by stragglers
+    // (grammy long-poll task, lark WSClient retry timer) and `tlive
+    // stop` / `tlive restart` hang until the CLI's SIGTERM/SIGKILL.
+    // Mirrors the exit logic in installSignalHandlers (lifecycle.ts).
+    requestDaemonShutdown: () => {
+      lifecycle.shutdown()
+        .then(() => process.exit(0))
+        .catch((err) => {
+          logger.error('IPC shutdown failed', { reason: (err as Error).message });
+          process.exit(1);
+        });
+    },
   });
   const ipc = opts.startIpc === false ? null : await startIpcServer({
     path: ipcPath,
