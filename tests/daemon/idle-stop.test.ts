@@ -7,9 +7,10 @@
 
 import { describe, it, expect } from 'vitest';
 import { startIdleStop } from '../../src/daemon/idle-stop.js';
+import { WorkspaceManager } from '../../src/workspace/manager.js';
 import type { SessionManager } from '../../src/session/manager.js';
 import type { SessionPersistence, SessionMeta } from '../../src/session/persistence.js';
-import type { SessionInfo } from '../../src/session/types.js';
+import type { SessionInfo, OwnerChat } from '../../src/session/types.js';
 
 function fakeSessionManager(list: SessionInfo[], stopped: string[]): SessionManager {
   return {
@@ -25,7 +26,7 @@ function fakePersistence(metas: SessionMeta[]): SessionPersistence {
   } as unknown as SessionPersistence;
 }
 
-function mkInfo(id: string, lastActivityAt: number): SessionInfo {
+function mkInfo(id: string, lastActivityAt: number, ownerChat?: OwnerChat): SessionInfo {
   return {
     id,
     shortAlias: id.slice(0, 8),
@@ -38,6 +39,7 @@ function mkInfo(id: string, lastActivityAt: number): SessionInfo {
     cost: { totalCost: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
     createdAt: 0,
     lastActivityAt,
+    ownerChat,
   };
 }
 
@@ -76,6 +78,32 @@ describe('startIdleStop', () => {
     handle.stop();
     expect(out).toEqual(['sid-old']);
     expect(stopped).toEqual(['sid-old']);
+  });
+
+  it('clears binding active session via clearActiveSessionForChat after stopping', async () => {
+    const now = 10 * 24 * 60 * 60 * 1000; // day 10
+    const wm = new WorkspaceManager({ persistPath: null });
+    const ws = wm.create({ name: 't', workdir: '/tmp/t' });
+    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
+    wm.bindActiveSessionForChat('telegram', 'c1', 'sid-1');
+
+    const infos = [
+      mkInfo('sid-1', now - 25 * 60 * 60 * 1000, { channelType: 'telegram', chatId: 'c1' }),
+    ];
+    const stopped: string[] = [];
+    const handle = startIdleStop({
+      sessions: fakeSessionManager(infos, stopped),
+      persistence: fakePersistence(infos.map((i) => mkMeta(i.id))),
+      workspaces: wm,
+      idleHours: 24,
+      tickMs: 1_000,
+      now: () => now,
+    });
+    const out = await handle.tickOnce();
+    handle.stop();
+    expect(out).toEqual(['sid-1']);
+    expect(stopped).toEqual(['sid-1']);
+    expect(wm.getActiveSessionIdForChat('telegram', 'c1')).toBeNull();
   });
 
   it('skip() exempts a session for the next tick only', async () => {

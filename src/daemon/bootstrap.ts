@@ -418,6 +418,7 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
   const idleStop = startIdleStop({
     sessions,
     persistence,
+    workspaces,
     idleHours: cfg.daemon?.idleHours ?? 24,
     logger,
   });

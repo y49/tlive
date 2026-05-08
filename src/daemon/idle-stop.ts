@@ -14,11 +14,19 @@
 import type { SessionManager } from '../session/manager.js';
 import type { SessionPersistence, SessionMeta } from '../session/persistence.js';
 import type { SessionInfo } from '../session/types.js';
+import type { WorkspaceManager } from '../workspace/manager.js';
 import type { Logger } from '../util/logger.js';
 
 export interface IdleStopOptions {
   sessions: SessionManager;
   persistence: SessionPersistence;
+  /**
+   * Optional WorkspaceManager — when provided, IdleStop also clears the
+   * chat binding's `activeSessionId` after stopping the session, so the
+   * binding state matches reality (spec §7). Without this, the binding
+   * keeps pointing at a stopped sdkSessionId.
+   */
+  workspaces?: WorkspaceManager;
   /** Idle threshold hours; default 24. */
   idleHours?: number;
   /** Tick interval ms; default 5 minutes. Set smaller in tests. */
@@ -59,6 +67,21 @@ export function startIdleStop(opts: IdleStopOptions): IdleStopHandle {
         await opts.sessions.stop(info.id);
         stopped.push(info.id);
         opts.logger?.info('idle stop', { sdkSessionId: info.id, idleHours });
+        // Spec §7 — clear the binding's activeSessionId so it stops pointing
+        // at a stopped session. Skip if the session has no ownerChat (remote)
+        // or the WorkspaceManager wasn't injected (tests / partial wiring).
+        if (opts.workspaces && info.ownerChat) {
+          try {
+            opts.workspaces.clearActiveSessionForChat(info.ownerChat.channelType, info.ownerChat.chatId);
+          } catch (err) {
+            opts.logger?.warn('idle stop clear-binding failed', {
+              sdkSessionId: info.id,
+              channelType: info.ownerChat.channelType,
+              chatId: info.ownerChat.chatId,
+              reason: (err as Error).message,
+            });
+          }
+        }
         const meta = await opts.persistence.loadMeta(info.id);
         if (meta) {
           const updated: SessionMeta = { ...meta, status: 'stopped', lastActivityAt: new Date().toISOString() };
