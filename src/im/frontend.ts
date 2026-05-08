@@ -146,9 +146,19 @@ export class SessionFrontend {
             } catch { /* isolate */ }
             break;
           }
-          case 'stopped':
+          case 'stopped': {
+            // Bump sessionCount on this chat's costRollup (spec §6.2).
+            // Must read ownerChat BEFORE detachSession removes the entry.
+            const stoppedEntry = this.sessions.get(ev.sessionId);
+            if (stoppedEntry?.ownerChat) {
+              const { channelType, chatId } = stoppedEntry.ownerChat;
+              try {
+                this.opts.workspaceManager.addCost(channelType, chatId, 0, true);
+              } catch { /* isolate — wm may not have the chat instance */ }
+            }
             void this.detachSession(ev.sessionId).catch(() => { /* isolate */ });
             break;
+          }
         }
       }),
     );
@@ -399,6 +409,18 @@ export class SessionFrontend {
         }
       }
     } else if (ev.kind === 'turn_end') {
+      // Accumulate per-turn cost into the chat's costRollup (spec §6.2).
+      if (ev.costUsd > 0 && entry.ownerChat) {
+        try {
+          this.opts.workspaceManager.addCost(
+            entry.ownerChat.channelType,
+            entry.ownerChat.chatId,
+            ev.costUsd,
+            false,
+          );
+        } catch { /* isolate */ }
+      }
+
       // Reaction anchor: 🤔 → 👌. Fire-and-forget with a 400ms buffer so
       // Telegram's separate push channel for reactions doesn't beat the
       // bot's reply text to the user's client. Without the buffer users

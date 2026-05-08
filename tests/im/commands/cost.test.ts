@@ -3,70 +3,51 @@ import { costCmd } from '../../../src/im/commands/cost.js';
 import { buildCtx } from './_helpers.js';
 
 describe('/cost', () => {
-  it('replies with prompt when chat is unbound and no --all', async () => {
+  it('replies with prompt when chat is unbound', async () => {
     const { ctx, replies } = buildCtx({ workspace: null });
     await costCmd.run(ctx, []);
     expect(replies[0]).toMatch(/未绑定工作区/);
   });
 
-  it('default scope: live-only fallback when no rollupStore, ws-filtered', async () => {
-    const { ctx, replies } = buildCtx({
-      activeSession: { id: 'sess1', shortAlias: 'sess1' } as never,
-    });
+  it('default scope: shows current chat costRollup', async () => {
+    const { ctx, replies, ws } = buildCtx();
+    // Seed some cost on the chat instance via wm.addCost
+    ctx.workspaceManager.addCost('telegram', '12345', 0.25, true);
     await costCmd.run(ctx, []);
-    expect(replies[0]).toMatch(/💰 test-ws \(today\)/);
-    expect(replies[0]).toContain('1 live sessions');
+    expect(replies[0]).toMatch(/💰 此 chat/);
+    expect(replies[0]).toContain('$0.2500');
+    expect(replies[0]).toContain('1 sessions');
+    // ws is used only to confirm workspace exists (no assertion on ws here)
+    void ws;
   });
 
-  it('--all uses all-workspaces scope label', async () => {
+  it('--all uses global scope across all chat instances', async () => {
     const { ctx, replies } = buildCtx();
+    ctx.workspaceManager.addCost('telegram', '12345', 0.5, true);
     await costCmd.run(ctx, ['--all']);
-    expect(replies[0]).toContain('所有工作区');
+    expect(replies[0]).toMatch(/💰 全部 chat/);
+    expect(replies[0]).toContain('$0.5000');
   });
 
   it('--global is alias for --all', async () => {
-    const { ctx, replies } = buildCtx({ workspace: null });
+    const { ctx, replies } = buildCtx();
     await costCmd.run(ctx, ['--global']);
-    expect(replies[0]).toContain('所有工作区');
+    expect(replies[0]).toMatch(/💰 全部 chat/);
   });
 
-  it('uses rollup store when wired', async () => {
-    const { ctx, replies, ws } = buildCtx();
-    ctx.rollupStore = {
-      load: async () => [
-        {
-          workspaceId: ws!.id,
-          sdkSessionId: 's1',
-          dateKey: '2026-04-22',
-          deltaUsd: 0.5,
-          deltaIn: 100,
-          deltaOut: 200,
-          at: Date.now(),
-        },
-      ],
-    } as unknown as Parameters<typeof costCmd.run>[0]['rollupStore'];
-    await costCmd.run(ctx, ['week']);
-    expect(replies[0]).toContain('💰 test-ws (week)');
-    expect(replies[0]).toContain('0.5000');
+  it('--workspace replies with "未绑定" when chat is unbound', async () => {
+    const { ctx, replies } = buildCtx({ workspace: null });
+    await costCmd.run(ctx, ['--workspace']);
+    expect(replies[0]).toMatch(/未绑定工作区/);
   });
 
-  it('total range scopes since=0 (lifetime)', async () => {
-    const { ctx, replies, ws } = buildCtx();
-    ctx.rollupStore = {
-      load: async () => [
-        {
-          workspaceId: ws!.id,
-          sdkSessionId: 's1',
-          dateKey: '2020-01-01',
-          deltaUsd: 1.25,
-          deltaIn: 0,
-          deltaOut: 0,
-          at: 0, // very old — must still appear under total
-        },
-      ],
-    } as unknown as Parameters<typeof costCmd.run>[0]['rollupStore'];
-    await costCmd.run(ctx, ['total']);
-    expect(replies[0]).toContain('(total)');
-    expect(replies[0]).toContain('1.2500');
+  it('--workspace shows per-chat breakdown of same workspace + total', async () => {
+    const { ctx, replies } = buildCtx();
+    // chatId is '12345' per _helpers default
+    ctx.workspaceManager.addCost('telegram', '12345', 1.0, true);
+    await costCmd.run(ctx, ['--workspace']);
+    expect(replies[0]).toMatch(/📊 workspace test-ws 总和/);
+    expect(replies[0]).toMatch(/合计.*\$1\.0/);
+    expect(replies[0]).toMatch(/chat 12345/);
   });
 });
