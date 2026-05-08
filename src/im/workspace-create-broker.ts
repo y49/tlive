@@ -17,7 +17,7 @@
 //   timeout (5 min)
 //     → broker.pruneExpired() removes stale entries
 
-import type { ChannelType } from '../workspace/bindings.js';
+import type { ChannelType } from '../workspace/chat-instance.js';
 
 export interface PendingCreate {
   channelType: ChannelType;

@@ -15,7 +15,7 @@
 import type { SessionManager } from '../session/manager.js';
 import type { PermissionBroker } from '../permission/broker.js';
 import type { PlatformAdapter } from '../platform/types.js';
-import type { ChannelType } from '../workspace/bindings.js';
+import type { ChannelType } from '../workspace/chat-instance.js';
 import type { Logger } from '../util/logger.js';
 
 export interface StaleRecoveryDeps {

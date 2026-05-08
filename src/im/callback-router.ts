@@ -49,7 +49,7 @@ import type {
   ThinkingLevel,
 } from '../runtime/types.js';
 import type { PolicyStore } from '../permission/policy-store.js';
-import type { ChannelType } from '../workspace/bindings.js';
+import type { ChannelType } from '../workspace/chat-instance.js';
 import type { Workspace } from '../workspace/config.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
 import type { WorkspaceCreateBroker } from './workspace-create-broker.js';

@@ -4,7 +4,7 @@
 // from the legacy src/im/render/types.ts so HUD code can depend on it
 // without dragging in renderer-specific types that will be deleted in T10.
 
-import type { ChannelType } from '../workspace/bindings.js';
+import type { ChannelType } from '../workspace/chat-instance.js';
 
 export interface RenderTarget {
   channelType: ChannelType;

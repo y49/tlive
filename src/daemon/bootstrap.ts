@@ -75,7 +75,7 @@ import { tryCreateWorkspaceFromPath } from './workspace-create-handler.js';
 import { TelegramAdapter } from '../platform/telegram/adapter.js';
 import { FeishuAdapter } from '../platform/feishu/adapter.js';
 import type { PlatformAdapter, InboundEvent } from '../platform/types.js';
-import type { ChannelType } from '../workspace/bindings.js';
+import type { ChannelType } from '../workspace/chat-instance.js';
 
 import type { AgentProvider, AgentRuntime } from '../runtime/types.js';
 import { ClaudeSdkRuntime } from '../runtime/claude/runtime.js';

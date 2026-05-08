@@ -6,7 +6,7 @@
 // SubagentEntry, PermissionTemplateInput, and 8 unused SessionRenderState
 // fields) — see refactor(im): trim SessionRenderState commit.
 
-import type { ChannelType } from '../../workspace/bindings.js';
+import type { ChannelType } from '../../workspace/chat-instance.js';
 import type { PlatformAdapter } from '../../platform/types.js';
 import type { ChannelCapabilities } from '../capability-matrix.js';
 

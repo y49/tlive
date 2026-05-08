@@ -14,7 +14,7 @@ import type {
   PlatformAdapter, OutboundMessage, OutboundAttachment, InboundEvent, ReplyMarkup, ParseMode,
 } from '../types.js';
 import { RateLimitError } from '../types.js';
-import type { ChannelType } from '../../workspace/bindings.js';
+import type { ChannelType } from '../../workspace/chat-instance.js';
 import { replyMarkupToTelegram, escapeMarkdownV2, formatHtml } from './renderer.js';
 import { sendTelegramAttachment, downloadTelegramFile } from './attachment.js';
 

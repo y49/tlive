@@ -10,7 +10,7 @@ import type { NotificationEvent } from '../runtime/events.js';
 import type { AgentStatus } from './status.js';
 import type { SessionContext } from './context.js';
 import type { CostTracker } from '../cost/tracker.js';
-import type { ChannelType } from '../workspace/bindings.js';
+import type { ChannelType } from '../workspace/chat-instance.js';
 
 export type SessionKind = 'local' | 'remote';
 

@@ -9,7 +9,7 @@
 // unambiguous in the multi-workspace case.
 
 import type { Logger } from '../util/logger.js';
-import type { ChannelType } from './bindings.js';
+import type { ChannelType } from './chat-instance.js';
 import type { WorkspaceManager } from './manager.js';
 import type { TliveConfigV1 } from '../config/schema.js';
 

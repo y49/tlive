@@ -10,7 +10,7 @@
 //
 // Spec: docs/superpowers/specs/2026-04-22-t14b-full-cutover-design.md §7.2.
 
-import type { ChannelType } from '../workspace/bindings.js';
+import type { ChannelType } from '../workspace/chat-instance.js';
 
 export interface ChannelCapabilities {
   /** Can set native emoji reactions on inbound messages? */

@@ -1,15 +1,11 @@
 // src/workspace/config.ts
 //
-// Workspace + WorkspaceDefaults shapes (spec §6.1). Plain data types — the
-// behavioral WorkspaceManager lives in manager.ts, and bindings live in
-// bindings.ts. Keeping the types isolated lets MCP tool schemas, IPC
-// payloads, and renderer helpers import them without dragging in manager
-// state.
+// Workspace template — pure project config (spec 2026-05-08 §3.1). Runtime
+// state (activeSessionId, costRollup, settings override) lives on
+// ChatInstance per (channelType, chatId). Roles/admins removed entirely
+// per chat-trust model.
 
 import type { AgentProvider, Effort, McpServerConfig, PermissionMode, ThinkingLevel } from '../runtime/types.js';
-import type { ChatBinding } from './bindings.js';
-
-export type Role = 'admin' | 'operator' | 'observer';
 
 export interface WorkspaceDefaults {
   provider: AgentProvider;
@@ -17,11 +13,8 @@ export interface WorkspaceDefaults {
   effort?: Effort;
   permissionMode: PermissionMode;
   thinking: ThinkingLevel;
-  verbose: boolean;
   budgetUsd?: number;
   systemPromptAppend?: string;
-  prewarmCache: boolean;
-  threadPerSession: boolean;
 }
 
 export interface WorkspaceBudget {
@@ -34,16 +27,9 @@ export interface Workspace {
   name: string;
   workdir: string;
   gitRemote?: string;
-  // activeSessionId removed — moved to ChatBinding.activeSessionId per
-  // docs/superpowers/specs/2026-05-07-isolated-chat-sessions-design.md §3.
-  // Each chat owns its own SDK session so conversations stay independent.
   defaults: WorkspaceDefaults;
   budget: WorkspaceBudget;
   mcpServers: Record<string, McpServerConfig>;
-  roles: Record<string, Role>;
-  /** Default role assigned when a new user messages the workspace. */
-  defaultRole: Role;
-  bindings: ChatBinding[];
   createdAt: string;
 }
 
@@ -63,8 +49,5 @@ export function defaultWorkspaceDefaults(provider: AgentProvider = 'claude'): Wo
     provider,
     permissionMode: 'default',
     thinking: 'collapsed',
-    verbose: false,
-    prewarmCache: false,
-    threadPerSession: false,
   };
 }

@@ -8,7 +8,7 @@
 // - Feishu: no-op (no first-party autocomplete surface).
 
 import type { PlatformAdapter } from '../platform/types.js';
-import type { ChannelType } from '../workspace/bindings.js';
+import type { ChannelType } from '../workspace/chat-instance.js';
 import type { BotCommandSpec } from '../platform/telegram/bot-commands.js';
 import { registerBotCommands as telegramRegister } from '../platform/telegram/bot-commands.js';
 

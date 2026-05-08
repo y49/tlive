@@ -1,7 +1,7 @@
 // tests/workspace/bindings.test.ts
 
 import { describe, it, expect } from 'vitest';
-import { addBinding, removeBinding, findBinding, type ChatBinding } from '../../src/workspace/bindings.js';
+import { addBinding, removeBinding, findBinding, type ChatBinding } from '../../src/workspace/chat-instance.js';
 
 describe('bindings', () => {
   it('addBinding appends to empty array', () => {

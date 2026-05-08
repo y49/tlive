@@ -26,7 +26,7 @@ import {
 import {
   type ChatBinding, type ChannelType, addBinding as addBindingPure, removeBinding as removeBindingPure,
   findBinding,
-} from './bindings.js';
+} from './chat-instance.js';
 
 export class WorkspaceConflictError extends Error {
   constructor(workspaceId: string, current: string, incoming: string) {

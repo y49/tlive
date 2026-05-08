@@ -27,7 +27,7 @@ import type { SessionPersistence } from '../session/persistence.js';
 import type { CostRollupStore } from '../cost/rollups.js';
 import type { WarmRuntimePool } from '../session/warm-pool.js';
 import type { PlatformAdapter } from '../platform/types.js';
-import type { ChannelType } from '../workspace/bindings.js';
+import type { ChannelType } from '../workspace/chat-instance.js';
 
 export interface IpcDispatcherDeps {
   sessions: SessionManager;

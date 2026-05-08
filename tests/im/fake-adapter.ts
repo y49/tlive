@@ -7,7 +7,7 @@
 import type {
   PlatformAdapter, OutboundMessage, OutboundAttachment, InboundEvent, ParseMode, ReplyMarkup,
 } from '../../src/platform/types.js';
-import type { ChannelType } from '../../src/workspace/bindings.js';
+import type { ChannelType } from '../../src/workspace/chat-instance.js';
 
 export interface FakeCall {
   kind: 'send' | 'edit' | 'delete' | 'pin' | 'setReaction' | 'sendAttachment' | 'sendCard' | 'updateCard';

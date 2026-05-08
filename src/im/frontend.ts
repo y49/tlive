@@ -25,7 +25,7 @@ import type { PermissionBroker, BrokerEvent } from '../permission/broker.js';
 import type { AskUserQuestionBroker, AskBrokerEvent } from '../permission/ask-broker.js';
 import type { ElicitationBroker, ElicitationBrokerEvent } from '../permission/elicitation-broker.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
-import type { ChannelType } from '../workspace/bindings.js';
+import type { ChannelType } from '../workspace/chat-instance.js';
 import type { PlatformAdapter } from '../platform/types.js';
 import type { Logger } from '../util/logger.js';
 import { capabilitiesOf } from './capability-matrix.js';

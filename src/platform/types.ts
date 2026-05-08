@@ -17,7 +17,7 @@
 //
 // Spec: docs/superpowers/specs/2026-04-22-t14b-full-cutover-design.md §10.
 
-import type { ChannelType } from '../workspace/bindings.js';
+import type { ChannelType } from '../workspace/chat-instance.js';
 
 export type ParseMode = 'markdown' | 'html' | 'plain';
 

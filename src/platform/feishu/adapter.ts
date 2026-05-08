@@ -17,7 +17,7 @@ import type {
   FormField,
 } from '../types.js';
 import { RateLimitError } from '../types.js';
-import type { ChannelType } from '../../workspace/bindings.js';
+import type { ChannelType } from '../../workspace/chat-instance.js';
 import { buildInlineCard } from './renderer.js';
 import { buildFormCard } from './form.js';
 import { sendFeishuAttachment, downloadFeishuAttachment } from './attachment.js';
