@@ -8,10 +8,9 @@
 // setReaction is implemented via POST/DELETE /open-apis/im/v1/messages/{id}/reactions.
 // HTTP calls are injected via options.httpPost / options.httpDelete (Approach A)
 // so tests can mock them without touching the lark SDK Client. Production uses
-// a thin wrapper around the lark Client's raw requestThirdParty-style method.
-// If the lark SDK does not expose a convenient raw HTTP helper, we fall back to
-// calling the reaction API methods on the typed im.v1.message.reactions object
-// (the SDK does expose this resource). Reaction errors are always swallowed.
+// thin wrappers around the lark Client's im.v1.messageReaction.create/delete
+// methods (camelCase singular — verified by inspecting Object.keys(c.im.v1)).
+// Reaction errors are always swallowed.
 
 import type {
   PlatformAdapter, OutboundMessage, OutboundAttachment, InboundEvent, ReplyMarkup,
@@ -48,13 +47,13 @@ export interface FeishuAdapterOptions {
   }) => void;
   /**
    * Injection point (Approach A) for the POST HTTP call used by setReaction.
-   * Defaults to calling im.v1.message.reactions.create on the lark Client.
+   * Defaults to calling im.v1.messageReaction.create on the lark Client.
    * Tests inject a vi.fn() to avoid real network calls.
    */
   httpPost?: (path: string, body: unknown) => Promise<unknown>;
   /**
    * Injection point (Approach A) for the DELETE HTTP call used by setReaction.
-   * Defaults to calling im.v1.message.reactions.delete on the lark Client.
+   * Defaults to calling im.v1.messageReaction.delete on the lark Client.
    * Tests inject a vi.fn() to avoid real network calls.
    */
   httpDelete?: (path: string) => Promise<unknown>;
@@ -96,9 +95,9 @@ export class FeishuAdapter implements PlatformAdapter {
         if (!match) return Promise.reject(new Error(`httpPost: unrecognised path: ${path}`));
         const messageId = match[1]!;
         const c = this.client as {
-          im: { v1: { message: { reactions: { create: (args: unknown) => Promise<unknown> } } } };
+          im: { v1: { messageReaction: { create: (args: unknown) => Promise<unknown> } } };
         };
-        return c.im.v1.message.reactions.create({ path: { message_id: messageId }, data: body });
+        return c.im.v1.messageReaction.create({ path: { message_id: messageId }, data: body });
       };
     }
     if (options.httpDelete) {
@@ -111,9 +110,9 @@ export class FeishuAdapter implements PlatformAdapter {
         if (!match) return Promise.reject(new Error(`httpDelete: unrecognised path: ${path}`));
         const [, messageId, reactionId] = match;
         const c = this.client as {
-          im: { v1: { message: { reactions: { delete: (args: unknown) => Promise<unknown> } } } };
+          im: { v1: { messageReaction: { delete: (args: unknown) => Promise<unknown> } } };
         };
-        return c.im.v1.message.reactions.delete({ path: { message_id: messageId, reaction_id: reactionId } });
+        return c.im.v1.messageReaction.delete({ path: { message_id: messageId, reaction_id: reactionId } });
       };
     }
 
@@ -243,7 +242,10 @@ export class FeishuAdapter implements PlatformAdapter {
         this.reactionCache.delete(messageId);
       } catch (err) {
         this.options.logger?.warn('feishu setReaction(null) failed', {
-          messageId, reactionId: cached, reason: (err as Error).message,
+          messageId, reactionId: cached,
+          reason: (err as Error).message,
+          errCode: (err as { code?: number }).code,
+          errResponse: (err as { response?: { data?: unknown } }).response?.data,
         });
       }
       return;
@@ -261,7 +263,10 @@ export class FeishuAdapter implements PlatformAdapter {
         await this.httpDelete(`/open-apis/im/v1/messages/${messageId}/reactions/${cached}`);
       } catch (err) {
         this.options.logger?.warn('feishu setReaction: prior delete failed (continuing)', {
-          messageId, cached, reason: (err as Error).message,
+          messageId, cached,
+          reason: (err as Error).message,
+          errCode: (err as { code?: number }).code,
+          errResponse: (err as { response?: { data?: unknown } }).response?.data,
         });
       }
       this.reactionCache.delete(messageId);
@@ -283,7 +288,10 @@ export class FeishuAdapter implements PlatformAdapter {
       }
     } catch (err) {
       this.options.logger?.warn('feishu setReaction failed', {
-        messageId, emoji, emojiType, reason: (err as Error).message,
+        messageId, emoji, emojiType,
+        reason: (err as Error).message,
+        errCode: (err as { code?: number }).code,
+        errResponse: (err as { response?: { data?: unknown } }).response?.data,
       });
     }
   }

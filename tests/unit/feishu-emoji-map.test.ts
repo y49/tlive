@@ -5,17 +5,14 @@ describe('feishuEmojiType', () => {
   it('maps received-phase 👀 → EYES', () => {
     expect(feishuEmojiType('👀')).toBe('EYES');
   });
-  it('maps working-phase ⏳ → HOURGLASS_FLOWING_SAND', () => {
-    expect(feishuEmojiType('⏳')).toBe('HOURGLASS_FLOWING_SAND');
+  it('maps processing-phase 🤔 → THINKING_FACE', () => {
+    expect(feishuEmojiType('🤔')).toBe('THINKING_FACE');
   });
-  it('maps done-phase ✅ → DONE', () => {
-    expect(feishuEmojiType('✅')).toBe('DONE');
+  it('maps done_ok-phase 👌 → OK', () => {
+    expect(feishuEmojiType('👌')).toBe('OK');
   });
-  it('maps error-phase ❌ → X', () => {
-    expect(feishuEmojiType('❌')).toBe('X');
-  });
-  it('maps revert-phase 🤔 → THINKING', () => {
-    expect(feishuEmojiType('🤔')).toBe('THINKING');
+  it('maps done_err-phase 💔 → BROKEN_HEART', () => {
+    expect(feishuEmojiType('💔')).toBe('BROKEN_HEART');
   });
   it('returns null for unmapped emoji', () => {
     expect(feishuEmojiType('🚀')).toBeNull();

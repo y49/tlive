@@ -25,30 +25,30 @@ describe('FeishuAdapter.setReaction', () => {
   });
 
   it('first setReaction POSTs with mapped emoji_type, caches reaction_id', async () => {
-    await adapter.setReaction('msg-1', 'chat-1', '✅');
+    await adapter.setReaction('msg-1', 'chat-1', '👌');
     expect(httpPost).toHaveBeenCalledWith(
       '/open-apis/im/v1/messages/msg-1/reactions',
-      { reaction_type: { emoji_type: 'DONE' } },
+      { reaction_type: { emoji_type: 'OK' } },
     );
     expect(httpDelete).not.toHaveBeenCalled();
   });
 
   it('second setReaction on same msg DELETEs cached id, POSTs new', async () => {
-    await adapter.setReaction('msg-1', 'chat-1', '⏳');
+    await adapter.setReaction('msg-1', 'chat-1', '👀');
     httpPost.mockClear();
     httpPost.mockResolvedValue({ data: { reaction_id: 'r-2' } });
-    await adapter.setReaction('msg-1', 'chat-1', '✅');
+    await adapter.setReaction('msg-1', 'chat-1', '👌');
     expect(httpDelete).toHaveBeenCalledWith(
       '/open-apis/im/v1/messages/msg-1/reactions/r-1',
     );
     expect(httpPost).toHaveBeenCalledWith(
       '/open-apis/im/v1/messages/msg-1/reactions',
-      { reaction_type: { emoji_type: 'DONE' } },
+      { reaction_type: { emoji_type: 'OK' } },
     );
   });
 
   it('setReaction(null) DELETEs cached id', async () => {
-    await adapter.setReaction('msg-1', 'chat-1', '✅');
+    await adapter.setReaction('msg-1', 'chat-1', '👌');
     await adapter.setReaction('msg-1', 'chat-1', null);
     expect(httpDelete).toHaveBeenCalledWith(
       '/open-apis/im/v1/messages/msg-1/reactions/r-1',
@@ -66,7 +66,7 @@ describe('FeishuAdapter.setReaction', () => {
 
   it('HTTP 5xx warn-logs and swallows (does not throw)', async () => {
     httpPost.mockRejectedValueOnce(new Error('500 server error'));
-    await expect(adapter.setReaction('msg-1', 'chat-1', '✅')).resolves.toBeUndefined();
+    await expect(adapter.setReaction('msg-1', 'chat-1', '👌')).resolves.toBeUndefined();
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringMatching(/setReaction failed/i),
       expect.any(Object),
@@ -74,9 +74,9 @@ describe('FeishuAdapter.setReaction', () => {
   });
 
   it('cache is per-messageId — different msg does not share cached id', async () => {
-    await adapter.setReaction('msg-1', 'chat-1', '✅');
+    await adapter.setReaction('msg-1', 'chat-1', '👌');
     httpPost.mockClear();
-    await adapter.setReaction('msg-2', 'chat-1', '✅');
+    await adapter.setReaction('msg-2', 'chat-1', '👌');
     expect(httpDelete).not.toHaveBeenCalled();
     expect(httpPost).toHaveBeenCalledTimes(1);
   });
