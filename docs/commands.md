@@ -126,14 +126,27 @@ workspace-scoped 命令在无 binding 时引导用户进 `/workspace` 流程
 
 用户点 `[📁 X]` 切到另一个 workspace:
 
-1. 读当前 ws 的 activeSession;in-flight 时弹 confirm("切走会中断当前 turn")
+1. 读**当前 chat 的** binding.activeSessionId;in-flight 时弹 confirm("切走会中断当前 turn")
 2. 当前 session 走 `interrupt() + stop()`(`activeSessionId` 与 jsonl 保留)
-3. `removeBinding(currentWs, this chat)` + `addBinding(targetWs, this chat, primary)`
-4. 读目标 ws 的 `activeSessionId`:
+3. `removeBinding(currentWs, this chat)` + `addBinding(targetWs, this chat)`
+4. 读目标 ws 中**当前 chat 的** binding.activeSessionId:
    - 非 null → **lazy resume**(下条 inbound 触发,见 §5)
    - null → 提示 "已切到 X,暂无活跃会话" + `[🆕 新会话] [📋 全部会话]`
 
 切换后所有 workspace-scoped 命令视图自动跟随新 ws。
+
+### 3.6 每 chat 独立 session(2026-05-07 改)
+
+> **重要**:session 归 chat 所有,不归 workspace 所有。多个 chat 可以
+> 绑定同一个 workspace(共享配置),但**各自有独立的 session**,互不
+> fan-out。
+>
+> - 飞书发的消息只在飞书显示,不会镜像到 Telegram(即使两个 chat 都绑
+>   到同一个 workspace)
+> - chat A 的对话不会泄漏给 chat B
+> - 改 `ws.defaults.model` 不影响正在跑的 session,新建 session 才生效
+>
+> 详见 spec `2026-05-07-isolated-chat-sessions-design.md`。
 
 ---
 
