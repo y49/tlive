@@ -1,5 +1,7 @@
 # IM Commands Reference (v3.3)
 
+> **v1.0-rc breaking changes**:旧 `workspaces.json` schema 不再兼容、`binding.role` 字段移除、daemon 强制单实例。升级步骤见 [docs/upgrade-v1.0-rc.md](upgrade-v1.0-rc.md)。
+
 **Spec**: `docs/superpowers/specs/2026-04-30-im-commands-redesign-design.md` (§3-§10)
 
 ---

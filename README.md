@@ -7,6 +7,11 @@
 > with zero terminal interaction — or keep using your terminal and route
 > permissions to your phone via MCP.
 
+## ⚠ Upgrading from v0.x to v1.0-rc
+
+v1.0-rc 是大重构,**升级前必须停旧 daemon + 清旧 workspaces.json**。
+完整步骤见 [docs/upgrade-v1.0-rc.md](docs/upgrade-v1.0-rc.md)。
+
 ## Three ways to use tlive
 
 - **Daemon mode** — IM is your only interface. `tlive start`, open your bot,
