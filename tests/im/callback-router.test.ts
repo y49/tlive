@@ -187,6 +187,16 @@ describe('CallbackRouter', () => {
     const out = await router.route({ data: 'nope:whatever', userId: 'u', chatId: 'c', channelType: 'telegram' });
     expect(out.kind).toBe('unknown');
   });
+
+  it('rejects callback without userId and logs error', async () => {
+    const out = await router.route({
+      data: 'perm:allow:sess:req1',
+      userId: '',
+      chatId: 'c',
+      channelType: 'telegram',
+    });
+    expect(out).toEqual({ kind: 'unknown', reason: 'missing-userId' });
+  });
 });
 
 describe('CallbackRouter — menu:expand / menu:collapse (Task 30)', () => {
