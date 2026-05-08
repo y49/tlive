@@ -15,9 +15,9 @@ export const helpCmd: CommandDef = {
     const lines = [
       '📖 tlive 命令 (v3.3)',
       '',
-      '🗂  会话 (workspace-scoped)',
+      '🗂  会话(各 chat 独立)',
       '   /new           起新会话',
-      '   /sessions      会话列表',
+      '   /sessions      当前 chat 的会话(--all 跨 chat)',
       '   /workspace     工作区: 看 / 切 / 加 / 退',
       '   /cost          累计成本',
       '   /find <kw>     搜历史',

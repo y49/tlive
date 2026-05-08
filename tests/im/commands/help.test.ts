@@ -8,7 +8,8 @@ describe('/help', () => {
     await helpCmd.run(ctx, []);
     const out = replies[0]!;
     expect(out).toContain('tlive 命令');
-    expect(out).toContain('会话 (workspace-scoped)');
+    expect(out).toContain('会话(各 chat 独立)');
+    expect(out).toContain('当前 chat 的会话');
     expect(out).toContain('当前对话 (session-scoped)');
     // Spot-check command entries
     expect(out).toContain('/new');
