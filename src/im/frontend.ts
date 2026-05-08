@@ -6,19 +6,20 @@
 // right renderer(s). Maintains a RenderContext per session with per-anchor
 // message-id book-keeping, and tears everything down on session stop.
 //
-// Platform targeting: on each session, we resolve the workspace's bindings
-// via WorkspaceManager.listBindings(workspaceId), pair each ChannelType with
-// the registered PlatformAdapter, and instantiate one renderer-set per
-// binding (renderer-per-target — fixes the N×M fan-out bug from T6 review).
-// TODO(Iso #6 + #7): per chat-level isolation (spec §3) attachSession will
-// pick the single owner chat instead of iterating all bindings.
+// Platform targeting: per spec §3 chat-level isolation — each session has
+// exactly one ownerChat (the chat that spawned it). attachSession takes
+// (sessionId, workspaceId, ownerChat) and instantiates a SINGLE renderer
+// bundle for the ownerChat. Fan-out across all workspace bindings is gone:
+// other chats bound to the same workspace will not receive renders for this
+// session (spec §5). Iso #7 strips the role-based filter loops that remain
+// here from the v1 multi-binding implementation.
 //
 // T10b: Legacy renderers (session-header, activity-sticky, agent-message,
 // todo-sticky, permission-card-legacy, attachment-preview-legacy, queue-hint)
 // have been deleted. TL_NEW_UX gate removed — new UX path is now the only path.
 
 import type { SessionManager } from '../session/manager.js';
-import type { SessionLike } from '../session/types.js';
+import type { OwnerChat } from '../session/types.js';
 import type { NotificationEvent } from '../runtime/events.js';
 import type { PermissionBroker, BrokerEvent } from '../permission/broker.js';
 import type { AskUserQuestionBroker, AskBrokerEvent } from '../permission/ask-broker.js';
@@ -37,7 +38,6 @@ import {
 import { ReactionTracker } from './reaction-tracker.js';
 import { ElicitationFormRenderer } from './elicitation/form.js';
 import { initialHudState, resolveModelLabel, type HudState } from './hud/state.js';
-import { targetKey as renderTargetKey } from './render-target.js';
 import { AttachmentPreview } from './attachment.js';
 import { PermissionCard } from './permission/card.js';
 import { TurnComposite } from './turn-composite.js';
@@ -60,14 +60,18 @@ interface ChannelRenderers {
 interface SessionEntry {
   sessionId: string;
   workspaceId: string;
+  /** Chat that spawned this session (spec §3 + §5.1). Renders go here only. */
+  ownerChat: OwnerChat;
   unsubscribeEvent: () => void;
-  channels: ChannelRenderers[];
+  /** Single renderer bundle keyed off ownerChat (spec §5.1 — fan-out removed). */
+  channel: ChannelRenderers;
   /** Per-turn counter for HUD header display. */
   turnCounter?: number;
   /** Active generic-permission cards keyed by requestId. */
   activePermCards?: Map<string, PermissionCard>;
-  /** Generic permission cards waiting for plaintext fallback resolution (per chatId). */
-  pendingPermPlaintextCards?: Map<string, PermissionCard>;
+  /** Generic permission card waiting for plaintext fallback resolution. Single
+   *  card per session (one ownerChat → one pending card max). */
+  pendingPermPlaintextCard?: PermissionCard;
   /**
    * Per-session promise chain to serialize handleSessionEvent invocations.
    * SDK fires events in order, but the onEvent callback is fire-and-forget.
@@ -75,11 +79,11 @@ interface SessionEntry {
    * TurnComposite / EditQueue pipeline.
    */
   dispatchChain: Promise<void>;
-  /** Per-turn TurnComposite + EditQueue per channel target. */
-  activeTurnComposites?: Map<string, TurnComposite>;
-  editQueues?: Map<string, EditQueue>;
-  /** Per-channel AskCardController. */
-  askControllers?: Map<string, AskCardController>;
+  /** Active TurnComposite + EditQueue for the single ownerChat target. */
+  activeTurnComposite?: TurnComposite;
+  editQueue?: EditQueue;
+  /** AskCardController for the single ownerChat. */
+  askController?: AskCardController;
 }
 
 export interface SessionFrontendOptions {
@@ -128,9 +132,20 @@ export class SessionFrontend {
         switch (ev.kind) {
           case 'created':
           case 'resumed':
-          case 'registered':
-            try { this.attachSession(ev.session); } catch { /* isolate */ }
+          case 'registered': {
+            const owner = ev.session.ownerChat;
+            if (!owner) {
+              this.opts.logger?.warn(
+                'session attached without ownerChat — frontend skip (spec §5.1)',
+                { sessionId: ev.session.id, kind: ev.kind },
+              );
+              return;
+            }
+            try {
+              this.attachSession(ev.session.id, ev.session.workspaceId, owner, ev.session);
+            } catch { /* isolate */ }
             break;
+          }
           case 'stopped':
             void this.detachSession(ev.sessionId).catch(() => { /* isolate */ });
             break;
@@ -192,100 +207,107 @@ export class SessionFrontend {
     this.started = false;
   }
 
-  /** Test helper — expose renderer set for a session. */
+  /** Test helper — expose renderer bundle for a session as a singleton list
+   *  for backward compatibility with multi-channel test assertions. */
   getChannelsForTest(sessionId: string): ChannelRenderers[] | undefined {
-    return this.sessions.get(sessionId)?.channels;
+    const entry = this.sessions.get(sessionId);
+    return entry ? [entry.channel] : undefined;
   }
 
   // ---- Session attach / detach --------------------------------------------
 
-  private attachSession(session: SessionLike): void {
-    if (this.sessions.has(session.id)) return;
-    // TODO(Iso #6 + #7): per chat-level isolation (spec §3) the session
-    // attaches to exactly one chat (its owner), not every binding in the
-    // workspace. For now we still iterate all bindings and treat them all
-    // as 'primary' — Iso #6 fixes attachSession to pick the owner chat
-    // and Iso #7 strips role-based fan-out.
-    const allBindings = this.opts.workspaceManager.listBindings(session.workspaceId);
-    const workspace = this.opts.workspaceManager.get(session.workspaceId);
-    const channels: ChannelRenderers[] = [];
-    const targets: RenderTarget[] = allBindings.map((b) => ({
-      channelType: b.channelType,
-      chatId: b.chatId,
-      threadId: b.threadId,
-      role: 'primary',
-    }));
-    const renderState = newSessionRenderState({
-      sessionId: session.id,
-      shortAlias: session.shortAlias,
-      workspaceId: session.workspaceId,
-      workspaceName: workspace?.name ?? session.workspaceId,
-      targets,
-    });
-    for (const target of targets) {
-      const adapter = this.opts.adapters[target.channelType];
-      if (!adapter) continue;
-      const caps = capabilitiesOf(target.channelType);
-      const deps = { adapter, capabilities: caps, target };
-      const channel: ChannelRenderers = {
-        channelType: target.channelType,
-        adapter,
-        target,
-        session: renderState,
-        reaction: new ReactionTracker({ ...deps, session: renderState }),
-        elicitation: new ElicitationFormRenderer({ ...deps, session: renderState }),
-      };
-      channels.push(channel);
+  /**
+   * Spec §5.2 — single-channel attach. session is the SessionLike whose
+   * onEvent we subscribe to for forward dispatching. ownerChat is the only
+   * render target; other workspace bindings do NOT get a renderer (spec §5).
+   */
+  private attachSession(
+    sessionId: string,
+    workspaceId: string,
+    ownerChat: OwnerChat,
+    session: { shortAlias: string; onEvent: (cb: (e: NotificationEvent) => void) => () => void },
+  ): void {
+    if (this.sessions.has(sessionId)) return;
+    const adapter = this.opts.adapters[ownerChat.channelType];
+    if (!adapter) {
+      this.opts.logger?.warn('attachSession: no adapter for ownerChat', {
+        sessionId, channelType: ownerChat.channelType,
+      });
+      return;
     }
+    const workspace = this.opts.workspaceManager.get(workspaceId);
+    const target: RenderTarget = {
+      channelType: ownerChat.channelType,
+      chatId: ownerChat.chatId,
+      threadId: ownerChat.threadId,
+      role: 'primary',
+    };
+    const renderState = newSessionRenderState({
+      sessionId,
+      shortAlias: session.shortAlias,
+      workspaceId,
+      workspaceName: workspace?.name ?? workspaceId,
+      targets: [target],
+    });
+    const caps = capabilitiesOf(target.channelType);
+    const deps = { adapter, capabilities: caps, target };
+    const channel: ChannelRenderers = {
+      channelType: target.channelType,
+      adapter,
+      target,
+      session: renderState,
+      reaction: new ReactionTracker({ ...deps, session: renderState }),
+      elicitation: new ElicitationFormRenderer({ ...deps, session: renderState }),
+    };
 
     // Apply any pending inbound that arrived BEFORE this session was attached:
     // bootstrap.handleInbound calls markInboundReceived right before
     // lazyResumeOrCreate, so by the time we see 'created' here the inbound
-    // message id is parked in pendingInbound. Drain it into per-channel state
-    // and fire the 'received' reaction (👁️) so the user sees an ack.
-    for (const c of channels) {
-      const key = chatKey(c.target.channelType, c.target.chatId);
-      const pending = this.pendingInbound.get(key);
-      if (!pending) continue;
-      renderState.lastInboundByTarget.set(targetKey(c.target), {
-        chatId: c.target.chatId,
+    // message id is parked in pendingInbound.
+    const key = chatKey(channel.target.channelType, channel.target.chatId);
+    const pending = this.pendingInbound.get(key);
+    if (pending) {
+      renderState.lastInboundByTarget.set(targetKey(channel.target), {
+        chatId: channel.target.chatId,
         messageId: pending.messageId,
         threadId: pending.threadId,
       });
       this.pendingInbound.delete(key);
-      void c.reaction.setPhase(
-        { chatId: c.target.chatId, messageId: pending.messageId, threadId: pending.threadId },
+      void channel.reaction.setPhase(
+        { chatId: channel.target.chatId, messageId: pending.messageId, threadId: pending.threadId },
         'received',
       ).catch((err) => {
         this.opts.logger?.warn('reaction received failed', {
-          sessionId: session.id, channelType: c.target.channelType,
+          sessionId, channelType: channel.target.channelType,
           reason: (err as Error).message,
         });
       });
     }
 
     const entry: SessionEntry = {
-      sessionId: session.id,
-      workspaceId: session.workspaceId,
+      sessionId,
+      workspaceId,
+      ownerChat,
       unsubscribeEvent: () => { /* set below */ },
-      channels,
+      channel,
       dispatchChain: Promise.resolve(),
     };
     const unsubscribeEvent = session.onEvent((ev) => {
       entry.dispatchChain = entry.dispatchChain
-        .then(() => this.handleSessionEvent(session.id, ev))
+        .then(() => this.handleSessionEvent(sessionId, ev))
         .catch((err) => {
           this.opts.logger?.error('frontend dispatch failed', {
-            sessionId: session.id, kind: ev.kind, err: (err as Error).message,
+            sessionId, kind: ev.kind, err: (err as Error).message,
             stack: (err as Error).stack,
           });
         });
     });
     entry.unsubscribeEvent = unsubscribeEvent;
-    this.sessions.set(session.id, entry);
+    this.sessions.set(sessionId, entry);
     this.opts.logger?.info('frontend attach', {
-      sessionId: session.id, workspaceId: session.workspaceId,
-      channels: channels.map((c) => c.target.channelType),
+      sessionId, workspaceId,
+      channelType: channel.target.channelType,
+      chatId: channel.target.chatId,
     });
   }
 
@@ -303,20 +325,19 @@ export class SessionFrontend {
   markInboundReceived(channelType: ChannelType, chatId: string, messageId: string, threadId?: string): void {
     const key = chatKey(channelType, chatId);
     this.pendingInbound.set(key, { messageId, threadId });
-    // Apply to every already-attached session whose channels include this chat.
+    // Apply to every already-attached session whose ownerChat matches this chat.
     for (const entry of this.sessions.values()) {
-      for (const c of entry.channels) {
-        if (c.target.channelType !== channelType || c.target.chatId !== chatId) continue;
-        c.session.lastInboundByTarget.set(targetKey(c.target), { chatId, messageId, threadId });
-        void c.reaction.setPhase({ chatId, messageId, threadId }, 'received').catch((err) => {
-          this.opts.logger?.warn('reaction received failed', {
-            sessionId: entry.sessionId, channelType,
-            reason: (err as Error).message,
-          });
+      const c = entry.channel;
+      if (c.target.channelType !== channelType || c.target.chatId !== chatId) continue;
+      c.session.lastInboundByTarget.set(targetKey(c.target), { chatId, messageId, threadId });
+      void c.reaction.setPhase({ chatId, messageId, threadId }, 'received').catch((err) => {
+        this.opts.logger?.warn('reaction received failed', {
+          sessionId: entry.sessionId, channelType,
+          reason: (err as Error).message,
         });
-        // Drain pending — at least one session consumed it.
-        this.pendingInbound.delete(key);
-      }
+      });
+      // Drain pending — at least one session consumed it.
+      this.pendingInbound.delete(key);
     }
   }
 
@@ -325,18 +346,14 @@ export class SessionFrontend {
     if (!entry) return;
     this.sessions.delete(sessionId);
     try { entry.unsubscribeEvent(); } catch { /* isolate */ }
-    if (entry.activeTurnComposites) {
-      for (const tc of entry.activeTurnComposites.values()) {
-        try { tc.destroy(); } catch { /* isolate */ }
-      }
+    if (entry.activeTurnComposite) {
+      try { entry.activeTurnComposite.destroy(); } catch { /* isolate */ }
     }
     if (entry.activePermCards) {
       for (const reqId of entry.activePermCards.keys()) this.cardsByReqId.delete(reqId);
     }
-    if (entry.askControllers) {
-      for (const ctrl of entry.askControllers.values()) ctrl.cancelPending();
-    }
-    if (entry.pendingPermPlaintextCards) entry.pendingPermPlaintextCards.clear();
+    entry.askController?.cancelPending();
+    entry.pendingPermPlaintextCard = undefined;
   }
 
   // ---- Event dispatch -----------------------------------------------------
@@ -346,7 +363,7 @@ export class SessionFrontend {
     const workspace = this.opts.workspaceManager.get(entry.workspaceId);
     const provider = session?.provider === 'codex' ? 'codex' : 'claude';
     const workspaceName = workspace?.name
-      ?? entry.channels[0]?.session.workspaceName
+      ?? entry.channel.session.workspaceName
       ?? entry.workspaceId;
     // Prefer the SDK-reported model (captured on system event during init —
     // before frontend subscribed) over the workspace default. resolveModelLabel
@@ -369,11 +386,11 @@ export class SessionFrontend {
     if (!entry) return;
     this.opts.logger?.info?.('frontend dispatch', { sessionId, kind: ev.kind });
 
-    // ---- Reaction phases (per-channel) ------------------------------------
+    // ---- Reaction phases (single owner channel) -------------------------
+    const c = entry.channel;
     if (ev.kind === 'turn_start') {
-      for (const c of entry.channels) {
-        const inbound = c.session.lastInboundByTarget.get(targetKey(c.target));
-        if (!inbound) continue;
+      const inbound = c.session.lastInboundByTarget.get(targetKey(c.target));
+      if (inbound) {
         try { await c.reaction.setPhase(inbound, 'processing'); }
         catch (err) {
           this.opts.logger?.warn('reaction processing failed', {
@@ -391,23 +408,17 @@ export class SessionFrontend {
       // typical conditions, short enough that the reaction transition
       // still feels responsive.
       const turnEndAt = Date.now();
-      const inbounds: Array<{ c: ChannelRenderers; inbound: { chatId: string; messageId: string; threadId?: string } }> = [];
-      for (const c of entry.channels) {
-        const inbound = c.session.lastInboundByTarget.get(targetKey(c.target));
-        if (inbound) inbounds.push({ c, inbound });
-      }
-      if (inbounds.length > 0) {
+      const inbound = c.session.lastInboundByTarget.get(targetKey(c.target));
+      if (inbound) {
         void (async () => {
           const elapsed = Date.now() - turnEndAt;
           const remaining = Math.max(0, 400 - elapsed);
           if (remaining > 0) await new Promise<void>((resolve) => setTimeout(resolve, remaining));
-          for (const { c, inbound } of inbounds) {
-            try { await c.reaction.setPhase(inbound, 'done_ok'); }
-            catch (err) {
-              this.opts.logger?.warn('reaction done_ok failed', {
-                sessionId, channelType: c.target.channelType, reason: (err as Error).message,
-              });
-            }
+          try { await c.reaction.setPhase(inbound, 'done_ok'); }
+          catch (err) {
+            this.opts.logger?.warn('reaction done_ok failed', {
+              sessionId, channelType: c.target.channelType, reason: (err as Error).message,
+            });
           }
         })();
       }
@@ -415,113 +426,69 @@ export class SessionFrontend {
       // Reaction anchor: 💔 for runtime errors. Same 400ms buffer as done_ok
       // so any error-banner render lands first.
       const errAt = Date.now();
-      const errInbounds: Array<{ c: ChannelRenderers; inbound: { chatId: string; messageId: string; threadId?: string } }> = [];
-      for (const c of entry.channels) {
-        const inbound = c.session.lastInboundByTarget.get(targetKey(c.target));
-        if (inbound) errInbounds.push({ c, inbound });
-      }
-      if (errInbounds.length > 0) {
+      const inbound = c.session.lastInboundByTarget.get(targetKey(c.target));
+      if (inbound) {
         void (async () => {
           const elapsed = Date.now() - errAt;
           const remaining = Math.max(0, 400 - elapsed);
           if (remaining > 0) await new Promise<void>((resolve) => setTimeout(resolve, remaining));
-          for (const { c, inbound } of errInbounds) {
-            try { await c.reaction.setPhase(inbound, 'done_err'); }
-            catch (err) {
-              this.opts.logger?.warn('reaction done_err failed', {
-                sessionId, channelType: c.target.channelType, reason: (err as Error).message,
-              });
-            }
+          try { await c.reaction.setPhase(inbound, 'done_err'); }
+          catch (err) {
+            this.opts.logger?.warn('reaction done_err failed', {
+              sessionId, channelType: c.target.channelType, reason: (err as Error).message,
+            });
           }
         })();
       }
     }
 
-    // ---- TurnComposite / HUD dispatch --------------------------------------
+    // ---- TurnComposite / HUD dispatch (single owner channel) ---------------
 
-    const primaryTargets = entry.channels
-      .filter(c => c.target.role === 'primary')
-      .map(c => c.target);
+    if (ev.kind === 'turn_start') {
+      entry.turnCounter = (entry.turnCounter ?? 0) + 1;
+      const initState = this.buildInitialHudState(sessionId, entry);
 
-    if (primaryTargets.length > 0) {
-      if (ev.kind === 'turn_start') {
-        entry.turnCounter = (entry.turnCounter ?? 0) + 1;
-        const initState = this.buildInitialHudState(sessionId, entry);
-
-        // Build TurnComposite per primary AND mirror channel. Primaries get
-        // the full HUD card with interactive ask/permission cards on top;
-        // mirrors get the same banner+body+footer ReplyDocument so users on
-        // the mirror channel see assistant text echoed (spec §I5). EditQueue
-        // persists across turns (rate-limit state belongs to the chat, not
-        // the turn) so we cache it on the SessionEntry.
-        if (entry.activeTurnComposites) {
-          for (const tc of entry.activeTurnComposites.values()) tc.destroy();
-        }
-        entry.activeTurnComposites = new Map<string, TurnComposite>();
-        if (!entry.editQueues) entry.editQueues = new Map<string, EditQueue>();
-        const startPromises: Promise<void>[] = [];
-        for (const c of entry.channels) {
-          if (c.target.role !== 'primary' && c.target.role !== 'mirror') continue;
-          const tk = renderTargetKey(c.target);
-          let eq = entry.editQueues.get(tk);
-          if (!eq) {
-            const eqOpts = c.target.channelType === 'telegram'
-              ? { refillMs: 2000, capacity: 5 }
-              : { refillMs: 100, capacity: 50 };
-            eq = new EditQueue(eqOpts);
-            entry.editQueues.set(tk, eq);
-          }
-          const tc = new TurnComposite(c.adapter, c.target, eq, initState);
-          entry.activeTurnComposites.set(tk, tc);
-          // Await placeholder send so msgId is set before subsequent events
-          // (assistant_text_delta / turn_end) fire flushOnce — otherwise the
-          // race causes flushOnce to short-circuit on null msgId, dropping the edit.
-          startPromises.push(tc.start().catch((err) => {
-            this.opts.logger?.error('TurnComposite.start failed', {
-              sessionId, channelType: c.target.channelType, err: (err as Error).message,
-            });
-          }));
-        }
-        await Promise.all(startPromises);
-
-        // Build AskCardController per primary channel. Cancel any cards from
-        // the previous turn (turn boundary forgets pending questions). Each
-        // controller receives a broker-aware resolveFn so button clicks land
-        // back in askBroker.resolve (cleans pending registry + emits resolved).
-        if (entry.askControllers) {
-          for (const ctrl of entry.askControllers.values()) ctrl.cancelPending();
-        }
-        entry.askControllers = new Map<string, AskCardController>();
-        for (const c of entry.channels) {
-          if (c.target.role !== 'primary') continue;
-          const tk = renderTargetKey(c.target);
-          entry.askControllers.set(
-            tk,
-            new AskCardController(c.adapter, c.target, (reqId, chosen) => {
-              this.opts.askBroker?.resolve(sessionId, reqId, chosen);
-            }),
-          );
-        }
+      // EditQueue persists across turns (rate-limit state belongs to the
+      // chat, not the turn) so we cache it on the SessionEntry.
+      if (entry.activeTurnComposite) entry.activeTurnComposite.destroy();
+      if (!entry.editQueue) {
+        const eqOpts = c.target.channelType === 'telegram'
+          ? { refillMs: 2000, capacity: 5 }
+          : { refillMs: 100, capacity: 50 };
+        entry.editQueue = new EditQueue(eqOpts);
       }
+      const tc = new TurnComposite(c.adapter, c.target, entry.editQueue, initState);
+      entry.activeTurnComposite = tc;
+      // Await placeholder send so msgId is set before subsequent events
+      // (assistant_text_delta / turn_end) fire flushOnce — otherwise the
+      // race causes flushOnce to short-circuit on null msgId, dropping the edit.
+      await tc.start().catch((err) => {
+        this.opts.logger?.error('TurnComposite.start failed', {
+          sessionId, channelType: c.target.channelType, err: (err as Error).message,
+        });
+      });
 
-      // Broadcast every event to all live TurnComposites for HUD/reply update.
-      if (entry.activeTurnComposites) {
-        for (const tc of entry.activeTurnComposites.values()) {
-          if (!tc.isDestroyed()) tc.ingestEvent(ev);
-        }
-      }
+      // Build AskCardController for the owner channel. Cancel any card
+      // from the previous turn (turn boundary forgets pending questions).
+      // The controller receives a broker-aware resolveFn so button clicks
+      // land back in askBroker.resolve (cleans pending registry + emits
+      // resolved).
+      entry.askController?.cancelPending();
+      entry.askController = new AskCardController(c.adapter, c.target, (reqId, chosen) => {
+        this.opts.askBroker?.resolve(sessionId, reqId, chosen);
+      });
+    }
+
+    // Broadcast every event to the live TurnComposite for HUD/reply update.
+    if (entry.activeTurnComposite && !entry.activeTurnComposite.isDestroyed()) {
+      entry.activeTurnComposite.ingestEvent(ev);
     }
 
     // ---- Attachment dispatch ------------------------------------------------
 
-    // Dispatch attachment previews to primary targets only (mirrors get text
-    // echoes but not file previews per spec §I5).
     if (ev.kind === 'attachment_produced') {
-      for (const c of entry.channels) {
-        if (c.target.role !== 'primary') continue;
-        const ap = new AttachmentPreview(c.adapter, c.target);
-        await ap.send({ name: ev.name, mime: ev.mime, sizeBytes: ev.sizeBytes, path: ev.path });
-      }
+      const ap = new AttachmentPreview(c.adapter, c.target);
+      await ap.send({ name: ev.name, mime: ev.mime, sizeBytes: ev.sizeBytes, path: ev.path });
     }
 
     // ---- Session lifecycle --------------------------------------------------
@@ -555,26 +522,23 @@ export class SessionFrontend {
         this.opts.permissionBroker.resolve(ev.sessionId, req.id, 'deny');
         return;
       }
-      for (const c of entry.channels) {
-        if (c.target.role !== 'primary') continue;
-        const card = new PermissionCard(c.adapter, c.target, {
-          kind: 'generic',
-          requestId: req.id,
-          toolName: req.toolName,
-          toolInput: req.toolInput,
-          onResolve: (decision) => {
-            // PermissionCard uses 'always'; broker expects 'allow_always'.
-            const brokerDecision = decision === 'always' ? 'allow_always' : decision;
-            this.opts.permissionBroker.resolve(ev.sessionId, req.id, brokerDecision);
-          },
-        });
-        await card.send();
-        entry.activePermCards.set(req.id, card);
-        this.cardsByReqId.set(req.id, card);
-        if (card.isPermFallbackPending()) {
-          if (!entry.pendingPermPlaintextCards) entry.pendingPermPlaintextCards = new Map<string, PermissionCard>();
-          entry.pendingPermPlaintextCards.set(c.target.chatId, card);
-        }
+      const c = entry.channel;
+      const card = new PermissionCard(c.adapter, c.target, {
+        kind: 'generic',
+        requestId: req.id,
+        toolName: req.toolName,
+        toolInput: req.toolInput,
+        onResolve: (decision) => {
+          // PermissionCard uses 'always'; broker expects 'allow_always'.
+          const brokerDecision = decision === 'always' ? 'allow_always' : decision;
+          this.opts.permissionBroker.resolve(ev.sessionId, req.id, brokerDecision);
+        },
+      });
+      await card.send();
+      entry.activePermCards.set(req.id, card);
+      this.cardsByReqId.set(req.id, card);
+      if (card.isPermFallbackPending()) {
+        entry.pendingPermPlaintextCard = card;
       }
       return;
     }
@@ -582,10 +546,8 @@ export class SessionFrontend {
     if (ev.kind === 'resolved') {
       entry.activePermCards.delete(ev.requestId);
       this.cardsByReqId.delete(ev.requestId);
-      if (entry.pendingPermPlaintextCards) {
-        for (const [chatId, c] of [...entry.pendingPermPlaintextCards.entries()]) {
-          if (c.requestId === ev.requestId) entry.pendingPermPlaintextCards.delete(chatId);
-        }
+      if (entry.pendingPermPlaintextCard?.requestId === ev.requestId) {
+        entry.pendingPermPlaintextCard = undefined;
       }
       return;
     }
@@ -597,68 +559,52 @@ export class SessionFrontend {
 
     if (ev.kind === 'pending') {
       const req = ev.request;
-      // Lazy init: askControllers is normally built on turn_start, but a
+      const c = entry.channel;
+      // Lazy init: askController is normally built on turn_start, but a
       // session can receive ask events outside any turn boundary (e.g. tests
-      // or direct broker-driven prompts). Build per-primary controllers on
-      // demand so we always have a destination for the card.
-      if (!entry.askControllers) entry.askControllers = new Map<string, AskCardController>();
-      for (const c of entry.channels) {
-        if (c.target.role !== 'primary') continue;
-        const tk = renderTargetKey(c.target);
-        let ctrl = entry.askControllers.get(tk);
-        if (!ctrl) {
-          ctrl = new AskCardController(c.adapter, c.target, (reqId, chosen) => {
-            this.opts.askBroker?.resolve(ev.sessionId, reqId, chosen);
-          });
-          entry.askControllers.set(tk, ctrl);
-        }
-        // v3.2.3: surface real errors instead of swallowing — pre-fix the
-        // multi-select bug couldn't even be diagnosed because failures here
-        // were silent.
-        await ctrl.open(req).catch((err) => {
-          this.opts.logger?.error('askController.open failed', {
-            sessionId: ev.sessionId, reqId: req.id,
-            err: (err as Error).message,
-            stack: (err as Error).stack,
-          });
+      // or direct broker-driven prompts). Build the controller on demand so
+      // we always have a destination for the card.
+      if (!entry.askController) {
+        entry.askController = new AskCardController(c.adapter, c.target, (reqId, chosen) => {
+          this.opts.askBroker?.resolve(ev.sessionId, reqId, chosen);
         });
-        const card = ctrl.getCard(req.id);
-        // Register in the flat reqId index so routeCallback can dispatch
-        // ask:* callbacks. Last writer wins on duplicate keys (multi-channel
-        // primaries should be rare; PermissionCard.handleCallback is
-        // idempotent anyway).
-        if (card) this.cardsByReqId.set(req.id, card);
       }
-      // v3.2.3: signal askPending to every active TurnComposite so the
+      // v3.2.3: surface real errors instead of swallowing — pre-fix the
+      // multi-select bug couldn't even be diagnosed because failures here
+      // were silent.
+      await entry.askController.open(req).catch((err) => {
+        this.opts.logger?.error('askController.open failed', {
+          sessionId: ev.sessionId, reqId: req.id,
+          err: (err as Error).message,
+          stack: (err as Error).stack,
+        });
+      });
+      const card = entry.askController.getCard(req.id);
+      // Register in the flat reqId index so routeCallback can dispatch
+      // ask:* callbacks.
+      if (card) this.cardsByReqId.set(req.id, card);
+      // v3.2.3: signal askPending to the active TurnComposite so the
       // banner switches to "❓ awaiting input" — without this it stays on
       // tool_running ("◐ AskUserQuestion") because tool_use_start fired first.
-      if (entry.activeTurnComposites) {
-        for (const tc of entry.activeTurnComposites.values()) {
-          if (!tc.isDestroyed()) tc.replyDocument.setAskPending(true);
-        }
+      if (entry.activeTurnComposite && !entry.activeTurnComposite.isDestroyed()) {
+        entry.activeTurnComposite.replyDocument.setAskPending(true);
       }
       return;
     }
 
     if (ev.kind === 'resolved') {
       this.cardsByReqId.delete(ev.requestId);
-      if (entry.askControllers) {
-        for (const ctrl of entry.askControllers.values()) {
-          if (ctrl.has(ev.requestId)) {
-            await ctrl.markResolved(ev.requestId, ev.chosen).catch((err) => {
-              this.opts.logger?.error('askController.markResolved failed', {
-                sessionId: ev.sessionId, reqId: ev.requestId,
-                err: (err as Error).message,
-              });
-            });
-          }
-        }
+      if (entry.askController?.has(ev.requestId)) {
+        await entry.askController.markResolved(ev.requestId, ev.chosen).catch((err) => {
+          this.opts.logger?.error('askController.markResolved failed', {
+            sessionId: ev.sessionId, reqId: ev.requestId,
+            err: (err as Error).message,
+          });
+        });
       }
       // Banner back to ◐ thinking after the user answered
-      if (entry.activeTurnComposites) {
-        for (const tc of entry.activeTurnComposites.values()) {
-          if (!tc.isDestroyed()) tc.replyDocument.setAskPending(false);
-        }
+      if (entry.activeTurnComposite && !entry.activeTurnComposite.isDestroyed()) {
+        entry.activeTurnComposite.replyDocument.setAskPending(false);
       }
     }
   }
@@ -675,29 +621,30 @@ export class SessionFrontend {
 
   private async routePlaintext(chatId: string, text: string): Promise<void> {
     const trimmed = text.trim().toLowerCase();
-    // Try generic permission keyword fallback first.
+    // Try generic permission keyword fallback first. Single pending card per
+    // session — only matches when the session's ownerChat is this chat.
     for (const entry of this.sessions.values()) {
-      const card = entry.pendingPermPlaintextCards?.get(chatId);
+      if (entry.ownerChat.chatId !== chatId) continue;
+      const card = entry.pendingPermPlaintextCard;
       if (!card || !card.isPermFallbackPending()) continue;
       const verb = parsePermissionKeyword(trimmed);
       if (verb) {
         await card.resolveFromKeyword(verb);
-        entry.pendingPermPlaintextCards?.delete(chatId);
+        entry.pendingPermPlaintextCard = undefined;
         return;
       }
     }
-    // Custom-input plaintext relay for ask cards. Walk active ask cards on
-    // controllers whose render target matches this chatId and offer the text
-    // to any card expecting a plaintext relay (mode='custom-input').
+    // Custom-input plaintext relay for ask cards. Walk the ask controller
+    // whose owner chat matches this chatId and offer the text to any card
+    // expecting a plaintext relay (mode='custom-input').
     for (const entry of this.sessions.values()) {
-      if (!entry.askControllers) continue;
-      for (const ctrl of entry.askControllers.values()) {
-        if (ctrl.getTarget().chatId !== chatId) continue;
-        for (const card of ctrl.activeCards()) {
-          if (card.expectsPlaintextRelay()) {
-            await card.resolveWithPlaintext(text);
-            return;
-          }
+      if (entry.ownerChat.chatId !== chatId) continue;
+      const ctrl = entry.askController;
+      if (!ctrl) continue;
+      for (const card of ctrl.activeCards()) {
+        if (card.expectsPlaintextRelay()) {
+          await card.resolveWithPlaintext(text);
+          return;
         }
       }
     }
@@ -706,10 +653,11 @@ export class SessionFrontend {
   private async handleElicitationEvent(ev: ElicitationBrokerEvent): Promise<void> {
     const entry = this.sessions.get(ev.sessionId);
     if (!entry) return;
+    const c = entry.channel;
     if (ev.kind === 'pending') {
-      for (const c of entry.channels) { await c.elicitation.onPending(ev.request); }
+      await c.elicitation.onPending(ev.request);
     } else {
-      for (const c of entry.channels) { await c.elicitation.onResolved(ev.requestId, ev.result.action); }
+      await c.elicitation.onResolved(ev.requestId, ev.result.action);
     }
   }
 }

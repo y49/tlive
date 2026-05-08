@@ -90,6 +90,7 @@ function createLocal(env: Env, extra: { initialPrompt?: string } = {}): Promise<
     provider: 'claude',
     workdir: env.workdir,
     source: 'im',
+    ownerChat: { channelType: 'telegram', chatId: 'chat-1' },
     ...extra,
   });
 }

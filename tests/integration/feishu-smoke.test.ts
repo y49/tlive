@@ -36,7 +36,11 @@ describe('integration: Feishu end-to-end with reaction fallback', () => {
   beforeEach(() => { ctx = makeFrontend(); });
 
   it('attach → file-edit permission with diff → allow (new UX path)', async () => {
-    const session = new FakeSession({ id: 'sess-f', workspaceId: 'w1' });
+    const session = new FakeSession({
+      id: 'sess-f',
+      workspaceId: 'w1',
+      ownerChat: { channelType: 'feishu', chatId: '100' },
+    });
     ctx.sm.push({ kind: 'created', session });
     await tick();
 
@@ -68,7 +72,11 @@ describe('integration: Feishu end-to-end with reaction fallback', () => {
   });
 
   it('reactions are never invoked on Feishu (capability matrix enforces)', async () => {
-    const session = new FakeSession({ id: 'sess-r', workspaceId: 'w1' });
+    const session = new FakeSession({
+      id: 'sess-r',
+      workspaceId: 'w1',
+      ownerChat: { channelType: 'feishu', chatId: '100' },
+    });
     ctx.sm.push({ kind: 'created', session });
     await tick();
     session.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: 'x', at: 1_000_000 });

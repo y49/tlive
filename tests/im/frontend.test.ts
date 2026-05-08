@@ -112,6 +112,72 @@ describe('SessionFrontend', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Iso #6 — SessionFrontend single channel attachSession
+// ---------------------------------------------------------------------------
+
+describe('SessionFrontend — single channel attachSession (Iso #6)', () => {
+  it('attaches exactly one channel keyed off ownerChat', async () => {
+    const tg = new FakeAdapter('telegram');
+    const fs = new FakeAdapter('feishu');
+    const sm = mkFakeSessionManager();
+    const pb = mkFakeBroker();
+    const frontend = new SessionFrontend({
+      sessionManager: sm,
+      workspaceManager: mkFakeWm(),
+      permissionBroker: pb,
+      adapters: { telegram: tg, feishu: fs },
+    });
+    frontend.start();
+
+    const session = new FakeSession({
+      id: 'iso6-sess',
+      workspaceId: 'w1',
+      ownerChat: { channelType: 'telegram', chatId: 'tg-owner' },
+    });
+    sm.push({ kind: 'created', session });
+    await new Promise((r) => setTimeout(r, 10));
+
+    const channels = frontend.getChannelsForTest('iso6-sess');
+    expect(channels).toBeDefined();
+    expect(channels).toHaveLength(1);
+    expect(channels![0]!.target.channelType).toBe('telegram');
+    expect(channels![0]!.target.chatId).toBe('tg-owner');
+
+    // Internal entry exposes ownerChat field
+    const entry = (frontend as unknown as {
+      sessions: Map<string, { ownerChat: { channelType: string; chatId: string }; channel: { target: { chatId: string } } }>;
+    }).sessions.get('iso6-sess');
+    expect(entry).toBeDefined();
+    expect(entry!.ownerChat).toEqual({ channelType: 'telegram', chatId: 'tg-owner' });
+    expect(entry!.channel.target.chatId).toBe('tg-owner');
+
+    await frontend.stop();
+  });
+
+  it('skips attach when session has no ownerChat (e.g. RemoteSession)', async () => {
+    const tg = new FakeAdapter('telegram');
+    const sm = mkFakeSessionManager();
+    const pb = mkFakeBroker();
+    const frontend = new SessionFrontend({
+      sessionManager: sm,
+      workspaceManager: mkFakeWm(),
+      permissionBroker: pb,
+      adapters: { telegram: tg },
+    });
+    frontend.start();
+
+    // RemoteSession-like: no ownerChat — frontend skips the attach.
+    const session = new FakeSession({ id: 'iso6-no-owner', workspaceId: 'w1', ownerChat: null });
+    sm.push({ kind: 'created', session });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(frontend.getChannelsForTest('iso6-no-owner')).toBeUndefined();
+
+    await frontend.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // TL_NEW_UX path tests
 // ---------------------------------------------------------------------------
 

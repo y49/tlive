@@ -5,7 +5,7 @@
 // needs: subscribe(listener) for create/resume/stop, and per-session
 // onEvent(cb) for NotificationEvent emission.
 
-import type { SessionLike, SessionEventKind, SessionInfo } from '../../src/session/types.js';
+import type { SessionLike, SessionEventKind, SessionInfo, OwnerChat } from '../../src/session/types.js';
 import type { NotificationEvent } from '../../src/runtime/events.js';
 import type { AgentStatus } from '../../src/session/status.js';
 import type { SessionManager, ManagerEventListener } from '../../src/session/manager.js';
@@ -24,15 +24,28 @@ export class FakeSession implements SessionLike {
   status: AgentStatus = { phase: 'idle', queuedInputs: 0 };
   readonly cost = new CostTracker();
   readonly isReady = true;
+  readonly ownerChat?: OwnerChat;
 
   private listeners = new Set<(e: NotificationEvent) => void>();
   private statusListeners = new Set<(s: AgentStatus) => void>();
 
-  constructor(opts: { id: string; workspaceId: string; workdir?: string }) {
+  constructor(opts: {
+    id: string;
+    workspaceId: string;
+    workdir?: string;
+    /** Pass null to test the no-ownerChat case (RemoteSession-like). */
+    ownerChat?: OwnerChat | null;
+  }) {
     this.id = opts.id;
     this.shortAlias = opts.id.slice(0, 4);
     this.workspaceId = opts.workspaceId;
     this.workdir = opts.workdir ?? '/tmp/workdir';
+    // Default ownerChat for tests: telegram chat 100 — matches existing
+    // mkFakeWm() binding so attachSession can find an adapter. Pass null
+    // explicitly to model RemoteSession (no chat owner).
+    this.ownerChat = opts.ownerChat === null
+      ? undefined
+      : (opts.ownerChat ?? { channelType: 'telegram', chatId: '100' });
     this.ctx = SessionContext.create({
       sessionId: opts.id, workdir: this.workdir,
       workspaceId: opts.workspaceId, provider: 'claude',

@@ -18,7 +18,7 @@ import type { NotificationEvent } from '../runtime/events.js';
 import { SessionContext } from './context.js';
 import { CostTracker } from '../cost/tracker.js';
 import type { AgentStatus } from './status.js';
-import type { SessionInfo, SessionLike } from './types.js';
+import type { OwnerChat, SessionInfo, SessionLike } from './types.js';
 import { shortId } from '../util/short-id.js';
 
 export interface RemoteSessionInit {
@@ -105,6 +105,10 @@ export class RemoteSession implements SessionLike {
   // Remote daemon owns the system event; cross-IPC propagation deferred.
   readonly sdkModel: string | undefined = undefined;
   readonly sdkMaxContextTokens: number | undefined = undefined;
+  // RemoteSessions are spawned by external MCP clients, not by an IM chat,
+  // so they have no ownerChat (spec §2 + §4). SessionFrontend skips remote
+  // sessions in its subscribe handler when ownerChat is missing.
+  readonly ownerChat: OwnerChat | undefined = undefined;
 
   onEvent(cb: (e: NotificationEvent) => void): () => void {
     this.eventListeners.add(cb);

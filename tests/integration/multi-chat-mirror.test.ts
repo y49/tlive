@@ -74,6 +74,7 @@ describe('integration: multi-chat-mirror', () => {
       provider: 'claude',
       workdir: env.home,
       source: 'im',
+      ownerChat: { channelType: 'telegram', chatId: 'tg-1' },
     });
     await tick();
 
