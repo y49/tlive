@@ -30,11 +30,7 @@ export const workspaceCmd: CommandDef = {
       await renderReadOnly(ctx, ws);
       return;
     }
-    const activeSessionId = ctx.workspaceManager.getActiveSessionIdForChat(
-      ctx.inbound.channelType,
-      ctx.inbound.chatId,
-    );
-    await renderBoundAdmin(ctx, ws, all, activeSessionId);
+    await renderBoundAdmin(ctx, ws, all);
   },
 };
 
@@ -78,16 +74,25 @@ async function renderBoundAdmin(
   ctx: CommandContext,
   ws: Workspace,
   all: Workspace[],
-  activeSessionId: string | null,
 ): Promise<void> {
   const others = all.filter((w) => w.id !== ws.id);
+  // Per spec §6.2 — sessions live on each ChatBinding, not the Workspace.
+  // State C reads the active session for the inbound (channelType, chatId).
+  const myBinding = ws.bindings.find(
+    (b) => b.channelType === ctx.inbound.channelType && b.chatId === ctx.inbound.chatId,
+  );
   const lines = [
     `📁 当前工作区: ${ws.name} ✓`,
     `   📂 ${ws.workdir}`,
     `   🤖 ${ws.defaults.model ?? 'default'} · ${ws.defaults.permissionMode}`,
   ];
-  if (activeSessionId) {
-    lines.push(`   🔗 active session: ${activeSessionId.slice(0, 8)}`);
+  if (myBinding?.activeSessionId) {
+    lines.push(`   💬 此 chat 的会话: ${myBinding.activeSessionId.slice(0, 8)}`);
+  }
+  // Signal isolation: each other chat in this workspace runs its own session.
+  const otherBindings = ws.bindings.filter((b) => b !== myBinding);
+  if (otherBindings.length > 0) {
+    lines.push(`   👥 其他 chat 在此项目: ${otherBindings.length} 个(各自独立)`);
   }
 
   const buttons: InlineButton[][] = [];

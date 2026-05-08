@@ -61,6 +61,71 @@ describe('/workspace state-adaptive', () => {
     expect(replyMarkups[0]).toBeUndefined();
   });
 
+  it('state C: shows current chat binding active session, not workspace level', async () => {
+    const { ctx, replies } = buildCtx({
+      workspace: {
+        id: 'w1', name: 'tlive', workdir: '/p/t',
+        defaults: {
+          provider: 'claude', permissionMode: 'default', thinking: 'collapsed',
+          verbose: false, prewarmCache: false, threadPerSession: false,
+        },
+        roles: { 'u1': 'admin' },
+        bindings: [
+          { channelType: 'telegram', chatId: 'c1', activeSessionId: 'sid-tg-aaaaaaaa' },
+          { channelType: 'feishu', chatId: 'c2', activeSessionId: 'sid-fs-bbbbbbbb' },
+        ],
+      },
+      channelType: 'telegram',
+      chatId: 'c1',
+      userId: 'u1',
+    });
+    await workspaceCmd.run(ctx, []);
+    expect(replies[0]).toMatch(/sid-tg-/);
+    expect(replies[0]).not.toMatch(/sid-fs-/);
+  });
+
+  it('state C: shows "其他 chat" count when other bindings exist', async () => {
+    const { ctx, replies } = buildCtx({
+      workspace: {
+        id: 'w1', name: 'tlive', workdir: '/p/t',
+        defaults: {
+          provider: 'claude', permissionMode: 'default', thinking: 'collapsed',
+          verbose: false, prewarmCache: false, threadPerSession: false,
+        },
+        roles: { 'u1': 'admin' },
+        bindings: [
+          { channelType: 'telegram', chatId: 'c1', activeSessionId: null },
+          { channelType: 'feishu', chatId: 'c2', activeSessionId: 'sid-fs' },
+          { channelType: 'feishu', chatId: 'c3', activeSessionId: null },
+        ],
+      },
+      channelType: 'telegram',
+      chatId: 'c1',
+      userId: 'u1',
+    });
+    await workspaceCmd.run(ctx, []);
+    expect(replies[0]).toMatch(/其他 chat 在此项目: 2 个/);
+  });
+
+  it('state C: omits "其他 chat" line when only one binding (self)', async () => {
+    const { ctx, replies } = buildCtx({
+      workspace: {
+        id: 'w1', name: 'tlive', workdir: '/p/t',
+        defaults: {
+          provider: 'claude', permissionMode: 'default', thinking: 'collapsed',
+          verbose: false, prewarmCache: false, threadPerSession: false,
+        },
+        roles: { 'u1': 'admin' },
+        // Helper seeds a single binding for the inbound chat by default.
+      },
+      channelType: 'telegram',
+      chatId: 'c1',
+      userId: 'u1',
+    });
+    await workspaceCmd.run(ctx, []);
+    expect(replies[0]).not.toMatch(/其他 chat 在此项目/);
+  });
+
   it('state C with no other workspaces: only management row, no switch row', async () => {
     const { ctx, replyMarkups } = buildCtx({
       workspace: {
