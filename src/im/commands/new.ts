@@ -86,6 +86,7 @@ export const newCmd: CommandDef = {
       initialPrompt: prompt,
       model,
       effort,
+      permissionMode: ws.defaults.permissionMode,
       source: 'im',
       ownerChat: { channelType, chatId },
     });
