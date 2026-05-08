@@ -656,15 +656,18 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
     // Without this, an answer like "2" lands in lazyResumeOrCreate and
     // creates a new turn while the question keeps waiting forever.
     const wsForAsk = deps.workspaces.findByChat(ev.channelType, ev.chatId);
-    if (wsForAsk && wsForAsk.activeSessionId) {
-      const pending = deps.askBroker.pendingFor(wsForAsk.activeSessionId);
+    const askActiveId = wsForAsk
+      ? deps.workspaces.getActiveSessionIdForChat(ev.channelType, ev.chatId)
+      : null;
+    if (wsForAsk && askActiveId) {
+      const pending = deps.askBroker.pendingFor(askActiveId);
       if (pending.length > 0) {
         const ask = pending[0]!; // multiple in-flight questions are unusual
         const choice = parseAskAnswer(text, ask.options.map((o) => o.label));
         if (choice !== null) {
-          deps.askBroker.resolve(wsForAsk.activeSessionId, ask.id, [choice], ev.userId);
+          deps.askBroker.resolve(askActiveId, ask.id, [choice], ev.userId);
           deps.logger.info('ask-answer relayed', {
-            sessionId: wsForAsk.activeSessionId, askId: ask.id, choice, userId: ev.userId,
+            sessionId: askActiveId, askId: ask.id, choice, userId: ev.userId,
           });
           return; // do NOT fall through to lazyResumeOrCreate
         }
@@ -693,6 +696,11 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
     }
     try {
       await deps.workspaces.lazyResumeOrCreate(ws.id, text, 'im', {
+        // chatChannelType + chatId are temporarily threaded through deps so
+        // WorkspaceManager can resolve the per-chat ChatBinding owning this
+        // session. Iso #4 lifts these into the function signature.
+        chatChannelType: ev.channelType,
+        chatId: ev.chatId,
         isLive: (id) => {
           const s = deps.sessions.get(id);
           if (s === undefined) return false;

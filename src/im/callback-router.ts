@@ -587,7 +587,6 @@ export class CallbackRouter {
     wm.addBinding(target.id, {
       channelType: ctx.channelType,
       chatId: ctx.chatId,
-      role: 'primary',
     });
     await wm.save().catch((err) => {
       this.deps.logger?.warn('workspace:bind save failed', {
@@ -619,28 +618,32 @@ export class CallbackRouter {
       return { kind: 'handled', action: `workspace:switch:noop:${target.name}` };
     }
 
-    // Stop current session if any (interrupt + stop, claude -r semantics).
-    // We use sessionManager.stop (not session.stop directly) so the dead
-    // LocalSession is removed from the manager map — otherwise resumeLocal
-    // on switch-back would short-circuit on the stopped instance instead of
-    // reconstructing from the persisted snapshot.
+    // Stop the current chat's session (per chat-level isolation, the
+    // session belongs to (channel, chatId), not the workspace). Use
+    // sessionManager.stop so the dead LocalSession is removed from the
+    // manager map — otherwise resumeLocal on switch-back would
+    // short-circuit on the stopped instance instead of reconstructing
+    // from the persisted snapshot.
+    const currentChatActiveId = current
+      ? wm.getActiveSessionIdForChat(ctx.channelType, ctx.chatId)
+      : null;
     if (current && current.id !== target.id) {
-      if (current.activeSessionId) {
-        const session = this.deps.sessionManager.get(current.activeSessionId);
+      if (currentChatActiveId) {
+        const session = this.deps.sessionManager.get(currentChatActiveId);
         if (session && session.kind === 'local') {
           try {
             await (session as LocalSession).interrupt();
           } catch (err) {
             this.deps.logger?.warn('workspace:switch interrupt failed', {
-              sid: current.activeSessionId,
+              sid: currentChatActiveId,
               reason: (err as Error).message,
             });
           }
           try {
-            await this.deps.sessionManager.stop(current.activeSessionId);
+            await this.deps.sessionManager.stop(currentChatActiveId);
           } catch (err) {
             this.deps.logger?.warn('workspace:switch stop failed', {
-              sid: current.activeSessionId,
+              sid: currentChatActiveId,
               reason: (err as Error).message,
             });
           }
@@ -651,7 +654,6 @@ export class CallbackRouter {
     wm.addBinding(target.id, {
       channelType: ctx.channelType,
       chatId: ctx.chatId,
-      role: 'primary',
     });
     await wm.save().catch((err) => {
       this.deps.logger?.warn('workspace:switch save failed', {
@@ -660,39 +662,16 @@ export class CallbackRouter {
       });
     });
 
-    // Try resume target's activeSession (claude -r semantics) when jsonl exists.
-    const lines = [`✅ 已切到工作区 "${target.name}"`, `📂 ${target.workdir}`];
-    const persistence = this.deps.persistence;
-    if (target.activeSessionId && persistence) {
-      let hasSnap = false;
-      try {
-        hasSnap = await persistence.hasSnapshot(target.activeSessionId);
-      } catch (err) {
-        this.deps.logger?.warn('workspace:switch hasSnapshot failed', {
-          sid: target.activeSessionId,
-          reason: (err as Error).message,
-        });
-        hasSnap = false;
-      }
-      if (hasSnap) {
-        try {
-          await this.deps.sessionManager.resumeLocal(target.activeSessionId);
-          lines.push('📌 已恢复上次会话,继续对话即可');
-        } catch (err) {
-          const reason = (err as Error).message;
-          this.deps.logger?.warn('workspace:switch resume failed', {
-            sid: target.activeSessionId,
-            workspaceId: target.id,
-            reason,
-          });
-          lines.push(`⚠ 上次会话恢复失败: ${reason}`);
-        }
-      } else {
-        lines.push('暂无活跃会话');
-      }
-    } else {
-      lines.push('暂无活跃会话');
-    }
+    // Per chat-level isolation: when this chat moves to target, any prior
+    // session was bound to (channel, chatId, current). The target binding
+    // we just added starts fresh — no per-chat history to resume from in
+    // this workspace. The user's next plain-text message takes the
+    // create branch in lazyResumeOrCreate.
+    const lines = [
+      `✅ 已切到工作区 "${target.name}"`,
+      `📂 ${target.workdir}`,
+      '暂无活跃会话',
+    ];
     await this.sendReply(ctx, lines.join('\n'));
     return { kind: 'handled', action: `workspace:switch:${target.name}` };
   }
@@ -750,14 +729,15 @@ export class CallbackRouter {
         await this.sendReply(ctx, '此 chat 未绑定');
         return { kind: 'handled', action: 'workspace:exit:not-bound' };
       }
-      if (ws.activeSessionId) {
-        const s = this.deps.sessionManager.get(ws.activeSessionId);
+      const exitActiveId = wm.getActiveSessionIdForChat(ctx.channelType, ctx.chatId);
+      if (exitActiveId) {
+        const s = this.deps.sessionManager.get(exitActiveId);
         if (s && s.kind === 'local') {
           try {
             await (s as LocalSession).stop();
           } catch (err) {
             this.deps.logger?.warn('workspace:exit stop failed', {
-              sid: ws.activeSessionId,
+              sid: exitActiveId,
               reason: (err as Error).message,
             });
           }
@@ -859,16 +839,18 @@ export class CallbackRouter {
       await this.sendReply(ctx, '当前没有进行中的对话');
       return { kind: 'handled', action: 'turn:stop:idle' };
     }
-    const ws = this.deps.workspaceManager?.findByChat(ctx.channelType, ctx.chatId);
-    if (!ws) {
+    const wm = this.deps.workspaceManager;
+    const ws = wm?.findByChat(ctx.channelType, ctx.chatId);
+    if (!ws || !wm) {
       await this.sendReply(ctx, '此 chat 未绑定工作区');
       return { kind: 'handled', action: 'turn:stop:no-ws' };
     }
-    if (!ws.activeSessionId) {
+    const turnActiveId = wm.getActiveSessionIdForChat(ctx.channelType, ctx.chatId);
+    if (!turnActiveId) {
       await this.sendReply(ctx, '当前没有进行中的对话');
       return { kind: 'handled', action: 'turn:stop:no-session' };
     }
-    const session = this.deps.sessionManager.get(ws.activeSessionId);
+    const session = this.deps.sessionManager.get(turnActiveId);
     if (!session || session.kind !== 'local') {
       await this.sendReply(ctx, '当前没有进行中的对话');
       return { kind: 'handled', action: 'turn:stop:no-live' };
@@ -877,7 +859,7 @@ export class CallbackRouter {
       await (session as LocalSession).interrupt();
     } catch (err) {
       this.deps.logger?.warn('turn:stop interrupt failed', {
-        sid: ws.activeSessionId,
+        sid: turnActiveId,
         reason: (err as Error).message,
       });
       await this.sendReply(ctx, `❌ 中断失败: ${(err as Error).message}`);
@@ -917,33 +899,37 @@ export class CallbackRouter {
       await this.sendReply(ctx, '此 chat 未绑定工作区,先 /workspace 创建/绑定');
       return { kind: 'handled', action: 'session:new:no-ws' };
     }
+    const newActiveId = wm
+      ? wm.getActiveSessionIdForChat(ctx.channelType, ctx.chatId)
+      : null;
     if (sub === 'confirm') {
       // Force-replace: stop existing then clear binding so caller can /new
       // (or send any message, which lazyResumeOrCreate will create fresh).
-      if (ws.activeSessionId) {
-        const s = this.deps.sessionManager.get(ws.activeSessionId);
+      if (newActiveId) {
+        const s = this.deps.sessionManager.get(newActiveId);
         if (s && s.kind === 'local') {
           try { await (s as LocalSession).interrupt(); }
           catch (err) {
             this.deps.logger?.warn('session:new:confirm interrupt failed', {
-              sid: ws.activeSessionId, reason: (err as Error).message,
+              sid: newActiveId, reason: (err as Error).message,
             });
           }
           try { await (s as LocalSession).stop(); }
           catch (err) {
             this.deps.logger?.warn('session:new:confirm stop failed', {
-              sid: ws.activeSessionId, reason: (err as Error).message,
+              sid: newActiveId, reason: (err as Error).message,
             });
           }
         }
-        try { wm!.clearActiveSession(ws.id); } catch { /* already cleared */ }
+        try { wm!.clearActiveSessionForChat(ctx.channelType, ctx.chatId); }
+        catch { /* already cleared */ }
         await wm!.save().catch(() => undefined);
       }
       await this.sendReply(ctx, '✅ 已结束旧会话,发送一条消息开始新对话');
       return { kind: 'handled', action: 'session:new:confirm' };
     }
     // Default verb: if active session present, ask to confirm; else hint to send.
-    if (ws.activeSessionId) {
+    if (newActiveId) {
       const markup: ReplyMarkup = {
         type: 'inline_keyboard',
         buttons: [[
@@ -970,15 +956,16 @@ export class CallbackRouter {
   private async handleSessionFork(ctx: CallbackContext): Promise<CallbackOutcome> {
     const wm = this.deps.workspaceManager;
     const ws = wm?.findByChat(ctx.channelType, ctx.chatId);
-    if (!ws) {
+    if (!ws || !wm) {
       await this.sendReply(ctx, '此 chat 未绑定工作区');
       return { kind: 'handled', action: 'session:fork:no-ws' };
     }
-    if (!ws.activeSessionId) {
+    const forkActiveId = wm.getActiveSessionIdForChat(ctx.channelType, ctx.chatId);
+    if (!forkActiveId) {
       await this.sendReply(ctx, '当前无活跃会话可 fork');
       return { kind: 'handled', action: 'session:fork:no-session' };
     }
-    const s = this.deps.sessionManager.get(ws.activeSessionId);
+    const s = this.deps.sessionManager.get(forkActiveId);
     if (!s || s.kind !== 'local') {
       await this.sendReply(ctx, '当前无活跃会话可 fork');
       return { kind: 'handled', action: 'session:fork:no-live' };
@@ -989,15 +976,15 @@ export class CallbackRouter {
       forkedId = r.sdkSessionId;
     } catch (err) {
       this.deps.logger?.warn('session:fork failed', {
-        sid: ws.activeSessionId, reason: (err as Error).message,
+        sid: forkActiveId, reason: (err as Error).message,
       });
       await this.sendReply(ctx, `❌ Fork 失败: ${(err as Error).message}`);
       return { kind: 'handled', action: 'session:fork:failed' };
     }
     try {
-      wm!.clearActiveSession(ws.id);
-      wm!.bindActiveSession(ws.id, forkedId);
-      await wm!.save().catch(() => undefined);
+      wm.clearActiveSessionForChat(ctx.channelType, ctx.chatId);
+      wm.bindActiveSessionForChat(ctx.channelType, ctx.chatId, forkedId);
+      await wm.save().catch(() => undefined);
     } catch (err) {
       this.deps.logger?.warn('session:fork bindActive failed', {
         wsId: ws.id, sid: forkedId, reason: (err as Error).message,
@@ -1024,8 +1011,11 @@ export class CallbackRouter {
       await this.sendReply(ctx, '此 chat 未绑定工作区');
       return { kind: 'handled', action: 'session:kill:no-ws' };
     }
+    const killActiveId = wm
+      ? wm.getActiveSessionIdForChat(ctx.channelType, ctx.chatId)
+      : null;
     if (sub === 'confirm') {
-      if (!ws.activeSessionId) {
+      if (!killActiveId) {
         await this.sendReply(ctx, '当前无活跃会话');
         return { kind: 'handled', action: 'session:kill:no-session' };
       }
@@ -1038,17 +1028,17 @@ export class CallbackRouter {
       };
       await this.sendReply(
         ctx,
-        `确定杀死当前会话 (${shortAlias(ws.activeSessionId)})?\n进程会停止,jsonl 保留。`,
+        `确定杀死当前会话 (${shortAlias(killActiveId)})?\n进程会停止,jsonl 保留。`,
         markup,
       );
       return { kind: 'handled', action: 'session:kill:prompt' };
     }
     if (sub === 'do') {
-      if (!ws.activeSessionId) {
+      if (!killActiveId) {
         await this.sendReply(ctx, '当前无活跃会话');
         return { kind: 'handled', action: 'session:kill:no-session' };
       }
-      const sid = ws.activeSessionId;
+      const sid = killActiveId;
       const s = this.deps.sessionManager.get(sid);
       if (s && s.kind === 'local') {
         try { await (s as LocalSession).stop(); }
@@ -1058,7 +1048,8 @@ export class CallbackRouter {
           });
         }
       }
-      try { wm!.clearActiveSession(ws.id); } catch { /* already cleared */ }
+      try { wm!.clearActiveSessionForChat(ctx.channelType, ctx.chatId); }
+      catch { /* already cleared */ }
       await wm!.save().catch(() => undefined);
       await this.sendReply(ctx, `☠ 已杀死会话 ${shortAlias(sid)}`);
       return { kind: 'handled', action: 'session:kill:do' };
@@ -1087,11 +1078,12 @@ export class CallbackRouter {
     const ws = wm?.findByChat(ctx.channelType, ctx.chatId);
     if (ws && wm) {
       try {
-        if (ws.activeSessionId && ws.activeSessionId !== resumed.id) {
-          wm.clearActiveSession(ws.id);
+        const resumeActiveId = wm.getActiveSessionIdForChat(ctx.channelType, ctx.chatId);
+        if (resumeActiveId && resumeActiveId !== resumed.id) {
+          wm.clearActiveSessionForChat(ctx.channelType, ctx.chatId);
         }
-        if (ws.activeSessionId !== resumed.id) {
-          wm.bindActiveSession(ws.id, resumed.id);
+        if (resumeActiveId !== resumed.id) {
+          wm.bindActiveSessionForChat(ctx.channelType, ctx.chatId, resumed.id);
         }
         await wm.save().catch(() => undefined);
       } catch (err) {
@@ -1141,19 +1133,20 @@ export class CallbackRouter {
     if (verb === 'set') {
       const wm = this.deps.workspaceManager;
       const ws = wm?.findByChat(ctx.channelType, ctx.chatId);
-      if (!ws) {
+      if (!ws || !wm) {
         await this.sendReply(ctx, '此 chat 未绑定工作区');
         return { kind: 'handled', action: 'runtime:model:set:no-ws' };
       }
       const id = idParts.join(':');
       if (!id) return { kind: 'unknown', reason: 'runtime:model:set:no-id' };
-      if (ws.activeSessionId) {
-        const s = this.deps.sessionManager.get(ws.activeSessionId);
+      const setActiveId = wm.getActiveSessionIdForChat(ctx.channelType, ctx.chatId);
+      if (setActiveId) {
+        const s = this.deps.sessionManager.get(setActiveId);
         if (s && s.kind === 'local') {
           try { await (s as LocalSession).setModel(id); }
           catch (err) {
             this.deps.logger?.warn('runtime:model set failed', {
-              sid: ws.activeSessionId, reason: (err as Error).message,
+              sid: setActiveId, reason: (err as Error).message,
             });
             await this.sendReply(ctx, `❌ 切换失败: ${(err as Error).message}`);
             return { kind: 'handled', action: 'runtime:model:set:failed' };
@@ -1161,7 +1154,7 @@ export class CallbackRouter {
         }
       }
       ws.defaults.model = id;
-      await wm!.save().catch(() => undefined);
+      await wm.save().catch(() => undefined);
       await this.sendReply(ctx, `✅ 模型已切到 ${id}`);
       return { kind: 'handled', action: `runtime:model:set:${id}` };
     }
@@ -1177,7 +1170,7 @@ export class CallbackRouter {
     if (verb !== 'set') return { kind: 'unknown', reason: `runtime:mode:bad-verb:${verb ?? ''}` };
     const wm = this.deps.workspaceManager;
     const ws = wm?.findByChat(ctx.channelType, ctx.chatId);
-    if (!ws) {
+    if (!ws || !wm) {
       await this.sendReply(ctx, '此 chat 未绑定工作区');
       return { kind: 'handled', action: 'runtime:mode:set:no-ws' };
     }
@@ -1185,13 +1178,14 @@ export class CallbackRouter {
     if (!isValidPermissionMode(mode)) {
       return { kind: 'unknown', reason: `runtime:mode:bad-value:${mode}` };
     }
-    if (ws.activeSessionId) {
-      const s = this.deps.sessionManager.get(ws.activeSessionId);
+    const modeActiveId = wm.getActiveSessionIdForChat(ctx.channelType, ctx.chatId);
+    if (modeActiveId) {
+      const s = this.deps.sessionManager.get(modeActiveId);
       if (s && s.kind === 'local') {
         try { await (s as LocalSession).setPermissionMode(mode); }
         catch (err) {
           this.deps.logger?.warn('runtime:mode set failed', {
-            sid: ws.activeSessionId, reason: (err as Error).message,
+            sid: modeActiveId, reason: (err as Error).message,
           });
           await this.sendReply(ctx, `❌ 切换失败: ${(err as Error).message}`);
           return { kind: 'handled', action: 'runtime:mode:set:failed' };
@@ -1199,7 +1193,7 @@ export class CallbackRouter {
       }
     }
     ws.defaults.permissionMode = mode;
-    await wm!.save().catch(() => undefined);
+    await wm.save().catch(() => undefined);
     await this.sendReply(ctx, `✅ 权限模式已切到 ${mode}`);
     return { kind: 'handled', action: `runtime:mode:set:${mode}` };
   }
@@ -1240,15 +1234,16 @@ export class CallbackRouter {
     if (verb !== 'set') return { kind: 'unknown', reason: `runtime:budget:bad-verb:${verb ?? ''}` };
     const wm = this.deps.workspaceManager;
     const ws = wm?.findByChat(ctx.channelType, ctx.chatId);
-    if (!ws) {
+    if (!ws || !wm) {
       await this.sendReply(ctx, '此 chat 未绑定工作区');
       return { kind: 'handled', action: 'runtime:budget:set:no-ws' };
     }
-    if (!ws.activeSessionId) {
+    const budgetActiveId = wm.getActiveSessionIdForChat(ctx.channelType, ctx.chatId);
+    if (!budgetActiveId) {
       await this.sendReply(ctx, '当前无活跃会话');
       return { kind: 'handled', action: 'runtime:budget:set:no-session' };
     }
-    const s = this.deps.sessionManager.get(ws.activeSessionId);
+    const s = this.deps.sessionManager.get(budgetActiveId);
     if (!s || s.kind !== 'local') {
       await this.sendReply(ctx, '当前无活跃会话');
       return { kind: 'handled', action: 'runtime:budget:set:no-live' };

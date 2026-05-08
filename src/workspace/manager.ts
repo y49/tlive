@@ -1,16 +1,17 @@
 // src/workspace/manager.ts
 //
-// v1.0 WorkspaceManager (spec §6.1). Absorbs the legacy bridge
-// `engine/workspace-manager.ts` responsibilities (register / openByName /
-// openByPath / findByWorkdir / lazyBind / persist) and layers on:
-//   - activeSessionId single-writer enforcement (loud fail on conflict)
+// v1.0 WorkspaceManager (spec §6.1). Owns:
 //   - per-user roles (admin/operator/observer) — T4 enforces, this stores
-//   - multi-chat bindings primary/mirror — drives T6 fan-out rendering
+//   - multi-chat bindings (each ChatBinding owns its own activeSessionId
+//     per docs/superpowers/specs/2026-05-07-isolated-chat-sessions-design.md
+//     §3 — chats are isolated; no fan-out)
 //   - lazyResumeOrCreate — Mode A plain-text IM flow (spec §6.1 step 3)
 //   - per-workspace defaults, budget, mcpServers
 //
-// Reimplemented from scratch for v1.0. The v0.x `bridge/` tree is gone
-// (deleted in T8); this is now the sole WorkspaceManager in the codebase.
+// Chat-level activeSessionId is the only session-binding API: see
+// bindActiveSessionForChat / clearActiveSessionForChat /
+// getActiveSessionIdForChat. The legacy ws-level methods were removed
+// in Iso #3.
 
 import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
@@ -24,7 +25,7 @@ import {
 } from './config.js';
 import {
   type ChatBinding, type ChannelType, addBinding as addBindingPure, removeBinding as removeBindingPure,
-  partitionBindings, findBinding,
+  findBinding,
 } from './bindings.js';
 
 export class WorkspaceConflictError extends Error {
@@ -40,6 +41,15 @@ export interface WorkspaceManagerOptions {
 }
 
 export interface LazyResumeDeps {
+  /**
+   * Channel + chat identifying which binding owns this lazy-resume call.
+   * Temporary shim — Iso #4 changes the function signature so callers pass
+   * (channelType, chatId) directly instead of stuffing them into deps. For
+   * now, deps carries them so the chat-level activeSessionId reads/writes
+   * resolve to the correct binding.
+   */
+  chatChannelType: ChannelType;
+  chatId: string;
   /** Check whether a session id is still live. */
   isLive: (sdkSessionId: string) => boolean;
   /**
@@ -114,7 +124,6 @@ export class WorkspaceManager {
       name: input.name,
       workdir: input.workdir,
       gitRemote: input.gitRemote,
-      activeSessionId: null,
       defaults,
       budget: input.budget ?? {},
       mcpServers: {},
@@ -154,7 +163,6 @@ export class WorkspaceManager {
       channelType: opts.channelType,
       chatId: opts.chatId,
       threadId: opts.threadId,
-      role: 'primary',
     });
     return ws;
   }
@@ -191,43 +199,12 @@ export class WorkspaceManager {
 
   delete(id: string): boolean { return this.byId.delete(id); }
 
-  // ---- activeSessionId: single-writer -----------------------------------
-
-  /**
-   * Claim a workspace's active session slot. If a *different* non-null
-   * session is currently bound, throws WorkspaceConflictError to surface
-   * the invariant violation loudly. Callers must clearActiveSession first
-   * if they know the incumbent is defunct.
-   */
-  bindActiveSession(workspaceId: string, sdkSessionId: string): void {
-    const ws = this.byId.get(workspaceId);
-    if (!ws) throw new Error(`bindActiveSession: workspace ${workspaceId} not found`);
-    if (ws.activeSessionId && ws.activeSessionId !== sdkSessionId) {
-      throw new WorkspaceConflictError(workspaceId, ws.activeSessionId, sdkSessionId);
-    }
-    ws.activeSessionId = sdkSessionId;
-    // Fire-and-forget persist so a daemon crash/SIGKILL doesn't lose the
-    // workspace→session binding; without this, only graceful shutdown
-    // wrote activeSessionId to disk and any abnormal exit reset chat
-    // continuity to "no active session" → user sees a new session id on
-    // next message.
-    void this.save().catch(() => undefined);
-  }
-
-  clearActiveSession(workspaceId: string): void {
-    const ws = this.byId.get(workspaceId);
-    if (!ws) return;
-    ws.activeSessionId = null;
-    void this.save().catch(() => undefined);
-  }
-
-  getActiveSessionId(workspaceId: string): string | null {
-    return this.byId.get(workspaceId)?.activeSessionId ?? null;
-  }
-
   // ---- Bindings -------------------------------------------------------------
 
-  addBinding(workspaceId: string, binding: ChatBinding): Workspace {
+  addBinding(
+    workspaceId: string,
+    binding: Omit<ChatBinding, 'activeSessionId'> & { activeSessionId?: string | null },
+  ): Workspace {
     const ws = this.byId.get(workspaceId);
     if (!ws) throw new Error(`addBinding: workspace ${workspaceId} not found`);
     // Defensive: refuse empty chatId. A previous bug where the Feishu
@@ -253,10 +230,9 @@ export class WorkspaceManager {
   //
   // Per docs/superpowers/specs/2026-05-07-isolated-chat-sessions-design.md §4.1.
   // Each chat owns its own SDK session via ChatBinding.activeSessionId, so
-  // these are the per-binding analogues of the (deprecated) ws-level
-  // bindActiveSession / clearActiveSession / getActiveSessionId trio. The
-  // ws-level methods remain in place for one task window so callers can
-  // migrate; Iso #3 deletes them.
+  // these are the only session-binding APIs. The previous ws-level
+  // bindActiveSession / clearActiveSession / getActiveSessionId trio was
+  // deleted in Iso #3.
 
   bindActiveSessionForChat(
     channelType: ChannelType,
@@ -332,11 +308,6 @@ export class WorkspaceManager {
 
   listBindings(workspaceId: string): ChatBinding[] {
     return this.byId.get(workspaceId)?.bindings ?? [];
-  }
-
-  /** Convenience: {primary, mirrors, all}. */
-  partitionBindings(workspaceId: string): ReturnType<typeof partitionBindings> {
-    return partitionBindings(this.byId.get(workspaceId)?.bindings ?? []);
   }
 
   // ---- Roles ---------------------------------------------------------------
@@ -432,8 +403,14 @@ export class WorkspaceManager {
     const ws = this.byId.get(workspaceId);
     if (!ws) throw new Error(`lazyResumeOrCreate: workspace ${workspaceId} not found`);
 
+    // Resolve the chat-level activeSessionId via the temp deps shim. Iso #4
+    // will lift these directly into the function signature; until then,
+    // callers must pass chatChannelType + chatId in deps so we can find the
+    // correct binding to read/write.
+    const { chatChannelType, chatId } = deps;
+    const active = this.getActiveSessionIdForChat(chatChannelType, chatId);
+
     // Branch 1: live session exists
-    const active = ws.activeSessionId;
     if (active && deps.isLive(active)) {
       deps.onBranch?.({ branch: 'live', sessionId: active, workspaceId });
       await deps.sendInput(active, initialPrompt, source);
@@ -457,8 +434,8 @@ export class WorkspaceManager {
       }
       if (resumed) {
         deps.onBranch?.({ branch: 'resumed', sessionId: resumed.id, workspaceId });
-        try { this.bindActiveSession(workspaceId, resumed.id); }
-        catch { /* conflict: race with concurrent create; fall through */ }
+        try { this.bindActiveSessionForChat(chatChannelType, chatId, resumed.id); }
+        catch { /* race with concurrent create; fall through */ }
         await deps.sendInput(resumed.id, initialPrompt, source);
         return { action: 'resumed', session: resumed };
       }
@@ -473,10 +450,10 @@ export class WorkspaceManager {
       // fall through to createLocal (safety net)
     }
 
-    // Branch 3: fresh create. If we fell through here while a stale activeSessionId
-    // is still bound (no jsonl on disk, or resume returned null), clear it first so
-    // the bindActiveSession below doesn't trip the single-writer conflict guard.
-    if (active) this.clearActiveSession(workspaceId);
+    // Branch 3: fresh create. If we fell through here with a stale chat-level
+    // activeSessionId still bound (no jsonl on disk, or resume returned null),
+    // clear it first so the rebind below assigns cleanly.
+    if (active) this.clearActiveSessionForChat(chatChannelType, chatId);
     const created = await deps.createLocal({
       workspaceId,
       provider: ws.defaults.provider,
@@ -485,7 +462,7 @@ export class WorkspaceManager {
       source,
     });
     deps.onBranch?.({ branch: 'created', sessionId: created.id, workspaceId });
-    this.bindActiveSession(workspaceId, created.id);
+    this.bindActiveSessionForChat(chatChannelType, chatId, created.id);
     return { action: 'created', session: created };
   }
 
@@ -503,12 +480,11 @@ export class WorkspaceManager {
     await fs.mkdir(dirname(path), { recursive: true });
     const payload = {
       version: 1,
-      // activeSessionId IS persisted so the user's IM thread keeps the same
-      // session id across daemon restarts. lazyResumeOrCreate's branch 2
-      // (active && !isLive → resume) reattaches via runtime.prepare's
-      // resumeSessionId option (T3 plumbed end-to-end). If resume fails for
-      // a stale id, the same function safely falls through to branch 3
-      // createLocal — so persistence is robust against crashed sessions.
+      // Each binding's activeSessionId IS persisted so the user's IM thread
+      // keeps the same session id across daemon restarts. lazyResumeOrCreate's
+      // branch 2 (active && !isLive → resume) reattaches via runtime.prepare's
+      // resumeSessionId option. If resume fails for a stale id, the same
+      // function safely falls through to branch 3 createLocal.
       workspaces: [...this.byId.values()].map((ws) => ({ ...ws })),
     };
     await fs.writeFile(path, JSON.stringify(payload, null, 2), 'utf8');
@@ -527,13 +503,13 @@ export class WorkspaceManager {
       if (!Array.isArray(parsed.workspaces)) return;
       for (const ws of parsed.workspaces) {
         if (typeof ws.id === 'string' && typeof ws.name === 'string' && typeof ws.workdir === 'string') {
-          // activeSessionId IS preserved on load — its persistence (added in
-          // de2c6db) only matters if load() round-trips it. lazyResumeOrCreate
-          // observes isLive=false on a freshly-booted daemon (sessions Map
-          // empty) and takes branch 2 (hasPersistedSession → resume) using
-          // this id. If the id is stale, branch 2 falls through to branch 3
-          // createLocal — so preserving it is robust against crashed sessions.
-          this.byId.set(ws.id, { ...ws, activeSessionId: ws.activeSessionId ?? null });
+          // Per chat-level isolation (Iso #1), activeSessionId now lives on
+          // each ChatBinding rather than the Workspace. The bindings array
+          // round-trips verbatim, so each binding's activeSessionId is
+          // preserved across daemon restart. If an id turns out stale on
+          // resume, lazyResumeOrCreate falls through to createLocal — so
+          // restoring is robust regardless of session state.
+          this.byId.set(ws.id, { ...ws });
         }
       }
     } catch {

@@ -77,7 +77,7 @@ describe('/new', () => {
     });
     await newCmd.run(ctx, ['--force', 'hi']);
     expect(stopCalls.length).toBe(1);
-    expect(workspaceCalls.find((c) => c.method === 'clearActiveSession')).toBeDefined();
+    expect(workspaceCalls.find((c) => c.method === 'clearActiveSessionForChat')).toBeDefined();
     expect(sessionCalls.find((c) => c.method === 'createLocal')).toBeDefined();
     expect(replies[0]).toMatch(/✅ 会话 .* 已起/);
   });

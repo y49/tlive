@@ -18,8 +18,10 @@ export function workspaceForChat(ctx: CommandContext): Workspace | null {
 }
 
 /**
- * Resolve the currently-active LocalSession for this chat's workspace.
- * Replies + returns null when missing or remote.
+ * Resolve the currently-active LocalSession for this chat. Per chat-level
+ * isolation (spec §3), the session belongs to the binding for the inbound
+ * (channelType, chatId), not to the workspace. Replies + returns null when
+ * missing or remote.
  */
 export async function activeLocalSession(ctx: CommandContext): Promise<LocalSession | null> {
   const ws = workspaceForChat(ctx);
@@ -27,8 +29,11 @@ export async function activeLocalSession(ctx: CommandContext): Promise<LocalSess
     await ctx.reply('This chat is not bound to a workspace. Send `/bind` (admin) to attach, or `/whoami` for guidance.');
     return null;
   }
-  const activeId = ws.activeSessionId;
-  if (!activeId) { await ctx.reply('No active session for this workspace.'); return null; }
+  const activeId = ctx.workspaceManager.getActiveSessionIdForChat(
+    ctx.inbound.channelType,
+    ctx.inbound.chatId,
+  );
+  if (!activeId) { await ctx.reply('No active session for this chat.'); return null; }
   const session = ctx.sessionManager.get(activeId);
   if (!session) { await ctx.reply(`Active session ${activeId.slice(0, 8)} not found in manager.`); return null; }
   if (session.kind !== 'local') { await ctx.reply('Active session is remote; runtime controls are unavailable.'); return null; }

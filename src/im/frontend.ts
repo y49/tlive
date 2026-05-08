@@ -7,10 +7,11 @@
 // message-id book-keeping, and tears everything down on session stop.
 //
 // Platform targeting: on each session, we resolve the workspace's bindings
-// via WorkspaceManager.partitionBindings, pair each ChannelType with the
-// registered PlatformAdapter, and instantiate one renderer-set per binding
-// (renderer-per-target — fixes the N×M fan-out bug from T6 review). Mirrors
-// render read-only copies; only primaries carry interactive buttons.
+// via WorkspaceManager.listBindings(workspaceId), pair each ChannelType with
+// the registered PlatformAdapter, and instantiate one renderer-set per
+// binding (renderer-per-target — fixes the N×M fan-out bug from T6 review).
+// TODO(Iso #6 + #7): per chat-level isolation (spec §3) attachSession will
+// pick the single owner chat instead of iterating all bindings.
 //
 // T10b: Legacy renderers (session-header, activity-sticky, agent-message,
 // todo-sticky, permission-card-legacy, attachment-preview-legacy, queue-hint)
@@ -200,14 +201,19 @@ export class SessionFrontend {
 
   private attachSession(session: SessionLike): void {
     if (this.sessions.has(session.id)) return;
-    const bindings = this.opts.workspaceManager.partitionBindings(session.workspaceId);
+    // TODO(Iso #6 + #7): per chat-level isolation (spec §3) the session
+    // attaches to exactly one chat (its owner), not every binding in the
+    // workspace. For now we still iterate all bindings and treat them all
+    // as 'primary' — Iso #6 fixes attachSession to pick the owner chat
+    // and Iso #7 strips role-based fan-out.
+    const allBindings = this.opts.workspaceManager.listBindings(session.workspaceId);
     const workspace = this.opts.workspaceManager.get(session.workspaceId);
     const channels: ChannelRenderers[] = [];
-    const targets: RenderTarget[] = bindings.all.map((b) => ({
+    const targets: RenderTarget[] = allBindings.map((b) => ({
       channelType: b.channelType,
       chatId: b.chatId,
       threadId: b.threadId,
-      role: b.role,
+      role: 'primary',
     }));
     const renderState = newSessionRenderState({
       sessionId: session.id,

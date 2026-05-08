@@ -88,7 +88,7 @@ describe('e2e: workspace switch (claude -r semantics)', () => {
   it('switching workspaces stops the current session and rebinds the chat', async () => {
     const wsA = env.workspaces.create({ name: 'a', workdir: join(env.home, 'a') });
     const wsB = env.workspaces.create({ name: 'b', workdir: join(env.home, 'b') });
-    env.workspaces.addBinding(wsA.id, { channelType: 'telegram', chatId: 'chat-1', role: 'primary' });
+    env.workspaces.addBinding(wsA.id, { channelType: 'telegram', chatId: 'chat-1' });
 
     // Spin a real LocalSession in workspace A so the switch has a live session
     // to interrupt + stop.
@@ -98,7 +98,7 @@ describe('e2e: workspace switch (claude -r semantics)', () => {
       workdir: wsA.workdir,
       source: 'im',
     });
-    env.workspaces.bindActiveSession(wsA.id, session.id);
+    env.workspaces.bindActiveSessionForChat('telegram', 'chat-1', session.id);
     const runtimeA = env.runtimes[0]!;
     expect(runtimeA.stopCalls).toBe(0);
 
@@ -121,62 +121,55 @@ describe('e2e: workspace switch (claude -r semantics)', () => {
     expect(replies.some((t) => t.includes('暂无活跃会话'))).toBe(true);
   });
 
-  it('switching back resumes the original session via hasPersistedSession', async () => {
+  it('switching back to a workspace this chat previously left does NOT auto-resume (chat-level isolation)', async () => {
+    // Per spec §3 (Iso #1+) sessions are per (channel, chatId) — not per
+    // workspace. When chat-1 leaves wsA via switch, its activeSessionId
+    // goes with it: removeBinding wipes the binding for c1 in wsA, and
+    // adding c1 back to wsA later starts a fresh binding with no prior
+    // session. So switching back is just a fresh bind, not a resume.
     const wsA = env.workspaces.create({ name: 'a', workdir: join(env.home, 'a') });
     const wsB = env.workspaces.create({ name: 'b', workdir: join(env.home, 'b') });
-    env.workspaces.addBinding(wsA.id, { channelType: 'telegram', chatId: 'chat-1', role: 'primary' });
+    env.workspaces.addBinding(wsA.id, { channelType: 'telegram', chatId: 'chat-1' });
 
-    // Spin session in A and persist a snapshot so hasSnapshot returns true later.
     const sessionA = await env.sessions.createLocal({
       workspaceId: wsA.id,
       provider: 'claude',
       workdir: wsA.workdir,
       source: 'im',
     });
-    env.workspaces.bindActiveSession(wsA.id, sessionA.id);
+    env.workspaces.bindActiveSessionForChat('telegram', 'chat-1', sessionA.id);
     await env.persistence.saveSnapshot(sessionA.snapshotLegacy());
-    const sidA = sessionA.id;
 
-    // Sanity: jsonl is on disk.
-    expect(await env.persistence.hasSnapshot(sidA)).toBe(true);
-
-    // A → B (stops A's runtime; A's activeSessionId stays bound on the workspace
-    // so the next switch back can resume it).
+    // A → B drops chat-1's binding to wsA entirely.
     await env.router.route({
       data: `workspace:switch:${wsB.id}`,
       userId: 'u1', chatId: 'chat-1', messageId: 'm1', channelType: 'telegram',
     });
     expect(env.workspaces.findByChat('telegram', 'chat-1')?.id).toBe(wsB.id);
-    // workspace A's activeSessionId is preserved (jsonl-backed), so on switch-back
-    // the resumeLocal probe finds it.
-    expect(env.workspaces.getActiveSessionId(wsA.id)).toBe(sidA);
+    // Per chat-level isolation, the prior chat-1+wsA binding is gone — its
+    // activeSessionId went with it.
+    expect(env.workspaces.listBindings(wsA.id)).toHaveLength(0);
 
-    // Clear adapter calls so we observe only the second switch's reply.
     env.adapter.calls.length = 0;
 
-    // B → A — should resume A's prior session.
+    // B → A creates a fresh binding for chat-1 in wsA with no active session.
+    const runtimesBefore = env.runtimes.length;
     await env.router.route({
       data: `workspace:switch:${wsA.id}`,
       userId: 'u1', chatId: 'chat-1', messageId: 'm2', channelType: 'telegram',
     });
-
     expect(env.workspaces.findByChat('telegram', 'chat-1')?.id).toBe(wsA.id);
-    // Resume happened: the new runtime was prepared with resumeSessionId=sidA.
-    const lastRuntime = env.runtimes[env.runtimes.length - 1]!;
-    expect(lastRuntime.resumeRequestedFor).toBe(sidA);
-    // Resumed session in the manager carries the same id (claude -r semantics).
-    const resumed = env.sessions.get(sidA);
-    expect(resumed).toBeDefined();
-    expect(resumed!.id).toBe(sidA);
-    // Reply mentions the resume.
+    expect(env.workspaces.getActiveSessionIdForChat('telegram', 'chat-1')).toBeNull();
+    // No new resume was attempted on switch.
+    expect(env.runtimes.length).toBe(runtimesBefore);
     const replies = env.adapter.byKind('send').map((c) => String((c.args as { text?: string }).text ?? ''));
-    expect(replies.some((t) => t.includes('已恢复上次会话'))).toBe(true);
+    expect(replies.some((t) => t.includes('暂无活跃会话'))).toBe(true);
   });
 
   it('switching to a workspace with no prior activeSession just sends "no active" reply', async () => {
     const wsA = env.workspaces.create({ name: 'a', workdir: join(env.home, 'a') });
     const wsB = env.workspaces.create({ name: 'b', workdir: join(env.home, 'b') });
-    env.workspaces.addBinding(wsA.id, { channelType: 'telegram', chatId: 'chat-1', role: 'primary' });
+    env.workspaces.addBinding(wsA.id, { channelType: 'telegram', chatId: 'chat-1' });
     // wsB has no activeSessionId, no session ever created.
 
     const runtimeCountBefore = env.runtimes.length;

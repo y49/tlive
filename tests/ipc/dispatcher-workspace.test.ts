@@ -50,7 +50,7 @@ describe('IPC dispatcher — workspace.list / .remove', () => {
     const { wm, send, responses } = setup();
     const ws = wm.create({ name: 'foo', workdir: '/p/f' });
     wm.setRole(ws.id, 'u-admin', 'admin');
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1', role: 'primary' });
+    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
     await send({ kind: 'workspace.list' });
     expect(responses[0]).toMatchObject({
       kind: 'workspace.list',
@@ -104,7 +104,8 @@ describe('IPC dispatcher — workspace.list / .remove', () => {
     const { wm, send, responses, stopCalls, addLiveSession } = setup();
     const ws = wm.create({ name: 'foo', workdir: '/p/f' });
     const sdkId = 'sid-foo';
-    wm.bindActiveSession(ws.id, sdkId);
+    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
+    wm.bindActiveSessionForChat('telegram', 'c1', sdkId);
     addLiveSession(sdkId);
 
     await send({ kind: 'workspace.remove', idOrName: 'foo' });
@@ -126,7 +127,8 @@ describe('IPC dispatcher — workspace.list / .remove', () => {
     const { wm, send, responses, stopCalls, addLiveSession } = setup();
     const ws = wm.create({ name: 'foo', workdir: '/p/f' });
     const sdkId = 'sid-foo';
-    wm.bindActiveSession(ws.id, sdkId);
+    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
+    wm.bindActiveSessionForChat('telegram', 'c1', sdkId);
     addLiveSession(sdkId, { failStop: true });
 
     await send({ kind: 'workspace.remove', idOrName: 'foo' });

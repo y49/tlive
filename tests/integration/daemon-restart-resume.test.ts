@@ -70,11 +70,11 @@ async function buildPhase1(opts: { withActive: boolean; metaSdkId?: string }): P
   await wm.load();
   const ws = wm.create({ name: 'restart', workdir });
   wm.setRole(ws.id, CHAT.userId, 'admin');
-  wm.addBinding(ws.id, { channelType: CHAT.channelType, chatId: CHAT.chatId, role: 'primary' });
+  wm.addBinding(ws.id, { channelType: CHAT.channelType, chatId: CHAT.chatId });
 
   const sdkSessionId = opts.metaSdkId ?? 'sdk-session-' + Math.random().toString(36).slice(2, 10);
   if (opts.withActive) {
-    wm.bindActiveSession(ws.id, sdkSessionId);
+    wm.bindActiveSessionForChat(CHAT.channelType, CHAT.chatId, sdkSessionId);
     // Write a real meta record so hasSnapshot is true on Phase 2.
     const meta: SessionMeta = {
       sdkSessionId,
@@ -118,7 +118,7 @@ describe('e2e: daemon restart preserves session via lazy resume', () => {
     const wsLoaded = wm2.findByChat(CHAT.channelType, CHAT.chatId);
     expect(wsLoaded).toBeDefined();
     expect(wsLoaded!.id).toBe(phase1.workspaceId);
-    expect(wsLoaded!.activeSessionId).toBe(phase1.sdkSessionId);
+    expect(wm2.getActiveSessionIdForChat(CHAT.channelType, CHAT.chatId)).toBe(phase1.sdkSessionId);
 
     // meta.json on disk → hasSnapshot returns true.
     expect(await persistence2.hasSnapshot(phase1.sdkSessionId)).toBe(true);
@@ -132,6 +132,8 @@ describe('e2e: daemon restart preserves session via lazy resume', () => {
     let inputSentTo: string | null = null;
 
     const out = await wm2.lazyResumeOrCreate(phase1.workspaceId, 'hello after restart', 'im', {
+      chatChannelType: CHAT.channelType,
+      chatId: CHAT.chatId,
       isLive: (id) => {
         const s = sessionsMap.get(id);
         return s !== undefined; // empty Map → false for the persisted id
@@ -162,7 +164,7 @@ describe('e2e: daemon restart preserves session via lazy resume', () => {
     expect(inputSentTo).toBe(phase1.sdkSessionId);
 
     // activeSessionId still pointing at the same id — not rotated.
-    expect(wm2.getActiveSessionId(phase1.workspaceId)).toBe(phase1.sdkSessionId);
+    expect(wm2.getActiveSessionIdForChat(CHAT.channelType, CHAT.chatId)).toBe(phase1.sdkSessionId);
   });
 
   it('restart with corrupt jsonl falls through to created via onResumeFailed', async () => {
@@ -183,6 +185,8 @@ describe('e2e: daemon restart preserves session via lazy resume', () => {
     let createCalled = false;
 
     const out = await wm2.lazyResumeOrCreate(phase1.workspaceId, 'hello', 'im', {
+      chatChannelType: CHAT.channelType,
+      chatId: CHAT.chatId,
       isLive: () => false,
       hasPersistedSession: (id) => persistence2.hasSnapshot(id),
       resume: async () => { resumeCalled = true; return null; }, // simulate corrupt jsonl
@@ -202,7 +206,7 @@ describe('e2e: daemon restart preserves session via lazy resume', () => {
     expect(failedEvents[0]!.reason).toBe('resume returned null');
 
     // activeSessionId rotated to the new fresh id.
-    expect(wm2.getActiveSessionId(phase1.workspaceId)).toBe('sdk-session-FRESH');
+    expect(wm2.getActiveSessionIdForChat(CHAT.channelType, CHAT.chatId)).toBe('sdk-session-FRESH');
   });
 
   it('restart with no prior activeSessionId creates fresh', async () => {
@@ -216,13 +220,15 @@ describe('e2e: daemon restart preserves session via lazy resume', () => {
 
     const wsLoaded = wm2.findByChat(CHAT.channelType, CHAT.chatId);
     expect(wsLoaded).toBeDefined();
-    expect(wsLoaded!.activeSessionId).toBeNull(); // never bound in Phase 1
+    expect(wm2.getActiveSessionIdForChat(CHAT.channelType, CHAT.chatId)).toBeNull(); // never bound in Phase 1
 
     let resumeCalled = false;
     let createCalled = false;
     const branchEvents: Array<{ branch: string }> = [];
 
     const out = await wm2.lazyResumeOrCreate(phase1.workspaceId, 'hello', 'im', {
+      chatChannelType: CHAT.channelType,
+      chatId: CHAT.chatId,
       isLive: () => false,
       hasPersistedSession: () => { throw new Error('hasPersistedSession must not be called when activeSessionId is null'); },
       resume: async () => { resumeCalled = true; return null; },
@@ -235,7 +241,7 @@ describe('e2e: daemon restart preserves session via lazy resume', () => {
     expect(createCalled).toBe(true);
     expect(out.action).toBe('created');
     expect(branchEvents[0]!.branch).toBe('created');
-    expect(wm2.getActiveSessionId(phase1.workspaceId)).toBe('sdk-session-FIRST');
+    expect(wm2.getActiveSessionIdForChat(CHAT.channelType, CHAT.chatId)).toBe('sdk-session-FIRST');
   });
 
   it('restart with activeSessionId set but meta missing falls through to created (no resume attempt)', async () => {
@@ -256,6 +262,8 @@ describe('e2e: daemon restart preserves session via lazy resume', () => {
     const branchEvents: Array<{ branch: string }> = [];
 
     const out = await wm2.lazyResumeOrCreate(phase1.workspaceId, 'hello', 'im', {
+      chatChannelType: CHAT.channelType,
+      chatId: CHAT.chatId,
       isLive: () => false,
       hasPersistedSession: (id) => persistence2.hasSnapshot(id),
       resume: async () => { resumeCalled = true; return null; },

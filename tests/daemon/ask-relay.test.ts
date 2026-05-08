@@ -51,7 +51,7 @@ describe('handleInbound — AskUserQuestion answer relay', () => {
       const ws = handle.workspaces.findByChat('telegram', '555');
       expect(ws).toBeDefined();
       const sessionId = 'session-abc';
-      handle.workspaces.bindActiveSession(ws!.id, sessionId);
+      handle.workspaces.bindActiveSessionForChat('telegram', '555', sessionId);
 
       // Stage a pending question on that session.
       let resolved: string[] | null = null;
@@ -99,7 +99,7 @@ describe('handleInbound — AskUserQuestion answer relay', () => {
     try {
       const ws = handle.workspaces.findByChat('telegram', '555');
       const sessionId = 'session-xyz';
-      handle.workspaces.bindActiveSession(ws!.id, sessionId);
+      handle.workspaces.bindActiveSessionForChat('telegram', '555', sessionId);
 
       let resolved: string[] | null = null;
       handle.askBroker.issue(sessionId, {

@@ -24,10 +24,17 @@ export const newCmd: CommandDef = {
     const { flags, positional } = parseFlags(args);
     const force = flags.force === true;
 
+    // Per chat-level isolation (spec §3): the "active session" is per
+    // (channel, chat), not per workspace. Look up via the binding rather
+    // than the legacy ws-level field.
+    const channelType = ctx.inbound.channelType;
+    const chatId = ctx.inbound.chatId;
+    const activeSessionId = ctx.workspaceManager.getActiveSessionIdForChat(channelType, chatId);
+
     // Check for an existing active session (unless --force)
-    if (ws.activeSessionId && !force) {
-      const existing = ctx.sessionManager.get(ws.activeSessionId);
-      const aliasText = existing?.shortAlias ?? ws.activeSessionId.slice(0, 8);
+    if (activeSessionId && !force) {
+      const existing = ctx.sessionManager.get(activeSessionId);
+      const aliasText = existing?.shortAlias ?? activeSessionId.slice(0, 8);
       const replyMarkup: ReplyMarkup = {
         type: 'inline_keyboard',
         buttons: [[
@@ -36,7 +43,7 @@ export const newCmd: CommandDef = {
         ]],
       };
       await ctx.reply(
-        `⚠ 工作区 "${ws.name}" 已有活跃会话 ${aliasText}。\n确认替换为新会话?`,
+        `⚠ 此 chat 已有活跃会话 ${aliasText}。\n确认替换为新会话?`,
         { replyMarkup },
       );
       return;
@@ -57,18 +64,18 @@ export const newCmd: CommandDef = {
     const ephemeral = flags.ephemeral === true;
 
     // If --force AND there's an existing active session, stop it first
-    if (ws.activeSessionId && force) {
-      const existing = ctx.sessionManager.get(ws.activeSessionId);
+    if (activeSessionId && force) {
+      const existing = ctx.sessionManager.get(activeSessionId);
       if (existing && existing.kind === 'local') {
         try { await (existing as never as { stop: () => Promise<void> }).stop(); }
         catch (err) {
           ctx.logger?.warn('new: force-stop existing session failed', {
-            sid: ws.activeSessionId,
+            sid: activeSessionId,
             reason: (err as Error).message,
           });
         }
       }
-      ctx.workspaceManager.clearActiveSession(ws.id);
+      ctx.workspaceManager.clearActiveSessionForChat(channelType, chatId);
     }
 
     const session = await ctx.sessionManager.createLocal({
@@ -81,9 +88,10 @@ export const newCmd: CommandDef = {
       effort,
       source: 'im',
     });
-    try { ctx.workspaceManager.bindActiveSession(ws.id, session.id); }
-    catch (err) {
-      ctx.logger?.debug('new: bindActiveSession race', {
+    try {
+      ctx.workspaceManager.bindActiveSessionForChat(channelType, chatId, session.id);
+    } catch (err) {
+      ctx.logger?.debug('new: bindActiveSessionForChat race', {
         reason: (err as Error).message,
       });
     }

@@ -30,7 +30,11 @@ export const workspaceCmd: CommandDef = {
       await renderReadOnly(ctx, ws);
       return;
     }
-    await renderBoundAdmin(ctx, ws, all);
+    const activeSessionId = ctx.workspaceManager.getActiveSessionIdForChat(
+      ctx.inbound.channelType,
+      ctx.inbound.chatId,
+    );
+    await renderBoundAdmin(ctx, ws, all, activeSessionId);
   },
 };
 
@@ -70,15 +74,20 @@ async function renderUnbound(ctx: CommandContext, all: Workspace[]): Promise<voi
   );
 }
 
-async function renderBoundAdmin(ctx: CommandContext, ws: Workspace, all: Workspace[]): Promise<void> {
+async function renderBoundAdmin(
+  ctx: CommandContext,
+  ws: Workspace,
+  all: Workspace[],
+  activeSessionId: string | null,
+): Promise<void> {
   const others = all.filter((w) => w.id !== ws.id);
   const lines = [
     `📁 当前工作区: ${ws.name} ✓`,
     `   📂 ${ws.workdir}`,
     `   🤖 ${ws.defaults.model ?? 'default'} · ${ws.defaults.permissionMode}`,
   ];
-  if (ws.activeSessionId) {
-    lines.push(`   🔗 active session: ${ws.activeSessionId.slice(0, 8)}`);
+  if (activeSessionId) {
+    lines.push(`   🔗 active session: ${activeSessionId.slice(0, 8)}`);
   }
 
   const buttons: InlineButton[][] = [];

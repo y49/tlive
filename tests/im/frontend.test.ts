@@ -33,12 +33,8 @@ function mkFakeElicBroker(): ElicitationBroker & { push: ElicitationBrokerListen
 
 function mkFakeWm(): WorkspaceManager {
   return {
-    partitionBindings(_: string) {
-      return {
-        primary: { channelType: 'telegram', chatId: '100', role: 'primary' },
-        mirrors: [],
-        all: [{ channelType: 'telegram', chatId: '100', role: 'primary' }],
-      };
+    listBindings(_: string) {
+      return [{ channelType: 'telegram', chatId: '100', activeSessionId: null }];
     },
     get(_: string) {
       return { name: 'ws', defaults: { model: 'claude-sonnet-4' } };

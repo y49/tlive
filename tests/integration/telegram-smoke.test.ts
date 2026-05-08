@@ -20,12 +20,8 @@ function makeFrontend(channel: 'telegram' | 'feishu') {
     push(ev: Parameters<ElicitationBrokerListener>[0]) { for (const l of ebListeners) l(ev); },
   } as unknown as ElicitationBroker & { push: (ev: Parameters<ElicitationBrokerListener>[0]) => void };
   const wm = {
-    partitionBindings(_: string) {
-      return {
-        primary: { channelType: channel, chatId: '100', role: 'primary' },
-        mirrors: [],
-        all: [{ channelType: channel, chatId: '100', role: 'primary' }],
-      };
+    listBindings(_: string) {
+      return [{ channelType: channel, chatId: '100', activeSessionId: null }];
     },
     get(_: string) { return { name: 'ws', defaults: { model: 'claude' } }; },
   } as unknown as WorkspaceManager;

@@ -25,16 +25,15 @@ function mkPb(): PermissionBroker & { push: BrokerListener } {
 }
 
 function mkWm(): WorkspaceManager {
+  // Iso #3 uses listBindings(workspaceId) on the frontend; per chat-level
+  // isolation (spec §3) role is gone — frontend treats every binding the
+  // same. Iso #6/#7 narrow attach to the owner chat.
   return {
-    partitionBindings(_: string) {
-      return {
-        primary: { channelType: 'telegram' as const, chatId: 'tg-100', role: 'primary' as const },
-        mirrors: [{ channelType: 'feishu' as const, chatId: 'fs-200', role: 'mirror' as const }],
-        all: [
-          { channelType: 'telegram' as const, chatId: 'tg-100', role: 'primary' as const },
-          { channelType: 'feishu' as const, chatId: 'fs-200', role: 'mirror' as const },
-        ],
-      };
+    listBindings(_: string) {
+      return [
+        { channelType: 'telegram' as const, chatId: 'tg-100', activeSessionId: null },
+        { channelType: 'feishu' as const, chatId: 'fs-200', activeSessionId: null },
+      ];
     },
     get(_: string) { return { name: 'ws', defaults: { model: 'claude' } }; },
   } as unknown as WorkspaceManager;

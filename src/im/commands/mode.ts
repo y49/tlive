@@ -68,8 +68,10 @@ export const modeCmd: CommandDef = {
  * manager, or it isn't a local session.
  */
 function resolveActiveLocalSilent(ctx: CommandContext): LocalSession | null {
-  const ws = workspaceForChat(ctx);
-  const id = ws?.activeSessionId;
+  const id = ctx.workspaceManager.getActiveSessionIdForChat(
+    ctx.inbound.channelType,
+    ctx.inbound.chatId,
+  );
   if (!id) return null;
   const s = ctx.sessionManager.get(id);
   if (!s || s.kind !== 'local') return null;

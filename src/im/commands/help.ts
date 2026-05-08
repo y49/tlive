@@ -34,8 +34,10 @@ export const helpCmd: CommandDef = {
     ];
 
     // Optionally append SDK supportedCommands if a session is alive
-    const ws = ctx.workspaceManager.findByChat(ctx.inbound.channelType, ctx.inbound.chatId);
-    const activeId = ws?.activeSessionId ?? null;
+    const activeId = ctx.workspaceManager.getActiveSessionIdForChat(
+      ctx.inbound.channelType,
+      ctx.inbound.chatId,
+    );
     const activeSession = activeId ? ctx.sessionManager.get(activeId) : undefined;
     if (activeSession && activeSession.kind === 'local') {
       try {

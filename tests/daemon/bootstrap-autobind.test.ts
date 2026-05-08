@@ -33,7 +33,7 @@ describe('bootstrap auto-bind + claim-admin', () => {
     const ws = persisted.workspaces[0];
     expect(ws.roles['12345']).toBe('admin');
     expect(ws.bindings).toEqual([
-      expect.objectContaining({ channelType: 'telegram', chatId: '12345', role: 'primary' }),
+      expect.objectContaining({ channelType: 'telegram', chatId: '12345' }),
     ]);
 
     await handle.shutdown();
@@ -69,7 +69,7 @@ describe('bootstrap auto-bind + claim-admin', () => {
     const ws = persisted.workspaces[0];
     expect(ws.roles).toEqual({});
     expect(ws.bindings).toEqual([
-      expect.objectContaining({ channelType: 'telegram', chatId: '12345', role: 'primary' }),
+      expect.objectContaining({ channelType: 'telegram', chatId: '12345' }),
     ]);
     await h.shutdown();
   });

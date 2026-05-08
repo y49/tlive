@@ -38,7 +38,7 @@ describe('autoBindFromConfig', () => {
   it('is idempotent — re-running after binding exists creates 0 new bindings', () => {
     const wm = new WorkspaceManager();
     const ws = wm.create({ name: 'w', workdir: '/tmp/w' });
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: '123', role: 'primary' });
+    wm.addBinding(ws.id, { channelType: 'telegram', chatId: '123' });
     const c = cfg({ channels: { telegram: { token: 't', chatId: '123' } } });
     expect(autoBindFromConfig(wm, c, silentLogger())).toBe(0);
   });

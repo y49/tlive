@@ -40,8 +40,8 @@ async function boot() {
 
   const workspaces = new WorkspaceManager({ persistPath: join(home, 'workspaces.json') });
   const ws = workspaces.create({ name: 'mirrored', workdir: home });
-  workspaces.addBinding(ws.id, { channelType: 'telegram', chatId: 'tg-1', role: 'primary' });
-  workspaces.addBinding(ws.id, { channelType: 'feishu', chatId: 'fs-1', role: 'mirror' });
+  workspaces.addBinding(ws.id, { channelType: 'telegram', chatId: 'tg-1' });
+  workspaces.addBinding(ws.id, { channelType: 'feishu', chatId: 'fs-1' });
 
   const tg = new FakeAdapter('telegram');
   const ds = new FakeAdapter('feishu');

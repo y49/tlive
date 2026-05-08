@@ -5,8 +5,8 @@
 // so it can be unit-tested with a synthetic config.
 //
 // Single rule: for each (workspace × channel-with-chatId) pair, add a
-// `primary` binding when the chat is not already bound anywhere AND the
-// pairing is unambiguous in the multi-workspace case.
+// binding when the chat is not already bound anywhere AND the pairing is
+// unambiguous in the multi-workspace case.
 
 import type { Logger } from '../util/logger.js';
 import type { ChannelType } from './bindings.js';
@@ -55,7 +55,6 @@ export function autoBindFromConfig(
       workspaces.addBinding(target.id, {
         channelType: platform,
         chatId,
-        role: 'primary',
       });
       logger.info('auto-bound chat from config', {
         workspaceId: target.id, workspaceName: target.name, platform, chatId,

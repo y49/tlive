@@ -14,12 +14,8 @@ function makeFrontend() {
     push(ev: Parameters<BrokerListener>[0]) { for (const l of pbListeners) l(ev); },
   } as unknown as PermissionBroker & { push: (ev: Parameters<BrokerListener>[0]) => void };
   const wm = {
-    partitionBindings(_: string) {
-      return {
-        primary: { channelType: 'feishu' as const, chatId: '100', role: 'primary' as const },
-        mirrors: [],
-        all: [{ channelType: 'feishu' as const, chatId: '100', role: 'primary' as const }],
-      };
+    listBindings(_: string) {
+      return [{ channelType: 'feishu' as const, chatId: '100', activeSessionId: null }];
     },
     get(_: string) { return { name: 'ws', defaults: { model: 'claude' } }; },
   } as unknown as WorkspaceManager;

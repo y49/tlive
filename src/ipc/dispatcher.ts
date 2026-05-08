@@ -160,13 +160,21 @@ export function buildIpcDispatcher(deps: IpcDispatcherDeps): IpcServerHandler {
         case 'workspace.list': {
           const workspaces = deps.workspaces.list().map(ws => {
             const adminEntry = Object.entries(ws.roles).find(([, r]) => r === 'admin');
+            // Per chat-level isolation (spec §3) the workspace itself has no
+            // single active session — pick the first binding's active id (if
+            // any) for backward-compatible single-value reporting. CLI
+            // clients that care about per-chat ownership should call
+            // workspace.bindings (TODO: not yet plumbed end-to-end).
+            const firstActive = ws.bindings
+              .map((b) => b.activeSessionId)
+              .find((id): id is string => Boolean(id)) ?? null;
             return {
               id: ws.id,
               name: ws.name,
               workdir: ws.workdir,
               admin: adminEntry ? adminEntry[0] : null,
               bindings: ws.bindings.length,
-              activeSessionId: ws.activeSessionId ?? null,
+              activeSessionId: firstActive,
             };
           });
           reply({ kind: 'workspace.list', workspaces });
@@ -179,11 +187,14 @@ export function buildIpcDispatcher(deps: IpcDispatcherDeps): IpcServerHandler {
             reply({ kind: 'workspace.removed', ok: false, reason: `not found: ${req.idOrName}` });
             return;
           }
-          // Stop active session if alive — prevents a dangling LocalSession in
-          // SessionManager with an orphaned workspaceId after the workspace
-          // record is deleted. Mirrors handleWorkspaceExit in callback-router.ts.
-          if (target.activeSessionId) {
-            const live = deps.sessions.get(target.activeSessionId);
+          // Stop every per-chat active session in the workspace — prevents
+          // dangling LocalSessions in SessionManager with orphaned
+          // workspaceIds after the workspace record is deleted. Mirrors
+          // handleWorkspaceExit in callback-router.ts (which already
+          // operates per-chat).
+          for (const binding of target.bindings) {
+            if (!binding.activeSessionId) continue;
+            const live = deps.sessions.get(binding.activeSessionId);
             if (live && live.kind === 'local') {
               try { await (live as LocalSession).stop(); }
               catch { /* best-effort — workspace deletion proceeds regardless */ }

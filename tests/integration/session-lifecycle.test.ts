@@ -63,7 +63,7 @@ async function setup(opts: SetupOpts = {}): Promise<Env> {
 
   const workspaces = new WorkspaceManager();
   const ws = workspaces.create({ name: 'ws', workdir });
-  workspaces.addBinding(ws.id, { channelType: 'telegram', chatId: 'chat-1', role: 'primary' });
+  workspaces.addBinding(ws.id, { channelType: 'telegram', chatId: 'chat-1' });
 
   const adapter = new FakeAdapter('telegram');
   const frontend = new SessionFrontend({
@@ -261,7 +261,7 @@ describe('Session lifecycle — full stack', () => {
     env = await setup();
     const s = await createLocal(env);
     // Bind the active session so lazyResumeOrCreate sees it on branch 2.
-    env.workspaces.bindActiveSession(env.wsId, s.id);
+    env.workspaces.bindActiveSessionForChat('telegram', 'chat-1', s.id);
     // Stop the session (saves snapshot to disk).
     await env.manager.stop(s.id);
 
@@ -271,6 +271,8 @@ describe('Session lifecycle — full stack', () => {
     // Drive through lazyResumeOrCreate with the same deps shape bootstrap uses,
     // exercising the full IM-resume path instead of calling resumeLocal directly.
     await env.workspaces.lazyResumeOrCreate(env.wsId, 'second message', 'im', {
+      chatChannelType: 'telegram',
+      chatId: 'chat-1',
       isLive: (id) => {
         const found = env.manager.get(id);
         return (
@@ -351,12 +353,14 @@ describe('Session lifecycle — full stack', () => {
     env = await setup();
     const s = await createLocal(env);
     // Bind and keep alive.
-    env.workspaces.bindActiveSession(env.wsId, s.id);
+    env.workspaces.bindActiveSessionForChat('telegram', 'chat-1', s.id);
 
     let createdCount = 0;
     env.manager.subscribe((ev) => { if (ev.kind === 'created') createdCount++; });
 
     await env.workspaces.lazyResumeOrCreate(env.wsId, 'second message', 'im', {
+      chatChannelType: 'telegram',
+      chatId: 'chat-1',
       isLive: (id) => {
         const found = env.manager.get(id);
         return (

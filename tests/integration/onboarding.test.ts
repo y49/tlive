@@ -228,10 +228,10 @@ describe('e2e: onboarding (empty state → first session)', () => {
       };
       await newCmd.run(buildCtx(env, ev4, userId), []);
 
-      // Runtime was constructed, workspace.activeSessionId pointed at it.
+      // Runtime was constructed; the chat-level binding now owns the session.
       expect(env.runtimes.length).toBe(runtimeCountBefore + 1);
-      const wsAfter = env.workspaces.get(ws.id)!;
-      expect(wsAfter.activeSessionId).toBeTruthy();
+      const activeSid = env.workspaces.getActiveSessionIdForChat(channelType, chatId);
+      expect(activeSid).toBeTruthy();
       const newCalls = env.adapter.byKind('send');
       expect(newCalls).toHaveLength(1);
       expect(String((newCalls[0]!.args as { text?: string }).text)).toContain('已起');

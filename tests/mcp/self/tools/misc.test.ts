@@ -36,6 +36,10 @@ describe('misc tool smoke tests', () => {
     resetCronEngineForTests();
     harness = await buildHarness();
     const ws = harness.deps.workspaces.create({ name: 'W', workdir: '/W' });
+    // Per chat-level isolation (spec §3) handoff.take requires a chat binding
+    // to write the activeSessionId onto. Add a placeholder telegram binding
+    // so handoff.{take,release} have somewhere to land.
+    harness.deps.workspaces.addBinding(ws.id, { channelType: 'telegram', chatId: 'misc-c' });
     const r = harness.deps.sessions.registerRemote({
       sdkSessionId: 'abababab-1111-2222-3333-444444444444',
       workspaceId: ws.id, workdir: '/W', provider: 'claude',
@@ -93,10 +97,15 @@ describe('misc tool smoke tests', () => {
   it('handoff release / take against workspace slot', async () => {
     const take = await makeHandoffTakeTool(harness.deps).handler({ sdkId: ctx.sessionId }, ctx);
     expect(take.isError).toBeFalsy();
-    expect(harness.deps.workspaces.getActiveSessionId(ctx.workspaceId)).toBe(ctx.sessionId);
+    // Per chat-level isolation (spec §3) the active session lives on the
+    // ChatBinding, not the workspace. The misc test harness wires a single
+    // binding per workspace; surface its activeSessionId via listActiveBindings.
+    const findActive = () => harness.deps.workspaces.listActiveBindings()
+      .find((b) => b.workspaceId === ctx.workspaceId)?.activeSessionId ?? null;
+    expect(findActive()).toBe(ctx.sessionId);
     const rel = await makeHandoffReleaseTool(harness.deps).handler({}, ctx);
     expect(rel.isError).toBeFalsy();
-    expect(harness.deps.workspaces.getActiveSessionId(ctx.workspaceId)).toBeNull();
+    expect(findActive()).toBeNull();
   });
 
   it('policy add / list / remove', async () => {

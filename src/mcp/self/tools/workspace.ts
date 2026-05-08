@@ -16,13 +16,23 @@ export function makeWorkspaceInfoTool(deps: McpToolDeps): McpTool {
     async handler(_args, ctx) {
       const ws = deps.workspaces.get(ctx.workspaceId);
       if (!ws) return errorResult(`workspace ${ctx.workspaceId} not found`);
+      // Per chat-level isolation (spec §3), there is no single workspace-wide
+      // active session — each ChatBinding owns its own. Return the array so
+      // callers can see per-chat ownership.
+      const activeSessions = ws.bindings
+        .filter((b) => b.activeSessionId)
+        .map((b) => ({
+          channelType: b.channelType,
+          chatId: b.chatId,
+          activeSessionId: b.activeSessionId!,
+        }));
       return jsonResult({
         id: ws.id,
         name: ws.name,
         workdir: ws.workdir,
         gitRemote: ws.gitRemote,
         provider: ws.defaults.provider,
-        activeSessionId: ws.activeSessionId,
+        activeSessions,
         defaultRole: ws.defaultRole,
       });
     },
