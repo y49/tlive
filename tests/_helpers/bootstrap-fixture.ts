@@ -34,6 +34,7 @@ import type { LocalSession } from '../../src/session/local-session.js';
 import type { ChatBinding, ChannelType } from '../../src/workspace/bindings.js';
 import type { Workspace } from '../../src/workspace/config.js';
 import type { Role } from '../../src/workspace/config.js';
+import type { PermissionMode } from '../../src/runtime/types.js';
 import { dispatch, resetRegistryForTests } from '../../src/im/command-parser.js';
 import { registerAllCommands } from '../../src/im/commands/index.js';
 import { CallbackRouter } from '../../src/im/callback-router.js';
@@ -55,7 +56,7 @@ export interface BootstrapWorkspaceSpec {
     chatId: string;
     activeSessionId?: string | null;
   }>;
-  defaults?: { model?: string; provider?: string };
+  defaults?: { model?: string; provider?: string; permissionMode?: string };
 }
 
 export interface BootstrapFixtureOpts {
@@ -107,7 +108,7 @@ function buildFakeWorkspaceManager(specs: BootstrapWorkspaceSpec[]): WorkspaceMa
     defaults: {
       provider: (s.defaults?.provider ?? 'claude') as 'claude' | 'codex',
       model: s.defaults?.model,
-      permissionMode: 'default',
+      permissionMode: (s.defaults?.permissionMode ?? 'default') as PermissionMode,
       thinking: 'collapsed',
       verbose: false,
       prewarmCache: false,
@@ -243,11 +244,16 @@ function buildFakeSessionManager(): SessionManager & {
       const id = `sess-fake-${++counter}`;
       const alias = id.replace(/[^a-z0-9]/g, '').slice(0, 8);
       let _model: string | undefined = opts.model as string | undefined;
+      let _permissionMode: string = (opts.permissionMode as string | undefined) ?? 'default';
       const s = {
         kind: 'local', id, shortAlias: alias, workspaceId: opts.workspaceId, ...opts,
         // Stub setModel / getModel so callback tests can call runtime:model:set:*.
         async setModel(m: string) { _model = m; },
         get sdkModel() { return _model; },
+        // Stub setPermissionMode / permissionMode so callback tests can call
+        // runtime:mode:set:*.
+        async setPermissionMode(m: string) { _permissionMode = m; },
+        get permissionMode() { return _permissionMode as PermissionMode; },
       } as unknown as LocalSession;
       liveSessions.set(id, s);
       return s;

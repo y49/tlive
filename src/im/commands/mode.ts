@@ -3,7 +3,7 @@
 // `/mode [<mode>]` — show or switch the current session's permission mode.
 // Per spec §3:
 //   no-args  → current mode + 4 button picker (default / acceptEdits /
-//              bypassPermissions / plan) with ✓ on current
+//              bypassPermissions / plan) with ✅ on current
 //   <mode>   → setPermissionMode on active session (best effort) + persist
 //              as workspace default so new sessions inherit it.
 //
@@ -11,18 +11,22 @@
 // reads from the workspace default. When the active session exposes
 // `permissionMode` (e.g. test fakes), that wins.
 //
-// Callback handlers (runtime:mode:set:<m>) are wired in Task 31.
+// Callback handlers (runtime:mode:set:<m>) are routed via CallbackRouter
+// handleRuntimeMode (Task 8.5).
 
 import type { CommandDef, CommandContext } from '../command-parser.js';
-import type { ReplyMarkup, InlineButton } from '../../platform/types.js';
 import type { PermissionMode } from '../../runtime/types.js';
 import type { LocalSession } from '../../session/local-session.js';
 import { workspaceForChat } from './_shared.js';
+import { renderPicker } from '../picker/picker.js';
 
 /** Picker shows the four canonical modes; aliases (yolo / safe-yolo /
  *  dontAsk) remain valid arg targets but stay off the keyboard. */
-const PICKER_MODES: PermissionMode[] = [
-  'default', 'acceptEdits', 'bypassPermissions', 'plan',
+const PICKER_ITEMS: Array<{ label: string; value: PermissionMode }> = [
+  { label: 'default (按规则)',               value: 'default' },
+  { label: 'acceptEdits (自动批准编辑)',      value: 'acceptEdits' },
+  { label: 'bypassPermissions (跳过所有权限)', value: 'bypassPermissions' },
+  { label: 'plan (只规划)',                  value: 'plan' },
 ];
 const VALID_MODES: ReadonlySet<PermissionMode> = new Set<PermissionMode>([
   'default', 'yolo', 'safe-yolo', 'plan', 'acceptEdits', 'dontAsk', 'bypassPermissions',
@@ -39,7 +43,7 @@ export const modeCmd: CommandDef = {
       return;
     }
     if (args.length === 0) {
-      await renderPicker(ctx);
+      await showModePicker(ctx);
       return;
     }
     const newMode = args[0] as PermissionMode;
@@ -78,7 +82,7 @@ function resolveActiveLocalSilent(ctx: CommandContext): LocalSession | null {
   return s as LocalSession;
 }
 
-async function renderPicker(ctx: CommandContext): Promise<void> {
+async function showModePicker(ctx: CommandContext): Promise<void> {
   const ws = workspaceForChat(ctx);
   if (!ws) return;
   const session = resolveActiveLocalSilent(ctx);
@@ -87,19 +91,14 @@ async function renderPicker(ctx: CommandContext): Promise<void> {
   // tests inject one on the fake session. Prefer that when present; else fall
   // back to the workspace default.
   const sessionAny = session as unknown as { permissionMode?: PermissionMode } | null;
-  const current = sessionAny?.permissionMode ?? ws.defaults.permissionMode;
+  const current: PermissionMode = sessionAny?.permissionMode ?? ws.defaults.permissionMode ?? 'default';
 
-  const buttons: InlineButton[][] = [
-    PICKER_MODES.slice(0, 2).map((m) => ({
-      text: `${m}${m === current ? ' ✓' : ''}`,
-      callbackData: `runtime:mode:set:${m}`,
+  await renderPicker(ctx, {
+    title: `🛡 选择 permission mode\n当前: ${current}`,
+    items: PICKER_ITEMS.map((it) => ({
+      ...it,
+      marker: it.value === current ? '✅' : undefined,
     })),
-    PICKER_MODES.slice(2).map((m) => ({
-      text: `${m}${m === current ? ' ✓' : ''}`,
-      callbackData: `runtime:mode:set:${m}`,
-    })),
-  ];
-
-  const replyMarkup: ReplyMarkup = { type: 'inline_keyboard', buttons };
-  await ctx.reply(`🛡 权限模式(当前 session)\n   ${current}`, { replyMarkup });
+    callbackPrefix: 'runtime:mode:set',
+  });
 }

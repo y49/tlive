@@ -3,7 +3,7 @@ import { modeCmd } from '../../../src/im/commands/mode.js';
 import { buildCtx } from './_helpers.js';
 
 describe('/mode', () => {
-  it('no-args: shows current + 4 mode buttons with ✓ on current', async () => {
+  it('no-args: shows current + 4 mode buttons with ✅ on current', async () => {
     const fakeSession = {
       kind: 'local' as const,
       id: 's1',
@@ -17,17 +17,22 @@ describe('/mode', () => {
     });
     await modeCmd.run(ctx, []);
     expect(replies[0]).toMatch(/default/);
-    const labels = (replyMarkups[0]!.buttons!).flat().map((b) => b.text);
+    const buttons = (replyMarkups[0]!.buttons!).flat();
+    const labels = buttons.map((b) => b.text);
+    // Each mode has a button whose callbackData includes the mode name.
     ['default', 'acceptEdits', 'bypassPermissions', 'plan'].forEach((m) => {
-      expect(labels.some((l) => l.startsWith(m))).toBe(true);
+      expect(buttons.some((b) => b.callbackData === `runtime:mode:set:${m}`)).toBe(true);
     });
-    expect(labels.some((l) => l.includes('default ✓'))).toBe(true);
+    // Current mode ('default') button has ✅ marker in its text.
+    const defaultBtn = buttons.find((b) => b.callbackData === 'runtime:mode:set:default');
+    expect(defaultBtn?.text).toContain('✅');
     // Callback data uses runtime:mode:set:<m>
-    const planBtn = (replyMarkups[0]!.buttons!).flat().find((b) => b.text.startsWith('plan'));
+    const planBtn = buttons.find((b) => b.callbackData === 'runtime:mode:set:plan');
     expect(planBtn?.callbackData).toBe('runtime:mode:set:plan');
+    void labels; // referenced above
   });
 
-  it('no-args, no session: picker uses workspace default for ✓', async () => {
+  it('no-args, no session: picker uses workspace default for ✅', async () => {
     const { ctx, replies, replyMarkups } = buildCtx({
       workspace: {
         activeSessionId: null,
@@ -43,8 +48,10 @@ describe('/mode', () => {
     });
     await modeCmd.run(ctx, []);
     expect(replies[0]).toMatch(/plan/);
-    const labels = (replyMarkups[0]!.buttons!).flat().map((b) => b.text);
-    expect(labels.some((l) => l.includes('plan ✓'))).toBe(true);
+    const buttons = (replyMarkups[0]!.buttons!).flat();
+    // Current mode ('plan') button has ✅ marker in its text.
+    const planBtn = buttons.find((b) => b.callbackData === 'runtime:mode:set:plan');
+    expect(planBtn?.text).toContain('✅');
   });
 
   it('with valid arg: calls setPermissionMode + persists', async () => {
