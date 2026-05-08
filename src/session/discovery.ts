@@ -22,6 +22,11 @@ export interface SessionListing {
   /** Populated by caller post-merge (from SessionManager.list()). */
   activeInDaemon: boolean;
   archived: boolean;
+  /**
+   * The chat that owns this session — populated from SessionMeta.lastChatBinding
+   * (or live session info). Used by /find default scope to filter by chat.
+   */
+  ownerChat?: { channelType: string; chatId: string };
 }
 
 export interface DiscoveryOptions {
@@ -43,6 +48,15 @@ export interface DiscoveryOptions {
   }>>;
   /** Override home dir — tests. */
   home?: string;
+  /**
+   * Optional loader that returns the ownerChat for a given sdkSessionId.
+   * When provided, each listing's `ownerChat` is populated by calling this.
+   * When omitted, falls back to reading `~/.tlive/sessions/<id>.meta.json`
+   * (using `lastChatBinding` from SessionMeta).
+   * Pass `false` to disable ownerChat population entirely (e.g. in tests that
+   * don't need it).
+   */
+  metaLoader?: ((sdkSessionId: string) => Promise<{ channelType: string; chatId: string } | undefined>) | false;
 }
 
 /** Find all sessions across providers. */
@@ -71,7 +85,39 @@ export async function discoverSessions(opts: DiscoveryOptions = {}): Promise<Ses
     deduped.push(r);
   }
   deduped.sort((a, b) => b.lastActivityAt.getTime() - a.lastActivityAt.getTime());
+
+  // Populate ownerChat from meta (lastChatBinding) unless explicitly disabled.
+  if (opts.metaLoader !== false) {
+    const loader = opts.metaLoader ?? buildDefaultMetaLoader(home);
+    await Promise.all(deduped.map(async (listing) => {
+      try {
+        const owner = await loader(listing.sdkSessionId);
+        if (owner) listing.ownerChat = owner;
+      } catch { /* skip on error — ownerChat stays undefined */ }
+    }));
+  }
+
   return deduped;
+}
+
+/**
+ * Default ownerChat loader: reads `<home>/.tlive/sessions/<id>.meta.json`
+ * and returns `lastChatBinding` if present.
+ */
+function buildDefaultMetaLoader(
+  home: string,
+): (sdkSessionId: string) => Promise<{ channelType: string; chatId: string } | undefined> {
+  return async (sdkSessionId: string) => {
+    const metaPath = join(home, '.tlive', 'sessions', `${sdkSessionId}.meta.json`);
+    try {
+      const raw = await fs.readFile(metaPath, 'utf-8');
+      const parsed = JSON.parse(raw) as { lastChatBinding?: { channelType: string; chatId: string } };
+      if (parsed?.lastChatBinding?.channelType && parsed?.lastChatBinding?.chatId) {
+        return parsed.lastChatBinding;
+      }
+    } catch { /* ENOENT or parse error — no ownerChat */ }
+    return undefined;
+  };
 }
 
 // ---- Claude --------------------------------------------------------------
