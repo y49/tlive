@@ -85,10 +85,17 @@ describe('daemon lock — multi-instance prevention', () => {
 
     // Second daemon should now acquire the lock and keep running.
     const second = spawnDaemon(home);
-    await waitMs(2000);
-
-    expect(second.exitCode).toBeNull(); // still running — lock acquired
-
-    second.kill('SIGTERM');
+    try {
+      await waitMs(2000);
+      expect(second.exitCode).toBeNull(); // still running — lock acquired
+    } finally {
+      second.kill('SIGTERM');
+      await new Promise<void>((res) => {
+        if (second.exitCode !== null) { res(); return; }
+        second.once('close', () => res());
+        // Safety timeout — force-kill if SIGTERM not honored within 3s
+        setTimeout(() => { if (second.exitCode === null) second.kill('SIGKILL'); res(); }, 3000);
+      });
+    }
   }, 15_000);
 });
