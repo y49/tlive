@@ -41,15 +41,6 @@ export interface WorkspaceManagerOptions {
 }
 
 export interface LazyResumeDeps {
-  /**
-   * Channel + chat identifying which binding owns this lazy-resume call.
-   * Temporary shim — Iso #4 changes the function signature so callers pass
-   * (channelType, chatId) directly instead of stuffing them into deps. For
-   * now, deps carries them so the chat-level activeSessionId reads/writes
-   * resolve to the correct binding.
-   */
-  chatChannelType: ChannelType;
-  chatId: string;
   /** Check whether a session id is still live. */
   isLive: (sdkSessionId: string) => boolean;
   /**
@@ -80,6 +71,8 @@ export interface LazyResumeDeps {
    *  or thrown). Fired before fall-through to createLocal so callers
    *  can log/alert. Best-effort — must not throw. */
   onResumeFailed?: (info: {
+    channelType: ChannelType;
+    chatId: string;
     workspaceId: string;
     sdkSessionId: string;
     reason: string;
@@ -346,13 +339,17 @@ export class WorkspaceManager {
   // ---- lazyResumeOrCreate (spec §6.1) --------------------------------------
 
   /**
-   * Per-workspace serialization for lazyResumeOrCreate. Two near-simultaneous
-   * inbound messages on the same workspace would otherwise both observe
+   * Per-chat serialization for lazyResumeOrCreate. Two near-simultaneous
+   * inbound messages on the same chat would otherwise both observe
    * `activeSessionId === null`, both take branch 3, and create two sessions —
    * the user sees N parallel session headers for one chat. Chain calls so the
    * second one observes the first's bindActiveSession.
+   *
+   * Per-chat (not per-workspace) because chats now own sessions: two chats
+   * bound to the same workspace must NOT serialize against each other —
+   * each has its own activeSessionId and runs concurrently.
    */
-  private readonly lazyResumeChain = new Map<string, Promise<unknown>>();
+  private readonly lazyChain = new Map<string, Promise<unknown>>();
 
   /**
    * Plain-text IM flow. Three branches:
@@ -369,107 +366,88 @@ export class WorkspaceManager {
    *
    * Returns a tagged outcome so callers can message the user contextually.
    *
-   * Per-workspace serialized — concurrent calls for the same workspaceId
+   * Per-chat serialized — concurrent calls for the same (channelType, chatId)
    * await each other rather than racing on activeSessionId reads.
+   *
+   * Throws if no binding exists for (channelType, chatId); callers should
+   * pre-check via findByChat and surface a friendlier "select workspace"
+   * prompt instead of relying on this throw.
    */
   async lazyResumeOrCreate(
-    workspaceId: string,
-    initialPrompt: string,
+    channelType: ChannelType,
+    chatId: string,
+    text: string,
     source: 'im' | 'cli',
     deps: LazyResumeDeps,
   ): Promise<LazyResumeOutcome> {
-    const prev = this.lazyResumeChain.get(workspaceId) ?? Promise.resolve();
-    const next = prev
-      .catch(() => undefined)
-      .then(() => this.lazyResumeOrCreateInner(workspaceId, initialPrompt, source, deps));
-    this.lazyResumeChain.set(workspaceId, next);
-    try {
-      return await next;
-    } finally {
-      // Drop the chain entry once it completes if no follower took it over;
-      // a follower would have already replaced the entry via .set above.
-      if (this.lazyResumeChain.get(workspaceId) === next) {
-        this.lazyResumeChain.delete(workspaceId);
-      }
+    const found = this.findBindingWithWorkspace(channelType, chatId);
+    if (!found) {
+      throw new Error(`lazyResumeOrCreate: chat ${channelType}:${chatId} not bound to any workspace`);
     }
+    // Per-chat serialization (was per-workspace before — chats now own sessions
+    // so chats are the right granularity for chain ordering).
+    const chainKey = `${channelType}:${chatId}`;
+    const previous = this.lazyChain.get(chainKey) ?? Promise.resolve();
+    const next = previous.then(async () =>
+      this.lazyResumeOrCreateInner(found.workspace, found.binding, text, source, deps),
+    );
+    this.lazyChain.set(chainKey, next.catch(() => undefined));
+    return next;
   }
 
   private async lazyResumeOrCreateInner(
-    workspaceId: string,
-    initialPrompt: string,
+    workspace: Workspace,
+    binding: ChatBinding,
+    text: string,
     source: 'im' | 'cli',
     deps: LazyResumeDeps,
   ): Promise<LazyResumeOutcome> {
-    const ws = this.byId.get(workspaceId);
-    if (!ws) throw new Error(`lazyResumeOrCreate: workspace ${workspaceId} not found`);
-
-    // Resolve the chat-level activeSessionId via the temp deps shim. Iso #4
-    // will lift these directly into the function signature; until then,
-    // callers must pass chatChannelType + chatId in deps so we can find the
-    // correct binding to read/write.
-    const { chatChannelType, chatId } = deps;
-    const active = this.getActiveSessionIdForChat(chatChannelType, chatId);
-
-    // Branch 1: live session exists
-    if (active && deps.isLive(active)) {
-      deps.onBranch?.({ branch: 'live', sessionId: active, workspaceId });
-      await deps.sendInput(active, initialPrompt, source);
-      // Caller should provide SessionLike via its own manager.get(); we only
-      // expose action + a minimal stub so IM can signal to the user.
-      const session = await this.fetchLiveOrThrow(active, deps);
-      return { action: 'sent_to_live', session };
+    const activeId = binding.activeSessionId;
+    if (activeId) {
+      if (deps.isLive(activeId)) {
+        await deps.sendInput(activeId, text, source);
+        deps.onBranch?.({ branch: 'live', sessionId: activeId, workspaceId: workspace.id });
+        return { action: 'sent_to_live', session: { id: activeId, kind: 'local' } as SessionLike };
+      }
+      if (await deps.hasPersistedSession(activeId)) {
+        let resumed: SessionLike | null = null;
+        let err: Error | null = null;
+        try {
+          resumed = await deps.resume(activeId);
+        } catch (e) {
+          err = e instanceof Error ? e : new Error(String(e));
+        }
+        if (resumed) {
+          await deps.sendInput(resumed.id, text, source);
+          binding.activeSessionId = resumed.id;
+          binding.lastActiveAt = new Date().toISOString();
+          void this.save().catch(() => undefined);
+          deps.onBranch?.({ branch: 'resumed', sessionId: resumed.id, workspaceId: workspace.id });
+          return { action: 'resumed', session: resumed };
+        }
+        deps.onResumeFailed?.({
+          channelType: binding.channelType,
+          chatId: binding.chatId,
+          workspaceId: workspace.id,
+          sdkSessionId: activeId,
+          reason: err ? err.message : 'resume returned null',
+        });
+      }
+      binding.activeSessionId = null;
     }
 
-    // Branch 2: process is dead, but jsonl on disk → resume from persisted state.
-    // hasPersistedSession is a cheap probe (single fs.access in production);
-    // gating resume() on it avoids spurious runtime spin-up when activeSessionId
-    // points at a stale id that was wiped from disk.
-    if (active && (await deps.hasPersistedSession(active))) {
-      let resumed: SessionLike | null = null;
-      let resumeError: Error | null = null;
-      try {
-        resumed = await deps.resume(active);
-      } catch (err) {
-        resumeError = err instanceof Error ? err : new Error(String(err));
-      }
-      if (resumed) {
-        deps.onBranch?.({ branch: 'resumed', sessionId: resumed.id, workspaceId });
-        try { this.bindActiveSessionForChat(chatChannelType, chatId, resumed.id); }
-        catch { /* race with concurrent create; fall through */ }
-        await deps.sendInput(resumed.id, initialPrompt, source);
-        return { action: 'resumed', session: resumed };
-      }
-      // resume returned null OR threw — log the abandonment via the
-      // optional onResumeFailed hook so operators have a forensic trail
-      // (otherwise the user silently gets a fresh session).
-      deps.onResumeFailed?.({
-        workspaceId,
-        sdkSessionId: active,
-        reason: resumeError ? resumeError.message : 'resume returned null',
-      });
-      // fall through to createLocal (safety net)
-    }
-
-    // Branch 3: fresh create. If we fell through here with a stale chat-level
-    // activeSessionId still bound (no jsonl on disk, or resume returned null),
-    // clear it first so the rebind below assigns cleanly.
-    if (active) this.clearActiveSessionForChat(chatChannelType, chatId);
-    const created = await deps.createLocal({
-      workspaceId,
-      provider: ws.defaults.provider,
-      workdir: ws.workdir,
-      initialPrompt,
+    const session = await deps.createLocal({
+      workspaceId: workspace.id,
+      provider: workspace.defaults.provider,
+      workdir: workspace.workdir,
+      initialPrompt: text,
       source,
     });
-    deps.onBranch?.({ branch: 'created', sessionId: created.id, workspaceId });
-    this.bindActiveSessionForChat(chatChannelType, chatId, created.id);
-    return { action: 'created', session: created };
-  }
-
-  private async fetchLiveOrThrow(sdkId: string, deps: LazyResumeDeps): Promise<SessionLike> {
-    const resumed = await deps.resume(sdkId);
-    if (resumed) return resumed;
-    throw new Error(`lazyResumeOrCreate: session ${sdkId} advertised live but not resolvable`);
+    binding.activeSessionId = session.id;
+    binding.lastActiveAt = new Date().toISOString();
+    void this.save().catch(() => undefined);
+    deps.onBranch?.({ branch: 'created', sessionId: session.id, workspaceId: workspace.id });
+    return { action: 'created', session };
   }
 
   // ---- Persistence ---------------------------------------------------------

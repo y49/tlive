@@ -93,11 +93,6 @@ describe('WorkspaceManager.lazyResumeOrCreate', () => {
   function depsShell(overrides: Partial<LazyResumeDeps> = {}): { deps: LazyResumeDeps; calls: Record<string, unknown[]> } {
     const calls: Record<string, unknown[]> = { isLive: [], hasPersistedSession: [], resume: [], sendInput: [], createLocal: [] };
     const deps: LazyResumeDeps = {
-      // Iso #3 temp shim: lazyResumeOrCreate reads/writes the active session
-      // via the per-chat ChatBinding identified by these fields. Tests must
-      // ensure a binding exists for (chatChannelType, chatId) before calling.
-      chatChannelType: 'telegram',
-      chatId: 'c1',
       isLive: (sid) => { calls.isLive.push(sid); return false; },
       hasPersistedSession: (sid) => { calls.hasPersistedSession.push(sid); return true; },
       resume: async (sid) => { calls.resume.push(sid); return null; },
@@ -117,7 +112,7 @@ describe('WorkspaceManager.lazyResumeOrCreate', () => {
       isLive: () => true,
       resume: async () => fakeSession('sess-live'),
     });
-    const out = await wm.lazyResumeOrCreate(ws.id, 'hi', 'im', deps);
+    const out = await wm.lazyResumeOrCreate('telegram', 'c1', 'hi', 'im', deps);
     expect(out.action).toBe('sent_to_live');
     expect(calls.sendInput).toEqual([{ sid: 'sess-live', text: 'hi', src: 'im' }]);
     expect(calls.createLocal).toEqual([]);
@@ -133,7 +128,7 @@ describe('WorkspaceManager.lazyResumeOrCreate', () => {
       isLive: () => false,
       resume: vi.fn(async (sid) => sid === 'sess-old' ? resumed : null) as LazyResumeDeps['resume'],
     });
-    const out = await wm.lazyResumeOrCreate(ws.id, 'hello', 'im', deps);
+    const out = await wm.lazyResumeOrCreate('telegram', 'c1', 'hello', 'im', deps);
     expect(out.action).toBe('resumed');
     expect(out.session.id).toBe('sess-old');
     expect(calls.sendInput).toEqual([{ sid: 'sess-old', text: 'hello', src: 'im' }]);
@@ -145,7 +140,7 @@ describe('WorkspaceManager.lazyResumeOrCreate', () => {
     const ws = wm.create({ name: 'x', workdir: '/proj', defaults: { provider: 'codex' } });
     wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
     const { deps, calls } = depsShell();
-    const out = await wm.lazyResumeOrCreate(ws.id, 'begin', 'cli', deps);
+    const out = await wm.lazyResumeOrCreate('telegram', 'c1', 'begin', 'cli', deps);
     expect(out.action).toBe('created');
     expect(out.session.id).toBe('sess-new');
     expect(calls.createLocal).toHaveLength(1);
@@ -158,10 +153,12 @@ describe('WorkspaceManager.lazyResumeOrCreate', () => {
     expect(wm.getActiveSessionIdForChat('telegram', 'c1')).toBe('sess-new');
   });
 
-  it('throws for unknown workspace', async () => {
+  it('throws when chat unbound', async () => {
     const wm = new WorkspaceManager();
     const { deps } = depsShell();
-    await expect(wm.lazyResumeOrCreate('missing', 'x', 'im', deps)).rejects.toThrow(/not found/);
+    await expect(
+      wm.lazyResumeOrCreate('telegram', 'unbound-chat', 'hi', 'im', deps),
+    ).rejects.toThrow(/not bound/i);
   });
 });
 
@@ -256,8 +253,6 @@ describe('WorkspaceManager.lazyResumeOrCreate resume passes sessionId to runtime
     wm.bindActiveSessionForChat('telegram', 'c1', sid);
 
     const deps: LazyResumeDeps = {
-      chatChannelType: 'telegram',
-      chatId: 'c1',
       isLive: () => false,
       hasPersistedSession: (id) => persistence.hasSnapshot(id),
       resume: (id) => sessionMgr2.resumeLocal(id),
@@ -265,7 +260,7 @@ describe('WorkspaceManager.lazyResumeOrCreate resume passes sessionId to runtime
       createLocal: async () => { throw new Error('should not create'); },
     };
 
-    const out = await wm.lazyResumeOrCreate(ws.id, 'hello', 'im', deps);
+    const out = await wm.lazyResumeOrCreate('telegram', 'c1', 'hello', 'im', deps);
     expect(out.action).toBe('resumed');
     expect(out.session.id).toBe(sid);
 
@@ -357,8 +352,6 @@ describe('lazyResumeOrCreate — claude -r semantics (hasPersistedSession)', () 
     return ws;
   }
 
-  const baseDeps = { chatChannelType: 'telegram' as const, chatId: 'c1' };
-
   it('takes resumed branch when activeSessionId set, isLive false, hasPersistedSession true', async () => {
     const wm = new WorkspaceManager();
     const ws = setupBoundWs(wm, 'sid-1');
@@ -368,8 +361,7 @@ describe('lazyResumeOrCreate — claude -r semantics (hasPersistedSession)', () 
     let createCalled = false;
     const resumed = fakeSession('sid-1');
 
-    const out = await wm.lazyResumeOrCreate(ws.id, 'hello', 'im', {
-      ...baseDeps,
+    const out = await wm.lazyResumeOrCreate('telegram', 'c1', 'hello', 'im', {
       isLive: () => false,
       hasPersistedSession: () => true,
       resume: async (id) => { resumeCalledWith = id; return resumed; },
@@ -382,6 +374,7 @@ describe('lazyResumeOrCreate — claude -r semantics (hasPersistedSession)', () 
     expect(createCalled).toBe(false);
     expect(branchEvents[0]?.branch).toBe('resumed');
     expect(out.action).toBe('resumed');
+    void ws;
   });
 
   it('falls through to created when isLive false AND hasPersistedSession false', async () => {
@@ -392,8 +385,7 @@ describe('lazyResumeOrCreate — claude -r semantics (hasPersistedSession)', () 
     let resumeCalled = false;
     const created = fakeSession('sid-2');
 
-    const out = await wm.lazyResumeOrCreate(ws.id, 'hello', 'im', {
-      ...baseDeps,
+    const out = await wm.lazyResumeOrCreate('telegram', 'c1', 'hello', 'im', {
       isLive: () => false,
       hasPersistedSession: () => false,
       resume: async () => { resumeCalled = true; return null; },
@@ -405,6 +397,7 @@ describe('lazyResumeOrCreate — claude -r semantics (hasPersistedSession)', () 
     expect(createCalled).toBe(true);
     expect(resumeCalled).toBe(false);
     expect(out.action).toBe('created');
+    void ws;
   });
 
   it('still takes live branch when isLive true (does not consult hasPersistedSession)', async () => {
@@ -414,11 +407,10 @@ describe('lazyResumeOrCreate — claude -r semantics (hasPersistedSession)', () 
     let sentTo = '';
     const live = fakeSession('sid-1');
 
-    const out = await wm.lazyResumeOrCreate(ws.id, 'hello', 'im', {
-      ...baseDeps,
+    const out = await wm.lazyResumeOrCreate('telegram', 'c1', 'hello', 'im', {
       isLive: () => true,
       hasPersistedSession: () => { throw new Error('should not be called when live'); },
-      resume: async () => live, // fetchLiveOrThrow path
+      resume: async () => live, // unused on live branch (no fetchLiveOrThrow anymore)
       sendInput: async (id) => { sentTo = id; },
       createLocal: async () => { throw new Error('should not create on live branch'); },
       onBranch: () => { /* ignore */ },
@@ -426,6 +418,7 @@ describe('lazyResumeOrCreate — claude -r semantics (hasPersistedSession)', () 
 
     expect(sentTo).toBe('sid-1');
     expect(out.action).toBe('sent_to_live');
+    void ws;
   });
 
   it('falls through to created when resume returns null (corrupt jsonl)', async () => {
@@ -435,8 +428,7 @@ describe('lazyResumeOrCreate — claude -r semantics (hasPersistedSession)', () 
     let createCalled = false;
     const created = fakeSession('sid-new');
 
-    const out = await wm.lazyResumeOrCreate(ws.id, 'hello', 'im', {
-      ...baseDeps,
+    const out = await wm.lazyResumeOrCreate('telegram', 'c1', 'hello', 'im', {
       isLive: () => false,
       hasPersistedSession: () => true,
       resume: async () => null,  // jsonl exists but resume failed
@@ -447,6 +439,7 @@ describe('lazyResumeOrCreate — claude -r semantics (hasPersistedSession)', () 
 
     expect(createCalled).toBe(true);
     expect(out.action).toBe('created');
+    void ws;
   });
 
   it('catches resume thrown error and falls through to created with onResumeFailed', async () => {
@@ -454,11 +447,10 @@ describe('lazyResumeOrCreate — claude -r semantics (hasPersistedSession)', () 
     const ws = setupBoundWs(wm, 'sid-1');
 
     let createCalled = false;
-    let failedInfo: { workspaceId: string; sdkSessionId: string; reason: string } | null = null;
+    let failedInfo: { channelType: string; chatId: string; workspaceId: string; sdkSessionId: string; reason: string } | null = null;
     const fakeNewSession = fakeSession('sid-new');
 
-    await wm.lazyResumeOrCreate(ws.id, 'hello', 'im', {
-      ...baseDeps,
+    await wm.lazyResumeOrCreate('telegram', 'c1', 'hello', 'im', {
       isLive: () => false,
       hasPersistedSession: () => true,
       resume: async () => { throw new Error('disk-eio'); },
@@ -469,18 +461,23 @@ describe('lazyResumeOrCreate — claude -r semantics (hasPersistedSession)', () 
     });
 
     expect(createCalled).toBe(true);
-    expect(failedInfo).toMatchObject({ workspaceId: ws.id, sdkSessionId: 'sid-1', reason: 'disk-eio' });
+    expect(failedInfo).toMatchObject({
+      channelType: 'telegram',
+      chatId: 'c1',
+      workspaceId: ws.id,
+      sdkSessionId: 'sid-1',
+      reason: 'disk-eio',
+    });
   });
 
   it('fires onResumeFailed when resume returns null', async () => {
     const wm = new WorkspaceManager();
     const ws = setupBoundWs(wm, 'sid-1');
 
-    let failedInfo: { workspaceId: string; sdkSessionId: string; reason: string } | null = null;
+    let failedInfo: { channelType: string; chatId: string; workspaceId: string; sdkSessionId: string; reason: string } | null = null;
     const fakeNewSession = fakeSession('sid-new');
 
-    await wm.lazyResumeOrCreate(ws.id, 'hello', 'im', {
-      ...baseDeps,
+    await wm.lazyResumeOrCreate('telegram', 'c1', 'hello', 'im', {
       isLive: () => false,
       hasPersistedSession: () => true,
       resume: async () => null,
@@ -490,7 +487,13 @@ describe('lazyResumeOrCreate — claude -r semantics (hasPersistedSession)', () 
       onResumeFailed: (info) => { failedInfo = info; },
     });
 
-    expect(failedInfo).toMatchObject({ workspaceId: ws.id, sdkSessionId: 'sid-1', reason: 'resume returned null' });
+    expect(failedInfo).toMatchObject({
+      channelType: 'telegram',
+      chatId: 'c1',
+      workspaceId: ws.id,
+      sdkSessionId: 'sid-1',
+      reason: 'resume returned null',
+    });
   });
 
   it('after resume null, getActiveSessionIdForChat returns the freshly-created session id', async () => {
@@ -498,8 +501,7 @@ describe('lazyResumeOrCreate — claude -r semantics (hasPersistedSession)', () 
     const ws = setupBoundWs(wm, 'sid-1');
 
     const fakeNewSession = fakeSession('sid-new');
-    await wm.lazyResumeOrCreate(ws.id, 'hello', 'im', {
-      ...baseDeps,
+    await wm.lazyResumeOrCreate('telegram', 'c1', 'hello', 'im', {
       isLive: () => false,
       hasPersistedSession: () => true,
       resume: async () => null,
@@ -508,8 +510,9 @@ describe('lazyResumeOrCreate — claude -r semantics (hasPersistedSession)', () 
       onBranch: () => { /* ignore */ },
     });
 
-    // bindActiveSessionForChat should have updated to the new id.
+    // binding.activeSessionId should have updated to the new id.
     expect(wm.getActiveSessionIdForChat('telegram', 'c1')).toBe('sid-new');
+    void ws;
   });
 });
 

@@ -695,12 +695,7 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
       return;
     }
     try {
-      await deps.workspaces.lazyResumeOrCreate(ws.id, text, 'im', {
-        // chatChannelType + chatId are temporarily threaded through deps so
-        // WorkspaceManager can resolve the per-chat ChatBinding owning this
-        // session. Iso #4 lifts these into the function signature.
-        chatChannelType: ev.channelType,
-        chatId: ev.chatId,
+      await deps.workspaces.lazyResumeOrCreate(ev.channelType, ev.chatId, text, 'im', {
         isLive: (id) => {
           const s = deps.sessions.get(id);
           if (s === undefined) return false;

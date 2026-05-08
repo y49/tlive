@@ -131,9 +131,7 @@ describe('e2e: daemon restart preserves session via lazy resume', () => {
     let createCalled = false;
     let inputSentTo: string | null = null;
 
-    const out = await wm2.lazyResumeOrCreate(phase1.workspaceId, 'hello after restart', 'im', {
-      chatChannelType: CHAT.channelType,
-      chatId: CHAT.chatId,
+    const out = await wm2.lazyResumeOrCreate(CHAT.channelType, CHAT.chatId, 'hello after restart', 'im', {
       isLive: (id) => {
         const s = sessionsMap.get(id);
         return s !== undefined; // empty Map → false for the persisted id
@@ -180,13 +178,11 @@ describe('e2e: daemon restart preserves session via lazy resume', () => {
     expect(await persistence2.hasSnapshot(phase1.sdkSessionId)).toBe(true);
 
     const branchEvents: Array<{ branch: string; sessionId: string; workspaceId: string }> = [];
-    const failedEvents: Array<{ workspaceId: string; sdkSessionId: string; reason: string }> = [];
+    const failedEvents: Array<{ channelType: string; chatId: string; workspaceId: string; sdkSessionId: string; reason: string }> = [];
     let resumeCalled = false;
     let createCalled = false;
 
-    const out = await wm2.lazyResumeOrCreate(phase1.workspaceId, 'hello', 'im', {
-      chatChannelType: CHAT.channelType,
-      chatId: CHAT.chatId,
+    const out = await wm2.lazyResumeOrCreate(CHAT.channelType, CHAT.chatId, 'hello', 'im', {
       isLive: () => false,
       hasPersistedSession: (id) => persistence2.hasSnapshot(id),
       resume: async () => { resumeCalled = true; return null; }, // simulate corrupt jsonl
@@ -226,9 +222,7 @@ describe('e2e: daemon restart preserves session via lazy resume', () => {
     let createCalled = false;
     const branchEvents: Array<{ branch: string }> = [];
 
-    const out = await wm2.lazyResumeOrCreate(phase1.workspaceId, 'hello', 'im', {
-      chatChannelType: CHAT.channelType,
-      chatId: CHAT.chatId,
+    const out = await wm2.lazyResumeOrCreate(CHAT.channelType, CHAT.chatId, 'hello', 'im', {
       isLive: () => false,
       hasPersistedSession: () => { throw new Error('hasPersistedSession must not be called when activeSessionId is null'); },
       resume: async () => { resumeCalled = true; return null; },
@@ -261,9 +255,7 @@ describe('e2e: daemon restart preserves session via lazy resume', () => {
     let createCalled = false;
     const branchEvents: Array<{ branch: string }> = [];
 
-    const out = await wm2.lazyResumeOrCreate(phase1.workspaceId, 'hello', 'im', {
-      chatChannelType: CHAT.channelType,
-      chatId: CHAT.chatId,
+    const out = await wm2.lazyResumeOrCreate(CHAT.channelType, CHAT.chatId, 'hello', 'im', {
       isLive: () => false,
       hasPersistedSession: (id) => persistence2.hasSnapshot(id),
       resume: async () => { resumeCalled = true; return null; },

@@ -270,9 +270,7 @@ describe('Session lifecycle — full stack', () => {
 
     // Drive through lazyResumeOrCreate with the same deps shape bootstrap uses,
     // exercising the full IM-resume path instead of calling resumeLocal directly.
-    await env.workspaces.lazyResumeOrCreate(env.wsId, 'second message', 'im', {
-      chatChannelType: 'telegram',
-      chatId: 'chat-1',
+    await env.workspaces.lazyResumeOrCreate('telegram', 'chat-1', 'second message', 'im', {
       isLive: (id) => {
         const found = env.manager.get(id);
         return (
@@ -358,9 +356,7 @@ describe('Session lifecycle — full stack', () => {
     let createdCount = 0;
     env.manager.subscribe((ev) => { if (ev.kind === 'created') createdCount++; });
 
-    await env.workspaces.lazyResumeOrCreate(env.wsId, 'second message', 'im', {
-      chatChannelType: 'telegram',
-      chatId: 'chat-1',
+    await env.workspaces.lazyResumeOrCreate('telegram', 'chat-1', 'second message', 'im', {
       isLive: (id) => {
         const found = env.manager.get(id);
         return (
