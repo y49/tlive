@@ -31,7 +31,7 @@ function makeFrontend() {
 
 async function tick(ms = 10) { await new Promise((r) => setTimeout(r, ms)); }
 
-describe('integration: Feishu end-to-end with reaction fallback', () => {
+describe('integration: Feishu end-to-end', () => {
   let ctx: ReturnType<typeof makeFrontend>;
   beforeEach(() => { ctx = makeFrontend(); });
 
@@ -71,7 +71,7 @@ describe('integration: Feishu end-to-end with reaction fallback', () => {
     expect(ctx.adapter.byKind('send').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('reactions are never invoked on Feishu (capability matrix enforces)', async () => {
+  it('native setReaction is invoked on Feishu (capability matrix enables)', async () => {
     const session = new FakeSession({
       id: 'sess-r',
       workspaceId: 'w1',
@@ -79,8 +79,12 @@ describe('integration: Feishu end-to-end with reaction fallback', () => {
     });
     ctx.sm.push({ kind: 'created', session });
     await tick();
+    // Simulate an inbound message first so the tracker has a messageId to react to.
+    ctx.frontend.markInboundReceived('feishu', '100', 'm1');
+    await tick();
     session.emit({ kind: 'turn_start', turnId: 't1', userInputPreview: 'x', at: 1_000_000 });
     await tick();
-    expect(ctx.adapter.byKind('setReaction')).toHaveLength(0);
+    // setReaction should now be called (native path).
+    expect(ctx.adapter.byKind('setReaction').length).toBeGreaterThanOrEqual(1);
   });
 });

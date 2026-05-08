@@ -2,8 +2,8 @@
 //
 // Per-platform capability matrix (spec §7.2). Every renderer consults this
 // before emitting an action that may not be supported by the target
-// platform — e.g. reaction emoji on Feishu, native modal on Telegram. When
-// a capability is absent the matrix tells the renderer to fall back.
+// platform — e.g. native modal on Telegram. When a capability is absent
+// the matrix tells the renderer to fall back.
 //
 // The values here are contract: they are asserted verbatim by
 // tests/im/capability-matrix.test.ts.
@@ -58,7 +58,7 @@ export const CAPABILITIES: Record<ChannelType, ChannelCapabilities> = {
     cards: false,
   },
   feishu: {
-    reactions: false,               // platform has no reaction API
+    reactions: true,                // native: POST im/v1/messages/.../reactions
     editMessage: true,
     pinMessage: true,
     fileUpload: true,

@@ -9,8 +9,8 @@ describe('CAPABILITIES matrix', () => {
     expect(CAPABILITIES.telegram.callbackDataMaxBytes).toBe(64);
   });
 
-  it('Feishu lacks native reactions but supports modal cards', () => {
-    expect(CAPABILITIES.feishu.reactions).toBe(false);
+  it('Feishu supports native reactions and modal cards', () => {
+    expect(CAPABILITIES.feishu.reactions).toBe(true);
     expect(CAPABILITIES.feishu.modalForm).toBe(true);
     expect(CAPABILITIES.feishu.pinMessage).toBe(true);
     expect(CAPABILITIES.feishu.autocompleteCommands).toBe(false);
