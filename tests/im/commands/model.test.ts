@@ -46,9 +46,6 @@ describe('/model', () => {
           model: 'gpt-5',
           permissionMode: 'default',
           thinking: 'collapsed',
-          verbose: false,
-          prewarmCache: false,
-          threadPerSession: false,
         } as never,
       },
     });
@@ -133,9 +130,6 @@ describe('/model', () => {
           model: 'claude-sonnet-4-6', // ws default sonnet
           permissionMode: 'default',
           thinking: 'collapsed',
-          verbose: false,
-          prewarmCache: false,
-          threadPerSession: false,
         } as never,
       },
       activeSession: fakeSession as never,

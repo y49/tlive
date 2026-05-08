@@ -50,11 +50,8 @@ export interface WorkspaceConfigEntry {
     effort?: Effort;
     permissionMode?: PermissionMode;
     thinking?: ThinkingLevel;
-    verbose?: boolean;
     budgetUsd?: number;
     systemPromptAppend?: string;
-    prewarmCache?: boolean;
-    threadPerSession?: boolean;
   };
   budget?: { dailyUsd?: number; monthlyUsd?: number };
 }
@@ -245,10 +242,6 @@ export function parseConfig(raw: unknown): ParseResult<TliveConfigV1> {
           if (typeof d.model !== 'string') issues.push({ path: `${path}.defaults.model`, message: 'must be string' });
           else entry.defaults.model = d.model;
         }
-        if (d.verbose !== undefined) {
-          if (typeof d.verbose !== 'boolean') issues.push({ path: `${path}.defaults.verbose`, message: 'must be boolean' });
-          else entry.defaults.verbose = d.verbose;
-        }
         if (d.budgetUsd !== undefined) {
           if (typeof d.budgetUsd !== 'number') issues.push({ path: `${path}.defaults.budgetUsd`, message: 'must be number' });
           else entry.defaults.budgetUsd = d.budgetUsd;
@@ -256,14 +249,6 @@ export function parseConfig(raw: unknown): ParseResult<TliveConfigV1> {
         if (d.systemPromptAppend !== undefined) {
           if (typeof d.systemPromptAppend !== 'string') issues.push({ path: `${path}.defaults.systemPromptAppend`, message: 'must be string' });
           else entry.defaults.systemPromptAppend = d.systemPromptAppend;
-        }
-        if (d.prewarmCache !== undefined) {
-          if (typeof d.prewarmCache !== 'boolean') issues.push({ path: `${path}.defaults.prewarmCache`, message: 'must be boolean' });
-          else entry.defaults.prewarmCache = d.prewarmCache;
-        }
-        if (d.threadPerSession !== undefined) {
-          if (typeof d.threadPerSession !== 'boolean') issues.push({ path: `${path}.defaults.threadPerSession`, message: 'must be boolean' });
-          else entry.defaults.threadPerSession = d.threadPerSession;
         }
       }
       if (isObject(w.budget)) {

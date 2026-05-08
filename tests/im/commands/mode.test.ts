@@ -40,9 +40,6 @@ describe('/mode', () => {
           provider: 'claude',
           permissionMode: 'plan',
           thinking: 'collapsed',
-          verbose: false,
-          prewarmCache: false,
-          threadPerSession: false,
         } as never,
       },
     });

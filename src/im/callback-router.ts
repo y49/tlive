@@ -10,7 +10,7 @@
 //   elic:cancel:<sid>:<reqId>        → ElicitationBroker.resolve decline
 //   suggest:<sid>:<sugId>            → SessionManager.get(sid).sendInput
 //   queue:cancel:<sid>:<itemId>      → session.queue.cancel
-//   budget:override:<sid>:<usd>      → (TODO T9) BudgetGuard.extend via session
+//   budget:override:<sid>:<usd>      → BudgetGuard.extend via session
 //   takeback:<sid>                   → SessionManager.resumeLocal
 //
 // For any `perm:` / `ask:` / `elic:` / `queue:` callback whose session is
@@ -28,8 +28,7 @@
 //    (first whitespace-split token of `input.command`, star-globbed).
 //  - other categories: `{ toolName }` only.
 // Policy persistence is a side effect — the broker.resolve call still fires
-// unconditionally, so a missing `policyStoreFor` (T9 not yet wired) still
-// resolves the current request.
+// unconditionally, so a missing `policyStoreFor` still resolves the current request.
 //
 // Short-alias prefix resolution: sid may be either the full sdkSessionId or
 // a short alias prefix (SessionManager.getByPrefix).
@@ -61,8 +60,7 @@ export interface CallbackRouterDeps {
   askBroker: AskUserQuestionBroker;
   elicitationBroker: ElicitationBroker;
   /**
-   * Optional adapters map for stale-card edits. T9 wires this; tests
-   * pass stubs.
+   * Optional adapters map for stale-card edits. Tests pass stubs.
    */
   adapters?: Partial<Record<ChannelType, PlatformAdapter>>;
   /**

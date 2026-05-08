@@ -216,20 +216,32 @@ reappear. Send a plain message — it continues the prior conversation.
 **Changed in v1.0:** cost accumulates correctly across resumes (the T6 bug
 where `turn_end` usage was lost on resume is fixed).
 
-### 9. Multi-chat mirror
+### 9. Multi-chat isolation
 
-Using `/pairings` (admin), add a second chat as a mirror:
+Bind two different chats (e.g., one Telegram + one Feishu) to the same workspace
+via `/workspace [📁 <ws-name>]` in each chat.
+
+In each chat run:
 
 ```text
-/mirror add mirror      # in the secondary chat
+/cost
+/sessions
 ```
 
-Trigger a tool in the primary chat that would emit a permission card.
-
 **Expected.**
-- Primary: card with clickable buttons.
-- Mirror: same card rendered, but **buttons disabled** ("ghosted").
-- Tool result / streaming reply appears in both.
+- `/cost` returns per-chat cost independently (costs from chat A do not bleed
+  into chat B's view).
+- `/sessions` returns only that chat's own sessions (chat A cannot see chat B's
+  session list).
+
+Then in one chat:
+
+```text
+/workspace [📁 other-ws]
+```
+
+**Expected.** That chat switches to the other workspace; the second chat's
+workspace binding is unaffected.
 
 ### 10. Companion mode
 
@@ -346,7 +358,7 @@ tlive start
 [ ]  6. /model /mode /effort — mid-session switch visible in header
 [ ]  7. /sessions paginated, /resume works
 [ ]  8. /cost — session + workspace totals
-[ ]  9. Multi-chat mirror — buttons disabled on mirror
+[ ]  9. Multi-chat isolation — per-chat cost + sessions independent
 [ ] 10. Companion mode — IM approval unblocks local claude
 [ ] 11. Handoff roundtrip — daemon → local → daemon
 [ ] 12. Scheduled task fires

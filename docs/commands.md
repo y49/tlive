@@ -266,7 +266,7 @@ tlive workspace add [<path>] [--name N]
   # 注意:v1.0 已删除 --admin flag
 
 tlive workspace list
-  # NAME       WORKDIR                   BINDINGS
+  # NAME       WORKDIR                   CHATS
   # tlive      ~/Project/test/tlive      2 chats
   # api        ~/Project/api             0 chats
 

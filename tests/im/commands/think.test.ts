@@ -10,9 +10,6 @@ describe('/think', () => {
           provider: 'claude',
           permissionMode: 'default',
           thinking: 'collapsed',
-          verbose: false,
-          prewarmCache: false,
-          threadPerSession: false,
         } as never,
       },
     });
@@ -35,9 +32,6 @@ describe('/think', () => {
           provider: 'claude',
           permissionMode: 'default',
           thinking: 'collapsed',
-          verbose: false,
-          prewarmCache: false,
-          threadPerSession: false,
         } as never,
       },
     });

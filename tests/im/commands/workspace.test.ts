@@ -34,7 +34,7 @@ describe('/workspace state-adaptive', () => {
         id: 'w1', name: 'tlive', workdir: '/p/t',
         defaults: {
           provider: 'claude', model: 'claude-sonnet-4-6', permissionMode: 'default',
-          thinking: 'collapsed', verbose: false, prewarmCache: false, threadPerSession: false,
+          thinking: 'collapsed',
         },
       },
       userId: 'u1',
@@ -114,7 +114,6 @@ describe('/workspace state-adaptive', () => {
         id: 'w1', name: 'tlive', workdir: '/p/t',
         defaults: {
           provider: 'claude', permissionMode: 'default', thinking: 'collapsed',
-          verbose: false, prewarmCache: false, threadPerSession: false,
         },
         // Helper seeds a single binding for the inbound chat by default.
       },
@@ -132,7 +131,6 @@ describe('/workspace state-adaptive', () => {
         id: 'w1', name: 'tlive', workdir: '/p/t',
         defaults: {
           provider: 'claude', permissionMode: 'default', thinking: 'collapsed',
-          verbose: false, prewarmCache: false, threadPerSession: false,
         },
       },
       userId: 'u1',
