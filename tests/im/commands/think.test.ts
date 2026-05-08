@@ -3,7 +3,7 @@ import { thinkCmd } from '../../../src/im/commands/think.js';
 import { buildCtx } from './_helpers.js';
 
 describe('/think', () => {
-  it('no-args: shows current + 3 level buttons with ✓ on current', async () => {
+  it('no-args: shows current + 3 level buttons with ✅ on current', async () => {
     const { ctx, replies, replyMarkups } = buildCtx({
       workspace: {
         defaults: {
@@ -20,11 +20,11 @@ describe('/think', () => {
     expect(replies[0]).toMatch(/collapsed/);
     const labels = (replyMarkups[0]!.buttons!).flat().map((b) => b.text);
     ['collapsed', 'expanded', 'hidden'].forEach((l) => {
-      expect(labels.some((t) => t.startsWith(l))).toBe(true);
+      expect(labels.some((t) => t.includes(l))).toBe(true);
     });
-    expect(labels.some((l) => l.includes('collapsed ✓'))).toBe(true);
+    expect(labels.some((l) => l.includes('✅') && l.includes('collapsed'))).toBe(true);
     // Callback data
-    const expandedBtn = (replyMarkups[0]!.buttons!).flat().find((b) => b.text.startsWith('expanded'));
+    const expandedBtn = (replyMarkups[0]!.buttons!).flat().find((b) => b.text.includes('expanded') && !b.text.includes('✅'));
     expect(expandedBtn?.callbackData).toBe('runtime:think:set:expanded');
   });
 
