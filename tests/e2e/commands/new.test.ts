@@ -152,4 +152,36 @@ describe('/new — text + button + role', () => {
     // The reply should indicate no permission or unbound workspace.
     expect(env.replies.some((r) => /未绑定工作区|无权限/.test(r))).toBe(true);
   });
+
+  it('workspace:bind callback elevates binder to admin, allowing /new immediately', async () => {
+    env = setupBootstrap({
+      workspaces: [{
+        id: 'w6', name: 'ws', workdir: '/tmp/e2e-6',
+        roles: {}, defaultRole: 'observer',
+        bindings: [],
+      }],
+    });
+
+    // Bind — binder should be claimAdmin'd
+    await env.dispatchCallback({
+      channelType: 'telegram', chatId: 'c1', userId: 'u-first',
+      messageId: 'm-bind', callbackData: 'workspace:bind:w6',
+    });
+    expect(env.workspaceManager.getRole('w6', 'u-first')).toBe('admin');
+
+    // Create binding for the chat so /new can work.
+    env.workspaceManager.addBinding('w6', {
+      channelType: 'telegram',
+      chatId: 'c1',
+      activeSessionId: null,
+    });
+
+    // /new should succeed (not be role-denied)
+    await env.handleInbound({
+      channelType: 'telegram', chatId: 'c1',
+      userId: 'u-first', text: '/new', messageId: 'm-new',
+    });
+    expect(env.workspaceManager.getActiveSessionIdForChat('telegram', 'c1')).toBeTruthy();
+    await env.cleanup?.();
+  });
 });
