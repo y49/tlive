@@ -2,17 +2,17 @@ import { describe, it, expect } from 'vitest';
 import { feishuEmojiType } from '../../src/platform/feishu/emoji-map.js';
 
 describe('feishuEmojiType', () => {
-  it('maps received-phase 👀 → EYES', () => {
-    expect(feishuEmojiType('👀')).toBe('EYES');
+  it('maps received-phase 👀 → GLANCE', () => {
+    expect(feishuEmojiType('👀')).toBe('GLANCE');
   });
-  it('maps processing-phase 🤔 → THINKING_FACE', () => {
-    expect(feishuEmojiType('🤔')).toBe('THINKING_FACE');
+  it('maps processing-phase 🤔 → THINKING', () => {
+    expect(feishuEmojiType('🤔')).toBe('THINKING');
   });
   it('maps done_ok-phase 👌 → OK', () => {
     expect(feishuEmojiType('👌')).toBe('OK');
   });
-  it('maps done_err-phase 💔 → BROKEN_HEART', () => {
-    expect(feishuEmojiType('💔')).toBe('BROKEN_HEART');
+  it('maps done_err-phase 💔 → HEARTBROKEN', () => {
+    expect(feishuEmojiType('💔')).toBe('HEARTBROKEN');
   });
   it('returns null for unmapped emoji', () => {
     expect(feishuEmojiType('🚀')).toBeNull();
