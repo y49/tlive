@@ -931,7 +931,7 @@ describe('CallbackRouter — workspace:*', () => {
     await router.route(ctx(`workspace:bind:${w2.id}`));
     expect(wm.workspaceForChat('telegram', 'c1')?.id).toBe(w2.id);
     // w1 binding removed
-    expect(wm.listBindings(w1.id).find((b) => b.chatId === 'c1')).toBeUndefined();
+    expect(wm.listChatInstances().find((c) => c.workspaceId === w1.id && c.chatId === 'c1')).toBeUndefined();
   });
 
   it('workspace:bind with unknown id replies error and returns unknown', async () => {

@@ -191,7 +191,6 @@ export function buildIpcDispatcher(deps: IpcDispatcherDeps): IpcServerHandler {
             }
           }
           deps.workspaces.removeWorkspace(target.id, { force: true });
-          await deps.workspaces.save().catch(() => undefined);
           reply({ kind: 'workspace.removed', ok: true });
           return;
         }

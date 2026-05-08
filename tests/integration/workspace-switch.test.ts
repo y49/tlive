@@ -152,7 +152,7 @@ describe('e2e: workspace switch (claude -r semantics)', () => {
     expect(env.workspaces.workspaceForChat('telegram', 'chat-1')?.id).toBe(wsB.id);
     // Per chat-level isolation, the prior chat-1+wsA binding is gone — its
     // activeSessionId went with it.
-    expect(env.workspaces.listBindings(wsA.id)).toHaveLength(0);
+    expect(env.workspaces.listChatInstances().filter((c) => c.workspaceId === wsA.id)).toHaveLength(0);
 
     env.adapter.calls.length = 0;
 

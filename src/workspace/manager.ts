@@ -146,6 +146,7 @@ export class WorkspaceManager {
     }
     this.chatInstances = this.chatInstances.filter((c) => c.workspaceId !== id);
     this.byId.delete(id);
+    void this.save().catch(() => undefined);
     return { workspace: ws, chatInstances: bound };
   }
 
