@@ -34,6 +34,7 @@
 // Short-alias prefix resolution: sid may be either the full sdkSessionId or
 // a short alias prefix (SessionManager.getByPrefix).
 
+import { parsePickerCallback } from './picker/index.js';
 import type { SessionManager } from '../session/manager.js';
 import type { PermissionBroker } from '../permission/broker.js';
 import type { AskUserQuestionBroker } from '../permission/ask-broker.js';
@@ -142,7 +143,22 @@ export function parseCallbackData(data: string): { kind: string; parts: string[]
 }
 
 export class CallbackRouter {
+  private pickerHandlers = new Map<string, (ctx: CallbackContext, value: string) => Promise<void>>();
+
   constructor(private readonly deps: CallbackRouterDeps) {}
+
+  /**
+   * Register a handler for a picker callback prefix (e.g. `'model:set'`).
+   * When `route()` encounters a callback whose `parsePickerCallback` prefix
+   * matches, it calls `fn(ctx, value)`. Commands (Tasks 15-19) call this
+   * during bootstrap; the picker framework itself never registers handlers.
+   */
+  registerPickerHandler(
+    prefix: string,
+    fn: (ctx: CallbackContext, value: string) => Promise<void>,
+  ): void {
+    this.pickerHandlers.set(prefix, fn);
+  }
 
   async route(ctx: CallbackContext): Promise<CallbackOutcome> {
     if (!ctx.userId) {
@@ -184,8 +200,21 @@ export class CallbackRouter {
         return this.handleCostHint(parts, ctx);
       case 'find':
         return this.handleFindHint(parts, ctx);
-      default:
+      default: {
+        // Picker dispatch — runs LAST so explicit prefixes above take priority.
+        // Only handles prefixes registered via registerPickerHandler; all other
+        // picker-shaped data (e.g. `someprefix:set:value` with no handler) falls
+        // through to the unknown outcome below.
+        const picker = parsePickerCallback(ctx.data);
+        if (picker) {
+          const handler = this.pickerHandlers.get(picker.prefix);
+          if (handler) {
+            await handler(ctx, picker.value);
+            return { kind: 'handled', action: `picker:${picker.prefix}` };
+          }
+        }
         return { kind: 'unknown', reason: `unknown kind: ${kind}` };
+      }
     }
   }
 
