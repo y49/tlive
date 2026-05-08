@@ -7,10 +7,11 @@
 > with zero terminal interaction — or keep using your terminal and route
 > permissions to your phone via MCP.
 
-## ⚠ Upgrading from v0.x to v1.0-rc
+## ⚠ Upgrading from v0.x / v1.0-rc to v1.0
 
-v1.0-rc 是大重构,**升级前必须停旧 daemon + 清旧 workspaces.json**。
-完整步骤见 [docs/upgrade-v1.0-rc.md](docs/upgrade-v1.0-rc.md)。
+v1.0 是大重构,**schema / 命令 / 信任模型全 breaking change**。
+升级前必须停旧 daemon + 清旧 workspaces.json。
+完整步骤见 [docs/upgrade-v1.0.md](docs/upgrade-v1.0.md)。
 
 ## Three ways to use tlive
 
@@ -51,8 +52,8 @@ On first run, `tlive setup` migrates your `~/.tlive/config.env` into
 
 - **12 IM slash commands + inline keyboards** — mid-session `/model` / `/mode` /
   `/think` / `/perm` / `/budget` show picker UI (no typing needed); `/workspace`
-  4-state binding flow; `/sessions`, `/cost`, `/find`. Full reference in
-  [docs/commands.md](docs/commands.md).
+  3-state binding flow; `/sessions`, `/cost [--workspace|--all]`, `/find [--workspace|--all]`.
+  Full reference in [docs/commands.md](docs/commands.md).
 - **8-anchor message UX** — reaction ack, session header, activity sticky,
   streaming agent response, 4-category permission cards, elicitation forms,
   todo sticky, attachments.
