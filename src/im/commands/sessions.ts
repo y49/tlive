@@ -1,35 +1,33 @@
 // src/im/commands/sessions.ts
 //
 // /sessions [--all] [--archived] [--page=N] — paginated session list.
-// Default scope = current workspace; --all (alias --global) for cross-ws.
+// Per spec §6.2 — sessions are per-chat, so default scope filters by the
+// inbound's ownerChat (channelType, chatId), NOT by workspace. --all (alias
+// --global) opts out and shows everything across chats + workspaces.
 
 import type { CommandDef } from '../command-parser.js';
 import type { InlineButton } from '../../platform/types.js';
 import { parseFlags } from '../command-parser.js';
-import { workspaceForChat } from './_shared.js';
 
 const PAGE_SIZE = 8;
 
 export const sessionsCmd: CommandDef = {
   name: 'sessions',
   role: ['admin', 'operator', 'observer'],
-  description: '当前工作区的会话列表',
+  description: '当前 chat 的会话列表',
   async run(ctx, args) {
     const { flags } = parseFlags(args);
-    // --all / --global both opt out of workspace filter
+    // --all / --global both opt out of per-chat filter.
     const allScope = flags.all === true || flags.global === true;
-    const wsFilter = allScope ? null : workspaceForChat(ctx);
 
-    if (!allScope && !wsFilter) {
-      await ctx.reply('当前 chat 未绑定工作区,发 /workspace 选一个,或用 /sessions --all 看全部');
-      return;
-    }
-
-    const filtered = ctx.sessionManager.listInfo('local')
-      .filter((s) => !wsFilter || s.workspaceId === wsFilter.id);
+    const filtered = ctx.sessionManager.listInfo('local').filter((s) => {
+      if (allScope) return true;
+      return s.ownerChat?.channelType === ctx.inbound.channelType
+          && s.ownerChat?.chatId === ctx.inbound.chatId;
+    });
 
     if (filtered.length === 0) {
-      const scope = allScope ? '所有工作区' : `工作区 ${wsFilter!.name}`;
+      const scope = allScope ? '所有会话' : '当前 chat 的会话';
       await ctx.reply(`📋 ${scope} 暂无会话`, {
         replyMarkup: {
           type: 'inline_keyboard',
@@ -45,8 +43,8 @@ export const sessionsCmd: CommandDef = {
 
     const lines: string[] = [];
     const buttons: InlineButton[][] = [];
-    if (allScope) lines.push(`📋 所有工作区 (${filtered.length} sessions)`);
-    else lines.push(`📋 ${wsFilter!.name} (${filtered.length} sessions)`);
+    if (allScope) lines.push(`📋 所有会话 (${filtered.length} sessions)`);
+    else lines.push(`📋 当前 chat 的会话 (${filtered.length} sessions)`);
 
     for (const s of slice) {
       const cost = s.cost.totalCost.toFixed(4);

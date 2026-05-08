@@ -173,14 +173,21 @@ export function buildCtx(spec: FakeCtxSpec = {}): FakeCtxResult {
     async stop(id: string) { sessionCalls.push({ method: 'stop', args: [id] }); },
     listInfo(kind?: string) {
       sessionCalls.push({ method: 'listInfo', args: [kind] });
-      return allSessions.map((s) => ({
-        id: s.id, shortAlias: s.shortAlias ?? '', kind: 'local' as const,
-        provider: 'claude' as const, workspaceId: s.workspaceId ?? '',
-        workdir: '/tmp', title: (s as unknown as { title?: string }).title,
-        status: { phase: 'idle' as const, queuedInputs: 0 },
-        cost: { totalCost: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
-        createdAt: Date.now(), lastActivityAt: Date.now(),
-      }));
+      return allSessions.map((s) => {
+        const ownerChat = (s as unknown as { ownerChat?: { channelType: ChannelType; chatId: string; threadId?: string } }).ownerChat
+          // Default ownerChat to the inbound (channelType, chatId) so existing
+          // tests that don't set ownerChat still pass the per-chat filter.
+          ?? { channelType, chatId };
+        return {
+          id: s.id, shortAlias: s.shortAlias ?? '', kind: 'local' as const,
+          provider: 'claude' as const, workspaceId: s.workspaceId ?? '',
+          workdir: '/tmp', title: (s as unknown as { title?: string }).title,
+          status: { phase: 'idle' as const, queuedInputs: 0 },
+          cost: { totalCost: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+          createdAt: Date.now(), lastActivityAt: Date.now(),
+          ownerChat,
+        };
+      });
     },
     subscribe(_l: unknown) { return () => undefined; },
   } as unknown as SessionManager;
