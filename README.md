@@ -49,9 +49,10 @@ On first run, `tlive setup` migrates your `~/.tlive/config.env` into
 
 ## Highlights
 
-- **45 IM slash commands** — mid-session `/model` / `/mode` / `/perm`, plus
-  `/rewind`, `/fork`, `/budget`, `/cost`, `/status`, dynamic `/models` /
-  `/agents`. Full reference in the skill docs.
+- **12 IM slash commands + inline keyboards** — mid-session `/model` / `/mode` /
+  `/think` / `/perm` / `/budget` show picker UI (no typing needed); `/workspace`
+  4-state binding flow; `/sessions`, `/cost`, `/find`. Full reference in
+  [docs/commands.md](docs/commands.md).
 - **8-anchor message UX** — reaction ack, session header, activity sticky,
   streaming agent response, 4-category permission cards, elicitation forms,
   todo sticky, attachments.

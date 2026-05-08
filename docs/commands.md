@@ -1,4 +1,4 @@
-# IM Commands Reference (v3.3)
+# IM Commands Reference (v1.0-rc)
 
 > **v1.0-rc breaking changes**:旧 `workspaces.json` schema 不再兼容、`binding.role` 字段移除、daemon 强制单实例。升级步骤见 [docs/upgrade-v1.0-rc.md](upgrade-v1.0-rc.md)。
 
@@ -8,9 +8,10 @@
 
 ## 1. Overview
 
-tlive v3.3 ships **12 IM slash commands** — a deliberate reduction from the 45
-commands in v1.0. The other 35 either moved into inline keyboard buttons,
-collapsed into one of the 12, or were parked for v2.0 / CLI-only.
+tlive v1.0-rc ships **12 IM slash commands** — a deliberate reduction from 47
+spec-draft commands. The other 35 either moved into inline keyboard buttons,
+collapsed into one of the 12, or were parked for v2.0 / CLI-only. See §9 for
+the full removal list.
 
 Two mental categories drive the catalog:
 
@@ -154,7 +155,7 @@ workspace-scoped 命令在无 binding 时引导用户进 `/workspace` 流程
 
 ## 4. Inline keyboards (detail card)
 
-每条 assistant 回复的 detail card 末尾自动展示一组按钮。这是 v3.3 的主交互路径。
+每条 assistant 回复的 detail card 末尾自动展示一组按钮。这是 v1.0-rc 的主交互路径。
 
 ### 4.1 默认布局(4 按钮)
 
@@ -208,12 +209,13 @@ workspace-scoped 命令在无 binding 时引导用户进 `/workspace` 流程
 ### 5.3 `lazyResumeOrCreate` 决策树
 
 ```
-有 ws.activeSessionId?
+有 binding.activeSessionId?          ← per-chat,Iso §3.1
 ├─ deps.isLive(id)               → sendInput(id, text)         // sent_to_live
 ├─ deps.hasPersistedSession(id)  → resume(id) + sendInput      // resumed
 └─ 兜底                          → createLocal({...})          // created
 ```
 
+- `binding.activeSessionId`:当前 **chat** 的 session id(不是 workspace 级)
 - `isLive`:进程在内存且 `getStatus() === 'active'`
 - `hasPersistedSession`:`persistence.hasSnapshot(id)`(查 jsonl 文件)
 - `onResumeFailed` hook 在 daemon log 暴露 silent fall-through(jsonl 损坏等)
@@ -307,9 +309,9 @@ dialog state 完成同样动作。
 
 ---
 
-## 9. Removed in v3.3 (35 commands)
+## 9. Removed in v1.0-rc (35 commands)
 
-47 → 12 收敛清单。功能没消失,只是搬家了:
+47 → 12 收敛清单(spec 草案命令 → v1.0-rc 发布命令)。功能没消失,只是搬家了:
 
 ### → 移到 detail card inline keyboard 按钮
 
@@ -335,7 +337,35 @@ dialog state 完成同样动作。
 
 ---
 
-## 10. Per-platform notes
+## 10. Operator notes
+
+### 10.1 Daemon single-instance lock
+
+v1.0-rc 强制单实例:daemon 启动时在 `~/.tlive/daemon.lock` 上获取排他文件锁
+(`tryAcquireDaemonLock`)。若锁已被占用(另一个 daemon 进程正在运行),新进程
+立即退出并打印 `DAEMON_ALREADY_RUNNING` 错误。
+
+**影响**:
+- `tlive start` 在 daemon 已运行时直接幂等(不会起第二个进程)
+- `tlive stop` 先发 SIGTERM → 等待 drain → 释放锁;之后可正常 re-start
+- lock 文件路径:`~/.tlive/daemon.lock`(相同 `TLIVE_HOME` 配置下共享)
+
+**运维提示**:若进程异常退出留下孤立 lock 文件,`tlive start` 会检测旧 pid
+不存活后自动清理并获取锁(stale-lock detection)。
+
+### 10.2 Per-chat session isolation (Iso §6.2)
+
+每个 IM chat 拥有独立的 `binding.activeSessionId`,互不影响。多个 chat 绑定同
+一个 workspace 时:
+
+- 各 chat 维护独立 session 生命周期
+- workspace 默认配置(`model`/`mode` 等)仅在 **新建 session** 时读取,正在运行的
+  session 不受 workspace 配置修改的影响
+- `lazyResumeOrCreate` 的查询粒度是 chat-level binding,不是 workspace-level
+
+---
+
+## 11. Per-platform notes
 
 - **Telegram** — autocomplete via `setMyCommands`;forum-group topics 支持
   per-session topic;detail card 用 InlineKeyboardMarkup
@@ -346,7 +376,7 @@ dialog state 完成同样动作。
 
 ---
 
-## 11. Reference
+## 12. Reference
 
 - Spec: `docs/superpowers/specs/2026-04-30-im-commands-redesign-design.md`
 - Registry: `src/im/commands/index.ts` (`ALL_COMMANDS`)
