@@ -1,13 +1,12 @@
 // tests/e2e/commands/workspace.test.ts
 //
-// e2e tests for the /workspace command — 4-state UX.
+// e2e tests for the /workspace command — 3-state UX (chat-trust).
 //
-// Per spec §4 / Iso §6.2:
+// Per spec §4 / chat-trust §7:
 //   State A: unbound chat, no workspaces     → [➕ 新增工作区] prompt only
 //   State B: unbound chat, has workspaces    → lists workspace names for binding
-//   State C: bound + admin                  → workspace info + optional session +
+//   State C: bound (any user, no role gate)  → workspace info + optional session +
 //                                              multi-chat counter + action buttons
-//   State D: bound + non-admin (observer)   → read-only view
 //
 // Uses setupBootstrap() — real command dispatch + real CallbackRouter.
 // No daemon or real session runtimes are spun up.
@@ -39,7 +38,7 @@ afterEach(async () => {
   env = undefined;
 });
 
-describe('/workspace — 4 state UX', () => {
+describe('/workspace — 3 state UX (chat-trust)', () => {
   it('state A (unbound + no ws) prompts to create a new workspace', async () => {
     env = setupBootstrap({ workspaces: [] });
 
@@ -157,5 +156,33 @@ describe('/workspace — 4 state UX', () => {
     const reply = env.replies.join('\n');
     // Format: "👥 其他 chat 在此项目: 1 个(各自独立)"
     expect(reply).toMatch(/其他 chat.*1/);
+  });
+
+  it('shows bound view to any user in the chat (chat-trust, no readOnly)', async () => {
+    // chat-trust: a non-admin / random user in a bound chat sees the full
+    // bound view — no role gate, no "只读" downgrade.
+    env = setupBootstrap({
+      workspaces: [{
+        id: 'w1', name: 'proj', workdir: '/tmp/tlive-e2e-ws-trust',
+        bindings: [{ channelType: 'telegram', chatId: 'c1' }],
+      }],
+    });
+
+    await env.handleInbound({
+      channelType: 'telegram', chatId: 'c1', userId: 'random-user-99',
+      text: '/workspace', messageId: 'm1',
+    });
+
+    const reply = env.replies.join('\n');
+    // Must show bound workspace name (state C, not readOnly downgrade).
+    expect(reply).toMatch(/当前工作区/);
+    // Must NOT contain any read-only downgrade text.
+    expect(reply).not.toMatch(/只读/);
+    // Action buttons (exit / manage) must still be present.
+    const sendCalls = env.adapter.byKind('send');
+    const replyMarkup = sendCalls[0]?.args.replyMarkup;
+    expect(replyMarkup).toBeTruthy();
+    const allButtons = sendCalls.flatMap(flatButtons);
+    expect(allButtons.some((b) => b.callbackData === 'workspace:exit:confirm')).toBe(true);
   });
 });
