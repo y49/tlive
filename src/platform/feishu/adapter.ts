@@ -22,6 +22,7 @@ import type { ChannelType } from '../../workspace/bindings.js';
 import { buildInlineCard } from './renderer.js';
 import { buildFormCard } from './form.js';
 import { sendFeishuAttachment, downloadFeishuAttachment } from './attachment.js';
+import { feishuEmojiType } from './emoji-map.js';
 import { Client as LarkClient, WSClient, EventDispatcher, Domain } from '@larksuiteoapi/node-sdk';
 import type { Logger } from '../../util/logger.js';
 import { larkLoggerAdapter } from './lark-logger.js';
@@ -66,7 +67,7 @@ export class FeishuAdapter implements PlatformAdapter {
   private readonly eventDispatcher: unknown | null;
   private readonly options: FeishuAdapterOptions;
   private readonly inboundListeners = new Set<(ev: InboundEvent) => void>();
-  /** messageId → reaction_id cache for setReaction (LRU cap 512). */
+  /** messageId → reaction_id cache for setReaction (size cap 512). */
   private readonly reactionCache = new Map<string, string>();
   private readonly httpPost: (path: string, body: unknown) => Promise<unknown>;
   private readonly httpDelete: (path: string) => Promise<unknown>;
@@ -248,7 +249,6 @@ export class FeishuAdapter implements PlatformAdapter {
       return;
     }
 
-    const { feishuEmojiType } = await import('./emoji-map.js');
     const emojiType = feishuEmojiType(emoji);
     if (!emojiType) {
       this.options.logger?.warn('feishu setReaction: unmapped reaction emoji', { messageId, emoji });
@@ -274,7 +274,7 @@ export class FeishuAdapter implements PlatformAdapter {
       );
       const newId = (resp as { data?: { reaction_id?: string } })?.data?.reaction_id;
       if (newId) {
-        // LRU cap 512: evict oldest entry when full
+        // size cap 512: evict oldest-inserted entry when full
         if (this.reactionCache.size >= 512) {
           const oldestKey = this.reactionCache.keys().next().value;
           if (oldestKey !== undefined) this.reactionCache.delete(oldestKey);
