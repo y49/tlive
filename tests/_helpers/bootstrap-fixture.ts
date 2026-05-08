@@ -253,6 +253,7 @@ function buildFakeSessionManager(): SessionManager & {
       const alias = id.replace(/[^a-z0-9]/g, '').slice(0, 8);
       let _model: string | undefined = opts.model as string | undefined;
       let _permissionMode: string = (opts.permissionMode as string | undefined) ?? 'default';
+      let _budgetCap: number | undefined = undefined;
       const s = {
         kind: 'local', id, shortAlias: alias, workspaceId: opts.workspaceId, ...opts,
         // Stub setModel / getModel so callback tests can call runtime:model:set:*.
@@ -262,6 +263,10 @@ function buildFakeSessionManager(): SessionManager & {
         // runtime:mode:set:*.
         async setPermissionMode(m: string) { _permissionMode = m; },
         get permissionMode() { return _permissionMode as PermissionMode; },
+        // Stub setMaxBudget / getMaxBudget / cost so /budget and its callbacks work.
+        setMaxBudget(usd: number | undefined) { _budgetCap = usd; },
+        getMaxBudget() { return _budgetCap; },
+        cost: { totalCost: 0 },
       } as unknown as LocalSession;
       liveSessions.set(id, s);
       return s;

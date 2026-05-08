@@ -53,15 +53,16 @@ function budgetButtons(): ReplyMarkup {
     type: 'inline_keyboard',
     buttons: [
       [
-        { text: '$10', callbackData: 'runtime:budget:set:10' },
-        { text: '$25', callbackData: 'runtime:budget:set:25' },
-        { text: '$50', callbackData: 'runtime:budget:set:50' },
+        { text: '$1', callbackData: 'runtime:budget:set:1' },
+        { text: '$5', callbackData: 'runtime:budget:set:5' },
+        { text: '$20', callbackData: 'runtime:budget:set:20' },
       ],
       [
         { text: '$100', callbackData: 'runtime:budget:set:100' },
+        { text: '$200', callbackData: 'runtime:budget:set:200' },
         { text: '无限', callbackData: 'runtime:budget:set:unlimited' },
-        { text: '✏ 自定义', callbackData: 'runtime:budget:custom' },
       ],
     ],
   };
 }
+// Note: custom budget amounts can be set via /budget <usd> (text command).

@@ -21,12 +21,13 @@ describe('/budget', () => {
     expect(replies[0]).toMatch(/剩余.*\$8\.77/);
     expect(replyMarkups[0]).toBeTruthy();
     const labels = (replyMarkups[0]!.buttons ?? []).flat().map((b) => b.text);
-    expect(labels).toContain('$10');
-    expect(labels).toContain('$25');
-    expect(labels).toContain('$50');
+    expect(labels).toContain('$1');
+    expect(labels).toContain('$5');
+    expect(labels).toContain('$20');
     expect(labels).toContain('$100');
+    expect(labels).toContain('$200');
     expect(labels).toContain('无限');
-    expect(labels).toContain('✏ 自定义');
+    // Custom stub removed (Option B — text path /budget <usd> covers custom).
   });
 
   it('no args, no cap set: shows 无限 and omits remaining line', async () => {
