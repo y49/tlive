@@ -3,8 +3,7 @@
 // Per spec §7 — full onboarding e2e: empty WorkspaceManager → /workspace
 // renders state B (empty) with [➕ 新增工作区] → user clicks → broker pending
 // → user types absolute path → tryCreateWorkspaceFromPath validates fs.stat
-// + findByWorkdir + calls createFromIM (atomic create + claimAdmin +
-// addBinding) → workspace bound to chat → /new can spawn a session.
+// + findByWorkdir + calls create() + bindChat() → workspace bound to chat → /new can spawn a session.
 //
 // Real WorkspaceManager + CallbackRouter + WorkspaceCreateBroker +
 // SessionManager driven by FakeRuntime via runtimeFactory; no real
@@ -176,7 +175,7 @@ describe('e2e: onboarding (empty state → first session)', () => {
     expect(promptMsg.text).toContain('请发送项目根目录');
 
     // Step 3: user sends absolute path. Use a real directory so fs.stat
-    // succeeds and createFromIM is exercised end-to-end.
+    // succeeds and create() + bindChat() is exercised end-to-end.
     const projectDir = mkdtempSync(join(tmpdir(), 'tlive-onboard-proj-'));
     try {
       env.adapter.calls.length = 0;
@@ -202,7 +201,7 @@ describe('e2e: onboarding (empty state → first session)', () => {
       const ws = all[0]!;
       expect(ws.workdir).toBe(projectDir);
       expect(env.workspaces.getRole(ws.id, userId)).toBe('admin');
-      expect(env.workspaces.findByChat(channelType, chatId)?.id).toBe(ws.id);
+      expect(env.workspaces.workspaceForChat(channelType, chatId)?.id).toBe(ws.id);
       // Pending state cleared.
       expect(env.brokerCreate.pendingFor(channelType, chatId)).toBeUndefined();
 
@@ -230,7 +229,7 @@ describe('e2e: onboarding (empty state → first session)', () => {
 
       // Runtime was constructed; the chat-level binding now owns the session.
       expect(env.runtimes.length).toBe(runtimeCountBefore + 1);
-      const activeSid = env.workspaces.getActiveSessionIdForChat(channelType, chatId);
+      const activeSid = env.workspaces.getActiveSessionId(channelType, chatId);
       expect(activeSid).toBeTruthy();
       const newCalls = env.adapter.byKind('send');
       expect(newCalls).toHaveLength(1);

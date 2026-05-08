@@ -32,7 +32,7 @@ export function autoBindFromConfig(
     for (const [platform, ch] of Object.entries(channels) as Array<[ChannelType, ChannelEntryWithChatId | undefined]>) {
       const chatId = ch?.chatId;
       if (!chatId) continue; // Feishu schema has no chatId; skip.
-      if (workspaces.findByChat(platform, chatId)) continue; // already bound somewhere
+      if (workspaces.workspaceForChat(platform, chatId)) continue; // already bound somewhere
 
       // Multi-workspace ambiguity guard: if any other workspace also wants
       // this chatId via adminUserId, only the matching one wins.
@@ -52,10 +52,16 @@ export function autoBindFromConfig(
         }
       }
 
-      workspaces.addBinding(target.id, {
-        channelType: platform,
-        chatId,
-      });
+      try {
+        workspaces.bindChat({
+          workspaceId: target.id,
+          channelType: platform,
+          chatId,
+        });
+      } catch {
+        // already bound — skip (idempotent when called multiple times)
+        continue;
+      }
       logger.info('auto-bound chat from config', {
         workspaceId: target.id, workspaceName: target.name, platform, chatId,
       });

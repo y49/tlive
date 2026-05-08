@@ -106,8 +106,8 @@ describe('e2e: multi-chat isolation (same workspace) — spec §8.2', () => {
   it('two chats bound to same workspace get fully independent sessions', async () => {
     // One workspace, two bindings: telegram chat-tg and feishu chat-fs.
     const ws = env.workspaces.create({ name: 'shared-ws', workdir: env.home });
-    env.workspaces.addBinding(ws.id, { channelType: 'telegram', chatId: 'chat-tg' });
-    env.workspaces.addBinding(ws.id, { channelType: 'feishu', chatId: 'chat-fs' });
+    env.workspaces.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'chat-tg' });
+    env.workspaces.bindChat({workspaceId: ws.id,  channelType: 'feishu', chatId: 'chat-fs' });
 
     // Chat A (telegram) creates its own LocalSession.
     const sa = await env.manager.createLocal({
@@ -117,7 +117,7 @@ describe('e2e: multi-chat isolation (same workspace) — spec §8.2', () => {
       source: 'im',
       ownerChat: { channelType: 'telegram', chatId: 'chat-tg' },
     });
-    env.workspaces.bindActiveSessionForChat('telegram', 'chat-tg', sa.id);
+    env.workspaces.bindActiveSession('telegram', 'chat-tg', sa.id);
     const runtimeA = lastRuntime(env);
 
     // Chat B (feishu) creates its own — distinct — LocalSession.
@@ -128,14 +128,14 @@ describe('e2e: multi-chat isolation (same workspace) — spec §8.2', () => {
       source: 'im',
       ownerChat: { channelType: 'feishu', chatId: 'chat-fs' },
     });
-    env.workspaces.bindActiveSessionForChat('feishu', 'chat-fs', sb.id);
+    env.workspaces.bindActiveSession('feishu', 'chat-fs', sb.id);
     const runtimeB = lastRuntime(env);
 
     // ---- Data-model assertions: independent identities --------------------
     expect(sa.id).not.toBe(sb.id);
     expect(runtimeA).not.toBe(runtimeB);
-    expect(env.workspaces.getActiveSessionIdForChat('telegram', 'chat-tg')).toBe(sa.id);
-    expect(env.workspaces.getActiveSessionIdForChat('feishu', 'chat-fs')).toBe(sb.id);
+    expect(env.workspaces.getActiveSessionId('telegram', 'chat-tg')).toBe(sa.id);
+    expect(env.workspaces.getActiveSessionId('feishu', 'chat-fs')).toBe(sb.id);
     // ownerChat is recorded on the SessionLike.
     expect(sa.ownerChat?.channelType).toBe('telegram');
     expect(sa.ownerChat?.chatId).toBe('chat-tg');
@@ -201,7 +201,7 @@ describe('e2e: multi-chat isolation (same workspace) — spec §8.2', () => {
       workdir: env.home,
       defaults: { provider: 'claude', model: 'model-old' },
     });
-    env.workspaces.addBinding(ws.id, { channelType: 'telegram', chatId: 'chat-tg' });
+    env.workspaces.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'chat-tg' });
 
     // Create session A — runtime is prepared with model=model-old captured by
     // SessionManager's call path. Note: our test fakes don't surface the model
@@ -215,7 +215,7 @@ describe('e2e: multi-chat isolation (same workspace) — spec §8.2', () => {
       source: 'im',
       ownerChat: { channelType: 'telegram', chatId: 'chat-tg' },
     });
-    env.workspaces.bindActiveSessionForChat('telegram', 'chat-tg', sa.id);
+    env.workspaces.bindActiveSession('telegram', 'chat-tg', sa.id);
 
     // Mutate the workspace's defaults.model — this is an in-place mutation
     // that does NOT walk live sessions and patch their runtimes.

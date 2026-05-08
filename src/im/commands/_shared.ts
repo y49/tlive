@@ -9,15 +9,16 @@ import type { LocalSession } from '../../session/local-session.js';
 import type { RemoteSession } from '../../session/remote-session.js';
 import type { Workspace } from '../../workspace/config.js';
 
-// Re-export Role so callers import a single symbol from _shared.
+// NOTE: Role type removed in chat-trust model (T3 will delete role checks).
+// Kept as a shim so T3 can find and remove callers that still import Role.
 export type { Role } from '../../workspace/config.js';
 
 /**
  * Resolve a user's role within a workspace using only the user-level
  * `workspace.roles[userId]` map (with `workspace.defaultRole` fallback).
  *
- * AUTHORITATIVE since v1.0-rc Iso refactor — `binding.role` no longer exists.
- * Callbacks must carry `userId` to resolve permissions correctly.
+ * T3-PENDING: chat-trust removes role-based gating entirely. This function
+ * and all callers will be deleted in T3.
  */
 export function userRole(ws: { roles?: Record<string, string>; defaultRole?: string }, userId: string | null | undefined): import('../../workspace/config.js').Role {
   if (userId && ws.roles?.[userId]) {
@@ -31,7 +32,7 @@ export function userRole(ws: { roles?: Record<string, string>; defaultRole?: str
  * none is registered.
  */
 export function workspaceForChat(ctx: CommandContext): Workspace | null {
-  return ctx.workspaceManager.findByChat(ctx.inbound.channelType, ctx.inbound.chatId) ?? null;
+  return ctx.workspaceManager.workspaceForChat(ctx.inbound.channelType, ctx.inbound.chatId) ?? null;
 }
 
 /**
@@ -46,7 +47,7 @@ export async function activeLocalSession(ctx: CommandContext): Promise<LocalSess
     await ctx.reply('当前 chat 未绑定工作区,发 /workspace 选择一个');
     return null;
   }
-  const activeId = ctx.workspaceManager.getActiveSessionIdForChat(
+  const activeId = ctx.workspaceManager.getActiveSessionId(
     ctx.inbound.channelType,
     ctx.inbound.chatId,
   );

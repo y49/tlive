@@ -67,7 +67,7 @@ export const modelCmd: CommandDef = {
  * manager, or it isn't a local session. The picker tolerates all of these.
  */
 function resolveActiveLocalSilent(ctx: CommandContext): LocalSession | null {
-  const id = ctx.workspaceManager.getActiveSessionIdForChat(
+  const id = ctx.workspaceManager.getActiveSessionId(
     ctx.inbound.channelType,
     ctx.inbound.chatId,
   );

@@ -63,7 +63,7 @@ async function setup(opts: SetupOpts = {}): Promise<Env> {
 
   const workspaces = new WorkspaceManager();
   const ws = workspaces.create({ name: 'ws', workdir });
-  workspaces.addBinding(ws.id, { channelType: 'telegram', chatId: 'chat-1' });
+  workspaces.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'chat-1' });
 
   const adapter = new FakeAdapter('telegram');
   const frontend = new SessionFrontend({
@@ -262,7 +262,7 @@ describe('Session lifecycle — full stack', () => {
     env = await setup();
     const s = await createLocal(env);
     // Bind the active session so lazyResumeOrCreate sees it on branch 2.
-    env.workspaces.bindActiveSessionForChat('telegram', 'chat-1', s.id);
+    env.workspaces.bindActiveSession('telegram', 'chat-1', s.id);
     // Stop the session (saves snapshot to disk).
     await env.manager.stop(s.id);
 
@@ -352,7 +352,7 @@ describe('Session lifecycle — full stack', () => {
     env = await setup();
     const s = await createLocal(env);
     // Bind and keep alive.
-    env.workspaces.bindActiveSessionForChat('telegram', 'chat-1', s.id);
+    env.workspaces.bindActiveSession('telegram', 'chat-1', s.id);
 
     let createdCount = 0;
     env.manager.subscribe((ev) => { if (ev.kind === 'created') createdCount++; });

@@ -50,16 +50,16 @@ async function boot() {
   // ChatBinding rather than the Workspace. Add one binding for this test
   // and route all subscribe-time bind/clear through the chat-level API.
   const CHAT = { channelType: 'telegram' as const, chatId: 'chat-handoff' };
-  workspaces.addBinding(ws.id, CHAT);
+  workspaces.bindChat({ workspaceId: ws.id, ...CHAT });
   sessions.subscribe((ev) => {
     if (ev.kind === 'created' || ev.kind === 'resumed') {
-      try { workspaces.bindActiveSessionForChat(CHAT.channelType, CHAT.chatId, ev.session.id); }
+      try { workspaces.bindActiveSession(CHAT.channelType, CHAT.chatId, ev.session.id); }
       catch { /* swallowed — test inspects state explicitly */ }
     }
     if (ev.kind === 'stopped') {
-      const cur = workspaces.getActiveSessionIdForChat(CHAT.channelType, CHAT.chatId);
+      const cur = workspaces.getActiveSessionId(CHAT.channelType, CHAT.chatId);
       if (cur === ev.sessionId) {
-        workspaces.clearActiveSessionForChat(CHAT.channelType, CHAT.chatId);
+        workspaces.clearActiveSession(CHAT.channelType, CHAT.chatId);
       }
     }
   });
@@ -99,7 +99,7 @@ describe('integration: handoff roundtrip', () => {
     });
     const sdkId = session.id;
     expect(env.sessions.get(sdkId)).toBeDefined();
-    expect(env.workspaces.getActiveSessionIdForChat('telegram', 'chat-handoff')).toBe(sdkId);
+    expect(env.workspaces.getActiveSessionId('telegram', 'chat-handoff')).toBe(sdkId);
     // Persist an explicit snapshot so resume() later has a jsonl row to reload.
     await env.persistence.saveSnapshot(session.snapshotLegacy());
     const runtimeBefore = env.runtimes[env.runtimes.length - 1]!;
@@ -113,7 +113,7 @@ describe('integration: handoff roundtrip', () => {
     expect(released.kind).toBe('handoff.released');
     expect((released as { sdkId: string }).sdkId).toBe(sdkId);
     expect(env.sessions.get(sdkId)).toBeUndefined();
-    expect(env.workspaces.getActiveSessionIdForChat('telegram', 'chat-handoff')).toBeNull();
+    expect(env.workspaces.getActiveSessionId('telegram', 'chat-handoff')).toBeNull();
     expect(runtimeBefore.stopCalls).toBe(1);
 
     // --- handoff.take via IPC ---
@@ -127,7 +127,7 @@ describe('integration: handoff roundtrip', () => {
     const resumed = env.sessions.get(sdkId);
     expect(resumed).toBeDefined();
     expect(resumed!.id).toBe(sdkId); // same native jsonl identity
-    expect(env.workspaces.getActiveSessionIdForChat('telegram', 'chat-handoff')).toBe(sdkId);
+    expect(env.workspaces.getActiveSessionId('telegram', 'chat-handoff')).toBe(sdkId);
 
     // A second runtime instance was minted for the resumed session.
     expect(env.runtimes.length).toBeGreaterThan(1);
@@ -162,23 +162,23 @@ describe('integration: handoff roundtrip', () => {
       source: 'im',
     });
     await env.persistence.saveSnapshot(s.snapshotLegacy());
-    expect(env.workspaces.getActiveSessionIdForChat('telegram', 'chat-handoff')).toBe(s.id);
+    expect(env.workspaces.getActiveSessionId('telegram', 'chat-handoff')).toBe(s.id);
 
     await request({ kind: 'handoff.release', alias: s.id }, { path: env.socketPath });
     // Slot is empty — a fresh session could legally bind.
-    expect(env.workspaces.getActiveSessionIdForChat('telegram', 'chat-handoff')).toBeNull();
+    expect(env.workspaces.getActiveSessionId('telegram', 'chat-handoff')).toBeNull();
 
     await request({ kind: 'handoff.take', sdkId: s.id }, { path: env.socketPath });
     // Slot rebinds to the identical id.
-    expect(env.workspaces.getActiveSessionIdForChat('telegram', 'chat-handoff')).toBe(s.id);
+    expect(env.workspaces.getActiveSessionId('telegram', 'chat-handoff')).toBe(s.id);
 
     // Per chat-level isolation (Iso #1+) re-binding the chat to a
     // different id is permitted (latest write wins), and a different chat
     // could hold its own independent session. The legacy ws-level
     // single-writer guard is gone.
-    env.workspaces.bindActiveSessionForChat('telegram', 'chat-handoff', 'other-id');
+    env.workspaces.bindActiveSession('telegram', 'chat-handoff', 'other-id');
     expect(
-      env.workspaces.getActiveSessionIdForChat('telegram', 'chat-handoff'),
+      env.workspaces.getActiveSessionId('telegram', 'chat-handoff'),
     ).toBe('other-id');
   });
 });

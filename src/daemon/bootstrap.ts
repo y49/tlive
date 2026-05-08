@@ -197,11 +197,8 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
       gitRemote: w.gitRemote,
       defaults: w.defaults,
       budget: w.budget,
-      defaultRole: w.defaultRole,
     });
-    if (w.roles) {
-      for (const [uid, role] of Object.entries(w.roles)) workspaces.setRole(created.id, uid, role);
-    }
+    // T3-PENDING: w.roles / w.defaultRole / claimAdmin removed in chat-trust
   }
   // Claim admin from config-declared adminUserId. Idempotent — only fires
   // when no admin role is currently assigned on the workspace.
@@ -656,9 +653,9 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
     // "tea — green" as the user's answer rather than a brand-new prompt.
     // Without this, an answer like "2" lands in lazyResumeOrCreate and
     // creates a new turn while the question keeps waiting forever.
-    const wsForAsk = deps.workspaces.findByChat(ev.channelType, ev.chatId);
+    const wsForAsk = deps.workspaces.workspaceForChat(ev.channelType, ev.chatId);
     const askActiveId = wsForAsk
-      ? deps.workspaces.getActiveSessionIdForChat(ev.channelType, ev.chatId)
+      ? deps.workspaces.getActiveSessionId(ev.channelType, ev.chatId)
       : null;
     if (wsForAsk && askActiveId) {
       const pending = deps.askBroker.pendingFor(askActiveId);
@@ -678,7 +675,7 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
 
     // Plain-text: route to the workspace's lazyResumeOrCreate. We need a
     // workspace first — look up by chat binding.
-    const ws = deps.workspaces.findByChat(ev.channelType, ev.chatId);
+    const ws = deps.workspaces.workspaceForChat(ev.channelType, ev.chatId);
     if (!ws) {
       await deps.adapter.send({
         chatId: ev.chatId,
@@ -737,7 +734,7 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
   }
 
   // Slash command — build a CommandContext tied to this adapter for reply.
-  const wsForRole = deps.workspaces.findByChat(ev.channelType, ev.chatId);
+  const wsForRole = deps.workspaces.workspaceForChat(ev.channelType, ev.chatId);
   const userRole = wsForRole ? deps.workspaces.getRole(wsForRole.id, ev.userId) : 'observer';
 
   const ctx: CommandContext = {

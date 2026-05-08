@@ -39,7 +39,7 @@ describe('/new — text + button + role', () => {
     });
 
     // Session should have been created and bound to the chat.
-    const activeId = env.workspaceManager.getActiveSessionIdForChat('telegram', 'c1');
+    const activeId = env.workspaceManager.getActiveSessionId('telegram', 'c1');
     expect(activeId).toBeTruthy();
     expect(activeId).toMatch(/sess-fake/);
 
@@ -80,7 +80,7 @@ describe('/new — text + button + role', () => {
     expect(buttons.find((b) => b.callbackData === 'session:new:cancel')).toBeDefined();
 
     // No new session bound (still the existing one).
-    const activeId = env.workspaceManager.getActiveSessionIdForChat('telegram', 'c1');
+    const activeId = env.workspaceManager.getActiveSessionId('telegram', 'c1');
     expect(activeId).toBe('existing-session-id');
   });
 
@@ -170,10 +170,10 @@ describe('/new — text + button + role', () => {
     expect(env.workspaceManager.getRole('w6', 'u-first')).toBe('admin');
 
     // Create binding for the chat so /new can work.
-    env.workspaceManager.addBinding('w6', {
+    env.workspaceManager.bindChat({
+      workspaceId: 'w6',
       channelType: 'telegram',
       chatId: 'c1',
-      activeSessionId: null,
     });
 
     // /new should succeed (not be role-denied)
@@ -181,7 +181,7 @@ describe('/new — text + button + role', () => {
       channelType: 'telegram', chatId: 'c1',
       userId: 'u-first', text: '/new', messageId: 'm-new',
     });
-    expect(env.workspaceManager.getActiveSessionIdForChat('telegram', 'c1')).toBeTruthy();
+    expect(env.workspaceManager.getActiveSessionId('telegram', 'c1')).toBeTruthy();
     await env.cleanup?.();
   });
 });

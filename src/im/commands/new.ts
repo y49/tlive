@@ -29,7 +29,7 @@ export const newCmd: CommandDef = {
     // than the legacy ws-level field.
     const channelType = ctx.inbound.channelType;
     const chatId = ctx.inbound.chatId;
-    const activeSessionId = ctx.workspaceManager.getActiveSessionIdForChat(channelType, chatId);
+    const activeSessionId = ctx.workspaceManager.getActiveSessionId(channelType, chatId);
 
     // Check for an existing active session (unless --force)
     if (activeSessionId && !force) {
@@ -75,7 +75,7 @@ export const newCmd: CommandDef = {
           });
         }
       }
-      ctx.workspaceManager.clearActiveSessionForChat(channelType, chatId);
+      ctx.workspaceManager.clearActiveSession(channelType, chatId);
     }
 
     const session = await ctx.sessionManager.createLocal({
@@ -91,9 +91,9 @@ export const newCmd: CommandDef = {
       ownerChat: { channelType, chatId },
     });
     try {
-      ctx.workspaceManager.bindActiveSessionForChat(channelType, chatId, session.id);
+      ctx.workspaceManager.bindActiveSession(channelType, chatId, session.id);
     } catch (err) {
-      ctx.logger?.debug('new: bindActiveSessionForChat race', {
+      ctx.logger?.debug('new: bindActiveSession race', {
         reason: (err as Error).message,
       });
     }

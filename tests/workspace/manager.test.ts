@@ -1,661 +1,124 @@
 // tests/workspace/manager.test.ts
-
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { WorkspaceManager, type LazyResumeDeps } from '../../src/workspace/manager.js';
-import { SessionManager } from '../../src/session/manager.js';
-import { SessionPersistence } from '../../src/session/persistence.js';
-import { PermissionBroker } from '../../src/permission/broker.js';
-import { FakeRuntime } from '../session/fake-runtime.js';
-import type { SessionLike } from '../../src/session/types.js';
-import type { LocalSession } from '../../src/session/local-session.js';
+import { WorkspaceManager } from '../../src/workspace/manager.js';
 
-function fakeSession(id: string): SessionLike {
-  return {
-    id,
-    shortAlias: id.slice(0, 8),
-    kind: 'local',
-    provider: 'claude',
-    workspaceId: 'ws-any',
-    workdir: '/tmp',
-    ctx: {} as SessionLike['ctx'],
-    title: undefined,
-    status: { phase: 'idle', queuedInputs: 0 },
-    cost: {} as SessionLike['cost'],
-    isReady: true,
-    onEvent: () => () => undefined,
-    onStatusChange: () => () => undefined,
-    onSessionIdReady: () => () => undefined,
-    snapshot: () => ({} as never),
-  };
-}
+describe('WorkspaceManager — chat-instance model (v2)', () => {
+  let dir: string;
+  let path: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'tlive-wm-'));
+    path = join(dir, 'workspaces.json');
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-describe('WorkspaceManager create/lookup', () => {
-  it('create+findByWorkdir+findByName+findByChat', () => {
+  it('create + bindChat creates a ChatInstance and persists v2 schema', async () => {
+    const wm = new WorkspaceManager({ persistPath: path });
+    const ws = wm.create({ name: 'a', workdir: '/tmp/a' });
+    wm.bindChat({ workspaceId: ws.id, channelType: 'telegram', chatId: 'tg-1' });
+    await wm.save();
+
+    const inst = wm.findChatInstance('telegram', 'tg-1');
+    expect(inst).toMatchObject({ workspaceId: ws.id, activeSessionId: null });
+    expect(inst!.costRollup).toMatchObject({ totalUsd: 0, sessionCount: 0 });
+
+    const onDisk = JSON.parse(readFileSync(path, 'utf8'));
+    expect(onDisk.version).toBe(2);
+    expect(onDisk.chatInstances).toHaveLength(1);
+    expect(onDisk.workspaces).toHaveLength(1);
+  });
+
+  it('bindChat refuses second bind on same (channel, chat) until unbindChat', () => {
     const wm = new WorkspaceManager();
-    const ws = wm.create({ name: 'tlive', workdir: '/home/y/tlive' });
-    expect(wm.get(ws.id)).toBe(ws);
-    expect(wm.findByWorkdir('/home/y/tlive')?.id).toBe(ws.id);
-    expect(wm.findByName('tlive')?.id).toBe(ws.id);
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
-    expect(wm.findByChat('telegram', 'c1')?.id).toBe(ws.id);
-    expect(wm.findByChat('feishu', 'c1')).toBeUndefined();
+    const a = wm.create({ name: 'a', workdir: '/tmp/a' });
+    const b = wm.create({ name: 'b', workdir: '/tmp/b' });
+    wm.bindChat({ workspaceId: a.id, channelType: 'telegram', chatId: 'tg-1' });
+    expect(() => wm.bindChat({ workspaceId: b.id, channelType: 'telegram', chatId: 'tg-1' }))
+      .toThrow(/already bound/);
   });
 
-  it('ensureForWorkdir auto-creates when absent, returns existing when present', () => {
+  it('unbindChat removes the chat instance', () => {
     const wm = new WorkspaceManager();
-    const first = wm.ensureForWorkdir('/proj');
-    const second = wm.ensureForWorkdir('/proj');
-    expect(second.id).toBe(first.id);
-    expect(wm.list()).toHaveLength(1);
+    const ws = wm.create({ name: 'a', workdir: '/tmp/a' });
+    wm.bindChat({ workspaceId: ws.id, channelType: 'telegram', chatId: 'tg-1' });
+    wm.unbindChat('telegram', 'tg-1');
+    expect(wm.findChatInstance('telegram', 'tg-1')).toBeUndefined();
   });
-});
 
-describe('WorkspaceManager activeSessionId per-chat (Iso #1-3)', () => {
-  // Per chat-level isolation (spec §3) the active session lives on each
-  // ChatBinding. The legacy ws-level single-writer trio
-  // (bindActiveSession / clearActiveSession / getActiveSessionId) was
-  // deleted in Iso #3; chat-level coverage lives in the
-  // "chat-level session APIs" describe further down.
-  it('per-chat bind/clear works; rebinding to a different id overwrites', () => {
+  it('switchChat replaces workspace + resets costRollup + clears activeSessionId', () => {
     const wm = new WorkspaceManager();
-    const ws = wm.create({ name: 'x', workdir: '/x' });
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
-    wm.bindActiveSessionForChat('telegram', 'c1', 'sess-1');
-    expect(wm.getActiveSessionIdForChat('telegram', 'c1')).toBe('sess-1');
-    // Re-bind to a new id (chat-level semantics: latest write wins).
-    wm.bindActiveSessionForChat('telegram', 'c1', 'sess-2');
-    expect(wm.getActiveSessionIdForChat('telegram', 'c1')).toBe('sess-2');
-    wm.clearActiveSessionForChat('telegram', 'c1');
-    expect(wm.getActiveSessionIdForChat('telegram', 'c1')).toBeNull();
-  });
-});
+    const a = wm.create({ name: 'a', workdir: '/tmp/a' });
+    const b = wm.create({ name: 'b', workdir: '/tmp/b' });
+    wm.bindChat({ workspaceId: a.id, channelType: 'telegram', chatId: 'tg-1' });
+    wm.bindActiveSession('telegram', 'tg-1', 'sid-1');
+    wm.addCost('telegram', 'tg-1', 1.5, true);
 
-describe('WorkspaceManager roles', () => {
-  it('returns defaultRole when user unset, set/get overrides', () => {
+    wm.switchChat('telegram', 'tg-1', b.id);
+    const inst = wm.findChatInstance('telegram', 'tg-1');
+    expect(inst!.workspaceId).toBe(b.id);
+    expect(inst!.activeSessionId).toBeNull();
+    expect(inst!.costRollup.totalUsd).toBe(0);
+    expect(inst!.costRollup.sessionCount).toBe(0);
+  });
+
+  it('removeWorkspace without --force refuses if any chat is bound', () => {
     const wm = new WorkspaceManager();
-    const ws = wm.create({ name: 'x', workdir: '/x', defaultRole: 'operator' });
-    expect(wm.getRole(ws.id, 'alice')).toBe('operator');
-    wm.setRole(ws.id, 'alice', 'admin');
-    expect(wm.getRole(ws.id, 'alice')).toBe('admin');
-    expect(wm.getRole(ws.id, 'bob')).toBe('operator');
+    const ws = wm.create({ name: 'a', workdir: '/tmp/a' });
+    wm.bindChat({ workspaceId: ws.id, channelType: 'telegram', chatId: 'tg-1' });
+    expect(() => wm.removeWorkspace(ws.id))
+      .toThrow(/1 chat\(s\) still bound/);
+    expect(wm.get(ws.id)).toBeDefined();
   });
 
-  it('returns observer when workspace missing', () => {
+  it('removeWorkspace with --force cascades chat instance removal', () => {
     const wm = new WorkspaceManager();
-    expect(wm.getRole('nope', 'anyone')).toBe('observer');
+    const ws = wm.create({ name: 'a', workdir: '/tmp/a' });
+    wm.bindChat({ workspaceId: ws.id, channelType: 'telegram', chatId: 'tg-1' });
+    wm.bindChat({ workspaceId: ws.id, channelType: 'feishu', chatId: 'fs-x' });
+    const removed = wm.removeWorkspace(ws.id, { force: true });
+    expect(removed.chatInstances).toHaveLength(2);
+    expect(wm.get(ws.id)).toBeUndefined();
+    expect(wm.findChatInstance('telegram', 'tg-1')).toBeUndefined();
   });
-});
 
-describe('WorkspaceManager.lazyResumeOrCreate', () => {
-  function depsShell(overrides: Partial<LazyResumeDeps> = {}): { deps: LazyResumeDeps; calls: Record<string, unknown[]> } {
-    const calls: Record<string, unknown[]> = { isLive: [], hasPersistedSession: [], resume: [], sendInput: [], createLocal: [] };
-    const deps: LazyResumeDeps = {
-      isLive: (sid) => { calls.isLive.push(sid); return false; },
-      hasPersistedSession: (sid) => { calls.hasPersistedSession.push(sid); return true; },
-      resume: async (sid) => { calls.resume.push(sid); return null; },
-      sendInput: async (sid, text, src) => { calls.sendInput.push({ sid, text, src }); },
-      createLocal: async (opts) => { calls.createLocal.push(opts); return fakeSession('sess-new'); },
-      ...overrides,
-    };
-    return { deps, calls };
-  }
-
-  it('branch 1: live active session → sendInput', async () => {
+  it('listChatInstances returns all instances flat', () => {
     const wm = new WorkspaceManager();
-    const ws = wm.create({ name: 'x', workdir: '/x' });
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
-    wm.bindActiveSessionForChat('telegram', 'c1', 'sess-live');
-    const { deps, calls } = depsShell({
-      isLive: () => true,
-      resume: async () => fakeSession('sess-live'),
-    });
-    const out = await wm.lazyResumeOrCreate('telegram', 'c1', 'hi', 'im', deps);
-    expect(out.action).toBe('sent_to_live');
-    expect(calls.sendInput).toEqual([{ sid: 'sess-live', text: 'hi', src: 'im' }]);
-    expect(calls.createLocal).toEqual([]);
+    const a = wm.create({ name: 'a', workdir: '/tmp/a' });
+    const b = wm.create({ name: 'b', workdir: '/tmp/b' });
+    wm.bindChat({ workspaceId: a.id, channelType: 'telegram', chatId: 'tg-1' });
+    wm.bindChat({ workspaceId: b.id, channelType: 'feishu', chatId: 'fs-x' });
+    expect(wm.listChatInstances()).toHaveLength(2);
   });
 
-  it('branch 2: stopped active session → resume + sendInput, rebinds activeSessionId', async () => {
+  it('addCost accumulates totalUsd; sessionEnded bumps sessionCount', () => {
     const wm = new WorkspaceManager();
-    const ws = wm.create({ name: 'x', workdir: '/x' });
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
-    wm.bindActiveSessionForChat('telegram', 'c1', 'sess-old');
-    const resumed = fakeSession('sess-old');
-    const { deps, calls } = depsShell({
-      isLive: () => false,
-      resume: vi.fn(async (sid) => sid === 'sess-old' ? resumed : null) as LazyResumeDeps['resume'],
-    });
-    const out = await wm.lazyResumeOrCreate('telegram', 'c1', 'hello', 'im', deps);
-    expect(out.action).toBe('resumed');
-    expect(out.session.id).toBe('sess-old');
-    expect(calls.sendInput).toEqual([{ sid: 'sess-old', text: 'hello', src: 'im' }]);
-    expect(wm.getActiveSessionIdForChat('telegram', 'c1')).toBe('sess-old');
+    const ws = wm.create({ name: 'a', workdir: '/tmp/a' });
+    wm.bindChat({ workspaceId: ws.id, channelType: 'telegram', chatId: 'tg-1' });
+    wm.addCost('telegram', 'tg-1', 0.5, false);
+    wm.addCost('telegram', 'tg-1', 0.7, true);
+    const inst = wm.findChatInstance('telegram', 'tg-1');
+    expect(inst!.costRollup.totalUsd).toBeCloseTo(1.2, 5);
+    expect(inst!.costRollup.sessionCount).toBe(1);
   });
 
-  it('branch 3: no active / cannot resume → createLocal with workspace defaults and binds', async () => {
-    const wm = new WorkspaceManager();
-    const ws = wm.create({ name: 'x', workdir: '/proj', defaults: { provider: 'codex' } });
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
-    const { deps, calls } = depsShell();
-    const out = await wm.lazyResumeOrCreate('telegram', 'c1', 'begin', 'cli', deps);
-    expect(out.action).toBe('created');
-    expect(out.session.id).toBe('sess-new');
-    expect(calls.createLocal).toHaveLength(1);
-    const createCall = calls.createLocal[0] as { workspaceId: string; workdir: string; provider: string; initialPrompt: string; source: string };
-    expect(createCall.workspaceId).toBe(ws.id);
-    expect(createCall.workdir).toBe('/proj');
-    expect(createCall.provider).toBe('codex');
-    expect(createCall.initialPrompt).toBe('begin');
-    expect(createCall.source).toBe('cli');
-    expect(wm.getActiveSessionIdForChat('telegram', 'c1')).toBe('sess-new');
+  it('load v2 file rehydrates Map + chatInstances', async () => {
+    const wm1 = new WorkspaceManager({ persistPath: path });
+    const ws = wm1.create({ name: 'a', workdir: '/tmp/a' });
+    wm1.bindChat({ workspaceId: ws.id, channelType: 'telegram', chatId: 'tg-1' });
+    await wm1.save();
+
+    const wm2 = new WorkspaceManager({ persistPath: path });
+    await wm2.load();
+    expect(wm2.list()).toHaveLength(1);
+    expect(wm2.findChatInstance('telegram', 'tg-1')).toBeDefined();
   });
 
-  it('throws when chat unbound', async () => {
-    const wm = new WorkspaceManager();
-    const { deps } = depsShell();
-    await expect(
-      wm.lazyResumeOrCreate('telegram', 'unbound-chat', 'hi', 'im', deps),
-    ).rejects.toThrow(/not bound/i);
-  });
-});
-
-describe('WorkspaceManager.claimAdmin', () => {
-  it('returns true and sets admin role when no admin exists', () => {
-    const wm = new WorkspaceManager();
-    const ws = wm.create({ name: 'x', workdir: '/x' });
-    const claimed = wm.claimAdmin(ws.id, 'user-42');
-    expect(claimed).toBe(true);
-    expect(wm.getRole(ws.id, 'user-42')).toBe('admin');
-  });
-
-  it('returns false and does not change roles when an admin already exists', () => {
-    const wm = new WorkspaceManager();
-    const ws = wm.create({ name: 'x', workdir: '/x' });
-    wm.setRole(ws.id, 'first-admin', 'admin');
-    const claimed = wm.claimAdmin(ws.id, 'user-42');
-    expect(claimed).toBe(false);
-    expect(wm.getRole(ws.id, 'first-admin')).toBe('admin');
-    expect(wm.getRole(ws.id, 'user-42')).toBe('observer');
-  });
-
-  it('is idempotent for the same userId already admin', () => {
-    const wm = new WorkspaceManager();
-    const ws = wm.create({ name: 'x', workdir: '/x' });
-    expect(wm.claimAdmin(ws.id, 'user-42')).toBe(true);
-    expect(wm.claimAdmin(ws.id, 'user-42')).toBe(false);
-  });
-
-  it('throws on non-existent workspace', () => {
-    const wm = new WorkspaceManager();
-    expect(() => wm.claimAdmin('nope', 'user-42')).toThrow(/not found/);
-  });
-});
-
-describe('WorkspaceManager.lazyResumeOrCreate resume passes sessionId to runtime.prepare', () => {
-  let root: string;
-  let persistence: SessionPersistence;
-  let broker: PermissionBroker;
-  let runtimes: FakeRuntime[];
-  let sessionMgr: SessionManager;
-
-  beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'tlive-wsmgr-'));
-    persistence = new SessionPersistence(root);
-    await persistence.init();
-    broker = new PermissionBroker();
-    runtimes = [];
-    sessionMgr = new SessionManager({
-      persistence,
-      broker,
-      runtimeFactory: (provider) => {
-        const r = new FakeRuntime(provider);
-        runtimes.push(r);
-        return r;
-      },
-    });
-  });
-
-  afterEach(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
-
-  it('lazyResumeOrCreate resume branch passes session id to runtime.prepare', async () => {
-    // Create a session so a snapshot lands on disk.
-    const original = await sessionMgr.createLocal({
-      workspaceId: 'ws-resume', provider: 'claude', workdir: '/tmp', source: 'cli',
-    });
-    const sid = original.id;
-
-    // Flush pending saves and force snapshot to idle so resumeLocal accepts it.
-    await original.flushPendingPersistence();
-    await persistence.saveSnapshot({ ...original.snapshotLegacy(), status: 'idle' });
-    await sessionMgr.stop(sid);
-
-    // Wire a fresh SessionManager pointing to the same disk so it can resume.
-    const runtimes2: FakeRuntime[] = [];
-    const sessionMgr2 = new SessionManager({
-      persistence,
-      broker,
-      runtimeFactory: (provider) => {
-        const r = new FakeRuntime(provider);
-        runtimes2.push(r);
-        return r;
-      },
-    });
-
-    // Set up WorkspaceManager with the session pre-bound as active for this chat.
-    const wm = new WorkspaceManager();
-    const ws = wm.create({ name: 'test-ws', workdir: '/tmp' });
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
-    wm.bindActiveSessionForChat('telegram', 'c1', sid);
-
-    const deps: LazyResumeDeps = {
-      isLive: () => false,
-      hasPersistedSession: (id) => persistence.hasSnapshot(id),
-      resume: (id) => sessionMgr2.resumeLocal(id),
-      sendInput: async () => { /* no-op */ },
-      createLocal: async () => { throw new Error('should not create'); },
-    };
-
-    const out = await wm.lazyResumeOrCreate('telegram', 'c1', 'hello', 'im', deps);
-    expect(out.action).toBe('resumed');
-    expect(out.session.id).toBe(sid);
-
-    // The runtime created by resumeLocal must have received the session id.
-    expect(runtimes2).toHaveLength(1);
-    expect(runtimes2[0]!.resumeRequestedFor).toBe(sid);
-  });
-});
-
-describe('isLive contract — precise active-only lookup (Spec X §I4 / §4.3)', () => {
-  // The isLive predicate constructed in bootstrap.ts must use manager.get(id)
-  // (precise lookup) and only return true when LocalSession.getStatus() === 'active'.
-  // This test mirrors the predicate definition exactly.
-  function makeIsLive(manager: SessionManager): (id: string) => boolean {
-    return (id: string) => {
-      const found = manager.get(id);
-      if (found === undefined) return false;
-      if (found.kind !== 'local') return false;
-      return (found as LocalSession).getStatus() === 'active';
-    };
-  }
-
-  let root: string;
-  let persistence: SessionPersistence;
-  let broker: PermissionBroker;
-  let manager: SessionManager;
-  let runtime: FakeRuntime;
-
-  beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'tlive-islive-'));
-    persistence = new SessionPersistence(root);
-    await persistence.init();
-    broker = new PermissionBroker();
-    manager = new SessionManager({
-      persistence,
-      broker,
-      runtimeFactory: (provider) => {
-        runtime = new FakeRuntime(provider);
-        return runtime;
-      },
-    });
-  });
-
-  afterEach(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
-
-  it('isLive returns true for active session, false for stopped', async () => {
-    const isLive = makeIsLive(manager);
-    const s = await manager.createLocal({
-      workspaceId: 'ws-islive', provider: 'claude', workdir: '/tmp', source: 'cli',
-    });
-    // Immediately after create, session is active.
-    expect(isLive(s.id)).toBe(true);
-
-    // After stop, session is removed from manager map → isLive false.
-    await manager.stop(s.id);
-    expect(isLive(s.id)).toBe(false);
-  });
-
-  it('isLive returns false for unknown id', async () => {
-    const isLive = makeIsLive(manager);
-    expect(isLive('00000000-0000-0000-0000-000000000000')).toBe(false);
-  });
-
-  it('isLive returns false after session_complete transitions status to idle', async () => {
-    const isLive = makeIsLive(manager);
-    const s = await manager.createLocal({
-      workspaceId: 'ws-islive2', provider: 'claude', workdir: '/tmp', source: 'cli',
-    });
-    expect(isLive(s.id)).toBe(true);
-
-    // Fire session_complete through the runtime sink — transitions legacy status to 'idle'.
-    runtime.emitEvent({ kind: 'session_complete', reason: 'end_turn', summary: '' });
-
-    // Status is now 'idle'; isLive must be false (lazyResumeOrCreate must take resume branch).
-    expect(isLive(s.id)).toBe(false);
-
-    await manager.stop(s.id);
-  });
-});
-
-describe('lazyResumeOrCreate — claude -r semantics (hasPersistedSession)', () => {
-  // Helper: stand up a workspace with a chat binding pre-bound to sid.
-  function setupBoundWs(wm: WorkspaceManager, sid: string): { id: string } {
-    const ws = wm.create({ name: 't', workdir: '/tmp/x' });
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
-    wm.bindActiveSessionForChat('telegram', 'c1', sid);
-    return ws;
-  }
-
-  it('takes resumed branch when activeSessionId set, isLive false, hasPersistedSession true', async () => {
-    const wm = new WorkspaceManager();
-    const ws = setupBoundWs(wm, 'sid-1');
-
-    const branchEvents: Array<{ branch: string; sessionId: string; workspaceId: string }> = [];
-    let resumeCalledWith = '';
-    let createCalled = false;
-    const resumed = fakeSession('sid-1');
-
-    const out = await wm.lazyResumeOrCreate('telegram', 'c1', 'hello', 'im', {
-      isLive: () => false,
-      hasPersistedSession: () => true,
-      resume: async (id) => { resumeCalledWith = id; return resumed; },
-      sendInput: async () => { /* no-op */ },
-      createLocal: async () => { createCalled = true; return fakeSession('sid-new'); },
-      onBranch: (info) => branchEvents.push(info),
-    });
-
-    expect(resumeCalledWith).toBe('sid-1');
-    expect(createCalled).toBe(false);
-    expect(branchEvents[0]?.branch).toBe('resumed');
-    expect(out.action).toBe('resumed');
-    void ws;
-  });
-
-  it('falls through to created when isLive false AND hasPersistedSession false', async () => {
-    const wm = new WorkspaceManager();
-    const ws = setupBoundWs(wm, 'sid-1');
-
-    let createCalled = false;
-    let resumeCalled = false;
-    const created = fakeSession('sid-2');
-
-    const out = await wm.lazyResumeOrCreate('telegram', 'c1', 'hello', 'im', {
-      isLive: () => false,
-      hasPersistedSession: () => false,
-      resume: async () => { resumeCalled = true; return null; },
-      sendInput: async () => { /* no-op */ },
-      createLocal: async () => { createCalled = true; return created; },
-      onBranch: () => { /* ignore */ },
-    });
-
-    expect(createCalled).toBe(true);
-    expect(resumeCalled).toBe(false);
-    expect(out.action).toBe('created');
-    void ws;
-  });
-
-  it('still takes live branch when isLive true (does not consult hasPersistedSession)', async () => {
-    const wm = new WorkspaceManager();
-    const ws = setupBoundWs(wm, 'sid-1');
-
-    let sentTo = '';
-    const live = fakeSession('sid-1');
-
-    const out = await wm.lazyResumeOrCreate('telegram', 'c1', 'hello', 'im', {
-      isLive: () => true,
-      hasPersistedSession: () => { throw new Error('should not be called when live'); },
-      resume: async () => live, // unused on live branch (no fetchLiveOrThrow anymore)
-      sendInput: async (id) => { sentTo = id; },
-      createLocal: async () => { throw new Error('should not create on live branch'); },
-      onBranch: () => { /* ignore */ },
-    });
-
-    expect(sentTo).toBe('sid-1');
-    expect(out.action).toBe('sent_to_live');
-    void ws;
-  });
-
-  it('falls through to created when resume returns null (corrupt jsonl)', async () => {
-    const wm = new WorkspaceManager();
-    const ws = setupBoundWs(wm, 'sid-1');
-
-    let createCalled = false;
-    const created = fakeSession('sid-new');
-
-    const out = await wm.lazyResumeOrCreate('telegram', 'c1', 'hello', 'im', {
-      isLive: () => false,
-      hasPersistedSession: () => true,
-      resume: async () => null,  // jsonl exists but resume failed
-      sendInput: async () => { /* no-op */ },
-      createLocal: async () => { createCalled = true; return created; },
-      onBranch: () => { /* ignore */ },
-    });
-
-    expect(createCalled).toBe(true);
-    expect(out.action).toBe('created');
-    void ws;
-  });
-
-  it('catches resume thrown error and falls through to created with onResumeFailed', async () => {
-    const wm = new WorkspaceManager();
-    const ws = setupBoundWs(wm, 'sid-1');
-
-    let createCalled = false;
-    let failedInfo: { channelType: string; chatId: string; workspaceId: string; sdkSessionId: string; reason: string } | null = null;
-    const fakeNewSession = fakeSession('sid-new');
-
-    await wm.lazyResumeOrCreate('telegram', 'c1', 'hello', 'im', {
-      isLive: () => false,
-      hasPersistedSession: () => true,
-      resume: async () => { throw new Error('disk-eio'); },
-      sendInput: async () => { /* no-op */ },
-      createLocal: async () => { createCalled = true; return fakeNewSession; },
-      onBranch: () => { /* ignore */ },
-      onResumeFailed: (info) => { failedInfo = info; },
-    });
-
-    expect(createCalled).toBe(true);
-    expect(failedInfo).toMatchObject({
-      channelType: 'telegram',
-      chatId: 'c1',
-      workspaceId: ws.id,
-      sdkSessionId: 'sid-1',
-      reason: 'disk-eio',
-    });
-  });
-
-  it('fires onResumeFailed when resume returns null', async () => {
-    const wm = new WorkspaceManager();
-    const ws = setupBoundWs(wm, 'sid-1');
-
-    let failedInfo: { channelType: string; chatId: string; workspaceId: string; sdkSessionId: string; reason: string } | null = null;
-    const fakeNewSession = fakeSession('sid-new');
-
-    await wm.lazyResumeOrCreate('telegram', 'c1', 'hello', 'im', {
-      isLive: () => false,
-      hasPersistedSession: () => true,
-      resume: async () => null,
-      sendInput: async () => { /* no-op */ },
-      createLocal: async () => fakeNewSession,
-      onBranch: () => { /* ignore */ },
-      onResumeFailed: (info) => { failedInfo = info; },
-    });
-
-    expect(failedInfo).toMatchObject({
-      channelType: 'telegram',
-      chatId: 'c1',
-      workspaceId: ws.id,
-      sdkSessionId: 'sid-1',
-      reason: 'resume returned null',
-    });
-  });
-
-  it('after resume null, getActiveSessionIdForChat returns the freshly-created session id', async () => {
-    const wm = new WorkspaceManager();
-    const ws = setupBoundWs(wm, 'sid-1');
-
-    const fakeNewSession = fakeSession('sid-new');
-    await wm.lazyResumeOrCreate('telegram', 'c1', 'hello', 'im', {
-      isLive: () => false,
-      hasPersistedSession: () => true,
-      resume: async () => null,
-      sendInput: async () => { /* no-op */ },
-      createLocal: async () => fakeNewSession,
-      onBranch: () => { /* ignore */ },
-    });
-
-    // binding.activeSessionId should have updated to the new id.
-    expect(wm.getActiveSessionIdForChat('telegram', 'c1')).toBe('sid-new');
-    void ws;
-  });
-});
-
-describe('WorkspaceManager.createFromIM', () => {
-  it('creates workspace + claims admin + adds primary binding', () => {
-    const wm = new WorkspaceManager();
-    const ws = wm.createFromIM({
-      workdir: '/tmp/foo',
-      adminUserId: 'u1',
-      channelType: 'telegram',
-      chatId: 'c1',
-    });
-    expect(ws.workdir).toBe('/tmp/foo');
-    expect(ws.name).toBe('foo'); // basename
-    expect(wm.getRole(ws.id, 'u1')).toBe('admin');
-    expect(ws.bindings).toHaveLength(1);
-    expect(ws.bindings[0]).toMatchObject({
-      channelType: 'telegram',
-      chatId: 'c1',
-    });
-    expect(ws.bindings[0]).not.toHaveProperty('role');
-  });
-
-  it('respects custom name override', () => {
-    const wm = new WorkspaceManager();
-    const ws = wm.createFromIM({
-      workdir: '/tmp/foo',
-      adminUserId: 'u1',
-      channelType: 'telegram',
-      chatId: 'c1',
-      name: 'custom-name',
-    });
-    expect(ws.name).toBe('custom-name');
-  });
-
-  it('threadId carries through to binding', () => {
-    const wm = new WorkspaceManager();
-    const ws = wm.createFromIM({
-      workdir: '/tmp/foo',
-      adminUserId: 'u1',
-      channelType: 'telegram',
-      chatId: 'c1',
-      threadId: 't42',
-    });
-    expect(ws.bindings[0]?.threadId).toBe('t42');
-  });
-
-  it('respects defaults override', () => {
-    const wm = new WorkspaceManager();
-    const ws = wm.createFromIM({
-      workdir: '/tmp/foo',
-      adminUserId: 'u1',
-      channelType: 'telegram',
-      chatId: 'c1',
-      defaults: { provider: 'codex' },
-    });
-    expect(ws.defaults.provider).toBe('codex');
-  });
-
-  it('findByChat picks up the new workspace immediately', () => {
-    const wm = new WorkspaceManager();
-    wm.createFromIM({
-      workdir: '/tmp/foo',
-      adminUserId: 'u1',
-      channelType: 'telegram',
-      chatId: 'c1',
-    });
-    const found = wm.findByChat('telegram', 'c1');
-    expect(found?.workdir).toBe('/tmp/foo');
-  });
-});
-
-describe('WorkspaceManager — chat-level session APIs (Iso #2)', () => {
-  it('bindActiveSessionForChat writes to the matching binding', () => {
-    const wm = new WorkspaceManager();
-    const ws = wm.create({ name: 't', workdir: '/tmp/t' });
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
-    wm.addBinding(ws.id, { channelType: 'feishu', chatId: 'c2' });
-    wm.bindActiveSessionForChat('telegram', 'c1', 'sid-tg');
-    expect(wm.getActiveSessionIdForChat('telegram', 'c1')).toBe('sid-tg');
-    expect(wm.getActiveSessionIdForChat('feishu', 'c2')).toBeNull();
-  });
-
-  it('clearActiveSessionForChat resets the matching binding', () => {
-    const wm = new WorkspaceManager();
-    const ws = wm.create({ name: 't', workdir: '/tmp/t' });
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
-    wm.bindActiveSessionForChat('telegram', 'c1', 'sid-tg');
-    wm.clearActiveSessionForChat('telegram', 'c1');
-    expect(wm.getActiveSessionIdForChat('telegram', 'c1')).toBeNull();
-  });
-
-  it('getActiveSessionIdForChat returns null for unknown chat', () => {
-    const wm = new WorkspaceManager();
-    expect(wm.getActiveSessionIdForChat('telegram', 'nope')).toBeNull();
-  });
-
-  it('listActiveBindings returns only non-null actives across workspaces', () => {
-    const wm = new WorkspaceManager();
-    const ws1 = wm.create({ name: 'a', workdir: '/tmp/a' });
-    const ws2 = wm.create({ name: 'b', workdir: '/tmp/b' });
-    wm.addBinding(ws1.id, { channelType: 'telegram', chatId: 'c1' });
-    wm.addBinding(ws1.id, { channelType: 'feishu', chatId: 'c2' });
-    wm.addBinding(ws2.id, { channelType: 'telegram', chatId: 'c3' });
-    wm.bindActiveSessionForChat('telegram', 'c1', 'sid-1');
-    wm.bindActiveSessionForChat('telegram', 'c3', 'sid-3');
-    // c2 left null
-
-    const actives = wm.listActiveBindings();
-    expect(actives).toHaveLength(2);
-    const ids = actives.map((a) => a.activeSessionId).sort();
-    expect(ids).toEqual(['sid-1', 'sid-3']);
-    const c1 = actives.find((a) => a.chatId === 'c1');
-    expect(c1).toMatchObject({
-      channelType: 'telegram', chatId: 'c1',
-      workspaceId: ws1.id, activeSessionId: 'sid-1',
-    });
-    expect(c1?.lastActiveAt).toBeTruthy();
-  });
-
-  it('bindActiveSessionForChat updates lastActiveAt to ISO 8601 timestamp', () => {
-    const wm = new WorkspaceManager();
-    const ws = wm.create({ name: 't', workdir: '/tmp/t' });
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
-    const before = Date.now();
-    wm.bindActiveSessionForChat('telegram', 'c1', 'sid-tg');
-    const after = Date.now();
-    const actives = wm.listActiveBindings();
-    expect(actives).toHaveLength(1);
-    const ts = new Date(actives[0]!.lastActiveAt).getTime();
-    expect(ts).toBeGreaterThanOrEqual(before);
-    expect(ts).toBeLessThanOrEqual(after);
-  });
-
-  it('bindActiveSessionForChat throws when chat has no binding', () => {
-    const wm = new WorkspaceManager();
-    expect(() =>
-      wm.bindActiveSessionForChat('telegram', 'nonexistent', 'sid'),
-    ).toThrow(/no binding/i);
-  });
-
-  it('clearActiveSessionForChat on unknown chat is a no-op (does not throw)', () => {
-    const wm = new WorkspaceManager();
-    expect(() => wm.clearActiveSessionForChat('telegram', 'unknown-chat')).not.toThrow();
+  it('load v1 file (legacy) is rejected with explicit error — no migration', async () => {
+    const fs = await import('node:fs/promises');
+    await fs.writeFile(path, JSON.stringify({ version: 1, workspaces: [] }));
+    const wm = new WorkspaceManager({ persistPath: path });
+    await expect(wm.load()).rejects.toThrow(/schema version 1 unsupported/);
   });
 });

@@ -7,14 +7,14 @@
 //   1. expand `~`/`$HOME`
 //   2. fs.stat + isDirectory
 //   3. WorkspaceManager.findByWorkdir guard (already-registered)
-//   4. WorkspaceManager.createFromIM (atomic create + claimAdmin + addBinding)
+//   4. WorkspaceManager.create + bindChat (two-step; no roles in chat-trust model)
 //
 // On any failure (1-4) we reply an error message but PRESERVE the pending
 // state so the user can simply re-send the corrected path without re-clicking
 // the button. Success: resolve() removes pending state, reply success.
 
 import { stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 
 import type { WorkspaceManager } from '../workspace/manager.js';
 import type { WorkspaceCreateBroker, PendingCreate } from '../im/workspace-create-broker.js';
@@ -71,16 +71,19 @@ export async function tryCreateWorkspaceFromPath(
 
   let ws;
   try {
-    ws = deps.workspaces.createFromIM({
+    ws = deps.workspaces.create({
+      name: basename(expanded) || 'workspace',
       workdir: expanded,
-      adminUserId: pending.userId,
+    });
+    deps.workspaces.bindChat({
+      workspaceId: ws.id,
       channelType: pending.channelType,
       chatId: pending.chatId,
       threadId: ev.threadId,
     });
     await deps.workspaces.save();
   } catch (err) {
-    deps.logger.warn('createFromIM failed', { reason: (err as Error).message });
+    deps.logger.warn('workspace create failed', { reason: (err as Error).message });
     await deps.adapter.send({
       chatId: ev.chatId,
       threadId: ev.threadId,

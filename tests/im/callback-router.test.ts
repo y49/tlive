@@ -419,13 +419,13 @@ describe('CallbackRouter — turn/session/runtime/cost/find handlers (Task 31)',
 
     const wm = new WorkspaceManager();
     const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
+    wm.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'c1' });
     // Grant test user admin so role-gated handlers (session/runtime) pass.
     wm.setRole(ws.id, 'u1', 'admin');
     if (opts.activeSessionId !== null && opts.activeSessionId !== undefined) {
-      wm.bindActiveSessionForChat('telegram', 'c1', opts.activeSessionId);
+      wm.bindActiveSession('telegram', 'c1', opts.activeSessionId);
     } else if (opts.activeSessionId === undefined && session) {
-      wm.bindActiveSessionForChat('telegram', 'c1', session.id);
+      wm.bindActiveSession('telegram', 'c1', session.id);
     }
 
     const sm = {
@@ -547,7 +547,7 @@ describe('CallbackRouter — turn/session/runtime/cost/find handlers (Task 31)',
     const out = await router.route(ctx('session:fork'));
     expect(out.kind).toBe('handled');
     expect(calls.find((c) => c.name === 'forkSession')).toBeDefined();
-    expect(wm.getActiveSessionIdForChat('telegram', 'c1')).toBe('sess-forked-xyz7890');
+    expect(wm.getActiveSessionId('telegram', 'c1')).toBe('sess-forked-xyz7890');
     expect(sentMsgs[0]?.text).toMatch(/已 fork/);
   });
 
@@ -568,17 +568,17 @@ describe('CallbackRouter — turn/session/runtime/cost/find handlers (Task 31)',
     const out = await router.route(ctx('session:kill:do'));
     expect(out).toEqual({ kind: 'handled', action: 'session:kill:do' });
     expect(calls.find((c) => c.name === 'stop')).toBeDefined();
-    expect(wm.getActiveSessionIdForChat('telegram', 'c1')).toBeNull();
+    expect(wm.getActiveSessionId('telegram', 'c1')).toBeNull();
     expect(sentMsgs[0]?.text).toMatch(/已杀死/);
   });
 
   it('session:kill:cancel acknowledges without changes', async () => {
     const { router, calls, wm, ws } = setupAdvanced();
-    const before = wm.getActiveSessionIdForChat('telegram', 'c1');
+    const before = wm.getActiveSessionId('telegram', 'c1');
     const out = await router.route(ctx('session:kill:cancel'));
     expect(out.kind).toBe('handled');
     expect(calls).toHaveLength(0);
-    expect(wm.getActiveSessionIdForChat('telegram', 'c1')).toBe(before);
+    expect(wm.getActiveSessionId('telegram', 'c1')).toBe(before);
   });
 
   it('session:new prompts for confirm when active session exists', async () => {
@@ -597,7 +597,7 @@ describe('CallbackRouter — turn/session/runtime/cost/find handlers (Task 31)',
     const out = await router.route(ctx('session:new:confirm'));
     expect(out.kind).toBe('handled');
     expect(calls.find((c) => c.name === 'stop')).toBeDefined();
-    expect(wm.getActiveSessionIdForChat('telegram', 'c1')).toBeNull();
+    expect(wm.getActiveSessionId('telegram', 'c1')).toBeNull();
   });
 
   it('session:resume:<sid> resumes + binds + replies', async () => {
@@ -605,7 +605,7 @@ describe('CallbackRouter — turn/session/runtime/cost/find handlers (Task 31)',
     const out = await router.route(ctx('session:resume:sess-resumed-aaa9999'));
     expect(out.kind).toBe('handled');
     expect((out as { action: string }).action).toMatch(/^session:resume:/);
-    expect(wm.getActiveSessionIdForChat('telegram', 'c1')).toBe('sess-resumed-aaa9999');
+    expect(wm.getActiveSessionId('telegram', 'c1')).toBe('sess-resumed-aaa9999');
     expect(sentMsgs[0]?.text).toMatch(/已恢复会话/);
   });
 
@@ -919,7 +919,7 @@ describe('CallbackRouter — workspace:*', () => {
     const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
     const result = await router.route(ctx(`workspace:bind:${ws.id}`));
     expect(result).toEqual({ kind: 'handled', action: 'workspace:bind:tlive' });
-    expect(wm.findByChat('telegram', 'c1')?.id).toBe(ws.id);
+    expect(wm.workspaceForChat('telegram', 'c1')?.id).toBe(ws.id);
     expect(sentMsgs[0]?.text).toMatch(/已绑定/);
   });
 
@@ -927,9 +927,9 @@ describe('CallbackRouter — workspace:*', () => {
     const { router, wm } = setup();
     const w1 = wm.create({ name: 'a', workdir: '/p/a' });
     const w2 = wm.create({ name: 'b', workdir: '/p/b' });
-    wm.addBinding(w1.id, { channelType: 'telegram', chatId: 'c1' });
+    wm.bindChat({workspaceId: w1.id,  channelType: 'telegram', chatId: 'c1' });
     await router.route(ctx(`workspace:bind:${w2.id}`));
-    expect(wm.findByChat('telegram', 'c1')?.id).toBe(w2.id);
+    expect(wm.workspaceForChat('telegram', 'c1')?.id).toBe(w2.id);
     // w1 binding removed
     expect(wm.listBindings(w1.id).find((b) => b.chatId === 'c1')).toBeUndefined();
   });
@@ -939,7 +939,7 @@ describe('CallbackRouter — workspace:*', () => {
     const result = await router.route(ctx('workspace:bind:does-not-exist'));
     expect(result.kind).toBe('unknown');
     expect((result as { reason: string }).reason).toBe('workspace:bind:not-found');
-    expect(wm.findByChat('telegram', 'c1')).toBeUndefined();
+    expect(wm.workspaceForChat('telegram', 'c1')).toBeUndefined();
     expect(sentMsgs[0]?.text).toMatch(/不存在/);
   });
 
@@ -965,7 +965,7 @@ describe('CallbackRouter — workspace:*', () => {
   it('workspace:exit:confirm sends confirmation card with [✅] and [❌] buttons', async () => {
     const { router, wm, sentMsgs } = setup();
     const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
+    wm.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'c1' });
     wm.setRole(ws.id, 'u1', 'admin');
     await router.route(ctx('workspace:exit:confirm'));
     expect(sentMsgs[0]?.text).toMatch(/确定退出/);
@@ -981,19 +981,19 @@ describe('CallbackRouter — workspace:*', () => {
   it('workspace:exit:do removes binding and replies', async () => {
     const { router, wm, sentMsgs } = setup();
     const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
+    wm.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'c1' });
     wm.setRole(ws.id, 'u1', 'admin');
     await router.route(ctx('workspace:exit:do'));
-    expect(wm.findByChat('telegram', 'c1')).toBeUndefined();
+    expect(wm.workspaceForChat('telegram', 'c1')).toBeUndefined();
     expect(sentMsgs[0]?.text).toMatch(/已退出/);
   });
 
   it('workspace:exit:cancel acknowledges without changing bindings', async () => {
     const { router, wm } = setup();
     const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
+    wm.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'c1' });
     await router.route(ctx('workspace:exit:cancel'));
-    expect(wm.findByChat('telegram', 'c1')?.id).toBe(ws.id);
+    expect(wm.workspaceForChat('telegram', 'c1')?.id).toBe(ws.id);
   });
 
   it('workspace:config:open shows workspace defaults + edit buttons (admin)', async () => {
@@ -1004,7 +1004,7 @@ describe('CallbackRouter — workspace:*', () => {
       defaults: { provider: 'claude', model: 'claude-sonnet-4-6', permissionMode: 'default', thinking: 'collapsed' },
     });
     wm.setRole(ws.id, 'u1', 'admin');
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
+    wm.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'c1' });
 
     const result = await router.route(ctx('workspace:config:open'));
     expect(result).toEqual({ kind: 'handled', action: 'workspace:config:open' });
@@ -1033,7 +1033,7 @@ describe('CallbackRouter — workspace:*', () => {
     const { router, wm, sentMsgs } = setup();
     const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
     // No setRole — defaults to observer (default defaultRole is 'observer')
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
+    wm.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'c1' });
 
     const result = await router.route(ctx('workspace:config:open'));
     expect(result).toEqual({ kind: 'handled', action: 'workspace:config:not-admin' });
@@ -1051,7 +1051,7 @@ describe('CallbackRouter — workspace:*', () => {
     const { router, wm } = setup();
     const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
     wm.setRole(ws.id, 'u1', 'admin');
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
+    wm.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'c1' });
     const result = await router.route(ctx('workspace:config:bogus'));
     expect(result.kind).toBe('unknown');
     expect((result as { reason: string }).reason).toBe('workspace:config:bad-verb:bogus');
@@ -1061,12 +1061,12 @@ describe('CallbackRouter — workspace:*', () => {
     const { router, wm, sentMsgs } = setup();
     const w1 = wm.create({ name: 'a', workdir: '/p/a' });
     const w2 = wm.create({ name: 'b', workdir: '/p/b' });
-    wm.addBinding(w1.id, { channelType: 'telegram', chatId: 'c1' });
+    wm.bindChat({workspaceId: w1.id,  channelType: 'telegram', chatId: 'c1' });
     wm.setRole(w1.id, 'u1', 'admin');
     const result = await router.route(ctx(`workspace:switch:${w2.id}`));
     expect(result.kind).toBe('handled');
     expect((result as { action: string }).action).toBe('workspace:switch:b');
-    expect(wm.findByChat('telegram', 'c1')?.id).toBe(w2.id);
+    expect(wm.workspaceForChat('telegram', 'c1')?.id).toBe(w2.id);
     expect(sentMsgs[0]?.text).toMatch(/已切到工作区/);
     expect(sentMsgs[0]?.text).toMatch(/暂无活跃会话/);
   });
@@ -1074,11 +1074,11 @@ describe('CallbackRouter — workspace:*', () => {
   it('workspace:switch with unknown target replies error', async () => {
     const { router, wm } = setup();
     const w1 = wm.create({ name: 'a', workdir: '/p/a' });
-    wm.addBinding(w1.id, { channelType: 'telegram', chatId: 'c1' });
+    wm.bindChat({workspaceId: w1.id,  channelType: 'telegram', chatId: 'c1' });
     const result = await router.route(ctx('workspace:switch:does-not-exist'));
     expect(result.kind).toBe('unknown');
     // Original binding intact
-    expect(wm.findByChat('telegram', 'c1')?.id).toBe(w1.id);
+    expect(wm.workspaceForChat('telegram', 'c1')?.id).toBe(w1.id);
   });
 
   it('returns unknown on bad workspace verb', async () => {
@@ -1106,14 +1106,14 @@ describe('CallbackRouter — workspace:*', () => {
   it('workspace:switch on current workspace short-circuits with "already-on" reply', async () => {
     const { router, wm, sentMsgs } = setup();
     const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
+    wm.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'c1' });
     wm.setRole(ws.id, 'u1', 'admin');
     const result = await router.route(ctx(`workspace:switch:${ws.id}`));
     expect(result.kind).toBe('handled');
     expect((result as { action: string }).action).toMatch(/noop/);
     expect(sentMsgs[0]?.text).toMatch(/已经在工作区/);
     // Binding unchanged
-    expect(wm.findByChat('telegram', 'c1')?.id).toBe(ws.id);
+    expect(wm.workspaceForChat('telegram', 'c1')?.id).toBe(ws.id);
   });
 
   it('workspace:switch always reports no-active-session per chat-level isolation', async () => {
@@ -1125,7 +1125,7 @@ describe('CallbackRouter — workspace:*', () => {
     const wcb = new WorkspaceCreateBroker();
     const w1 = wm.create({ name: 'a', workdir: '/p/a' });
     const w2 = wm.create({ name: 'b', workdir: '/p/b' });
-    wm.addBinding(w1.id, { channelType: 'telegram', chatId: 'c1' });
+    wm.bindChat({workspaceId: w1.id,  channelType: 'telegram', chatId: 'c1' });
     wm.setRole(w1.id, 'u1', 'admin');
 
     const sentMsgs: OutboundMessage[] = [];
@@ -1172,6 +1172,6 @@ describe('CallbackRouter — workspace:*', () => {
     expect(result.kind).toBe('handled');
     expect(sentMsgs[0]?.text).toMatch(/已切到工作区/);
     expect(sentMsgs[0]?.text).toMatch(/暂无活跃会话/);
-    expect(wm.findByChat('telegram', 'c1')?.id).toBe(w2.id);
+    expect(wm.workspaceForChat('telegram', 'c1')?.id).toBe(w2.id);
   });
 });

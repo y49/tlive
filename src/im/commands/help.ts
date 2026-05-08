@@ -37,7 +37,7 @@ export const helpCmd: CommandDef = {
     ];
 
     // Optionally append SDK supportedCommands if a session is alive
-    const activeId = ctx.workspaceManager.getActiveSessionIdForChat(
+    const activeId = ctx.workspaceManager.getActiveSessionId(
       ctx.inbound.channelType,
       ctx.inbound.chatId,
     );

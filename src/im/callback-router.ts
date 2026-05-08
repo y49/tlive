@@ -616,24 +616,18 @@ export class CallbackRouter {
       return { kind: 'unknown', reason: 'workspace:bind:not-found' };
     }
     // Single-binding-per-chat: remove existing if any.
-    const existing = wm.findByChat(ctx.channelType, ctx.chatId);
+    const existing = wm.workspaceForChat(ctx.channelType, ctx.chatId);
     if (existing) {
-      wm.removeBinding(existing.id, { channelType: ctx.channelType, chatId: ctx.chatId });
+      wm.unbindChat(ctx.channelType, ctx.chatId);
     }
-    wm.addBinding(target.id, {
-      channelType: ctx.channelType,
-      chatId: ctx.chatId,
-    });
-    // Auto-promote the binder to admin if they have no role yet. This covers
-    // both first-ever bind (ws has no admin) and per-channel first bind
-    // (Telegram already had an admin user, but Feishu's userId is distinct
-    // and arrives observer-by-default). Already-roled users (admin/operator/
-    // observer) keep their existing role — bind is not a privilege escalation
-    // path.
     try {
-      const existingRole = target.roles?.[ctx.userId];
-      if (!existingRole) wm.setRole(target.id, ctx.userId, 'admin');
-    } catch { /* ignore */ }
+      wm.bindChat({
+        workspaceId: target.id,
+        channelType: ctx.channelType,
+        chatId: ctx.chatId,
+      });
+    } catch { /* already bound — should not happen after unbind above */ }
+    // T3-PENDING: setRole removed in chat-trust
     await wm.save().catch((err) => {
       this.deps.logger?.warn('workspace:bind save failed', {
         wsId: target.id,
@@ -655,7 +649,7 @@ export class CallbackRouter {
     }
 
     // Role check: only admin/operator may switch workspace.
-    const currentForRole = wm.findByChat(ctx.channelType, ctx.chatId);
+    const currentForRole = wm.workspaceForChat(ctx.channelType, ctx.chatId);
     if (currentForRole) {
       const role = userRole(currentForRole, ctx.userId);
       if (role !== 'admin' && role !== 'operator') {
@@ -668,7 +662,7 @@ export class CallbackRouter {
     // rather than falling through to bind-and-reply (which would say
     // "已切到 X / 暂无活跃会话" even when the user is already on X with
     // a live session).
-    const current = wm.findByChat(ctx.channelType, ctx.chatId);
+    const current = wm.workspaceForChat(ctx.channelType, ctx.chatId);
     if (current?.id === target.id) {
       await this.sendReply(ctx, `已经在工作区 "${target.name}",无需切换`);
       return { kind: 'handled', action: `workspace:switch:noop:${target.name}` };
@@ -681,7 +675,7 @@ export class CallbackRouter {
     // short-circuit on the stopped instance instead of reconstructing
     // from the persisted snapshot.
     const currentChatActiveId = current
-      ? wm.getActiveSessionIdForChat(ctx.channelType, ctx.chatId)
+      ? wm.getActiveSessionId(ctx.channelType, ctx.chatId)
       : null;
     if (current && current.id !== target.id) {
       if (currentChatActiveId) {
@@ -705,12 +699,15 @@ export class CallbackRouter {
           }
         }
       }
-      wm.removeBinding(current.id, { channelType: ctx.channelType, chatId: ctx.chatId });
+      wm.unbindChat(ctx.channelType, ctx.chatId);
     }
-    wm.addBinding(target.id, {
-      channelType: ctx.channelType,
-      chatId: ctx.chatId,
-    });
+    try {
+      wm.bindChat({
+        workspaceId: target.id,
+        channelType: ctx.channelType,
+        chatId: ctx.chatId,
+      });
+    } catch { /* already bound — should not happen after unbind above */ }
     await wm.save().catch((err) => {
       this.deps.logger?.warn('workspace:switch save failed', {
         wsId: target.id,
@@ -764,7 +761,7 @@ export class CallbackRouter {
     const [subverb] = rest;
     // Role check: only admin/operator may exit workspace (skip cancel — harmless).
     if (subverb !== 'cancel') {
-      const wsForRole = wm.findByChat(ctx.channelType, ctx.chatId);
+      const wsForRole = wm.workspaceForChat(ctx.channelType, ctx.chatId);
       if (wsForRole) {
         const role = userRole(wsForRole, ctx.userId);
         if (role !== 'admin' && role !== 'operator') {
@@ -774,7 +771,7 @@ export class CallbackRouter {
       }
     }
     if (subverb === 'confirm') {
-      const ws = wm.findByChat(ctx.channelType, ctx.chatId);
+      const ws = wm.workspaceForChat(ctx.channelType, ctx.chatId);
       if (!ws) {
         await this.sendReply(ctx, '此 chat 未绑定工作区');
         return { kind: 'handled', action: 'workspace:exit:not-bound' };
@@ -791,12 +788,12 @@ export class CallbackRouter {
       return { kind: 'handled', action: 'workspace:exit:confirm' };
     }
     if (subverb === 'do') {
-      const ws = wm.findByChat(ctx.channelType, ctx.chatId);
+      const ws = wm.workspaceForChat(ctx.channelType, ctx.chatId);
       if (!ws) {
         await this.sendReply(ctx, '此 chat 未绑定');
         return { kind: 'handled', action: 'workspace:exit:not-bound' };
       }
-      const exitActiveId = wm.getActiveSessionIdForChat(ctx.channelType, ctx.chatId);
+      const exitActiveId = wm.getActiveSessionId(ctx.channelType, ctx.chatId);
       if (exitActiveId) {
         const s = this.deps.sessionManager.get(exitActiveId);
         if (s && s.kind === 'local') {
@@ -810,7 +807,7 @@ export class CallbackRouter {
           }
         }
       }
-      wm.removeBinding(ws.id, { channelType: ctx.channelType, chatId: ctx.chatId });
+      wm.unbindChat(ctx.channelType, ctx.chatId);
       await wm.save().catch((err) => {
         this.deps.logger?.warn('workspace:exit save failed', {
           wsId: ws.id,
@@ -838,7 +835,7 @@ export class CallbackRouter {
     const wm = this.deps.workspaceManager;
     if (!wm) return { kind: 'unknown', reason: 'workspace:config:no-manager' };
 
-    const ws = wm.findByChat(ctx.channelType, ctx.chatId);
+    const ws = wm.workspaceForChat(ctx.channelType, ctx.chatId);
     if (!ws) {
       await this.sendReply(ctx, '此 chat 未绑定工作区');
       return { kind: 'handled', action: 'workspace:config:not-bound' };
@@ -907,12 +904,12 @@ export class CallbackRouter {
       return { kind: 'handled', action: 'turn:stop:idle' };
     }
     const wm = this.deps.workspaceManager;
-    const ws = wm?.findByChat(ctx.channelType, ctx.chatId);
+    const ws = wm?.workspaceForChat(ctx.channelType, ctx.chatId);
     if (!ws || !wm) {
       await this.sendReply(ctx, '此 chat 未绑定工作区');
       return { kind: 'handled', action: 'turn:stop:no-ws' };
     }
-    const turnActiveId = wm.getActiveSessionIdForChat(ctx.channelType, ctx.chatId);
+    const turnActiveId = wm.getActiveSessionId(ctx.channelType, ctx.chatId);
     if (!turnActiveId) {
       await this.sendReply(ctx, '当前没有进行中的对话');
       return { kind: 'handled', action: 'turn:stop:no-session' };
@@ -957,7 +954,7 @@ export class CallbackRouter {
   private async handleSessionNew(rest: string[], ctx: CallbackContext): Promise<CallbackOutcome> {
     const [sub] = rest;
     const wm = this.deps.workspaceManager;
-    const ws = wm?.findByChat(ctx.channelType, ctx.chatId);
+    const ws = wm?.workspaceForChat(ctx.channelType, ctx.chatId);
     if (sub === 'cancel') {
       await this.sendReply(ctx, '已取消');
       return { kind: 'handled', action: 'session:new:cancel' };
@@ -973,7 +970,7 @@ export class CallbackRouter {
       return { kind: 'handled', action: 'session:new:denied' };
     }
     const newActiveId = wm
-      ? wm.getActiveSessionIdForChat(ctx.channelType, ctx.chatId)
+      ? wm.getActiveSessionId(ctx.channelType, ctx.chatId)
       : null;
     if (sub === 'confirm') {
       // Force-replace: stop existing then clear binding so caller can /new
@@ -994,7 +991,7 @@ export class CallbackRouter {
             });
           }
         }
-        try { wm!.clearActiveSessionForChat(ctx.channelType, ctx.chatId); }
+        try { wm!.clearActiveSession(ctx.channelType, ctx.chatId); }
         catch { /* already cleared */ }
         await wm!.save().catch(() => undefined);
       }
@@ -1028,12 +1025,12 @@ export class CallbackRouter {
 
   private async handleSessionFork(ctx: CallbackContext): Promise<CallbackOutcome> {
     const wm = this.deps.workspaceManager;
-    const ws = wm?.findByChat(ctx.channelType, ctx.chatId);
+    const ws = wm?.workspaceForChat(ctx.channelType, ctx.chatId);
     if (!ws || !wm) {
       await this.sendReply(ctx, '此 chat 未绑定工作区');
       return { kind: 'handled', action: 'session:fork:no-ws' };
     }
-    const forkActiveId = wm.getActiveSessionIdForChat(ctx.channelType, ctx.chatId);
+    const forkActiveId = wm.getActiveSessionId(ctx.channelType, ctx.chatId);
     if (!forkActiveId) {
       await this.sendReply(ctx, '当前无活跃会话可 fork');
       return { kind: 'handled', action: 'session:fork:no-session' };
@@ -1055,8 +1052,8 @@ export class CallbackRouter {
       return { kind: 'handled', action: 'session:fork:failed' };
     }
     try {
-      wm.clearActiveSessionForChat(ctx.channelType, ctx.chatId);
-      wm.bindActiveSessionForChat(ctx.channelType, ctx.chatId, forkedId);
+      wm.clearActiveSession(ctx.channelType, ctx.chatId);
+      wm.bindActiveSession(ctx.channelType, ctx.chatId, forkedId);
       await wm.save().catch(() => undefined);
     } catch (err) {
       this.deps.logger?.warn('session:fork bindActive failed', {
@@ -1075,7 +1072,7 @@ export class CallbackRouter {
   private async handleSessionKill(rest: string[], ctx: CallbackContext): Promise<CallbackOutcome> {
     const [sub] = rest;
     const wm = this.deps.workspaceManager;
-    const ws = wm?.findByChat(ctx.channelType, ctx.chatId);
+    const ws = wm?.workspaceForChat(ctx.channelType, ctx.chatId);
     if (sub === 'cancel') {
       await this.sendReply(ctx, '已取消');
       return { kind: 'handled', action: 'session:kill:cancel' };
@@ -1085,7 +1082,7 @@ export class CallbackRouter {
       return { kind: 'handled', action: 'session:kill:no-ws' };
     }
     const killActiveId = wm
-      ? wm.getActiveSessionIdForChat(ctx.channelType, ctx.chatId)
+      ? wm.getActiveSessionId(ctx.channelType, ctx.chatId)
       : null;
     if (sub === 'confirm') {
       if (!killActiveId) {
@@ -1121,7 +1118,7 @@ export class CallbackRouter {
           });
         }
       }
-      try { wm!.clearActiveSessionForChat(ctx.channelType, ctx.chatId); }
+      try { wm!.clearActiveSession(ctx.channelType, ctx.chatId); }
       catch { /* already cleared */ }
       await wm!.save().catch(() => undefined);
       await this.sendReply(ctx, `☠ 已杀死会话 ${shortAlias(sid)}`);
@@ -1135,7 +1132,7 @@ export class CallbackRouter {
     if (!sidRaw) return { kind: 'unknown', reason: 'session:resume:malformed' };
     // Role check: only admin/operator may resume sessions.
     const wmResume = this.deps.workspaceManager;
-    const wsResume = wmResume?.findByChat(ctx.channelType, ctx.chatId);
+    const wsResume = wmResume?.workspaceForChat(ctx.channelType, ctx.chatId);
     if (wsResume) {
       const roleResume = userRole(wsResume, ctx.userId);
       if (roleResume !== 'admin' && roleResume !== 'operator') {
@@ -1158,15 +1155,15 @@ export class CallbackRouter {
       return { kind: 'handled', action: 'session:resume:not-found' };
     }
     const wm = this.deps.workspaceManager;
-    const ws = wm?.findByChat(ctx.channelType, ctx.chatId);
+    const ws = wm?.workspaceForChat(ctx.channelType, ctx.chatId);
     if (ws && wm) {
       try {
-        const resumeActiveId = wm.getActiveSessionIdForChat(ctx.channelType, ctx.chatId);
+        const resumeActiveId = wm.getActiveSessionId(ctx.channelType, ctx.chatId);
         if (resumeActiveId && resumeActiveId !== resumed.id) {
-          wm.clearActiveSessionForChat(ctx.channelType, ctx.chatId);
+          wm.clearActiveSession(ctx.channelType, ctx.chatId);
         }
         if (resumeActiveId !== resumed.id) {
-          wm.bindActiveSessionForChat(ctx.channelType, ctx.chatId, resumed.id);
+          wm.bindActiveSession(ctx.channelType, ctx.chatId, resumed.id);
         }
         await wm.save().catch(() => undefined);
       } catch (err) {
@@ -1215,7 +1212,7 @@ export class CallbackRouter {
     }
     if (verb === 'set') {
       const wm = this.deps.workspaceManager;
-      const ws = wm?.findByChat(ctx.channelType, ctx.chatId);
+      const ws = wm?.workspaceForChat(ctx.channelType, ctx.chatId);
       if (!ws || !wm) {
         await this.sendReply(ctx, '此 chat 未绑定工作区');
         return { kind: 'handled', action: 'runtime:model:set:no-ws' };
@@ -1228,7 +1225,7 @@ export class CallbackRouter {
       }
       const id = idParts.join(':');
       if (!id) return { kind: 'unknown', reason: 'runtime:model:set:no-id' };
-      const setActiveId = wm.getActiveSessionIdForChat(ctx.channelType, ctx.chatId);
+      const setActiveId = wm.getActiveSessionId(ctx.channelType, ctx.chatId);
       if (setActiveId) {
         const s = this.deps.sessionManager.get(setActiveId);
         if (s && s.kind === 'local') {
@@ -1258,7 +1255,7 @@ export class CallbackRouter {
     }
     if (verb !== 'set') return { kind: 'unknown', reason: `runtime:mode:bad-verb:${verb ?? ''}` };
     const wm = this.deps.workspaceManager;
-    const ws = wm?.findByChat(ctx.channelType, ctx.chatId);
+    const ws = wm?.workspaceForChat(ctx.channelType, ctx.chatId);
     if (!ws || !wm) {
       await this.sendReply(ctx, '此 chat 未绑定工作区');
       return { kind: 'handled', action: 'runtime:mode:set:no-ws' };
@@ -1273,7 +1270,7 @@ export class CallbackRouter {
     if (!isValidPermissionMode(mode)) {
       return { kind: 'unknown', reason: `runtime:mode:bad-value:${mode}` };
     }
-    const modeActiveId = wm.getActiveSessionIdForChat(ctx.channelType, ctx.chatId);
+    const modeActiveId = wm.getActiveSessionId(ctx.channelType, ctx.chatId);
     if (modeActiveId) {
       const s = this.deps.sessionManager.get(modeActiveId);
       if (s && s.kind === 'local') {
@@ -1301,7 +1298,7 @@ export class CallbackRouter {
     }
     if (verb !== 'set') return { kind: 'unknown', reason: `runtime:think:bad-verb:${verb ?? ''}` };
     const wm = this.deps.workspaceManager;
-    const ws = wm?.findByChat(ctx.channelType, ctx.chatId);
+    const ws = wm?.workspaceForChat(ctx.channelType, ctx.chatId);
     if (!ws) {
       await this.sendReply(ctx, '此 chat 未绑定工作区');
       return { kind: 'handled', action: 'runtime:think:set:no-ws' };
@@ -1334,7 +1331,7 @@ export class CallbackRouter {
     }
     if (verb !== 'set') return { kind: 'unknown', reason: `runtime:budget:bad-verb:${verb ?? ''}` };
     const wm = this.deps.workspaceManager;
-    const ws = wm?.findByChat(ctx.channelType, ctx.chatId);
+    const ws = wm?.workspaceForChat(ctx.channelType, ctx.chatId);
     if (!ws || !wm) {
       await this.sendReply(ctx, '此 chat 未绑定工作区');
       return { kind: 'handled', action: 'runtime:budget:set:no-ws' };
@@ -1345,7 +1342,7 @@ export class CallbackRouter {
       await this.sendReply(ctx, '❌ 权限不足:设置预算需要 admin 或 operator 权限');
       return { kind: 'handled', action: 'runtime:budget:set:denied' };
     }
-    const budgetActiveId = wm.getActiveSessionIdForChat(ctx.channelType, ctx.chatId);
+    const budgetActiveId = wm.getActiveSessionId(ctx.channelType, ctx.chatId);
     if (!budgetActiveId) {
       await this.sendReply(ctx, '当前无活跃会话');
       return { kind: 'handled', action: 'runtime:budget:set:no-session' };
@@ -1382,7 +1379,7 @@ export class CallbackRouter {
     }
     // Role check: only admin/operator may manage permissions.
     const wmPerm = this.deps.workspaceManager;
-    const wsPerm = wmPerm?.findByChat(ctx.channelType, ctx.chatId);
+    const wsPerm = wmPerm?.workspaceForChat(ctx.channelType, ctx.chatId);
     if (wsPerm) {
       const rolePerm = userRole(wsPerm, ctx.userId);
       if (rolePerm !== 'admin' && rolePerm !== 'operator') {
@@ -1419,7 +1416,7 @@ export class CallbackRouter {
       }
       if (sub === 'do') {
         const wm = this.deps.workspaceManager;
-        const ws = wm?.findByChat(ctx.channelType, ctx.chatId);
+        const ws = wm?.workspaceForChat(ctx.channelType, ctx.chatId);
         if (!ws) {
           await this.sendReply(ctx, '此 chat 未绑定工作区');
           return { kind: 'handled', action: 'runtime:perm:clear:no-ws' };

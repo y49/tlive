@@ -5,8 +5,7 @@
 // Provides a minimal environment that wires the real command registry
 // (dispatch) and the real CallbackRouter without spinning up the full daemon:
 //   - handleInbound(ev) — dispatches a text/command inbound event using the
-//     real dispatch() from command-parser.ts. Role is resolved from the
-//     workspace's roles map (or defaultRole), mirroring bootstrap.handleInbound.
+//     real dispatch() from command-parser.ts.
 //   - dispatchCallback(ev) — routes a callback event through the real
 //     CallbackRouter.route(), with adapters wired for sendReply.
 //   - adapter — FakeAdapter (telegram) that captures all outbound calls.
@@ -15,14 +14,10 @@
 //   - cleanup() — no-op (no async resources in this fixture).
 //
 // Design notes:
-//   - The fake WorkspaceManager and SessionManager follow the same shape as
-//     tests/im/commands/_helpers.ts but exposed at a higher level (dispatch-
-//     entry, not cmd.run) so role gating + registry dispatch are exercised.
-//   - The fake SessionManager's createLocal returns a minimal SessionLike so
-//     commands that call bindActiveSessionForChat can proceed normally.
+//   - v1.0 chat-trust model: no roles/admins. All chat users can drive the bot.
+//     The fake WM uses the new ChatInstance API (bindChat/workspaceForChat/etc).
 //   - The fixture keeps deps minimal: only what /new, /sessions, /workspace
-//     and their callbacks need for Tasks 9-14. Future tasks add fields as
-//     needed; no fields are pre-anticipated.
+//     and their callbacks need. Future tasks add fields as needed.
 
 import type { InboundEvent, ReplyMarkup } from '../../src/platform/types.js';
 import type { SessionManager } from '../../src/session/manager.js';
@@ -32,6 +27,7 @@ import type { AskUserQuestionBroker } from '../../src/permission/ask-broker.js';
 import type { ElicitationBroker } from '../../src/permission/elicitation-broker.js';
 import type { LocalSession } from '../../src/session/local-session.js';
 import type { ChannelType } from '../../src/workspace/chat-instance.js';
+import type { ChatInstance } from '../../src/workspace/chat-instance.js';
 import type { Workspace } from '../../src/workspace/config.js';
 import type { Role } from '../../src/workspace/config.js';
 import type { PermissionMode } from '../../src/runtime/types.js';
@@ -50,6 +46,8 @@ export interface BootstrapWorkspaceSpec {
   id: string;
   name: string;
   workdir: string;
+  /** T3-PENDING: roles removed in chat-trust; accepted here for backward compat
+   *  with existing tests until T3 cleans them up. */
   roles?: Record<string, Role>;
   defaultRole?: Role;
   bindings: Array<{
@@ -111,109 +109,133 @@ function buildFakeWorkspaceManager(specs: BootstrapWorkspaceSpec[]): WorkspaceMa
     id: s.id,
     name: s.name,
     workdir: s.workdir,
-    roles: { ...(s.roles ?? {}) },
-    defaultRole: s.defaultRole ?? 'observer',
     defaults: {
       provider: (s.defaults?.provider ?? 'claude') as 'claude' | 'codex',
       model: s.defaults?.model,
       permissionMode: (s.defaults?.permissionMode ?? 'default') as PermissionMode,
       thinking: 'collapsed',
-      verbose: false,
-      prewarmCache: false,
-      threadPerSession: false,
     },
     budget: {},
     mcpServers: {},
-    bindings: s.bindings.map((b) => ({
-      channelType: b.channelType,
-      chatId: b.chatId,
-      activeSessionId: b.activeSessionId ?? null,
-    } as ChatBinding)),
     createdAt: new Date().toISOString(),
-  }));
+    // T3-PENDING: stash roles for backward compat (existing tests read them via userRole)
+    _roles: { ...(s.roles ?? {}) } as Record<string, Role>,
+    _defaultRole: (s.defaultRole ?? 'observer') as Role,
+  } as unknown as Workspace));
+
+  // Seed ChatInstances from bindings spec
+  const now = new Date().toISOString();
+  const chatInstances: ChatInstance[] = [];
+  for (const s of specs) {
+    for (const b of s.bindings) {
+      chatInstances.push({
+        channelType: b.channelType as ChannelType,
+        chatId: b.chatId,
+        workspaceId: s.id,
+        activeSessionId: b.activeSessionId ?? null,
+        lastActiveAt: b.activeSessionId ? now : null,
+        costRollup: { totalUsd: 0, sessionCount: 0, lastResetAt: now },
+        createdAt: now,
+      });
+    }
+  }
 
   const wm = {
     list(): Workspace[] { return [...allWorkspaces]; },
     get(id: string): Workspace | undefined {
       return allWorkspaces.find((w) => w.id === id);
     },
-    findByChat(ct: ChannelType, cid: string): Workspace | undefined {
-      return allWorkspaces.find((w) =>
-        w.bindings.some((b) => b.channelType === ct && b.chatId === cid),
-      );
+    findByWorkdir(workdir: string): Workspace | undefined {
+      return allWorkspaces.find((w) => w.workdir === workdir);
     },
+    // New API
+    workspaceForChat(ct: ChannelType, cid: string): Workspace | undefined {
+      const inst = chatInstances.find((c) => c.channelType === ct && c.chatId === cid);
+      if (!inst) return undefined;
+      return allWorkspaces.find((w) => w.id === inst.workspaceId);
+    },
+    findChatInstance(ct: ChannelType, cid: string): ChatInstance | undefined {
+      return chatInstances.find((c) => c.channelType === ct && c.chatId === cid);
+    },
+    listChatInstances(): ChatInstance[] {
+      return [...chatInstances];
+    },
+    bindChat(opts: { workspaceId: string; channelType: ChannelType; chatId: string; threadId?: string }): ChatInstance {
+      const t = new Date().toISOString();
+      const inst: ChatInstance = {
+        channelType: opts.channelType, chatId: opts.chatId, threadId: opts.threadId,
+        workspaceId: opts.workspaceId,
+        activeSessionId: null, lastActiveAt: null,
+        costRollup: { totalUsd: 0, sessionCount: 0, lastResetAt: t },
+        createdAt: t,
+      };
+      const idx = chatInstances.findIndex((c) => c.channelType === opts.channelType && c.chatId === opts.chatId);
+      if (idx >= 0) chatInstances.splice(idx, 1);
+      chatInstances.push(inst);
+      return inst;
+    },
+    unbindChat(ct: ChannelType, cid: string): ChatInstance | undefined {
+      const idx = chatInstances.findIndex((c) => c.channelType === ct && c.chatId === cid);
+      if (idx >= 0) { const r = chatInstances[idx]!; chatInstances.splice(idx, 1); return r; }
+      return undefined;
+    },
+    switchChat(ct: ChannelType, cid: string, newWsId: string): ChatInstance {
+      const inst = chatInstances.find((c) => c.channelType === ct && c.chatId === cid);
+      if (!inst) throw new Error(`switchChat: ${ct}:${cid} not bound`);
+      inst.workspaceId = newWsId;
+      inst.activeSessionId = null;
+      inst.costRollup = { totalUsd: 0, sessionCount: 0, lastResetAt: new Date().toISOString() };
+      return inst;
+    },
+    getActiveSessionId(ct: ChannelType, cid: string): string | null {
+      return chatInstances.find((c) => c.channelType === ct && c.chatId === cid)?.activeSessionId ?? null;
+    },
+    bindActiveSession(ct: ChannelType, cid: string, sid: string): void {
+      const inst = chatInstances.find((c) => c.channelType === ct && c.chatId === cid);
+      if (!inst) throw new Error(`bindActiveSession: no binding for ${ct}:${cid}`);
+      inst.activeSessionId = sid;
+      inst.lastActiveAt = new Date().toISOString();
+    },
+    clearActiveSession(ct: ChannelType, cid: string): void {
+      const inst = chatInstances.find((c) => c.channelType === ct && c.chatId === cid);
+      if (inst) inst.activeSessionId = null;
+    },
+    addCost(ct: ChannelType, cid: string, delta: number, ended: boolean): void {
+      const inst = chatInstances.find((c) => c.channelType === ct && c.chatId === cid);
+      if (inst) {
+        inst.costRollup.totalUsd += delta;
+        if (ended) inst.costRollup.sessionCount++;
+      }
+    },
+    removeWorkspace(id: string, opts?: { force?: boolean }) {
+      const idx = allWorkspaces.findIndex((w) => w.id === id);
+      if (idx < 0) return { workspace: undefined, chatInstances: [] };
+      const bound = chatInstances.filter((c) => c.workspaceId === id);
+      if (bound.length > 0 && !opts?.force) throw new Error(`removeWorkspace: ${bound.length} chat(s) still bound`);
+      const ws = allWorkspaces[idx]!;
+      allWorkspaces.splice(idx, 1);
+      const removed = chatInstances.filter((c) => c.workspaceId === id);
+      chatInstances.splice(0, chatInstances.length, ...chatInstances.filter((c) => c.workspaceId !== id));
+      return { workspace: ws, chatInstances: removed };
+    },
+    // T3-PENDING: role methods below will be removed in T3
     getRole(wsId: string, userId: string): Role {
-      const ws = allWorkspaces.find((w) => w.id === wsId);
+      const ws = allWorkspaces.find((w) => w.id === wsId) as unknown as { _roles?: Record<string, Role>; _defaultRole?: Role } | undefined;
       if (!ws) return 'observer';
-      return (ws.roles[userId] as Role | undefined) ?? ws.defaultRole;
+      return (ws._roles?.[userId] as Role | undefined) ?? (ws._defaultRole ?? 'observer');
     },
     setRole(wsId: string, userId: string, role: Role): void {
-      const ws = allWorkspaces.find((w) => w.id === wsId);
-      if (ws) ws.roles[userId] = role;
+      const ws = allWorkspaces.find((w) => w.id === wsId) as unknown as { _roles?: Record<string, Role> } | undefined;
+      if (ws?._roles) ws._roles[userId] = role;
     },
     claimAdmin(wsId: string, userId: string): boolean {
-      const ws = allWorkspaces.find((w) => w.id === wsId);
+      const ws = allWorkspaces.find((w) => w.id === wsId) as unknown as { _roles?: Record<string, Role> } | undefined;
       if (!ws) throw new Error(`claimAdmin: workspace ${wsId} not found`);
-      const hasAdmin = Object.values(ws.roles).some((r) => r === 'admin');
-      if (hasAdmin) return false;
-      ws.roles[userId] = 'admin';
+      const roles = ws._roles ?? {};
+      if (Object.values(roles).some((r) => r === 'admin')) return false;
+      if (!ws._roles) (ws as unknown as Record<string, unknown>)['_roles'] = {};
+      (ws as unknown as { _roles: Record<string, Role> })._roles[userId] = 'admin';
       return true;
-    },
-    addBinding(wsId: string, binding: ChatBinding): Workspace | undefined {
-      const ws = allWorkspaces.find((w) => w.id === wsId);
-      if (!ws) throw new Error(`addBinding: workspace ${wsId} not found`);
-      ws.bindings.push(binding);
-      return ws;
-    },
-    removeBinding(wsId: string, key: unknown): Workspace | undefined {
-      return allWorkspaces.find((w) => w.id === wsId);
-    },
-    getActiveSessionIdForChat(ct: ChannelType, cid: string): string | null {
-      for (const w of allWorkspaces) {
-        const b = w.bindings.find((x) => x.channelType === ct && x.chatId === cid);
-        if (b) return b.activeSessionId ?? null;
-      }
-      return null;
-    },
-    bindActiveSessionForChat(ct: ChannelType, cid: string, sid: string): void {
-      for (const w of allWorkspaces) {
-        const b = w.bindings.find((x) => x.channelType === ct && x.chatId === cid);
-        if (b) {
-          b.activeSessionId = sid;
-          b.lastActiveAt = new Date().toISOString();
-          return;
-        }
-      }
-      throw new Error(`bindActiveSessionForChat: no binding for ${ct}:${cid}`);
-    },
-    clearActiveSessionForChat(ct: ChannelType, cid: string): void {
-      for (const w of allWorkspaces) {
-        const b = w.bindings.find((x) => x.channelType === ct && x.chatId === cid);
-        if (b) { b.activeSessionId = null; return; }
-      }
-    },
-    listActiveBindings(): Array<{
-      channelType: ChannelType; chatId: string; workspaceId: string;
-      activeSessionId: string; lastActiveAt: string;
-    }> {
-      const out: Array<{
-        channelType: ChannelType; chatId: string; workspaceId: string;
-        activeSessionId: string; lastActiveAt: string;
-      }> = [];
-      for (const w of allWorkspaces) {
-        for (const b of w.bindings) {
-          if (!b.activeSessionId) continue;
-          out.push({
-            channelType: b.channelType, chatId: b.chatId, workspaceId: w.id,
-            activeSessionId: b.activeSessionId,
-            lastActiveAt: b.lastActiveAt ?? new Date(0).toISOString(),
-          });
-        }
-      }
-      return out;
-    },
-    listBindings(wsId: string): ChatBinding[] {
-      return allWorkspaces.find((w) => w.id === wsId)?.bindings ?? [];
     },
     async save(): Promise<void> { /* no-op */ },
   } as unknown as WorkspaceManager;
@@ -256,14 +278,10 @@ function buildFakeSessionManager(): SessionManager & {
       let _budgetCap: number | undefined = undefined;
       const s = {
         kind: 'local', id, shortAlias: alias, workspaceId: opts.workspaceId, ...opts,
-        // Stub setModel / getModel so callback tests can call runtime:model:set:*.
         async setModel(m: string) { _model = m; },
         get sdkModel() { return _model; },
-        // Stub setPermissionMode / permissionMode so callback tests can call
-        // runtime:mode:set:*.
         async setPermissionMode(m: string) { _permissionMode = m; },
         get permissionMode() { return _permissionMode as PermissionMode; },
-        // Stub setMaxBudget / getMaxBudget / cost so /budget and its callbacks work.
         setMaxBudget(usd: number | undefined) { _budgetCap = usd; },
         getMaxBudget() { return _budgetCap; },
         cost: { totalCost: 0 },
@@ -306,12 +324,6 @@ function buildFakeSessionManager(): SessionManager & {
 // Fake in-memory PolicyStore (for /perm tests — no filesystem I/O)
 // --------------------------------------------------------------------------
 
-/**
- * Build a simple in-memory PolicyStore per workspace, returned by a factory
- * function compatible with BootstrapFixtureOpts.policyStoreFor.
- * Rules live in a plain array; add/remove are synchronous but wrapped in
- * resolved promises to satisfy the PolicyStore interface.
- */
 export function buildFakePolicyStoreFactory(): {
   factory: (workspaceId: string) => PolicyStore;
   storeMap: Map<string, PolicyRule[]>;
@@ -362,14 +374,12 @@ export function buildFakePolicyStoreFactory(): {
 // --------------------------------------------------------------------------
 
 export function setupBootstrap(opts: BootstrapFixtureOpts): BootstrapFixture {
-  // Register commands (idempotent-ish via reset first).
   resetRegistryForTests();
   registerAllCommands();
 
   const adapter = new FakeAdapter('telegram');
   const replies: string[] = [];
 
-  // Intercept send to capture reply text.
   const originalSend = adapter.send.bind(adapter);
   adapter.send = async (msg) => {
     if (typeof msg.text === 'string') replies.push(msg.text);
@@ -395,7 +405,6 @@ export function setupBootstrap(opts: BootstrapFixtureOpts): BootstrapFixture {
     pendingFor() { return []; },
   } as unknown as ElicitationBroker;
 
-  // Build real CallbackRouter with adapters wired so sendReply works.
   const adaptersRecord: Partial<Record<ChannelType, typeof adapter>> = { telegram: adapter };
   const callbackRouter = new CallbackRouter({
     sessionManager,
@@ -404,16 +413,15 @@ export function setupBootstrap(opts: BootstrapFixtureOpts): BootstrapFixture {
     elicitationBroker,
     adapters: adaptersRecord,
     workspaceManager,
-    // Wire optional PolicyStore factory for /perm callback tests.
     ...(opts.policyStoreFor ? { policyStoreFor: opts.policyStoreFor } : {}),
   });
 
   async function handleInbound(spec: InboundSpec): Promise<void> {
     const { channelType, chatId, userId, text, messageId } = spec;
 
-    // Resolve role from workspace (mirrors bootstrap.handleInbound).
-    const ws = workspaceManager.findByChat(channelType, chatId);
-    const role = ws ? userRole(ws, userId) : 'observer';
+    // Resolve role from workspace (T3-PENDING: mirrors bootstrap.handleInbound role check).
+    const ws = workspaceManager.workspaceForChat(channelType, chatId);
+    const role = ws ? userRole(ws as unknown as { roles?: Record<string, string>; defaultRole?: string }, userId) : 'observer';
 
     const inbound: InboundEvent = {
       kind: 'message',
@@ -440,7 +448,6 @@ export function setupBootstrap(opts: BootstrapFixtureOpts): BootstrapFixture {
         permissionBroker,
         askBroker,
         elicitationBroker,
-        // Wire optional PolicyStore factory for /perm command tests.
         ...(opts.policyStoreFor ? { policyStoreFor: opts.policyStoreFor } : {}),
         reply: replyFn,
       },
@@ -451,7 +458,6 @@ export function setupBootstrap(opts: BootstrapFixtureOpts): BootstrapFixture {
 
   async function dispatchCallback(spec: CallbackSpec): Promise<void> {
     const { channelType, chatId, userId, messageId, callbackData } = spec;
-    // Map-form adapters for CallbackContext (distinct from record-form deps.adapters).
     const adapterMap = new Map<ChannelType, typeof adapter>([['telegram', adapter]]);
     await callbackRouter.route({
       data: callbackData,

@@ -39,7 +39,7 @@ describe('misc tool smoke tests', () => {
     // Per chat-level isolation (spec §3) handoff.take requires a chat binding
     // to write the activeSessionId onto. Add a placeholder telegram binding
     // so handoff.{take,release} have somewhere to land.
-    harness.deps.workspaces.addBinding(ws.id, { channelType: 'telegram', chatId: 'misc-c' });
+    harness.deps.workspaces.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'misc-c' });
     const r = harness.deps.sessions.registerRemote({
       sdkSessionId: 'abababab-1111-2222-3333-444444444444',
       workspaceId: ws.id, workdir: '/W', provider: 'claude',
@@ -98,9 +98,9 @@ describe('misc tool smoke tests', () => {
     const take = await makeHandoffTakeTool(harness.deps).handler({ sdkId: ctx.sessionId }, ctx);
     expect(take.isError).toBeFalsy();
     // Per chat-level isolation (spec §3) the active session lives on the
-    // ChatBinding, not the workspace. The misc test harness wires a single
-    // binding per workspace; surface its activeSessionId via listActiveBindings.
-    const findActive = () => harness.deps.workspaces.listActiveBindings()
+    // ChatInstance. The misc test harness wires a single
+    // binding per workspace; surface its activeSessionId via listChatInstances.
+    const findActive = () => harness.deps.workspaces.listChatInstances().filter((c) => c.activeSessionId !== null)
       .find((b) => b.workspaceId === ctx.workspaceId)?.activeSessionId ?? null;
     expect(findActive()).toBe(ctx.sessionId);
     const rel = await makeHandoffReleaseTool(harness.deps).handler({}, ctx);
@@ -111,7 +111,7 @@ describe('misc tool smoke tests', () => {
   it('handoff release with alias resolves owner via session.ownerChat (Iso #5)', async () => {
     // Spawn a fresh local session with ownerChat pointing at the misc-c
     // binding so handoff.release(alias=...) can use session.ownerChat
-    // directly instead of scanning listActiveBindings.
+    // directly instead of scanning listChatInstances.
     const local = await harness.deps.sessions.createLocal({
       workspaceId: ctx.workspaceId,
       provider: 'claude',
@@ -119,8 +119,8 @@ describe('misc tool smoke tests', () => {
       source: 'im',
       ownerChat: { channelType: 'telegram', chatId: 'misc-c' },
     });
-    harness.deps.workspaces.bindActiveSessionForChat('telegram', 'misc-c', local.id);
-    expect(harness.deps.workspaces.getActiveSessionIdForChat('telegram', 'misc-c')).toBe(local.id);
+    harness.deps.workspaces.bindActiveSession('telegram', 'misc-c', local.id);
+    expect(harness.deps.workspaces.getActiveSessionId('telegram', 'misc-c')).toBe(local.id);
 
     const rel = await makeHandoffReleaseTool(harness.deps).handler(
       { alias: local.shortAlias },
@@ -129,7 +129,7 @@ describe('misc tool smoke tests', () => {
     expect(rel.isError).toBeFalsy();
     const parsed = parseText(rel) as { ok: boolean; releasedSdkId: string | null };
     expect(parsed.releasedSdkId).toBe(local.id);
-    expect(harness.deps.workspaces.getActiveSessionIdForChat('telegram', 'misc-c')).toBeNull();
+    expect(harness.deps.workspaces.getActiveSessionId('telegram', 'misc-c')).toBeNull();
     await local.stop();
   });
 

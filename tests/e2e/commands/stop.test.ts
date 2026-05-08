@@ -44,7 +44,7 @@ describe('/stop — interrupt active session', () => {
     env.replies.length = 0;
 
     // Get the active session and add interrupt tracking.
-    const binding = env.workspaceManager.getActiveSessionIdForChat('telegram', 'c1');
+    const binding = env.workspaceManager.getActiveSessionId('telegram', 'c1');
     if (binding) {
       const session = env.sessionManager.get(binding);
       if (session) {

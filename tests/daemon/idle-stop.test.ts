@@ -80,12 +80,12 @@ describe('startIdleStop', () => {
     expect(stopped).toEqual(['sid-old']);
   });
 
-  it('clears binding active session via clearActiveSessionForChat after stopping', async () => {
+  it('clears binding active session via clearActiveSession after stopping', async () => {
     const now = 10 * 24 * 60 * 60 * 1000; // day 10
     const wm = new WorkspaceManager({ persistPath: null });
     const ws = wm.create({ name: 't', workdir: '/tmp/t' });
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: 'c1' });
-    wm.bindActiveSessionForChat('telegram', 'c1', 'sid-1');
+    wm.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'c1' });
+    wm.bindActiveSession('telegram', 'c1', 'sid-1');
 
     const infos = [
       mkInfo('sid-1', now - 25 * 60 * 60 * 1000, { channelType: 'telegram', chatId: 'c1' }),
@@ -103,7 +103,7 @@ describe('startIdleStop', () => {
     handle.stop();
     expect(out).toEqual(['sid-1']);
     expect(stopped).toEqual(['sid-1']);
-    expect(wm.getActiveSessionIdForChat('telegram', 'c1')).toBeNull();
+    expect(wm.getActiveSessionId('telegram', 'c1')).toBeNull();
   });
 
   it('skip() exempts a session for the next tick only', async () => {

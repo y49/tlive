@@ -25,11 +25,7 @@ export const workspaceCmd: CommandDef = {
       await renderUnbound(ctx, all);
       return;
     }
-    const role = ctx.workspaceManager.getRole(ws.id, ctx.userId);
-    if (role !== 'admin') {
-      await renderReadOnly(ctx, ws);
-      return;
-    }
+    // T3-PENDING: role checks removed in chat-trust. Now always show admin view.
     await renderBoundAdmin(ctx, ws, all);
   },
 };
@@ -76,23 +72,24 @@ async function renderBoundAdmin(
   all: Workspace[],
 ): Promise<void> {
   const others = all.filter((w) => w.id !== ws.id);
-  // Per spec §6.2 — sessions live on each ChatBinding, not the Workspace.
+  // Per spec §6.2 — sessions live on ChatInstance, not the Workspace.
   // State C reads the active session for the inbound (channelType, chatId).
-  const myBinding = ws.bindings.find(
-    (b) => b.channelType === ctx.inbound.channelType && b.chatId === ctx.inbound.chatId,
+  const myActiveId = ctx.workspaceManager.getActiveSessionId(ctx.inbound.channelType, ctx.inbound.chatId);
+  const allInstances = ctx.workspaceManager.listChatInstances().filter((c) => c.workspaceId === ws.id);
+  const otherInstances = allInstances.filter(
+    (c) => !(c.channelType === ctx.inbound.channelType && c.chatId === ctx.inbound.chatId),
   );
   const lines = [
     `📁 当前工作区: ${ws.name} ✓`,
     `   📂 ${ws.workdir}`,
     `   🤖 ${ws.defaults.model ?? 'default'} · ${ws.defaults.permissionMode}`,
   ];
-  if (myBinding?.activeSessionId) {
-    lines.push(`   💬 此 chat 的会话: ${myBinding.activeSessionId.slice(0, 8)}`);
+  if (myActiveId) {
+    lines.push(`   💬 此 chat 的会话: ${myActiveId.slice(0, 8)}`);
   }
   // Signal isolation: each other chat in this workspace runs its own session.
-  const otherBindings = ws.bindings.filter((b) => b !== myBinding);
-  if (otherBindings.length > 0) {
-    lines.push(`   👥 其他 chat 在此项目: ${otherBindings.length} 个(各自独立)`);
+  if (otherInstances.length > 0) {
+    lines.push(`   👥 其他 chat 在此项目: ${otherInstances.length} 个(各自独立)`);
   }
 
   const buttons: InlineButton[][] = [];

@@ -23,7 +23,7 @@ describe('autoBindFromConfig', () => {
     const log = silentLogger();
     const created = autoBindFromConfig(wm, c, log);
     expect(created).toBe(1);
-    expect(wm.findByChat('telegram', '123')?.name).toBe('w');
+    expect(wm.workspaceForChat('telegram', '123')?.name).toBe('w');
     expect(log.info).toHaveBeenCalledWith('auto-bound chat from config', expect.objectContaining({ platform: 'telegram', chatId: '123' }));
   });
 
@@ -38,7 +38,7 @@ describe('autoBindFromConfig', () => {
   it('is idempotent — re-running after binding exists creates 0 new bindings', () => {
     const wm = new WorkspaceManager();
     const ws = wm.create({ name: 'w', workdir: '/tmp/w' });
-    wm.addBinding(ws.id, { channelType: 'telegram', chatId: '123' });
+    wm.bindChat({ workspaceId: ws.id, channelType: 'telegram', chatId: '123' });
     const c = cfg({ channels: { telegram: { token: 't', chatId: '123' } } });
     expect(autoBindFromConfig(wm, c, silentLogger())).toBe(0);
   });
@@ -56,7 +56,7 @@ describe('autoBindFromConfig', () => {
       channels: { telegram: { token: 't', chatId: '123' } },
     };
     expect(autoBindFromConfig(wm, c, silentLogger())).toBe(1);
-    expect(wm.findByChat('telegram', '123')?.name).toBe('b');
+    expect(wm.workspaceForChat('telegram', '123')?.name).toBe('b');
   });
 
   it('multi-workspace ambiguous: chatId matches no admin → 0 bindings, warn logged', () => {

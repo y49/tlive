@@ -146,34 +146,25 @@ export function buildIpcDispatcher(deps: IpcDispatcherDeps): IpcServerHandler {
             gitRemote: w.gitRemote,
             defaults: w.defaults,
             budget: w.budget,
-            defaultRole: w.defaultRole,
           });
-          if (w.roles) {
-            for (const [uid, role] of Object.entries(w.roles)) {
-              deps.workspaces.setRole(created.id, uid, role);
-            }
-          }
+          // T3-PENDING: w.roles / w.defaultRole removed in chat-trust
           await deps.workspaces.save().catch(() => undefined);
           reply({ kind: 'workspace.added', workspaceId: created.id });
           return;
         }
         case 'workspace.list': {
           const workspaces = deps.workspaces.list().map(ws => {
-            const adminEntry = Object.entries(ws.roles).find(([, r]) => r === 'admin');
-            // Per chat-level isolation (spec §3) the workspace itself has no
-            // single active session — pick the first binding's active id (if
-            // any) for backward-compatible single-value reporting. CLI
-            // clients that care about per-chat ownership should call
-            // workspace.bindings (TODO: not yet plumbed end-to-end).
-            const firstActive = ws.bindings
-              .map((b) => b.activeSessionId)
+            // T3-PENDING: admin field removed in chat-trust
+            const allInstances = deps.workspaces.listChatInstances().filter((c) => c.workspaceId === ws.id);
+            const firstActive = allInstances
+              .map((c) => c.activeSessionId)
               .find((id): id is string => Boolean(id)) ?? null;
             return {
               id: ws.id,
               name: ws.name,
               workdir: ws.workdir,
-              admin: adminEntry ? adminEntry[0] : null,
-              bindings: ws.bindings.length,
+              admin: null as string | null,
+              bindings: allInstances.length,
               activeSessionId: firstActive,
             };
           });
@@ -189,18 +180,17 @@ export function buildIpcDispatcher(deps: IpcDispatcherDeps): IpcServerHandler {
           }
           // Stop every per-chat active session in the workspace — prevents
           // dangling LocalSessions in SessionManager with orphaned
-          // workspaceIds after the workspace record is deleted. Mirrors
-          // handleWorkspaceExit in callback-router.ts (which already
-          // operates per-chat).
-          for (const binding of target.bindings) {
-            if (!binding.activeSessionId) continue;
-            const live = deps.sessions.get(binding.activeSessionId);
+          // workspaceIds after the workspace record is deleted.
+          const boundInstances = deps.workspaces.listChatInstances().filter((c) => c.workspaceId === target.id);
+          for (const inst of boundInstances) {
+            if (!inst.activeSessionId) continue;
+            const live = deps.sessions.get(inst.activeSessionId);
             if (live && live.kind === 'local') {
               try { await (live as LocalSession).stop(); }
               catch { /* best-effort — workspace deletion proceeds regardless */ }
             }
           }
-          deps.workspaces.delete(target.id);
+          deps.workspaces.removeWorkspace(target.id, { force: true });
           await deps.workspaces.save().catch(() => undefined);
           reply({ kind: 'workspace.removed', ok: true });
           return;

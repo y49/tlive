@@ -72,7 +72,7 @@ export function startIdleStop(opts: IdleStopOptions): IdleStopHandle {
         // or the WorkspaceManager wasn't injected (tests / partial wiring).
         if (opts.workspaces && info.ownerChat) {
           try {
-            opts.workspaces.clearActiveSessionForChat(info.ownerChat.channelType, info.ownerChat.chatId);
+            opts.workspaces.clearActiveSession(info.ownerChat.channelType, info.ownerChat.chatId);
           } catch (err) {
             opts.logger?.warn('idle stop clear-binding failed', {
               sdkSessionId: info.id,
