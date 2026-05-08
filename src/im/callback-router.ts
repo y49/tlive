@@ -145,6 +145,12 @@ export class CallbackRouter {
   constructor(private readonly deps: CallbackRouterDeps) {}
 
   async route(ctx: CallbackContext): Promise<CallbackOutcome> {
+    if (!ctx.userId) {
+      this.deps.logger?.error('callback dispatched without userId — refusing', {
+        callbackData: ctx.data, channelType: ctx.channelType,
+      });
+      return { kind: 'unknown', reason: 'missing-userId' };
+    }
     const parsed = parseCallbackData(ctx.data);
     if (!parsed) return { kind: 'unknown', reason: 'empty' };
     const { kind, parts } = parsed;

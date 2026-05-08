@@ -9,6 +9,23 @@ import type { LocalSession } from '../../session/local-session.js';
 import type { RemoteSession } from '../../session/remote-session.js';
 import type { Workspace } from '../../workspace/config.js';
 
+// Re-export Role so callers import a single symbol from _shared.
+export type { Role } from '../../workspace/config.js';
+
+/**
+ * Resolve a user's role within a workspace using only the user-level
+ * `workspace.roles[userId]` map (with `workspace.defaultRole` fallback).
+ *
+ * AUTHORITATIVE since v1.0-rc Iso refactor — `binding.role` no longer exists.
+ * Callbacks must carry `userId` to resolve permissions correctly.
+ */
+export function userRole(ws: { roles?: Record<string, string>; defaultRole?: string }, userId: string | null | undefined): import('../../workspace/config.js').Role {
+  if (userId && ws.roles?.[userId]) {
+    return ws.roles[userId] as import('../../workspace/config.js').Role;
+  }
+  return ((ws.defaultRole as import('../../workspace/config.js').Role | undefined) ?? 'observer');
+}
+
 /**
  * Resolve the workspace bound to this chat. Replies + returns null when
  * none is registered.
