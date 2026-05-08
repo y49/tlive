@@ -27,9 +27,10 @@ describe('FeishuAdapter', () => {
     expect(payload.data.msg_type).toBe('interactive');
   });
 
-  it('setReaction throws (unsupported)', async () => {
+  it('setReaction resolves (does not throw) for unmapped emoji', async () => {
     const adapter = new FeishuAdapter({ appId: 'a', appSecret: 's', client: mkLarkClient() });
-    await expect(adapter.setReaction('m', 'c', '👍')).rejects.toThrow();
+    // '👍' is not in the emoji-map, so setReaction should warn-log and resolve.
+    await expect(adapter.setReaction('m', 'c', '👍')).resolves.toBeUndefined();
   });
 
   it('parses inbound message events', () => {

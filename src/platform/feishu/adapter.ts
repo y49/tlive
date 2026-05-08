@@ -5,8 +5,13 @@
 // adaptExpress webhook). We keep the Client loosely typed because lark's
 // generated types are extensive; the shape we rely on is small.
 //
-// Feishu has no reaction API — setReaction throws, renderers are expected to
-// consult CAPABILITIES and fall back via ReactionTracker's reply-message path.
+// setReaction is implemented via POST/DELETE /open-apis/im/v1/messages/{id}/reactions.
+// HTTP calls are injected via options.httpPost / options.httpDelete (Approach A)
+// so tests can mock them without touching the lark SDK Client. Production uses
+// a thin wrapper around the lark Client's raw requestThirdParty-style method.
+// If the lark SDK does not expose a convenient raw HTTP helper, we fall back to
+// calling the reaction API methods on the typed im.v1.message.reactions object
+// (the SDK does expose this resource). Reaction errors are always swallowed.
 
 import type {
   PlatformAdapter, OutboundMessage, OutboundAttachment, InboundEvent, ReplyMarkup,
@@ -40,6 +45,18 @@ export interface FeishuAdapterOptions {
     onMessage: (payload: unknown) => void;
     onCardAction: (payload: unknown) => void;
   }) => void;
+  /**
+   * Injection point (Approach A) for the POST HTTP call used by setReaction.
+   * Defaults to calling im.v1.message.reactions.create on the lark Client.
+   * Tests inject a vi.fn() to avoid real network calls.
+   */
+  httpPost?: (path: string, body: unknown) => Promise<unknown>;
+  /**
+   * Injection point (Approach A) for the DELETE HTTP call used by setReaction.
+   * Defaults to calling im.v1.message.reactions.delete on the lark Client.
+   * Tests inject a vi.fn() to avoid real network calls.
+   */
+  httpDelete?: (path: string) => Promise<unknown>;
 }
 
 export class FeishuAdapter implements PlatformAdapter {
@@ -49,6 +66,10 @@ export class FeishuAdapter implements PlatformAdapter {
   private readonly eventDispatcher: unknown | null;
   private readonly options: FeishuAdapterOptions;
   private readonly inboundListeners = new Set<(ev: InboundEvent) => void>();
+  /** messageId → reaction_id cache for setReaction (LRU cap 512). */
+  private readonly reactionCache = new Map<string, string>();
+  private readonly httpPost: (path: string, body: unknown) => Promise<unknown>;
+  private readonly httpDelete: (path: string) => Promise<unknown>;
 
   constructor(options: FeishuAdapterOptions) {
     this.options = options;
@@ -59,6 +80,40 @@ export class FeishuAdapter implements PlatformAdapter {
     } else {
       const domain = options.lark ? Domain.Lark : Domain.Feishu;
       this.client = new LarkClient({ appId: options.appId, appSecret: options.appSecret, domain });
+    }
+
+    // ---- HTTP injection for setReaction (Approach A) ----
+    // If the caller provides httpPost/httpDelete (test path), use them directly.
+    // Otherwise, build thin wrappers around the lark SDK client's reaction API.
+    if (options.httpPost) {
+      this.httpPost = options.httpPost;
+    } else {
+      this.httpPost = (path: string, body: unknown) => {
+        // Production path: parse the messageId from the URL and call the SDK.
+        // URL form: /open-apis/im/v1/messages/{messageId}/reactions
+        const match = /\/messages\/([^/]+)\/reactions$/.exec(path);
+        if (!match) return Promise.reject(new Error(`httpPost: unrecognised path: ${path}`));
+        const messageId = match[1]!;
+        const c = this.client as {
+          im: { v1: { message: { reactions: { create: (args: unknown) => Promise<unknown> } } } };
+        };
+        return c.im.v1.message.reactions.create({ path: { message_id: messageId }, data: body });
+      };
+    }
+    if (options.httpDelete) {
+      this.httpDelete = options.httpDelete;
+    } else {
+      this.httpDelete = (path: string) => {
+        // Production path: parse messageId + reactionId from the URL and call the SDK.
+        // URL form: /open-apis/im/v1/messages/{messageId}/reactions/{reactionId}
+        const match = /\/messages\/([^/]+)\/reactions\/([^/]+)$/.exec(path);
+        if (!match) return Promise.reject(new Error(`httpDelete: unrecognised path: ${path}`));
+        const [, messageId, reactionId] = match;
+        const c = this.client as {
+          im: { v1: { message: { reactions: { delete: (args: unknown) => Promise<unknown> } } } };
+        };
+        return c.im.v1.message.reactions.delete({ path: { message_id: messageId, reaction_id: reactionId } });
+      };
     }
 
     // ---- Inbound dispatcher ----
@@ -178,8 +233,59 @@ export class FeishuAdapter implements PlatformAdapter {
     this.checkLarkCode(res, 'pin');
   }
 
-  async setReaction(_messageId: string, _chatId: string, _emoji: string | null): Promise<void> {
-    throw new Error('FeishuAdapter: native reactions unsupported — renderer must fall back');
+  async setReaction(messageId: string, _chatId: string, emoji: string | null): Promise<void> {
+    if (emoji === null) {
+      const cached = this.reactionCache.get(messageId);
+      if (!cached) return;
+      try {
+        await this.httpDelete(`/open-apis/im/v1/messages/${messageId}/reactions/${cached}`);
+        this.reactionCache.delete(messageId);
+      } catch (err) {
+        this.options.logger?.warn('feishu setReaction(null) failed', {
+          messageId, reactionId: cached, reason: (err as Error).message,
+        });
+      }
+      return;
+    }
+
+    const { feishuEmojiType } = await import('./emoji-map.js');
+    const emojiType = feishuEmojiType(emoji);
+    if (!emojiType) {
+      this.options.logger?.warn('feishu setReaction: unmapped reaction emoji', { messageId, emoji });
+      return;
+    }
+
+    const cached = this.reactionCache.get(messageId);
+    if (cached) {
+      try {
+        await this.httpDelete(`/open-apis/im/v1/messages/${messageId}/reactions/${cached}`);
+      } catch (err) {
+        this.options.logger?.warn('feishu setReaction: prior delete failed (continuing)', {
+          messageId, cached, reason: (err as Error).message,
+        });
+      }
+      this.reactionCache.delete(messageId);
+    }
+
+    try {
+      const resp = await this.httpPost(
+        `/open-apis/im/v1/messages/${messageId}/reactions`,
+        { reaction_type: { emoji_type: emojiType } },
+      );
+      const newId = (resp as { data?: { reaction_id?: string } })?.data?.reaction_id;
+      if (newId) {
+        // LRU cap 512: evict oldest entry when full
+        if (this.reactionCache.size >= 512) {
+          const oldestKey = this.reactionCache.keys().next().value;
+          if (oldestKey !== undefined) this.reactionCache.delete(oldestKey);
+        }
+        this.reactionCache.set(messageId, newId);
+      }
+    } catch (err) {
+      this.options.logger?.warn('feishu setReaction failed', {
+        messageId, emoji, emojiType, reason: (err as Error).message,
+      });
+    }
   }
 
   async sendCard(opts: { chatId: string; threadId?: string; card: object }): Promise<string> {
