@@ -624,10 +624,16 @@ export class CallbackRouter {
       channelType: ctx.channelType,
       chatId: ctx.chatId,
     });
-    // Auto-promote the first user to bind this workspace to admin so they can
-    // run /new and other admin-gated commands immediately after binding.
-    // claimAdmin is a no-op when an admin already exists (idempotent).
-    try { wm.claimAdmin(target.id, ctx.userId); } catch { /* ignore */ }
+    // Auto-promote the binder to admin if they have no role yet. This covers
+    // both first-ever bind (ws has no admin) and per-channel first bind
+    // (Telegram already had an admin user, but Feishu's userId is distinct
+    // and arrives observer-by-default). Already-roled users (admin/operator/
+    // observer) keep their existing role — bind is not a privilege escalation
+    // path.
+    try {
+      const existingRole = target.roles?.[ctx.userId];
+      if (!existingRole) wm.setRole(target.id, ctx.userId, 'admin');
+    } catch { /* ignore */ }
     await wm.save().catch((err) => {
       this.deps.logger?.warn('workspace:bind save failed', {
         wsId: target.id,
