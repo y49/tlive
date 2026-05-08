@@ -13,7 +13,7 @@ import type { AskUserQuestionBroker } from '../../../src/permission/ask-broker.j
 import type { ElicitationBroker } from '../../../src/permission/elicitation-broker.js';
 import type { Workspace } from '../../../src/workspace/config.js';
 import type { LocalSession } from '../../../src/session/local-session.js';
-import type { ChatBinding, ChannelType } from '../../../src/workspace/chat-instance.js';
+import type { ChannelType } from '../../../src/workspace/chat-instance.js';
 import type { PolicyStore } from '../../../src/permission/policy-store.js';
 import type { Logger, LogLevel } from '../../../src/util/logger.js';
 

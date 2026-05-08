@@ -31,7 +31,7 @@ import type { PermissionBroker } from '../../src/permission/broker.js';
 import type { AskUserQuestionBroker } from '../../src/permission/ask-broker.js';
 import type { ElicitationBroker } from '../../src/permission/elicitation-broker.js';
 import type { LocalSession } from '../../src/session/local-session.js';
-import type { ChatBinding, ChannelType } from '../../src/workspace/chat-instance.js';
+import type { ChannelType } from '../../src/workspace/chat-instance.js';
 import type { Workspace } from '../../src/workspace/config.js';
 import type { Role } from '../../src/workspace/config.js';
 import type { PermissionMode } from '../../src/runtime/types.js';

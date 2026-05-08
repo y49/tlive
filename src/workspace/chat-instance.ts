@@ -1,5 +1,3 @@
-// src/workspace/chat-instance.ts
-//
 // Per-chat runtime instance (spec 2026-05-08 §3.2). Each (channelType, chatId)
 // has at most one ChatInstance binding it to a Workspace template. ChatInstance
 // owns runtime state: activeSessionId, costRollup, optional per-chat settings
@@ -12,7 +10,6 @@ import type { PermissionMode, ThinkingLevel } from '../runtime/types.js';
 export type ChannelType = 'telegram' | 'feishu';
 
 export interface ChatInstanceSettings {
-  /** Override workspace.defaults.model. Reserved — v1 has no UI. */
   model?: string;
   permissionMode?: PermissionMode;
   thinking?: ThinkingLevel;
