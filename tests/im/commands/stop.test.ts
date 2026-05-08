@@ -40,7 +40,7 @@ describe('/stop', () => {
   it('no active session: friendly message', async () => {
     const { ctx, replies } = buildCtx({ workspace: { activeSessionId: null } });
     await stopCmd.run(ctx, []);
-    expect(replies[0]).toMatch(/没有活跃会话|未|No active session/i);
+    expect(replies[0]).toMatch(/活跃会话|No active session/i);
   });
 
   it('handles interrupt error gracefully', async () => {

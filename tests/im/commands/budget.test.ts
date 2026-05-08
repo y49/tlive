@@ -101,6 +101,6 @@ describe('/budget', () => {
   it('no active session: friendly message', async () => {
     const { ctx, replies } = buildCtx({ workspace: { activeSessionId: null } });
     await budgetCmd.run(ctx, []);
-    expect(replies[0]).toMatch(/没有活跃|no active|未/i);
+    expect(replies[0]).toMatch(/活跃会话|no active session/i);
   });
 });
