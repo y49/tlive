@@ -9,7 +9,7 @@
 // `~/.tlive/daemon.pid` by bootstrap. Socket files and pid files can both
 // linger after a crash; PID liveness cannot.
 
-import { existsSync, unlinkSync } from 'node:fs';
+import { existsSync, unlinkSync, openSync, closeSync, writeFileSync, readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { connect } from 'node:net';
 
@@ -88,4 +88,50 @@ export function canReachSocket(path: string, timeoutMs = 200): Promise<boolean> 
     sock.once('connect', () => { clearTimeout(timer); sock.end(); resolve(true); });
     sock.once('error', () => { clearTimeout(timer); resolve(false); });
   });
+}
+
+export type LockResult =
+  | { ok: true }
+  | { ok: false; heldByPid: number };
+
+/**
+ * Acquire an exclusive PID lock at `lockPath` using O_CREAT|O_EXCL.
+ *
+ * - Atomic across processes via the kernel: only one O_EXCL open succeeds.
+ * - On EEXIST: read PID, isPidAlive ? return conflict : unlink + retry once
+ *   (recovery from crashed-without-cleanup).
+ * - Caller must register releaseDaemonLock in process exit/signal hooks.
+ */
+export function tryAcquireDaemonLock(lockPath: string): LockResult {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = openSync(lockPath, 'wx');
+      try {
+        writeFileSync(fd, String(process.pid), 'utf8');
+      } finally {
+        closeSync(fd);
+      }
+      return { ok: true };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      let pid: number;
+      try {
+        const txt = readFileSync(lockPath, 'utf8').trim();
+        pid = Number(txt);
+        if (!Number.isFinite(pid) || pid <= 0) pid = -1;
+      } catch {
+        pid = -1;
+      }
+      if (pid > 0 && isPidAlive(pid)) {
+        return { ok: false, heldByPid: pid };
+      }
+      unlinkIfExists(lockPath);
+    }
+  }
+  return { ok: false, heldByPid: -1 };
+}
+
+/** Best-effort lock release. Idempotent. */
+export function releaseDaemonLock(lockPath: string): void {
+  unlinkIfExists(lockPath);
 }
