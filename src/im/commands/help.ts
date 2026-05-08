@@ -30,6 +30,9 @@ export const helpCmd: CommandDef = {
       '   /perm          权限规则',
       '   /budget        预算上限',
       '',
+      '📖 帮助',
+      '   /help          查看本帮助',
+      '',
       '💡 大部分操作不用打字 — 看每条回复下面的按钮',
     ];
 
