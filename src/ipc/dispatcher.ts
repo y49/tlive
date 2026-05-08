@@ -175,11 +175,19 @@ export function buildIpcDispatcher(deps: IpcDispatcherDeps): IpcServerHandler {
             reply({ kind: 'workspace.removed', ok: false, reason: `not found: ${req.idOrName}` });
             return;
           }
+          const force = req.force ?? false;
+          let removed: ReturnType<typeof deps.workspaces.removeWorkspace>;
+          try {
+            removed = deps.workspaces.removeWorkspace(target.id, { force });
+          } catch (err) {
+            // removeWorkspace throws when chats are bound and force=false.
+            reply({ kind: 'workspace.removed', ok: false, reason: (err as Error).message });
+            return;
+          }
           // Stop every per-chat active session in the workspace — prevents
           // dangling LocalSessions in SessionManager with orphaned
           // workspaceIds after the workspace record is deleted.
-          const boundInstances = deps.workspaces.listChatInstances().filter((c) => c.workspaceId === target.id);
-          for (const inst of boundInstances) {
+          for (const inst of removed.chatInstances) {
             if (!inst.activeSessionId) continue;
             const live = deps.sessions.get(inst.activeSessionId);
             if (live && live.kind === 'local') {
@@ -187,7 +195,16 @@ export function buildIpcDispatcher(deps: IpcDispatcherDeps): IpcServerHandler {
               catch { /* best-effort — workspace deletion proceeds regardless */ }
             }
           }
-          deps.workspaces.removeWorkspace(target.id, { force: true });
+          // Notify each removed chat so users know their workspace was deleted.
+          for (const inst of removed.chatInstances) {
+            const adapter = deps.adapters?.[inst.channelType];
+            if (!adapter) continue;
+            await adapter.send({
+              chatId: inst.chatId,
+              threadId: inst.threadId,
+              text: `⚠ 该 chat 绑定的工作区 "${target.name}" 已被删除,发 /workspace 选新的`,
+            }).catch(() => undefined);
+          }
           reply({ kind: 'workspace.removed', ok: true });
           return;
         }

@@ -1,21 +1,13 @@
-import { describe, it, expect } from 'vitest';
-import { deriveAdminUserIdFromChatId } from '../../src/cli/setup.js';
+// tests/cli/setup.test.ts
+//
+// The deriveAdminUserIdFromChatId export was removed from setup.ts (dead
+// code cleanup T7). This placeholder keeps the file so the test suite
+// reference remains valid; add real coverage here as setup-wizard logic grows.
 
-describe('deriveAdminUserIdFromChatId', () => {
-  it('returns the same id for positive Telegram chatIds (DM case)', () => {
-    expect(deriveAdminUserIdFromChatId('1416643084')).toBe('1416643084');
-  });
+import { describe, it } from 'vitest';
 
-  it('returns undefined for negative Telegram chatIds (group case)', () => {
-    expect(deriveAdminUserIdFromChatId('-1001234567890')).toBeUndefined();
-  });
-
-  it('returns undefined for non-numeric input', () => {
-    expect(deriveAdminUserIdFromChatId('not-a-number')).toBeUndefined();
-  });
-
-  it('returns undefined for empty / undefined', () => {
-    expect(deriveAdminUserIdFromChatId(undefined)).toBeUndefined();
-    expect(deriveAdminUserIdFromChatId('')).toBeUndefined();
+describe('setup (placeholder)', () => {
+  it('no exports under test', () => {
+    // Intentional no-op — deriveAdminUserIdFromChatId was deleted.
   });
 });

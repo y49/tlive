@@ -60,7 +60,7 @@ function printUsage(): void {
       Show all registered workspaces.
   tlive workspace remove <id|name> [-y] [--force]
       Remove a workspace. Prompts confirmation unless -y/--yes is given.
-      --force also stops active sessions and removes bound chat instances.
+      --force  Force removal even if chats are bound (cascade-stops sessions and notifies each chat).
 `);
 }
 

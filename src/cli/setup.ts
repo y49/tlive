@@ -23,11 +23,10 @@
 import { createInterface } from 'node:readline';
 import { existsSync, promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, dirname, basename } from 'node:path';
+import { join, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
-
 import { loadConfig } from '../config/loader.js';
 import { parseConfig, type TliveConfigV1, type WorkspaceConfigEntry } from '../config/schema.js';
 import { detectGitContext } from '../workspace/git-aware.js';
@@ -66,18 +65,6 @@ async function askWithDefault(io: Io, label: string, def?: string): Promise<stri
 
 function nowId(prefix: string): string {
   return `${prefix}-${randomBytes(4).toString('hex')}`;
-}
-
-/**
- * Derive a default admin user id from a Telegram chatId.
- * Telegram uses positive ids for DMs (chat.id == user.id) and negative
- * ids for groups/channels — only the DM case is auto-derivable.
- */
-export function deriveAdminUserIdFromChatId(chatId: string | undefined): string | undefined {
-  if (!chatId) return undefined;
-  const n = Number(chatId);
-  if (!Number.isFinite(n) || n <= 0) return undefined;
-  return String(Math.trunc(n));
 }
 
 async function runMigrationIfNeeded(io: Io, home: string): Promise<{ migrated: boolean }> {
