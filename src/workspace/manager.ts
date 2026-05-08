@@ -10,8 +10,7 @@
 //   - lazyResumeOrCreate (spec §6.1 step 3 unchanged shape, but resolves
 //     workspace via ChatInstance now).
 //
-// chat-trust: no roles/admins. Workspace.roles / claimAdmin / setRole are
-// gone. Anyone in a bound chat drives the bot.
+// chat-trust: anyone in a bound chat drives the bot. No roles or admin concept.
 
 import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';

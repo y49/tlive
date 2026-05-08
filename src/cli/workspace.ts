@@ -54,12 +54,13 @@ export async function workspaceCommand(
 function printUsage(): void {
   process.stderr.write(
 `Usage:
-  tlive workspace add [<path>] [--name <n>] [--admin <userId>]
+  tlive workspace add [<path>] [--name <n>]
       Register a workspace. Path defaults to cwd. Name defaults to basename(path).
   tlive workspace list
       Show all registered workspaces.
-  tlive workspace remove <id|name> [-y]
+  tlive workspace remove <id|name> [-y] [--force]
       Remove a workspace. Prompts confirmation unless -y/--yes is given.
+      --force also stops active sessions and removes bound chat instances.
 `);
 }
 
@@ -67,17 +68,11 @@ async function runAdd(args: string[], request: RequestFn): Promise<void> {
   const flags = parseFlags(args);
   const workdir = resolve(typeof flags.positional[0] === 'string' ? flags.positional[0] : process.cwd());
   const name = typeof flags.flags.name === 'string' ? flags.flags.name : basenameOf(workdir);
-  const admin = typeof flags.flags.admin === 'string' ? flags.flags.admin : undefined;
 
   // The dispatcher accepts a partial workspace shape (name/workdir/etc.)
   // but the protocol type is the full TliveConfigV1.workspaces[number].
-  // We construct just the fields the handler reads + roles for admin —
-  // the WorkspaceManager fills the rest with defaults.
-  const workspace = {
-    name,
-    workdir,
-    ...(admin ? { roles: { [admin]: 'admin' as const }, defaultRole: 'observer' as const } : {}),
-  };
+  // WorkspaceManager fills the rest with defaults.
+  const workspace = { name, workdir };
 
   const resp = await request({
     kind: 'workspace.add',
@@ -88,9 +83,6 @@ async function runAdd(args: string[], request: RequestFn): Promise<void> {
   if (resp.kind === 'workspace.added') {
     const shortId = resp.workspaceId.slice(0, 8);
     process.stdout.write(`Created workspace (id: ${shortId}, workdir: ${workdir})\n`);
-    if (!admin) {
-      process.stdout.write(`   Admin not set - claim from any IM chat with /workspace.\n`);
-    }
     return;
   }
   if (resp.kind === 'error') {
@@ -119,12 +111,11 @@ async function runList(request: RequestFn): Promise<void> {
     return;
   }
 
-  const headers = ['NAME', 'WORKDIR', 'ADMIN', 'BINDINGS'];
+  const headers = ['NAME', 'WORKDIR', 'CHATS'];
   const rows = resp.workspaces.map((ws) => [
     ws.name,
     ws.workdir,
-    ws.admin ?? '(unclaimed)',
-    String(ws.bindings),
+    String(ws.chatInstances),
   ]);
   const widths = headers.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i]!.length)));
   const fmt = (cells: string[]) => cells.map((c, i) => pad(c, widths[i]!)).join('  ');
@@ -145,6 +136,7 @@ async function runRemove(
     return;
   }
   const autoYes = flags.flags.yes === true || flags.flags.y === true;
+  const force = flags.flags.force === true;
   if (!autoYes) {
     process.stdout.write(`Will remove workspace "${idOrName}". Continue? [y/N] `);
     const answer = (await readLine()).toLowerCase();
@@ -153,7 +145,7 @@ async function runRemove(
       return;
     }
   }
-  const resp = await request({ kind: 'workspace.remove', idOrName });
+  const resp = await request({ kind: 'workspace.remove', idOrName, force });
   if (resp.kind === 'workspace.removed') {
     if (resp.ok) {
       process.stdout.write('Removed\n');

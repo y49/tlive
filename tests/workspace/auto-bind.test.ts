@@ -43,36 +43,42 @@ describe('autoBindFromConfig', () => {
     expect(autoBindFromConfig(wm, c, silentLogger())).toBe(0);
   });
 
-  it('multi-workspace: binds chatId to the workspace whose adminUserId matches', () => {
+  it('multi-workspace: skips binding and logs a warning (ambiguous)', () => {
     const wm = new WorkspaceManager();
     wm.create({ name: 'a', workdir: '/tmp/a' });
     wm.create({ name: 'b', workdir: '/tmp/b' });
     const c: TliveConfigV1 = {
       version: '1',
       workspaces: [
-        { name: 'a', workdir: '/tmp/a', adminUserId: 'other' },
-        { name: 'b', workdir: '/tmp/b', adminUserId: '123' },
-      ],
-      channels: { telegram: { token: 't', chatId: '123' } },
-    };
-    expect(autoBindFromConfig(wm, c, silentLogger())).toBe(1);
-    expect(wm.workspaceForChat('telegram', '123')?.name).toBe('b');
-  });
-
-  it('multi-workspace ambiguous: chatId matches no admin → 0 bindings, warn logged', () => {
-    const wm = new WorkspaceManager();
-    wm.create({ name: 'a', workdir: '/tmp/a' });
-    wm.create({ name: 'b', workdir: '/tmp/b' });
-    const c: TliveConfigV1 = {
-      version: '1',
-      workspaces: [
-        { name: 'a', workdir: '/tmp/a', adminUserId: 'x' },
-        { name: 'b', workdir: '/tmp/b', adminUserId: 'y' },
+        { name: 'a', workdir: '/tmp/a' },
+        { name: 'b', workdir: '/tmp/b' },
       ],
       channels: { telegram: { token: 't', chatId: '123' } },
     };
     const log = silentLogger();
     expect(autoBindFromConfig(wm, c, log)).toBe(0);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('multi-workspace'),
+      expect.objectContaining({ chatId: '123' }),
+    );
+  });
+
+  it('multi-workspace ambiguous warn is emitted only once per chatId', () => {
+    const wm = new WorkspaceManager();
+    wm.create({ name: 'a', workdir: '/tmp/a' });
+    wm.create({ name: 'b', workdir: '/tmp/b' });
+    const c: TliveConfigV1 = {
+      version: '1',
+      workspaces: [
+        { name: 'a', workdir: '/tmp/a' },
+        { name: 'b', workdir: '/tmp/b' },
+      ],
+      channels: { telegram: { token: 't', chatId: '123' } },
+    };
+    const log = silentLogger();
+    expect(autoBindFromConfig(wm, c, log)).toBe(0);
+    // warn should fire exactly once (warnedAmbiguous dedupes)
+    expect(log.warn).toHaveBeenCalledTimes(1);
   });
 
   it('skips workspace listed in config but not registered in manager', () => {

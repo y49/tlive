@@ -44,8 +44,6 @@ export interface WorkspaceConfigEntry {
   name: string;
   workdir: string;
   gitRemote?: string;
-  /** IM user id allowed to claim admin role on first daemon boot. */
-  adminUserId?: string;
   defaults?: {
     provider?: AgentProvider;
     model?: string;
@@ -59,8 +57,6 @@ export interface WorkspaceConfigEntry {
     threadPerSession?: boolean;
   };
   budget?: { dailyUsd?: number; monthlyUsd?: number };
-  roles?: Record<string, 'admin' | 'operator' | 'observer'>;
-  defaultRole?: 'admin' | 'operator' | 'observer';
 }
 
 export interface TelegramChannelConfig {
@@ -143,7 +139,6 @@ const PROVIDERS: AgentProvider[] = ['claude', 'codex'];
 const EFFORTS: Effort[] = ['low', 'medium', 'high', 'max'];
 const PERM_MODES: PermissionMode[] = ['default', 'acceptEdits', 'plan', 'bypassPermissions'];
 const THINK_LEVELS: ThinkingLevel[] = ['collapsed', 'expanded', 'hidden'];
-const ROLES = ['admin', 'operator', 'observer'] as const;
 const LOG_LEVELS: LogLevel[] = ['debug', 'info', 'warn', 'error'];
 
 /**
@@ -282,27 +277,6 @@ export function parseConfig(raw: unknown): ParseResult<TliveConfigV1> {
           if (typeof b.monthlyUsd !== 'number') issues.push({ path: `${path}.budget.monthlyUsd`, message: 'must be number' });
           else entry.budget.monthlyUsd = b.monthlyUsd;
         }
-      }
-      if (w.adminUserId !== undefined) {
-        if (typeof w.adminUserId !== 'string' || w.adminUserId.length === 0) {
-          issues.push({ path: `${path}.adminUserId`, message: 'must be non-empty string' });
-        } else {
-          entry.adminUserId = w.adminUserId;
-        }
-      }
-      if (isObject(w.roles)) {
-        const roles: Record<string, 'admin' | 'operator' | 'observer'> = {};
-        for (const [uid, role] of Object.entries(w.roles)) {
-          if (typeof role !== 'string' || !(ROLES as readonly string[]).includes(role)) {
-            issues.push({ path: `${path}.roles.${uid}`, message: `must be one of ${ROLES.join('|')}` });
-          } else roles[uid] = role as 'admin' | 'operator' | 'observer';
-        }
-        entry.roles = roles;
-      }
-      if (w.defaultRole !== undefined) {
-        if (typeof w.defaultRole !== 'string' || !(ROLES as readonly string[]).includes(w.defaultRole)) {
-          issues.push({ path: `${path}.defaultRole`, message: `must be one of ${ROLES.join('|')}` });
-        } else entry.defaultRole = w.defaultRole as 'admin' | 'operator' | 'observer';
       }
       out.workspaces.push(entry);
     });

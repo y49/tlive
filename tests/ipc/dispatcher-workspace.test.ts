@@ -46,7 +46,7 @@ describe('IPC dispatcher — workspace.list / .remove', () => {
     expect(responses[0]).toMatchObject({ kind: 'workspace.list', workspaces: [] });
   });
 
-  it('workspace.list returns workspace info with binding counts', async () => {
+  it('workspace.list returns workspace info with chatInstance counts', async () => {
     const { wm, send, responses } = setup();
     const ws = wm.create({ name: 'foo', workdir: '/p/f' });
     wm.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'c1' });
@@ -57,19 +57,19 @@ describe('IPC dispatcher — workspace.list / .remove', () => {
         id: ws.id,
         name: 'foo',
         workdir: '/p/f',
-        bindings: 1,
+        chatInstances: 1,
         activeSessionId: null,
       }],
     });
   });
 
-  it('workspace.list returns admin: null when unclaimed', async () => {
+  it('workspace.list returns chatInstances: 0 when no chats bound', async () => {
     const { wm, send, responses } = setup();
     wm.create({ name: 'foo', workdir: '/p/f' });
     await send({ kind: 'workspace.list' });
     const r = responses[0];
     if (r.kind !== 'workspace.list') throw new Error('expected workspace.list');
-    expect(r.workspaces[0]!.admin).toBeNull();
+    expect(r.workspaces[0]!.chatInstances).toBe(0);
   });
 
   it('workspace.remove by name succeeds', async () => {

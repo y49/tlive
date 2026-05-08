@@ -1,12 +1,12 @@
 // src/workspace/auto-bind.ts
 //
-// Bootstrap-time helper that turns config-declared chat ids and adminUserId
-// into real WorkspaceManager bindings. Pure function (no IO beyond logger),
-// so it can be unit-tested with a synthetic config.
+// Bootstrap-time helper that turns config-declared channel chatIds into real
+// WorkspaceManager bindings. Pure function (no IO beyond logger), so it can
+// be unit-tested with a synthetic config.
 //
-// Single rule: for each (workspace × channel-with-chatId) pair, add a
-// binding when the chat is not already bound anywhere AND the pairing is
-// unambiguous in the multi-workspace case.
+// Single rule: for each channel with a chatId, bind it to the first workspace
+// when not already bound. In the multi-workspace case the binding is
+// ambiguous — skip and log a warning (users should bind via /workspace in IM).
 
 import type { Logger } from '../util/logger.js';
 import type { ChannelType } from './chat-instance.js';
@@ -34,22 +34,18 @@ export function autoBindFromConfig(
       if (!chatId) continue; // Feishu schema has no chatId; skip.
       if (workspaces.workspaceForChat(platform, chatId)) continue; // already bound somewhere
 
-      // Multi-workspace ambiguity guard: if any other workspace also wants
-      // this chatId via adminUserId, only the matching one wins.
+      // Multi-workspace ambiguity guard: a single channel chatId cannot be
+      // automatically assigned to one of N workspaces — skip and warn.
+      // Users should bind explicitly via /workspace in IM.
       if (cfg.workspaces.length > 1) {
-        const matchesAnyAdmin = cfg.workspaces.some((o) => o.adminUserId === chatId);
-        const matchesThisAdmin = w.adminUserId === chatId;
-        if (matchesAnyAdmin && !matchesThisAdmin) continue;
-        if (!matchesAnyAdmin) {
-          const key = `${platform}:${chatId}`;
-          if (!warnedAmbiguous.has(key)) {
-            warnedAmbiguous.add(key);
-            logger.warn('auto-bind skipped: multi-workspace and no adminUserId matches chatId', {
-              chatId, platform, candidates: cfg.workspaces.map((x) => x.name),
-            });
-          }
-          continue;
+        const key = `${platform}:${chatId}`;
+        if (!warnedAmbiguous.has(key)) {
+          warnedAmbiguous.add(key);
+          logger.warn('auto-bind skipped: multi-workspace config — bind via /workspace in IM', {
+            chatId, platform, candidates: cfg.workspaces.map((x) => x.name),
+          });
         }
+        continue;
       }
 
       try {

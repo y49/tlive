@@ -19,7 +19,7 @@ describe('bootstrap auto-bind (chat-trust, v2 schema)', () => {
   it('binds telegram chatId from config on first start', async () => {
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       version: '1',
-      workspaces: [{ name: 'w', workdir: '/tmp/w', adminUserId: '12345' }],
+      workspaces: [{ name: 'w', workdir: '/tmp/w' }],
       channels: { telegram: { token: 'fake-token', chatId: '12345' } },
     }), 'utf8');
 
@@ -47,7 +47,7 @@ describe('bootstrap auto-bind (chat-trust, v2 schema)', () => {
   it('is idempotent: second boot does not duplicate chatInstances', async () => {
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       version: '1',
-      workspaces: [{ name: 'w', workdir: '/tmp/w', adminUserId: '12345' }],
+      workspaces: [{ name: 'w', workdir: '/tmp/w' }],
       channels: { telegram: { token: 'fake-token', chatId: '12345' } },
     }), 'utf8');
 
@@ -60,7 +60,7 @@ describe('bootstrap auto-bind (chat-trust, v2 schema)', () => {
     expect(persisted.chatInstances).toHaveLength(1);
   });
 
-  it('does not bind when adminUserId is omitted and no chatId in channels', async () => {
+  it('does not bind when no chatId is set in channels', async () => {
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       version: '1',
       workspaces: [{ name: 'w', workdir: '/tmp/w' }],

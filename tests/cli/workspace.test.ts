@@ -83,17 +83,17 @@ describe('tlive workspace CLI', () => {
     harness = makeHarness(() => ({
       kind: 'workspace.list',
       workspaces: [
-        { id: 'w1', name: 'foo', workdir: '/p/f', admin: 'u-admin', bindings: 1, activeSessionId: null },
-        { id: 'w2', name: 'bar', workdir: '/p/b', admin: null, bindings: 0, activeSessionId: null },
+        { id: 'w1', name: 'foo', workdir: '/p/f', chatInstances: 2, activeSessionId: null },
+        { id: 'w2', name: 'bar', workdir: '/p/b', chatInstances: 0, activeSessionId: null },
       ],
     }));
     await runSafely(() => workspaceCommand(['list'], harness.deps));
     const joined = harness.cap.out.join('');
     expect(joined).toMatch(/NAME/);
+    expect(joined).toMatch(/CHATS/);
     expect(joined).toMatch(/foo/);
-    expect(joined).toMatch(/u-admin/);
     expect(joined).toMatch(/bar/);
-    expect(joined).toMatch(/\(unclaimed\)/);
+    expect(joined).not.toMatch(/ADMIN/);
   });
 
   it('add: posts workspace.add IPC with cwd default + basename name', async () => {
@@ -110,10 +110,10 @@ describe('tlive workspace CLI', () => {
     expect(harness.cap.out.join('')).toMatch(/Created workspace/);
   });
 
-  it('add: --name and --admin flags propagate', async () => {
+  it('add: --name flag propagates', async () => {
     harness = makeHarness(() => ({ kind: 'workspace.added', workspaceId: 'wid-deadbeef' }));
     await runSafely(() => workspaceCommand(
-      ['add', '/tmp/proj', '--name', 'myproj', '--admin', 'tg-12345'],
+      ['add', '/tmp/proj', '--name', 'myproj'],
       harness.deps,
     ));
     const req = harness.cap.reqs[0]!;
@@ -121,8 +121,6 @@ describe('tlive workspace CLI', () => {
     if (req.kind === 'workspace.add') {
       expect(req.workspace.name).toBe('myproj');
       expect(req.workspace.workdir).toBe('/tmp/proj');
-      // admin should land in roles map
-      expect(req.workspace.roles).toEqual({ 'tg-12345': 'admin' });
     }
   });
 
@@ -131,7 +129,15 @@ describe('tlive workspace CLI', () => {
     // Override readLine to throw if called — proves we never prompted.
     harness.deps.readLine = async () => { throw new Error('readLine should not be called'); };
     await runSafely(() => workspaceCommand(['remove', 'foo', '-y'], harness.deps));
-    expect(harness.cap.reqs).toEqual([{ kind: 'workspace.remove', idOrName: 'foo' }]);
+    expect(harness.cap.reqs).toEqual([{ kind: 'workspace.remove', idOrName: 'foo', force: false }]);
+    expect(harness.cap.out.join('')).toMatch(/Removed/);
+  });
+
+  it('remove with --force passes force flag in IPC request', async () => {
+    harness = makeHarness(() => ({ kind: 'workspace.removed', ok: true }));
+    harness.deps.readLine = async () => { throw new Error('readLine should not be called'); };
+    await runSafely(() => workspaceCommand(['remove', 'bar', '-y', '--force'], harness.deps));
+    expect(harness.cap.reqs).toEqual([{ kind: 'workspace.remove', idOrName: 'bar', force: true }]);
     expect(harness.cap.out.join('')).toMatch(/Removed/);
   });
 

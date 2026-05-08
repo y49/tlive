@@ -31,7 +31,7 @@ export type IpcRequest =
   | { kind: 'handoff.take'; sdkId: string }
   | { kind: 'workspace.add'; workspace: TliveConfigV1['workspaces'][number] }
   | { kind: 'workspace.list' }
-  | { kind: 'workspace.remove'; idOrName: string };
+  | { kind: 'workspace.remove'; idOrName: string; force?: boolean };
 
 // ---- Response union --------------------------------------------------------
 
@@ -59,8 +59,7 @@ export interface WorkspaceListEntry {
   id: string;
   name: string;
   workdir: string;
-  admin: string | null;     // first userId with role 'admin', or null
-  bindings: number;
+  chatInstances: number;
   activeSessionId: string | null;
 }
 

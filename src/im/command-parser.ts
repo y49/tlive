@@ -10,7 +10,7 @@
 // - Registry is a flat Map<string, CommandDef>. Aliases resolve to the same
 //   def (stored under each alias key). `listCommands()` dedupes via Set.
 // - chat-trust: no role gating. Any user in a bound chat can drive the bot.
-//   CommandDef.role removed (T3). dispatch has no userRole parameter.
+//   CommandDef.role removed (T3). dispatch accepts any user in a bound chat.
 // - Parsing: we split on whitespace for simple commands; complex commands
 //   (e.g. `/rename <alias> "<title>"`) do their own quote handling inside
 //   `run()` via `parseQuotedTail` helpers.

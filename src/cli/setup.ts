@@ -137,8 +137,6 @@ async function gatherWorkspace(io: Io, cwd: string, current: TliveConfigV1): Pro
     gitRemote: git.gitRemote,
     defaults: existing?.defaults ?? { provider: 'claude' },
     budget: existing?.budget,
-    roles: existing?.roles,
-    defaultRole: existing?.defaultRole,
   };
 }
 
@@ -156,14 +154,6 @@ async function gatherPlatform(
       if (!token) break;
       const chatId = await askWithDefault(io, '  Default chat id (your DM with the bot, or a group id)', current?.telegram?.chatId);
       next.telegram = { token, chatId: chatId || undefined };
-      if (workspace) {
-        const derived = deriveAdminUserIdFromChatId(chatId);
-        const prompt = derived
-          ? `  Your Telegram user id (admin)`
-          : `  Your Telegram user id (admin) — required for group chats`;
-        const adminUserId = await askWithDefault(io, prompt, workspace.adminUserId ?? derived);
-        if (adminUserId) workspace.adminUserId = adminUserId;
-      }
       break;
     }
     case 'feishu': {
@@ -242,7 +232,6 @@ export async function setupCommand(argv: string[] = []): Promise<void> {
         io.out(`\n${p}:\n`);
         config.channels = await gatherPlatform(io, p, config.channels, wsBeingConfigured);
       }
-      // Re-upsert in case the wizard mutated wsBeingConfigured.adminUserId in-place.
       config = upsertWorkspace(config, wsBeingConfigured);
     } else {
       io.out('\n(non-interactive stdin — platform credentials left unchanged)\n');

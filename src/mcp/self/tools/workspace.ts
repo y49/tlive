@@ -32,8 +32,6 @@ export function makeWorkspaceInfoTool(deps: McpToolDeps): McpTool {
         gitRemote: ws.gitRemote,
         provider: ws.defaults.provider,
         activeSessions,
-        // T3-PENDING: defaultRole removed in chat-trust model
-        defaultRole: null,
       });
     },
   };

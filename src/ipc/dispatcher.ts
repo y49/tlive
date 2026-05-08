@@ -147,14 +147,12 @@ export function buildIpcDispatcher(deps: IpcDispatcherDeps): IpcServerHandler {
             defaults: w.defaults,
             budget: w.budget,
           });
-          // T3-PENDING: w.roles / w.defaultRole removed in chat-trust
           await deps.workspaces.save().catch(() => undefined);
           reply({ kind: 'workspace.added', workspaceId: created.id });
           return;
         }
         case 'workspace.list': {
           const workspaces = deps.workspaces.list().map(ws => {
-            // T3-PENDING: admin field removed in chat-trust
             const allInstances = deps.workspaces.listChatInstances().filter((c) => c.workspaceId === ws.id);
             const firstActive = allInstances
               .map((c) => c.activeSessionId)
@@ -163,8 +161,7 @@ export function buildIpcDispatcher(deps: IpcDispatcherDeps): IpcServerHandler {
               id: ws.id,
               name: ws.name,
               workdir: ws.workdir,
-              admin: null as string | null,
-              bindings: allInstances.length,
+              chatInstances: allInstances.length,
               activeSessionId: firstActive,
             };
           });

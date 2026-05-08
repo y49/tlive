@@ -27,7 +27,7 @@ describe('handleInbound — AskUserQuestion answer relay', () => {
     // Workspace + telegram binding so chatId 555 maps to a workspace.
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       version: '1',
-      workspaces: [{ name: 'ws', workdir: home, adminUserId: 'u1' }],
+      workspaces: [{ name: 'ws', workdir: home }],
       channels: { telegram: { token: 'fake', chatId: '555' } },
     }), 'utf8');
   });
