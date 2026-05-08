@@ -249,7 +249,28 @@ function buildFakeSessionManager(): SessionManager & {
     async resumeLocal(id: string): Promise<LocalSession | null> { return liveSessions.get(id) ?? null; },
     async stop(id: string): Promise<void> { stopCalls.push(id); liveSessions.delete(id); },
     async stopAll(): Promise<void> { liveSessions.clear(); },
-    listInfo() { return []; },
+    listInfo(_kind?: 'local' | 'remote') {
+      const out = [];
+      for (const s of liveSessions.values()) {
+        const rec = s as unknown as Record<string, unknown>;
+        out.push({
+          id: rec.id as string,
+          shortAlias: rec.shortAlias as string,
+          kind: 'local' as const,
+          provider: (rec.provider as string | undefined) ?? 'claude',
+          workspaceId: rec.workspaceId as string,
+          workdir: (rec.workdir as string | undefined) ?? '/tmp',
+          title: rec.title as string | undefined,
+          status: { phase: 'idle' as const, queuedInputs: 0 },
+          cost: { totalCost: 0, inputTokens: 0, outputTokens: 0,
+            cacheReadTokens: 0, cacheCreationTokens: 0 },
+          createdAt: Date.now(),
+          lastActivityAt: Date.now(),
+          ownerChat: rec.ownerChat as { channelType: string; chatId: string } | undefined,
+        });
+      }
+      return out;
+    },
     subscribe(_l: unknown) { return () => undefined; },
   } as unknown as SessionManager & { createLocalCalls: Array<Record<string, unknown>>; stopCalls: string[] };
 

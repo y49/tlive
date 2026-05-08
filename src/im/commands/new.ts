@@ -87,6 +87,7 @@ export const newCmd: CommandDef = {
       model,
       effort,
       source: 'im',
+      ownerChat: { channelType, chatId },
     });
     try {
       ctx.workspaceManager.bindActiveSessionForChat(channelType, chatId, session.id);
