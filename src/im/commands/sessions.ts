@@ -13,7 +13,6 @@ const PAGE_SIZE = 8;
 
 export const sessionsCmd: CommandDef = {
   name: 'sessions',
-  role: ['admin', 'operator', 'observer'],
   description: '当前 chat 的会话列表',
   async run(ctx, args) {
     const { flags } = parseFlags(args);

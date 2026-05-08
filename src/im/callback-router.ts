@@ -35,7 +35,6 @@
 // a short alias prefix (SessionManager.getByPrefix).
 
 import { parsePickerCallback } from './picker/index.js';
-import { userRole } from './commands/_shared.js';
 import type { SessionManager } from '../session/manager.js';
 import type { PermissionBroker } from '../permission/broker.js';
 import type { AskUserQuestionBroker } from '../permission/ask-broker.js';
@@ -627,7 +626,6 @@ export class CallbackRouter {
         chatId: ctx.chatId,
       });
     } catch { /* already bound — should not happen after unbind above */ }
-    // T3-PENDING: setRole removed in chat-trust
     await wm.save().catch((err) => {
       this.deps.logger?.warn('workspace:bind save failed', {
         wsId: target.id,
@@ -646,16 +644,6 @@ export class CallbackRouter {
     if (!target) {
       await this.sendReply(ctx, '❌ 目标工作区不存在');
       return { kind: 'unknown', reason: 'workspace:switch:not-found' };
-    }
-
-    // Role check: only admin/operator may switch workspace.
-    const currentForRole = wm.workspaceForChat(ctx.channelType, ctx.chatId);
-    if (currentForRole) {
-      const role = userRole(currentForRole, ctx.userId);
-      if (role !== 'admin' && role !== 'operator') {
-        await this.sendReply(ctx, '❌ 权限不足:切换工作区需要 admin 或 operator 权限');
-        return { kind: 'handled', action: 'workspace:switch:denied' };
-      }
     }
 
     // Already on this workspace — short-circuit with a distinct reply
@@ -759,17 +747,6 @@ export class CallbackRouter {
   private async handleWorkspaceExit(rest: string[], ctx: CallbackContext): Promise<CallbackOutcome> {
     const wm = this.deps.workspaceManager!;
     const [subverb] = rest;
-    // Role check: only admin/operator may exit workspace (skip cancel — harmless).
-    if (subverb !== 'cancel') {
-      const wsForRole = wm.workspaceForChat(ctx.channelType, ctx.chatId);
-      if (wsForRole) {
-        const role = userRole(wsForRole, ctx.userId);
-        if (role !== 'admin' && role !== 'operator') {
-          await this.sendReply(ctx, '❌ 权限不足:退出工作区需要 admin 或 operator 权限');
-          return { kind: 'handled', action: 'workspace:exit:denied' };
-        }
-      }
-    }
     if (subverb === 'confirm') {
       const ws = wm.workspaceForChat(ctx.channelType, ctx.chatId);
       if (!ws) {
@@ -839,12 +816,6 @@ export class CallbackRouter {
     if (!ws) {
       await this.sendReply(ctx, '此 chat 未绑定工作区');
       return { kind: 'handled', action: 'workspace:config:not-bound' };
-    }
-
-    const role = wm.getRole(ws.id, ctx.userId);
-    if (role !== 'admin') {
-      await this.sendReply(ctx, '只有管理员可以查看配置');
-      return { kind: 'handled', action: 'workspace:config:not-admin' };
     }
 
     const subverb = rest[0];
@@ -962,12 +933,6 @@ export class CallbackRouter {
     if (!ws) {
       await this.sendReply(ctx, '此 chat 未绑定工作区,先 /workspace 创建/绑定');
       return { kind: 'handled', action: 'session:new:no-ws' };
-    }
-    // Role check: only admin/operator may create/replace sessions.
-    const roleNew = userRole(ws, ctx.userId);
-    if (roleNew !== 'admin' && roleNew !== 'operator') {
-      await this.sendReply(ctx, '❌ 权限不足:新建会话需要 admin 或 operator 权限');
-      return { kind: 'handled', action: 'session:new:denied' };
     }
     const newActiveId = wm
       ? wm.getActiveSessionId(ctx.channelType, ctx.chatId)
@@ -1130,16 +1095,6 @@ export class CallbackRouter {
   private async handleSessionResume(rest: string[], ctx: CallbackContext): Promise<CallbackOutcome> {
     const sidRaw = rest.join(':');
     if (!sidRaw) return { kind: 'unknown', reason: 'session:resume:malformed' };
-    // Role check: only admin/operator may resume sessions.
-    const wmResume = this.deps.workspaceManager;
-    const wsResume = wmResume?.workspaceForChat(ctx.channelType, ctx.chatId);
-    if (wsResume) {
-      const roleResume = userRole(wsResume, ctx.userId);
-      if (roleResume !== 'admin' && roleResume !== 'operator') {
-        await this.sendReply(ctx, '❌ 权限不足:恢复会话需要 admin 或 operator 权限');
-        return { kind: 'handled', action: 'session:resume:denied' };
-      }
-    }
     const sid = this.resolveSid(sidRaw) ?? sidRaw;
     let resumed: LocalSession | null = null;
     try { resumed = await this.deps.sessionManager.resumeLocal(sid); }
@@ -1217,12 +1172,6 @@ export class CallbackRouter {
         await this.sendReply(ctx, '此 chat 未绑定工作区');
         return { kind: 'handled', action: 'runtime:model:set:no-ws' };
       }
-      // Role check: only admin/operator may change model.
-      const roleModel = userRole(ws, ctx.userId);
-      if (roleModel !== 'admin' && roleModel !== 'operator') {
-        await this.sendReply(ctx, '❌ 权限不足:切换模型需要 admin 或 operator 权限');
-        return { kind: 'handled', action: 'runtime:model:set:denied' };
-      }
       const id = idParts.join(':');
       if (!id) return { kind: 'unknown', reason: 'runtime:model:set:no-id' };
       const setActiveId = wm.getActiveSessionId(ctx.channelType, ctx.chatId);
@@ -1259,12 +1208,6 @@ export class CallbackRouter {
     if (!ws || !wm) {
       await this.sendReply(ctx, '此 chat 未绑定工作区');
       return { kind: 'handled', action: 'runtime:mode:set:no-ws' };
-    }
-    // Role check: only admin/operator may change permission mode.
-    const roleMode = userRole(ws, ctx.userId);
-    if (roleMode !== 'admin' && roleMode !== 'operator') {
-      await this.sendReply(ctx, '❌ 权限不足:切换权限模式需要 admin 或 operator 权限');
-      return { kind: 'handled', action: 'runtime:mode:set:denied' };
     }
     const mode = modeParts.join(':') as PermissionMode;
     if (!isValidPermissionMode(mode)) {
@@ -1303,12 +1246,6 @@ export class CallbackRouter {
       await this.sendReply(ctx, '此 chat 未绑定工作区');
       return { kind: 'handled', action: 'runtime:think:set:no-ws' };
     }
-    // Role check: only admin/operator may change thinking level.
-    const roleThink = userRole(ws, ctx.userId);
-    if (roleThink !== 'admin' && roleThink !== 'operator') {
-      await this.sendReply(ctx, '❌ 权限不足:切换 thinking 需要 admin 或 operator 权限');
-      return { kind: 'handled', action: 'runtime:think:set:denied' };
-    }
     const level = levelRaw as ThinkingLevel;
     if (!isValidThinkingLevel(level)) {
       return { kind: 'unknown', reason: `runtime:think:bad-value:${level}` };
@@ -1335,12 +1272,6 @@ export class CallbackRouter {
     if (!ws || !wm) {
       await this.sendReply(ctx, '此 chat 未绑定工作区');
       return { kind: 'handled', action: 'runtime:budget:set:no-ws' };
-    }
-    // Role check: only admin/operator may change budget.
-    const roleBudget = userRole(ws, ctx.userId);
-    if (roleBudget !== 'admin' && roleBudget !== 'operator') {
-      await this.sendReply(ctx, '❌ 权限不足:设置预算需要 admin 或 operator 权限');
-      return { kind: 'handled', action: 'runtime:budget:set:denied' };
     }
     const budgetActiveId = wm.getActiveSessionId(ctx.channelType, ctx.chatId);
     if (!budgetActiveId) {
@@ -1376,16 +1307,6 @@ export class CallbackRouter {
     if (verb === 'open') {
       await this.sendReply(ctx, '请发 /perm 查看权限规则');
       return { kind: 'handled', action: 'runtime:perm:open' };
-    }
-    // Role check: only admin/operator may manage permissions.
-    const wmPerm = this.deps.workspaceManager;
-    const wsPerm = wmPerm?.workspaceForChat(ctx.channelType, ctx.chatId);
-    if (wsPerm) {
-      const rolePerm = userRole(wsPerm, ctx.userId);
-      if (rolePerm !== 'admin' && rolePerm !== 'operator') {
-        await this.sendReply(ctx, '❌ 权限不足:管理权限规则需要 admin 或 operator 权限');
-        return { kind: 'handled', action: 'runtime:perm:denied' };
-      }
     }
     if (verb === 'add') {
       if (sub === 'allow') {

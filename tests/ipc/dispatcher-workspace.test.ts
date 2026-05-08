@@ -46,10 +46,9 @@ describe('IPC dispatcher — workspace.list / .remove', () => {
     expect(responses[0]).toMatchObject({ kind: 'workspace.list', workspaces: [] });
   });
 
-  it('workspace.list returns workspace info with admin + binding counts', async () => {
+  it('workspace.list returns workspace info with binding counts', async () => {
     const { wm, send, responses } = setup();
     const ws = wm.create({ name: 'foo', workdir: '/p/f' });
-    wm.setRole(ws.id, 'u-admin', 'admin');
     wm.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'c1' });
     await send({ kind: 'workspace.list' });
     expect(responses[0]).toMatchObject({
@@ -58,7 +57,6 @@ describe('IPC dispatcher — workspace.list / .remove', () => {
         id: ws.id,
         name: 'foo',
         workdir: '/p/f',
-        admin: 'u-admin',
         bindings: 1,
         activeSessionId: null,
       }],

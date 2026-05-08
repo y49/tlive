@@ -5,11 +5,10 @@
 // Covers:
 //   - /sessions (no args) lists only sessions owned by the calling chat
 //   - /sessions --all lists sessions across all chats
-//   - observer role may view /sessions (read-only, no permission denial)
-//   - session:resume:<sid> callback by observer → permission denied
+//   - any user may view /sessions (chat-trust, no permission denial)
 //
 // Uses setupBootstrap() so real command dispatch + real CallbackRouter are
-// exercised, including role gating.
+// exercised. chat-trust: no role gating.
 
 import { describe, it, expect, afterEach } from 'vitest';
 import { setupBootstrap, type BootstrapFixture } from '../../_helpers/bootstrap-fixture.js';
@@ -21,13 +20,11 @@ afterEach(async () => {
   env = undefined;
 });
 
-describe('/sessions — per-chat filter + --all + observer + callback role', () => {
+describe('/sessions — per-chat filter + --all + chat-trust', () => {
   it('text /sessions in c1 lists only c1-owned sessions, not cF sessions', async () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w1', name: 'test-ws', workdir: '/tmp/tlive-e2e-sessions-1',
-        roles: { 'u-admin': 'admin' },
-        defaultRole: 'observer',
         bindings: [
           { channelType: 'telegram', chatId: 'c1' },
           { channelType: 'feishu', chatId: 'cF' },
@@ -73,8 +70,6 @@ describe('/sessions — per-chat filter + --all + observer + callback role', () 
     env = setupBootstrap({
       workspaces: [{
         id: 'w2', name: 'test-ws', workdir: '/tmp/tlive-e2e-sessions-2',
-        roles: { 'u-admin': 'admin' },
-        defaultRole: 'observer',
         bindings: [
           { channelType: 'telegram', chatId: 'c1' },
           { channelType: 'feishu', chatId: 'cF' },
@@ -109,8 +104,6 @@ describe('/sessions — per-chat filter + --all + observer + callback role', () 
     env = setupBootstrap({
       workspaces: [{
         id: 'w3', name: 'test-ws', workdir: '/tmp/tlive-e2e-sessions-3',
-        // No roles → everyone gets defaultRole = observer.
-        defaultRole: 'observer',
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
@@ -127,23 +120,5 @@ describe('/sessions — per-chat filter + --all + observer + callback role', () 
     expect(env.replies.some((r) => /暂无会话|sessions/.test(r))).toBe(true);
   });
 
-  it('callback session:resume:<sid> by observer → permission denied', async () => {
-    env = setupBootstrap({
-      workspaces: [{
-        id: 'w4', name: 'test-ws', workdir: '/tmp/tlive-e2e-sessions-4',
-        // defaultRole observer → u-observer is observer.
-        defaultRole: 'observer',
-        bindings: [{ channelType: 'telegram', chatId: 'c1' }],
-      }],
-    });
-
-    env.replies.length = 0;
-    await env.dispatchCallback({
-      channelType: 'telegram', chatId: 'c1', userId: 'u-observer',
-      messageId: 'm-resume', callbackData: 'session:resume:some-sid',
-    });
-
-    // Must reply with permission denied.
-    expect(env.replies.some((r) => /权限不足/.test(r))).toBe(true);
-  });
 });
+

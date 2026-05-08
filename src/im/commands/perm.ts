@@ -21,7 +21,6 @@ import { workspaceForChat } from './_shared.js';
 
 export const permCmd: CommandDef = {
   name: 'perm',
-  role: ['admin', 'operator'],
   description: 'Session 权限规则',
   async run(ctx, args) {
     const ws = workspaceForChat(ctx);

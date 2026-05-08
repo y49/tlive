@@ -420,8 +420,6 @@ describe('CallbackRouter — turn/session/runtime/cost/find handlers (Task 31)',
     const wm = new WorkspaceManager();
     const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
     wm.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'c1' });
-    // Grant test user admin so role-gated handlers (session/runtime) pass.
-    wm.setRole(ws.id, 'u1', 'admin');
     if (opts.activeSessionId !== null && opts.activeSessionId !== undefined) {
       wm.bindActiveSession('telegram', 'c1', opts.activeSessionId);
     } else if (opts.activeSessionId === undefined && session) {
@@ -966,7 +964,6 @@ describe('CallbackRouter — workspace:*', () => {
     const { router, wm, sentMsgs } = setup();
     const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
     wm.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'c1' });
-    wm.setRole(ws.id, 'u1', 'admin');
     await router.route(ctx('workspace:exit:confirm'));
     expect(sentMsgs[0]?.text).toMatch(/确定退出/);
     const markup = sentMsgs[0]?.replyMarkup as ReplyMarkup;
@@ -982,7 +979,6 @@ describe('CallbackRouter — workspace:*', () => {
     const { router, wm, sentMsgs } = setup();
     const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
     wm.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'c1' });
-    wm.setRole(ws.id, 'u1', 'admin');
     await router.route(ctx('workspace:exit:do'));
     expect(wm.workspaceForChat('telegram', 'c1')).toBeUndefined();
     expect(sentMsgs[0]?.text).toMatch(/已退出/);
@@ -1003,7 +999,6 @@ describe('CallbackRouter — workspace:*', () => {
       workdir: '/p/t',
       defaults: { provider: 'claude', model: 'claude-sonnet-4-6', permissionMode: 'default', thinking: 'collapsed' },
     });
-    wm.setRole(ws.id, 'u1', 'admin');
     wm.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'c1' });
 
     const result = await router.route(ctx('workspace:config:open'));
@@ -1029,17 +1024,6 @@ describe('CallbackRouter — workspace:*', () => {
     expect(datas).toContain('workspace:open');
   });
 
-  it('workspace:config:open replies "not admin" for observer role', async () => {
-    const { router, wm, sentMsgs } = setup();
-    const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
-    // No setRole — defaults to observer (default defaultRole is 'observer')
-    wm.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'c1' });
-
-    const result = await router.route(ctx('workspace:config:open'));
-    expect(result).toEqual({ kind: 'handled', action: 'workspace:config:not-admin' });
-    expect(sentMsgs[0]?.text).toMatch(/只有管理员/);
-  });
-
   it('workspace:config:open replies "not bound" when chat unbound', async () => {
     const { router, sentMsgs } = setup();
     const result = await router.route(ctx('workspace:config:open'));
@@ -1050,7 +1034,6 @@ describe('CallbackRouter — workspace:*', () => {
   it('workspace:config with bad subverb returns unknown (admin)', async () => {
     const { router, wm } = setup();
     const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
-    wm.setRole(ws.id, 'u1', 'admin');
     wm.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'c1' });
     const result = await router.route(ctx('workspace:config:bogus'));
     expect(result.kind).toBe('unknown');
@@ -1062,7 +1045,6 @@ describe('CallbackRouter — workspace:*', () => {
     const w1 = wm.create({ name: 'a', workdir: '/p/a' });
     const w2 = wm.create({ name: 'b', workdir: '/p/b' });
     wm.bindChat({workspaceId: w1.id,  channelType: 'telegram', chatId: 'c1' });
-    wm.setRole(w1.id, 'u1', 'admin');
     const result = await router.route(ctx(`workspace:switch:${w2.id}`));
     expect(result.kind).toBe('handled');
     expect((result as { action: string }).action).toBe('workspace:switch:b');
@@ -1107,7 +1089,6 @@ describe('CallbackRouter — workspace:*', () => {
     const { router, wm, sentMsgs } = setup();
     const ws = wm.create({ name: 'tlive', workdir: '/p/t' });
     wm.bindChat({workspaceId: ws.id,  channelType: 'telegram', chatId: 'c1' });
-    wm.setRole(ws.id, 'u1', 'admin');
     const result = await router.route(ctx(`workspace:switch:${ws.id}`));
     expect(result.kind).toBe('handled');
     expect((result as { action: string }).action).toMatch(/noop/);
@@ -1126,7 +1107,6 @@ describe('CallbackRouter — workspace:*', () => {
     const w1 = wm.create({ name: 'a', workdir: '/p/a' });
     const w2 = wm.create({ name: 'b', workdir: '/p/b' });
     wm.bindChat({workspaceId: w1.id,  channelType: 'telegram', chatId: 'c1' });
-    wm.setRole(w1.id, 'u1', 'admin');
 
     const sentMsgs: OutboundMessage[] = [];
     const adapter = {

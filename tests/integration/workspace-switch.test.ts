@@ -89,7 +89,6 @@ describe('e2e: workspace switch (claude -r semantics)', () => {
     const wsA = env.workspaces.create({ name: 'a', workdir: join(env.home, 'a') });
     const wsB = env.workspaces.create({ name: 'b', workdir: join(env.home, 'b') });
     env.workspaces.bindChat({workspaceId: wsA.id,  channelType: 'telegram', chatId: 'chat-1' });
-    env.workspaces.setRole(wsA.id, 'u1', 'admin');
 
     // Spin a real LocalSession in workspace A so the switch has a live session
     // to interrupt + stop.
@@ -131,9 +130,6 @@ describe('e2e: workspace switch (claude -r semantics)', () => {
     const wsA = env.workspaces.create({ name: 'a', workdir: join(env.home, 'a') });
     const wsB = env.workspaces.create({ name: 'b', workdir: join(env.home, 'b') });
     env.workspaces.bindChat({workspaceId: wsA.id,  channelType: 'telegram', chatId: 'chat-1' });
-    // u1 must be admin in both workspaces so role-gated switch handler passes.
-    env.workspaces.setRole(wsA.id, 'u1', 'admin');
-    env.workspaces.setRole(wsB.id, 'u1', 'admin');
 
     const sessionA = await env.sessions.createLocal({
       workspaceId: wsA.id,
@@ -174,7 +170,6 @@ describe('e2e: workspace switch (claude -r semantics)', () => {
     const wsA = env.workspaces.create({ name: 'a', workdir: join(env.home, 'a') });
     const wsB = env.workspaces.create({ name: 'b', workdir: join(env.home, 'b') });
     env.workspaces.bindChat({workspaceId: wsA.id,  channelType: 'telegram', chatId: 'chat-1' });
-    env.workspaces.setRole(wsA.id, 'u1', 'admin');
     // wsB has no activeSessionId, no session ever created.
 
     const runtimeCountBefore = env.runtimes.length;

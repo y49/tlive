@@ -89,7 +89,6 @@ describe('/workspace — 4 state UX', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w1', name: 'proj', workdir: '/tmp/tlive-e2e-ws-c',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
@@ -116,7 +115,6 @@ describe('/workspace — 4 state UX', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w1', name: 'proj', workdir: '/tmp/tlive-e2e-ws-c-sess',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
@@ -143,7 +141,6 @@ describe('/workspace — 4 state UX', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w1', name: 'proj', workdir: '/tmp/tlive-e2e-ws-multi',
-        roles: { 'u-admin': 'admin' },
         bindings: [
           { channelType: 'telegram', chatId: 'c1' },
           { channelType: 'feishu',   chatId: 'cF' },

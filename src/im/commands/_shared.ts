@@ -9,24 +9,6 @@ import type { LocalSession } from '../../session/local-session.js';
 import type { RemoteSession } from '../../session/remote-session.js';
 import type { Workspace } from '../../workspace/config.js';
 
-// NOTE: Role type removed in chat-trust model (T3 will delete role checks).
-// Kept as a shim so T3 can find and remove callers that still import Role.
-export type { Role } from '../../workspace/config.js';
-
-/**
- * Resolve a user's role within a workspace using only the user-level
- * `workspace.roles[userId]` map (with `workspace.defaultRole` fallback).
- *
- * T3-PENDING: chat-trust removes role-based gating entirely. This function
- * and all callers will be deleted in T3.
- */
-export function userRole(ws: { roles?: Record<string, string>; defaultRole?: string }, userId: string | null | undefined): import('../../workspace/config.js').Role {
-  if (userId && ws.roles?.[userId]) {
-    return ws.roles[userId] as import('../../workspace/config.js').Role;
-  }
-  return ((ws.defaultRole as import('../../workspace/config.js').Role | undefined) ?? 'observer');
-}
-
 /**
  * Resolve the workspace bound to this chat. Replies + returns null when
  * none is registered.

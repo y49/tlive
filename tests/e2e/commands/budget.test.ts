@@ -40,7 +40,6 @@ describe('/budget — preset picker + direct set + callback + role', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w', name: 't', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
@@ -79,7 +78,6 @@ describe('/budget — preset picker + direct set + callback + role', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w', name: 't', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
@@ -104,7 +102,6 @@ describe('/budget — preset picker + direct set + callback + role', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w', name: 't', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
@@ -128,7 +125,6 @@ describe('/budget — preset picker + direct set + callback + role', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w', name: 't', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
@@ -151,29 +147,10 @@ describe('/budget — preset picker + direct set + callback + role', () => {
     expect(env.replies.some((r) => /💸|预算/.test(r))).toBe(true);
   });
 
-  it('callback runtime:budget:set:* by observer is denied', async () => {
-    env = setupBootstrap({
-      workspaces: [{
-        id: 'w', name: 't', workdir: '/tmp/x',
-        defaultRole: 'observer',
-        bindings: [{ channelType: 'telegram', chatId: 'c1' }],
-      }],
-    });
-    env.replies.length = 0;
-
-    await env.dispatchCallback({
-      channelType: 'telegram', chatId: 'c1', userId: 'u-anon',
-      messageId: 'm1', callbackData: 'runtime:budget:set:20',
-    });
-
-    expect(env.replies.some((r) => /权限不足|无权限/.test(r))).toBe(true);
-  });
-
   it('/budget with no active session replies usage hint', async () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w', name: 't', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         // No activeSessionId set — binding has no active session.
         bindings: [{ channelType: 'telegram', chatId: 'c1', activeSessionId: null }],
       }],

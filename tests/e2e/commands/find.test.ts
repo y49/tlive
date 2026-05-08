@@ -26,7 +26,6 @@ describe('/find — workspace history search', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w1', name: 'test-ws', workdir: '/tmp/tlive-e2e-find-1',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
@@ -49,7 +48,6 @@ describe('/find — workspace history search', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w1', name: 'test-ws', workdir: '/tmp/tlive-e2e-find-2',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });

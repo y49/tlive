@@ -2,15 +2,13 @@
 //
 // e2e tests for the /new command. Exercises the full dispatch path (text
 // command via dispatch() + callback via CallbackRouter.route()) with:
-//   - Text /new in a bound workspace (admin) → session created
+//   - Text /new in a bound workspace → session created (chat-trust: any user)
 //   - Text /new with an existing session → confirm-replace card shown
-//   - Callback [🆕 new] (session:new) by admin → role allowed, reply sent
-//   - Callback [🆕 new] by observer → permission denied
+//   - Callback [🆕 new] (session:new) → hint to send message or prompt
 //   - Text /new in an unbound chat → bind hint
 //
 // All tests use setupBootstrap() which exercises real command registry
-// dispatch + real CallbackRouter, so role gating + registry plumbing are
-// covered without spinning up the daemon or real session runtimes.
+// dispatch + real CallbackRouter. chat-trust: no role gating.
 
 import { describe, it, expect, afterEach } from 'vitest';
 import { setupBootstrap, type BootstrapFixture } from '../../_helpers/bootstrap-fixture.js';
@@ -22,19 +20,17 @@ afterEach(async () => {
   env = undefined;
 });
 
-describe('/new — text + button + role', () => {
-  it('text /new starts a new session for the chat (admin user)', async () => {
+describe('/new — text + button + chat-trust', () => {
+  it('text /new starts a new session for the chat (any user)', async () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w1', name: 'test-ws', workdir: '/tmp/tlive-e2e-1',
-        roles: { 'u-admin': 'admin' },
-        defaultRole: 'observer',
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
 
     await env.handleInbound({
-      channelType: 'telegram', chatId: 'c1', userId: 'u-admin',
+      channelType: 'telegram', chatId: 'c1', userId: 'u-any',
       text: '/new', messageId: 'm1',
     });
 
@@ -52,8 +48,6 @@ describe('/new — text + button + role', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w2', name: 'test-ws', workdir: '/tmp/tlive-e2e-2',
-        roles: { 'u-admin': 'admin' },
-        defaultRole: 'observer',
         // Pre-seed an active session id in the binding.
         bindings: [{ channelType: 'telegram', chatId: 'c1', activeSessionId: 'existing-session-id' }],
       }],
@@ -61,7 +55,7 @@ describe('/new — text + button + role', () => {
 
     // Reply interception: capture replyMarkup via adapter calls.
     await env.handleInbound({
-      channelType: 'telegram', chatId: 'c1', userId: 'u-admin',
+      channelType: 'telegram', chatId: 'c1', userId: 'u-any',
       text: '/new', messageId: 'm2',
     });
 
@@ -84,18 +78,16 @@ describe('/new — text + button + role', () => {
     expect(activeId).toBe('existing-session-id');
   });
 
-  it('callback session:new by admin (no active session) → hint to send a message', async () => {
+  it('callback session:new (no active session) → hint to send a message', async () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w3', name: 'test-ws', workdir: '/tmp/tlive-e2e-3',
-        roles: { 'u-admin': 'admin' },
-        defaultRole: 'observer',
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
 
     await env.dispatchCallback({
-      channelType: 'telegram', chatId: 'c1', userId: 'u-admin',
+      channelType: 'telegram', chatId: 'c1', userId: 'u-any',
       messageId: 'm0', callbackData: 'session:new',
     });
 
@@ -103,41 +95,21 @@ describe('/new — text + button + role', () => {
     expect(env.replies.some((r) => /发送一条消息/.test(r))).toBe(true);
   });
 
-  it('callback session:new by admin (has active session) → confirm-replace prompt', async () => {
+  it('callback session:new (has active session) → confirm-replace prompt', async () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w4', name: 'test-ws', workdir: '/tmp/tlive-e2e-4',
-        roles: { 'u-admin': 'admin' },
-        defaultRole: 'observer',
         bindings: [{ channelType: 'telegram', chatId: 'c1', activeSessionId: 'some-session' }],
       }],
     });
 
     await env.dispatchCallback({
-      channelType: 'telegram', chatId: 'c1', userId: 'u-admin',
+      channelType: 'telegram', chatId: 'c1', userId: 'u-any',
       messageId: 'm0', callbackData: 'session:new',
     });
 
     // Has active session → prompt to confirm (session:new:prompt action).
     expect(env.replies.some((r) => /当前已有活跃会话/.test(r))).toBe(true);
-  });
-
-  it('callback session:new by observer → permission denied', async () => {
-    env = setupBootstrap({
-      workspaces: [{
-        id: 'w5', name: 'test-ws', workdir: '/tmp/tlive-e2e-5',
-        defaultRole: 'observer', // u-observer not in roles map
-        bindings: [{ channelType: 'telegram', chatId: 'c1' }],
-      }],
-    });
-
-    await env.dispatchCallback({
-      channelType: 'telegram', chatId: 'c1', userId: 'u-observer',
-      messageId: 'm1', callbackData: 'session:new',
-    });
-
-    // Must reply with permission denied.
-    expect(env.replies.some((r) => /权限不足/.test(r))).toBe(true);
   });
 
   it('text /new in unbound chat → workspace bind hint', async () => {
@@ -148,40 +120,27 @@ describe('/new — text + button + role', () => {
       text: '/new', messageId: 'm1',
     });
 
-    // Role for unbound chat → observer → dispatch denies /new (role:admin/operator required).
-    // The reply should indicate no permission or unbound workspace.
-    expect(env.replies.some((r) => /未绑定工作区|无权限/.test(r))).toBe(true);
+    // Unbound chat → /new replies with "未绑定工作区"
+    expect(env.replies.some((r) => /未绑定工作区/.test(r))).toBe(true);
   });
 
-  it('workspace:bind callback elevates binder to admin, allowing /new immediately', async () => {
-    env = setupBootstrap({
-      workspaces: [{
-        id: 'w6', name: 'ws', workdir: '/tmp/e2e-6',
-        roles: {}, defaultRole: 'observer',
-        bindings: [],
-      }],
-    });
-
-    // Bind — binder should be claimAdmin'd
-    await env.dispatchCallback({
-      channelType: 'telegram', chatId: 'c1', userId: 'u-first',
-      messageId: 'm-bind', callbackData: 'workspace:bind:w6',
-    });
-    expect(env.workspaceManager.getRole('w6', 'u-first')).toBe('admin');
-
-    // Create binding for the chat so /new can work.
-    env.workspaceManager.bindChat({
-      workspaceId: 'w6',
-      channelType: 'telegram',
-      chatId: 'c1',
-    });
-
-    // /new should succeed (not be role-denied)
-    await env.handleInbound({
-      channelType: 'telegram', chatId: 'c1',
-      userId: 'u-first', text: '/new', messageId: 'm-new',
-    });
-    expect(env.workspaceManager.getActiveSessionId('telegram', 'c1')).toBeTruthy();
-    await env.cleanup?.();
+  it('chat-trust: any user in bound chat can run /new (no role check)', async () => {
+    // Three separate env instances to avoid reply accumulation confusion
+    for (const userId of ['u-admin', 'u-random-lurker', 'u-nobody']) {
+      const e = setupBootstrap({
+        workspaces: [{
+          id: 'w6', name: 'ws', workdir: '/tmp/e2e-6',
+          bindings: [{ channelType: 'telegram', chatId: 'c1' }],
+        }],
+      });
+      await e.handleInbound({
+        channelType: 'telegram', chatId: 'c1',
+        userId, text: '/new', messageId: 'm-new',
+      });
+      // Each should create or confirm a session (not deny)
+      const denied = e.replies.some((r) => /权限不足|无权限/.test(r));
+      expect(denied).toBe(false);
+      await e.cleanup?.();
+    }
   });
 });

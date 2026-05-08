@@ -3,13 +3,11 @@
 // e2e tests for the /stop command.
 //
 // Covers:
-//   - /stop requires admin/operator role; observer denied
 //   - /stop interrupts active session (calls session.interrupt())
 //   - /stop with no active session shows Chinese hint
 //
-// Uses setupBootstrap() so real command dispatch is exercised, including
-// role gating. The test modifies the fake session object to support
-// getStatus() and interrupt() for testing.
+// chat-trust: any user in a bound chat can /stop. No role gating.
+// Uses setupBootstrap() so real command dispatch is exercised.
 
 import { describe, it, expect, afterEach } from 'vitest';
 import { setupBootstrap, type BootstrapFixture } from '../../_helpers/bootstrap-fixture.js';
@@ -26,7 +24,6 @@ describe('/stop — interrupt active session', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w', name: 't', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
@@ -72,35 +69,10 @@ describe('/stop — interrupt active session', () => {
     expect(reply).toMatch(/已中断|中止|生成/i);
   });
 
-  it('observer /stop denied', async () => {
-    env = setupBootstrap({
-      workspaces: [{
-        id: 'w', name: 't', workdir: '/tmp/x',
-        defaultRole: 'observer',
-        bindings: [{ channelType: 'telegram', chatId: 'c1' }],
-      }],
-    });
-
-    env.replies.length = 0;
-    await env.handleInbound({
-      channelType: 'telegram',
-      chatId: 'c1',
-      userId: 'u-anon',
-      text: '/stop',
-      messageId: 'm1',
-    });
-
-    // Verify permission denied message.
-    expect(env.replies.length).toBeGreaterThan(0);
-    const reply = env.replies.join('\n');
-    expect(reply).toMatch(/权限不足|无权限|认证/i);
-  });
-
   it('/stop with no active session shows Chinese hint', async () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w', name: 't', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });

@@ -12,7 +12,6 @@ import { workspaceForChat } from './_shared.js';
 
 export const newCmd: CommandDef = {
   name: 'new',
-  role: ['admin', 'operator'],
   description: '起新会话',
   async run(ctx, args) {
     const ws = workspaceForChat(ctx);

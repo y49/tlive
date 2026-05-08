@@ -59,7 +59,6 @@ describe('/perm — action menu + text subcommands + callback + role (Option A)'
     env = setupBootstrap({
       workspaces: [{
         id: 'w1', name: 'test', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
       policyStoreFor: factory,
@@ -87,7 +86,6 @@ describe('/perm — action menu + text subcommands + callback + role (Option A)'
     env = setupBootstrap({
       workspaces: [{
         id: 'w1', name: 'test', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
       policyStoreFor: factory,
@@ -111,7 +109,6 @@ describe('/perm — action menu + text subcommands + callback + role (Option A)'
     env = setupBootstrap({
       workspaces: [{
         id: 'w1', name: 'test', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
       policyStoreFor: factory,
@@ -134,7 +131,6 @@ describe('/perm — action menu + text subcommands + callback + role (Option A)'
     env = setupBootstrap({
       workspaces: [{
         id: 'w1', name: 'test', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
       policyStoreFor: factory,
@@ -155,7 +151,6 @@ describe('/perm — action menu + text subcommands + callback + role (Option A)'
     env = setupBootstrap({
       workspaces: [{
         id: 'w1', name: 'test', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
       policyStoreFor: factory,
@@ -188,7 +183,6 @@ describe('/perm — action menu + text subcommands + callback + role (Option A)'
     env = setupBootstrap({
       workspaces: [{
         id: 'w1', name: 'test', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
       policyStoreFor: factory,
@@ -221,7 +215,6 @@ describe('/perm — action menu + text subcommands + callback + role (Option A)'
     env = setupBootstrap({
       workspaces: [{
         id: 'w1', name: 'test', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
       policyStoreFor: factory,
@@ -242,7 +235,6 @@ describe('/perm — action menu + text subcommands + callback + role (Option A)'
     env = setupBootstrap({
       workspaces: [{
         id: 'w1', name: 'test', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
       policyStoreFor: factory,
@@ -263,7 +255,6 @@ describe('/perm — action menu + text subcommands + callback + role (Option A)'
     env = setupBootstrap({
       workspaces: [{
         id: 'w1', name: 'test', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
       policyStoreFor: factory,
@@ -282,25 +273,6 @@ describe('/perm — action menu + text subcommands + callback + role (Option A)'
     expect(buttons.some((b) => b.callbackData === 'runtime:perm:clear:cancel')).toBe(true);
   });
 
-  it('callback runtime:perm:add:allow by observer is denied (role check)', async () => {
-    const { factory } = buildFakePolicyStoreFactory();
-    env = setupBootstrap({
-      workspaces: [{
-        id: 'w1', name: 'test', workdir: '/tmp/x',
-        defaultRole: 'observer',
-        bindings: [{ channelType: 'telegram', chatId: 'c1' }],
-      }],
-      policyStoreFor: factory,
-    });
-
-    await env.dispatchCallback({
-      channelType: 'telegram', chatId: 'c1', userId: 'u-anon',
-      messageId: 'm1', callbackData: 'runtime:perm:add:allow',
-    });
-
-    expect(env.replies.some((r) => /权限不足|无权限/.test(r))).toBe(true);
-  });
-
   it('/perm with no workspace replies bind hint', async () => {
     env = setupBootstrap({ workspaces: [] });
 
@@ -309,8 +281,7 @@ describe('/perm — action menu + text subcommands + callback + role (Option A)'
       text: '/perm', messageId: 'm1',
     });
 
-    // /perm role=['admin','operator'] — observer gets role denial at dispatch level.
-    // Either "无权限" or "未绑定" is acceptable.
+    // Unbound chat → "未绑定工作区" reply.
     expect(env.replies.length).toBeGreaterThan(0);
   });
 });

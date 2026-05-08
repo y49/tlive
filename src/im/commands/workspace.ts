@@ -1,11 +1,10 @@
 // src/im/commands/workspace.ts
 //
-// /workspace — single entry for workspace management (v3.3).
-// Per spec §4 — state-adaptive, all inline-keyboard:
-//   A: unbound chat, system has workspaces → list with [📁 X] buttons
-//   B: unbound chat, no workspaces (fresh install) → only [➕ 新增]
-//   C: bound + admin → state + switch + manage buttons
-//   D: bound + non-admin → read-only
+// /workspace — single entry for workspace management (chat-trust).
+// Per spec §4 + §5 — state-adaptive, all inline-keyboard:
+//   A: unbound chat, no workspaces (fresh install) → only [➕ 新增]
+//   B: unbound chat, system has workspaces → list with [📁 X] buttons
+//   C: bound → state + switch + manage buttons (any user, no role gate)
 
 import type { CommandDef, CommandContext } from '../command-parser.js';
 import type { InlineButton } from '../../platform/types.js';
@@ -15,7 +14,6 @@ import { workspaceForChat } from './_shared.js';
 export const workspaceCmd: CommandDef = {
   name: 'workspace',
   aliases: ['ws'],
-  role: ['admin', 'operator', 'observer'],
   description: '工作区: 看 / 切 / 加 / 退',
   async run(ctx) {
     const ws = workspaceForChat(ctx);
@@ -25,7 +23,6 @@ export const workspaceCmd: CommandDef = {
       await renderUnbound(ctx, all);
       return;
     }
-    // T3-PENDING: role checks removed in chat-trust. Now always show admin view.
     await renderBoundAdmin(ctx, ws, all);
   },
 };
@@ -115,10 +112,4 @@ async function renderBoundAdmin(
   await ctx.reply(lines.join('\n'), {
     replyMarkup: { type: 'inline_keyboard', buttons },
   });
-}
-
-async function renderReadOnly(ctx: CommandContext, ws: Workspace): Promise<void> {
-  await ctx.reply(
-    `📁 工作区: ${ws.name} (只读)\n   📂 ${ws.workdir}\n   你不是该工作区的管理员,无法切换或配置`,
-  );
 }

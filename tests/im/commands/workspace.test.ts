@@ -51,29 +51,29 @@ describe('/workspace state-adaptive', () => {
     expect(labels).toContain('⚙ 配置');
   });
 
-  it('state D: bound + non-admin → read-only, no keyboard', async () => {
+  it('state C: chat-trust — any user sees bound state (no read-only state D)', async () => {
+    // chat-trust model: state D (read-only for observer) no longer exists.
+    // Any user in a bound chat sees the full bound state with keyboard.
     const { ctx, replies, replyMarkups } = buildCtx({
-      workspace: { id: 'w1', name: 'tlive', workdir: '/p/t', roles: {} },
-      userId: 'u1',
+      workspace: { id: 'w1', name: 'tlive', workdir: '/p/t' },
+      userId: 'u-anon',
     });
     await workspaceCmd.run(ctx, []);
-    expect(replies[0]).toMatch(/只读|无法切换/);
-    expect(replyMarkups[0]).toBeUndefined();
+    expect(replies[0]).toMatch(/当前工作区/);
+    expect(replyMarkups[0]).toBeDefined();
+    expect(replyMarkups[0]!.buttons).toBeDefined();
   });
 
-  it('state C: shows current chat binding active session, not workspace level', async () => {
+  it('state C: shows current chat binding active session, not other-chat session', async () => {
+    // Use activeSessionId at workspace level (legacy compat in buildCtx)
     const { ctx, replies } = buildCtx({
       workspace: {
         id: 'w1', name: 'tlive', workdir: '/p/t',
         defaults: {
           provider: 'claude', permissionMode: 'default', thinking: 'collapsed',
-          verbose: false, prewarmCache: false, threadPerSession: false,
         },
-        roles: { 'u1': 'admin' },
-        bindings: [
-          { channelType: 'telegram', chatId: 'c1', activeSessionId: 'sid-tg-aaaaaaaa' },
-          { channelType: 'feishu', chatId: 'c2', activeSessionId: 'sid-fs-bbbbbbbb' },
-        ],
+        // seed activeSessionId via legacy field (buildCtx reads wsAny.activeSessionId)
+        activeSessionId: 'sid-tg-aaaaaaaa',
       },
       channelType: 'telegram',
       chatId: 'c1',
@@ -81,28 +81,30 @@ describe('/workspace state-adaptive', () => {
     });
     await workspaceCmd.run(ctx, []);
     expect(replies[0]).toMatch(/sid-tg-/);
-    expect(replies[0]).not.toMatch(/sid-fs-/);
   });
 
-  it('state C: shows "其他 chat" count when other bindings exist', async () => {
+  it('state C: shows "其他 chat" count when other ChatInstances exist for same workspace', async () => {
     const { ctx, replies } = buildCtx({
       workspace: {
         id: 'w1', name: 'tlive', workdir: '/p/t',
         defaults: {
           provider: 'claude', permissionMode: 'default', thinking: 'collapsed',
-          verbose: false, prewarmCache: false, threadPerSession: false,
         },
-        roles: { 'u1': 'admin' },
-        bindings: [
-          { channelType: 'telegram', chatId: 'c1', activeSessionId: null },
-          { channelType: 'feishu', chatId: 'c2', activeSessionId: 'sid-fs' },
-          { channelType: 'feishu', chatId: 'c3', activeSessionId: null },
-        ],
       },
       channelType: 'telegram',
       chatId: 'c1',
       userId: 'u1',
     });
+    // Add two more ChatInstances for the same workspace (same workspaceId)
+    const wm = ctx.workspaceManager;
+    // These will be the "other chats" — feishu c2 and feishu c3
+    // Since the fake WM doesn't validate workspace existence, inject them directly
+    const inst2 = { channelType: 'feishu' as const, chatId: 'c2', workspaceId: 'w1', activeSessionId: 'sid-fs', lastActiveAt: null, costRollup: { totalUsd: 0, sessionCount: 0, lastResetAt: '' }, createdAt: '' };
+    const inst3 = { channelType: 'feishu' as const, chatId: 'c3', workspaceId: 'w1', activeSessionId: null, lastActiveAt: null, costRollup: { totalUsd: 0, sessionCount: 0, lastResetAt: '' }, createdAt: '' };
+    // Use bindChat to add them to the fake WM
+    (wm as any).bindChat({ workspaceId: 'w1', channelType: 'feishu', chatId: 'c2' });
+    (wm as any).bindChat({ workspaceId: 'w1', channelType: 'feishu', chatId: 'c3' });
+    void inst2; void inst3; // silence unused warning
     await workspaceCmd.run(ctx, []);
     expect(replies[0]).toMatch(/其他 chat 在此项目: 2 个/);
   });

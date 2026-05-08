@@ -9,7 +9,6 @@ import { activeLocalSession } from './_shared.js';
 
 export const stopCmd: CommandDef = {
   name: 'stop',
-  role: ['admin', 'operator'],
   description: '中断当前 turn (Ctrl+C 等价)',
   async run(ctx) {
     const session = await activeLocalSession(ctx);

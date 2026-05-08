@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { bootstrapDaemon } from '../../src/daemon/bootstrap.js';
 
-describe('bootstrap auto-bind + claim-admin', () => {
+describe('bootstrap auto-bind (chat-trust, v2 schema)', () => {
   let home: string;
 
   beforeEach(() => {
@@ -16,7 +16,7 @@ describe('bootstrap auto-bind + claim-admin', () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it('claims admin and binds telegram chatId on first start', async () => {
+  it('binds telegram chatId from config on first start', async () => {
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       version: '1',
       workspaces: [{ name: 'w', workdir: '/tmp/w', adminUserId: '12345' }],
@@ -30,16 +30,21 @@ describe('bootstrap auto-bind + claim-admin', () => {
     });
 
     const persisted = JSON.parse(readFileSync(join(home, 'workspaces.json'), 'utf8'));
+    expect(persisted.version).toBe(2);
+    // chat-trust: no roles on workspace
     const ws = persisted.workspaces[0];
-    expect(ws.roles['12345']).toBe('admin');
-    expect(ws.bindings).toEqual([
-      expect.objectContaining({ channelType: 'telegram', chatId: '12345' }),
-    ]);
+    expect(ws.roles).toBeUndefined();
+    // chatInstances array has the auto-bind entry
+    expect(persisted.chatInstances).toHaveLength(1);
+    expect(persisted.chatInstances[0]).toMatchObject({
+      channelType: 'telegram',
+      chatId: '12345',
+    });
 
     await handle.shutdown();
   });
 
-  it('is idempotent: second boot does not duplicate bindings or change roles', async () => {
+  it('is idempotent: second boot does not duplicate chatInstances', async () => {
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       version: '1',
       workspaces: [{ name: 'w', workdir: '/tmp/w', adminUserId: '12345' }],
@@ -52,25 +57,19 @@ describe('bootstrap auto-bind + claim-admin', () => {
     await h2.shutdown();
 
     const persisted = JSON.parse(readFileSync(join(home, 'workspaces.json'), 'utf8'));
-    const ws = persisted.workspaces[0];
-    expect(ws.bindings).toHaveLength(1);
-    expect(Object.keys(ws.roles)).toEqual(['12345']);
+    expect(persisted.chatInstances).toHaveLength(1);
   });
 
-  it('does not promote when adminUserId is omitted', async () => {
+  it('does not bind when adminUserId is omitted and no chatId in channels', async () => {
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       version: '1',
       workspaces: [{ name: 'w', workdir: '/tmp/w' }],
-      channels: { telegram: { token: 'fake-token', chatId: '12345' } },
+      channels: { telegram: { token: 'fake-token' } },
     }), 'utf8');
 
     const h = await bootstrapDaemon({ home, startAdapters: false, adapterFactory: () => null });
     const persisted = JSON.parse(readFileSync(join(home, 'workspaces.json'), 'utf8'));
-    const ws = persisted.workspaces[0];
-    expect(ws.roles).toEqual({});
-    expect(ws.bindings).toEqual([
-      expect.objectContaining({ channelType: 'telegram', chatId: '12345' }),
-    ]);
+    expect(persisted.chatInstances ?? []).toHaveLength(0);
     await h.shutdown();
   });
 });

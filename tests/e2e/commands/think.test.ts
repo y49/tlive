@@ -36,7 +36,6 @@ describe('/think — picker + direct set + callback + role', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w', name: 't', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         defaults: { permissionMode: 'default' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
@@ -62,7 +61,6 @@ describe('/think — picker + direct set + callback + role', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w', name: 't', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         defaults: { permissionMode: 'default' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
@@ -91,7 +89,6 @@ describe('/think — picker + direct set + callback + role', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w', name: 't', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
@@ -109,7 +106,6 @@ describe('/think — picker + direct set + callback + role', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w', name: 't', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
@@ -122,20 +118,5 @@ describe('/think — picker + direct set + callback + role', () => {
     expect(env.replies.some((r) => /hidden|已切到|think/i.test(r))).toBe(true);
   });
 
-  it('callback runtime:think:set:* by observer is denied (Task 8.5 role check)', async () => {
-    env = setupBootstrap({
-      workspaces: [{
-        id: 'w', name: 't', workdir: '/tmp/x',
-        defaultRole: 'observer',
-        bindings: [{ channelType: 'telegram', chatId: 'c1' }],
-      }],
-    });
-
-    await env.dispatchCallback({
-      channelType: 'telegram', chatId: 'c1', userId: 'u-anon',
-      messageId: 'm1', callbackData: 'runtime:think:set:expanded',
-    });
-
-    expect(env.replies.some((r) => /权限不足|无权限/.test(r))).toBe(true);
-  });
 });
+

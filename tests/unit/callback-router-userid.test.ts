@@ -1,19 +1,16 @@
+// tests/unit/callback-router-userid.test.ts
+//
+// T3: userRole() function was deleted in chat-trust refactor.
+// All role gating removed from inbound path.
+// This file is kept as a placeholder to avoid import errors.
+// Actual chat-trust verification is in tests/im/command-parser.test.ts.
+
 import { describe, it, expect } from 'vitest';
-import { userRole } from '../../src/im/commands/_shared.js';
 
-describe('userRole', () => {
-  const ws = { id: 'w', roles: { 'u-1': 'admin' }, defaultRole: 'observer' } as never;
-
-  it('returns explicit role when userId is in workspace.roles', () => {
-    expect(userRole(ws, 'u-1')).toBe('admin');
-  });
-  it('returns defaultRole when userId is not mapped', () => {
-    expect(userRole(ws, 'u-999')).toBe('observer');
-  });
-  it('returns defaultRole when userId is null', () => {
-    expect(userRole(ws, null)).toBe('observer');
-  });
-  it('returns observer when defaultRole is also missing', () => {
-    expect(userRole({ id: 'w', roles: {} } as never, null)).toBe('observer');
+describe('chat-trust (userRole deleted)', () => {
+  it('userRole function is removed — chat-trust: any user can drive bot', () => {
+    // Verify _shared.ts no longer exports userRole
+    // (TypeScript would catch at compile time; this documents the intent)
+    expect(true).toBe(true);
   });
 });

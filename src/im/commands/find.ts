@@ -15,7 +15,6 @@ import { searchSessions, type SearchHit } from '../../session/search.js';
 export const findCmd: CommandDef = {
   name: 'find',
   aliases: ['search'],
-  role: ['admin', 'operator', 'observer'],
   description: '搜索当前工作区会话历史',
   async run(ctx, args) {
     if (args.length === 0) {

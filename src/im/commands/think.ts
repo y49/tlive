@@ -29,7 +29,6 @@ const PICKER_ITEMS = LEVELS.map((l) => ({
 export const thinkCmd: CommandDef = {
   name: 'think',
   aliases: ['thinking'],
-  role: ['admin', 'operator'],
   description: '思考深度',
   async run(ctx, args) {
     const ws = workspaceForChat(ctx);

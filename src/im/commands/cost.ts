@@ -16,7 +16,6 @@ const RANGE_MS: Record<string, number> = {
 
 export const costCmd: CommandDef = {
   name: 'cost',
-  role: ['admin', 'operator', 'observer'],
   description: '工作区累计成本',
   async run(ctx, args) {
     const { flags, positional } = parseFlags(args);

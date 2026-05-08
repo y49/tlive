@@ -13,7 +13,7 @@
 // picker when the runtime call fails (offline, runtime not ready, etc.).
 //
 // Callback handlers (runtime:model:set:<id> / :custom / :set-default) are
-// handled by CallbackRouter.handleRuntimeModel (Task 8.5 added role check).
+// handled by CallbackRouter.handleRuntimeModel (no role check — chat-trust).
 
 import type { CommandDef, CommandContext } from '../command-parser.js';
 import type { ReplyMarkup, InlineButton } from '../../platform/types.js';
@@ -33,7 +33,6 @@ const KNOWN_MODELS = [
 
 export const modelCmd: CommandDef = {
   name: 'model',
-  role: ['admin', 'operator'],
   description: '查看 / 切换模型',
   async run(ctx, args) {
     const ws = workspaceForChat(ctx);

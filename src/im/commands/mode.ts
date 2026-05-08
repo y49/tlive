@@ -34,7 +34,6 @@ const VALID_MODES: ReadonlySet<PermissionMode> = new Set<PermissionMode>([
 
 export const modeCmd: CommandDef = {
   name: 'mode',
-  role: ['admin', 'operator'],
   description: '查看 / 切换权限模式',
   async run(ctx, args) {
     const ws = workspaceForChat(ctx);

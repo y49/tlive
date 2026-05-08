@@ -24,7 +24,6 @@ describe('/help — 12-command catalog + per-chat isolation note', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w', name: 't', workdir: '/tmp/tlive-e2e-help-1',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
@@ -63,7 +62,6 @@ describe('/help — 12-command catalog + per-chat isolation note', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w', name: 't', workdir: '/tmp/tlive-e2e-help-2',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
@@ -86,7 +84,6 @@ describe('/help — 12-command catalog + per-chat isolation note', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w', name: 't', workdir: '/tmp/tlive-e2e-help-3',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
@@ -111,7 +108,6 @@ describe('/help — 12-command catalog + per-chat isolation note', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w', name: 't', workdir: '/tmp/tlive-e2e-help-4',
-        roles: { 'u-op': 'operator' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
@@ -135,7 +131,6 @@ describe('/help — 12-command catalog + per-chat isolation note', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w', name: 't', workdir: '/tmp/tlive-e2e-help-5',
-        defaultRole: 'observer',
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });

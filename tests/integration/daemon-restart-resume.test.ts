@@ -69,7 +69,6 @@ async function buildPhase1(opts: { withActive: boolean; metaSdkId?: string }): P
   const wm = new WorkspaceManager({ persistPath: join(home, 'workspaces.json') });
   await wm.load();
   const ws = wm.create({ name: 'restart', workdir });
-  wm.setRole(ws.id, CHAT.userId, 'admin');
   wm.bindChat({workspaceId: ws.id,  channelType: CHAT.channelType, chatId: CHAT.chatId });
 
   const sdkSessionId = opts.metaSdkId ?? 'sdk-session-' + Math.random().toString(36).slice(2, 10);

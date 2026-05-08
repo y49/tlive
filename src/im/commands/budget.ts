@@ -12,7 +12,6 @@ import { activeLocalSession } from './_shared.js';
 
 export const budgetCmd: CommandDef = {
   name: 'budget',
-  role: ['admin', 'operator'],
   description: '当前 session 预算上限',
   async run(ctx, args) {
     const session = await activeLocalSession(ctx);

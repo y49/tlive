@@ -9,7 +9,6 @@ import type { LocalSession } from '../../session/local-session.js';
 export const helpCmd: CommandDef = {
   name: 'help',
   aliases: ['h', '?'],
-  role: ['admin', 'operator', 'observer'],
   description: '查看帮助和命令列表',
   async run(ctx) {
     const lines = [

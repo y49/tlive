@@ -41,7 +41,6 @@ describe('/model — picker + direct set + callback + role', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w', name: 't', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         defaults: { model: 'claude-sonnet-4-6' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
@@ -74,7 +73,6 @@ describe('/model — picker + direct set + callback + role', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w', name: 't', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         defaults: { model: 'claude-sonnet-4-6' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
@@ -98,7 +96,6 @@ describe('/model — picker + direct set + callback + role', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w', name: 't', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
@@ -123,7 +120,6 @@ describe('/model — picker + direct set + callback + role', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w', name: 't', workdir: '/tmp/x',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
@@ -143,25 +139,6 @@ describe('/model — picker + direct set + callback + role', () => {
     expect(env.replies.some((r) => /claude-opus-4-7|已切到|model/i.test(r))).toBe(true);
   });
 
-  it('callback runtime:model:set:* by observer is denied (Task 8.5 role check)', async () => {
-    env = setupBootstrap({
-      workspaces: [{
-        id: 'w', name: 't', workdir: '/tmp/x',
-        defaultRole: 'observer',
-        bindings: [{ channelType: 'telegram', chatId: 'c1' }],
-      }],
-    });
-
-    env.replies.length = 0;
-
-    await env.dispatchCallback({
-      channelType: 'telegram', chatId: 'c1', userId: 'u-anon',
-      messageId: 'm1', callbackData: 'runtime:model:set:claude-opus-4-7',
-    });
-
-    expect(env.replies.some((r) => /权限不足|无权限/.test(r))).toBe(true);
-  });
-
   it('/model (no-arg) with no workspace replies bind hint', async () => {
     env = setupBootstrap({ workspaces: [] });
 
@@ -170,8 +147,7 @@ describe('/model — picker + direct set + callback + role', () => {
       text: '/model', messageId: 'm1',
     });
 
-    // Command role=admin/operator — observer will be denied at dispatch level.
-    // Either a permission denial OR workspace binding hint is acceptable.
+    // Unbound chat → workspace binding hint.
     expect(env.replies.length).toBeGreaterThan(0);
   });
 });

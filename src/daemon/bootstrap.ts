@@ -198,22 +198,6 @@ export async function bootstrapDaemon(opts: BootstrapOptions = {}): Promise<Daem
       defaults: w.defaults,
       budget: w.budget,
     });
-    // T3-PENDING: w.roles / w.defaultRole / claimAdmin removed in chat-trust
-  }
-  // Claim admin from config-declared adminUserId. Idempotent — only fires
-  // when no admin role is currently assigned on the workspace.
-  for (const w of cfg.workspaces) {
-    const target = (w.id ? workspaces.get(w.id) : undefined)
-      ?? workspaces.findByWorkdir(w.workdir);
-    if (!target || !w.adminUserId) continue;
-    try {
-      const claimed = workspaces.claimAdmin(target.id, w.adminUserId);
-      if (claimed) logger.info('claimed admin from config', {
-        workspaceId: target.id, workspaceName: target.name, userId: w.adminUserId,
-      });
-    } catch (err) {
-      logger.warn('claimAdmin failed', { workspaceName: w.name, reason: (err as Error).message });
-    }
   }
 
   // Auto-bind chats declared in config.channels.<platform>.chatId.
@@ -734,9 +718,6 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
   }
 
   // Slash command — build a CommandContext tied to this adapter for reply.
-  const wsForRole = deps.workspaces.workspaceForChat(ev.channelType, ev.chatId);
-  const userRole = wsForRole ? deps.workspaces.getRole(wsForRole.id, ev.userId) : 'observer';
-
   const ctx: CommandContext = {
     inbound: ev,
     userId: ev.userId,
@@ -761,7 +742,7 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
     logger: deps.logger,
   };
 
-  await dispatchCommand(ctx, text, userRole, deps.logger);
+  await dispatchCommand(ctx, text, deps.logger);
 }
 
 /**

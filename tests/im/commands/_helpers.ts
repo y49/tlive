@@ -271,14 +271,6 @@ export function buildCtx(spec: FakeCtxSpec = {}): FakeCtxResult {
         if (ended) inst.costRollup.sessionCount++;
       }
     },
-    // T3-PENDING: role methods below will be removed in T3
-    getRole(wsId: string, u: string) {
-      workspaceCalls.push({ method: 'getRole', args: [wsId, u] });
-      return 'observer' as const;
-    },
-    setRole(wsId: string, u: string, role: string) {
-      workspaceCalls.push({ method: 'setRole', args: [wsId, u, role] });
-    },
     removeWorkspace(id: string, opts?: { force?: boolean }) {
       workspaceCalls.push({ method: 'removeWorkspace', args: [id, opts] });
       const idx = allWorkspaces.findIndex((w) => w.id === id);

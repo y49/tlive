@@ -34,56 +34,56 @@ describe('command-parser', () => {
     let captured: string[] | null = null;
     registerCommand({
       name: 'echo',
-      role: ['admin', 'operator', 'observer'],
       async run(_ctx, args) { captured = args; },
     });
     const { ctx, replies } = buildCtx();
-    await dispatch(ctx, '/echo foo bar', 'admin');
+    await dispatch(ctx, '/echo foo bar');
     expect(captured).toEqual(['foo', 'bar']);
     expect(replies).toEqual([]);
   });
 
   it('replies with unknown-command message for unknown name', async () => {
     const { ctx, replies } = buildCtx();
-    await dispatch(ctx, '/nope', 'admin');
+    await dispatch(ctx, '/nope');
     expect(replies[0]).toMatch(/未知命令/);
   });
 
-  it('role-gates — denies if userRole not in def.role', async () => {
+  it('chat-trust: any user can run any registered command (no role gate)', async () => {
+    let ran = false;
     registerCommand({
-      name: 'grant', role: ['admin'],
-      async run() { /* never runs */ },
+      name: 'cmd',
+      async run() { ran = true; },
     });
-    const { ctx, replies } = buildCtx();
-    await dispatch(ctx, '/grant u1 admin', 'operator');
-    expect(replies[0]).toMatch(/无权限/);
+    const { ctx } = buildCtx();
+    await dispatch(ctx, '/cmd');
+    expect(ran).toBe(true);
   });
 
   it('resolves alias back to the same def', async () => {
     let hit = 0;
     registerCommand({
-      name: 'help', aliases: ['h', '?'], role: ['observer'],
+      name: 'help', aliases: ['h', '?'],
       async run() { hit += 1; },
     });
     const { ctx } = buildCtx();
-    await dispatch(ctx, '/h', 'observer');
-    await dispatch(ctx, '/?', 'observer');
+    await dispatch(ctx, '/h');
+    await dispatch(ctx, '/?');
     expect(hit).toBe(2);
   });
 
   it('listCommands dedupes across aliases', () => {
-    registerCommand({ name: 'a', aliases: ['aa'], role: ['admin'], async run() { /* */ } });
-    registerCommand({ name: 'b', role: ['admin'], async run() { /* */ } });
+    registerCommand({ name: 'a', aliases: ['aa'], async run() { /* */ } });
+    registerCommand({ name: 'b', async run() { /* */ } });
     expect(listCommands().length).toBe(2);
   });
 
   it('reports run() throw via reply', async () => {
     registerCommand({
-      name: 'boom', role: ['admin'],
+      name: 'boom',
       async run() { throw new Error('kaboom'); },
     });
     const { ctx, replies } = buildCtx();
-    await dispatch(ctx, '/boom', 'admin');
+    await dispatch(ctx, '/boom');
     expect(replies[0]).toMatch(/kaboom/);
   });
 
@@ -104,10 +104,10 @@ describe('dispatch logging', () => {
   beforeEach(() => resetRegistryForTests());
 
   it('logs command start and done with name', async () => {
-    registerCommand({ name: 'foo', role: ['admin'], async run() { /* */ } });
+    registerCommand({ name: 'foo', async run() { /* */ } });
     const { logger, logs } = makeTestLogger();
     const { ctx } = buildCtx();
-    await dispatch(ctx, '/foo', 'admin', logger);
+    await dispatch(ctx, '/foo', logger);
     const msgs = logs.map((l) => l.msg);
     expect(msgs).toContain('command dispatch start');
     expect(msgs).toContain('command done');
@@ -116,28 +116,19 @@ describe('dispatch logging', () => {
   it('replies and logs on unknown command', async () => {
     const { logger, logs } = makeTestLogger();
     const { ctx, replies } = buildCtx();
-    await dispatch(ctx, '/nonexistent', 'admin', logger);
+    await dispatch(ctx, '/nonexistent', logger);
     expect(logs.some((l) => l.msg === 'command unknown')).toBe(true);
     expect(replies[0]).toContain('未知命令');
   });
 
-  it('logs and replies when role is denied', async () => {
-    registerCommand({ name: 'admin-only', role: ['admin'], async run() { /* */ } });
-    const { logger, logs } = makeTestLogger();
-    const { ctx, replies } = buildCtx();
-    await dispatch(ctx, '/admin-only', 'observer', logger);
-    expect(logs.some((l) => l.msg === 'command denied')).toBe(true);
-    expect(replies[0]).toMatch(/无权限/);
-  });
-
   it('logs error and replies when run() throws', async () => {
     registerCommand({
-      name: 'kaboom', role: ['admin'],
+      name: 'kaboom',
       async run() { throw new Error('boom!'); },
     });
     const { logger, logs } = makeTestLogger();
     const { ctx, replies } = buildCtx();
-    await dispatch(ctx, '/kaboom', 'admin', logger);
+    await dispatch(ctx, '/kaboom', logger);
     expect(logs.some((l) => l.level === 'error' && l.msg === 'command failed')).toBe(true);
     expect(replies[0]).toMatch(/boom!/);
   });
@@ -146,13 +137,13 @@ describe('dispatch logging', () => {
     resetRegistryForTests();
     const { ctx, replies } = buildCtx();
     const { logger } = makeTestLogger();
-    await dispatch(ctx, '/', 'admin', logger);
+    await dispatch(ctx, '/', logger);
     expect(replies[0]).toContain('空命令');
   });
 
   it('safeReply retries once when first reply throws', async () => {
     registerCommand({
-      name: 'broken', role: ['admin'],
+      name: 'broken',
       async run(c) { await c.reply('test'); },
     });
     let calls = 0;
@@ -175,7 +166,7 @@ describe('dispatch logging', () => {
     const { logger } = makeTestLogger();
     // /broken calls reply once (throws), then dispatch catches and uses safeReply
     // which calls reply again (call 2 succeeds with the failure message).
-    await dispatch(ctx, '/broken', 'admin', logger);
+    await dispatch(ctx, '/broken', logger);
     expect(calls).toBeGreaterThanOrEqual(2);
   });
 
@@ -200,7 +191,7 @@ describe('dispatch logging', () => {
     };
     const { logger, logs } = makeTestLogger();
     // unknown command → safeReply → first throws → log warn → second succeeds
-    await dispatch(ctx, '/nonexistent', 'admin', logger);
+    await dispatch(ctx, '/nonexistent', logger);
     expect(calls).toBe(2);
     const retryLog = logs.find((l) => l.level === 'warn' && l.msg === 'reply retry');
     expect(retryLog).toBeDefined();
@@ -225,7 +216,7 @@ describe('dispatch logging', () => {
       },
     };
     const { logger, logs } = makeTestLogger();
-    await dispatch(ctx, '/nonexistent', 'admin', logger);
+    await dispatch(ctx, '/nonexistent', logger);
     expect(logs.some((l) => l.level === 'warn' && l.msg === 'reply retry')).toBe(true);
     const failedLog = logs.find((l) => l.level === 'error' && l.msg === 'reply failed');
     expect(failedLog).toBeDefined();
@@ -236,30 +227,22 @@ describe('dispatch logging', () => {
 describe('validateRegistry', () => {
   it('returns no issues for valid commands', () => {
     resetRegistryForTests();
-    registerCommand({ name: 'foo', role: ['admin'], async run() {} });
+    registerCommand({ name: 'foo', async run() {} });
     expect(validateRegistry()).toEqual([]);
   });
 
   it('detects missing run function', () => {
     resetRegistryForTests();
-    registerCommand({ name: 'broken', role: ['admin'], run: undefined as never });
+    registerCommand({ name: 'broken', run: undefined as never });
     const issues = validateRegistry();
     expect(issues).toHaveLength(1);
     expect(issues[0]!.name).toBe('broken');
     expect(issues[0]!.message).toContain('run');
   });
 
-  it('detects empty role array', () => {
-    resetRegistryForTests();
-    registerCommand({ name: 'noroles', role: [], async run() {} });
-    const issues = validateRegistry();
-    expect(issues).toHaveLength(1);
-    expect(issues[0]!.message).toContain('role');
-  });
-
   it('detects uppercase name', () => {
     resetRegistryForTests();
-    registerCommand({ name: 'BadCase', role: ['admin'], async run() {} });
+    registerCommand({ name: 'BadCase', async run() {} });
     const issues = validateRegistry();
     expect(issues).toHaveLength(1);
     expect(issues[0]!.message).toContain('lowercase');
@@ -267,7 +250,8 @@ describe('validateRegistry', () => {
 
   it('aliases do not double-report (each def counted once)', () => {
     resetRegistryForTests();
-    registerCommand({ name: 'cmd', aliases: ['x', 'y', 'z'], role: [], async run() {} });
+    // Provide a valid command except for the uppercase name issue
+    registerCommand({ name: 'BadCase2', aliases: ['x', 'y', 'z'], async run() {} });
     // Same broken def registered under 4 keys; should report once not 4 times
     expect(validateRegistry()).toHaveLength(1);
   });

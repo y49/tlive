@@ -9,13 +9,11 @@
 // Design:
 // - Registry is a flat Map<string, CommandDef>. Aliases resolve to the same
 //   def (stored under each alias key). `listCommands()` dedupes via Set.
-// - Role gating: CommandContext carries the caller's role; dispatch rejects
-//   with a friendly message when the role is not in `def.role`.
+// - chat-trust: no role gating. Any user in a bound chat can drive the bot.
+//   CommandDef.role removed (T3). dispatch has no userRole parameter.
 // - Parsing: we split on whitespace for simple commands; complex commands
 //   (e.g. `/rename <alias> "<title>"`) do their own quote handling inside
 //   `run()` via `parseQuotedTail` helpers.
-
-import type { Role } from '../permission/roles.js';
 import type { InboundEvent, ReplyMarkup } from '../platform/types.js';
 import type { SessionManager } from '../session/manager.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
@@ -58,8 +56,6 @@ export interface CommandContext {
 export interface CommandDef {
   name: string;
   aliases?: string[];
-  /** Required role(s) to invoke. Empty array denies everyone. */
-  role: Role[];
   /** Optional short description for autocomplete / help listing. */
   description?: string;
   run(ctx: CommandContext, args: string[]): Promise<void>;
@@ -88,7 +84,6 @@ export function resetRegistryForTests(): void {
 export async function dispatch(
   ctx: CommandContext,
   rawText: string,
-  userRole: Role,
   logger?: Logger,
 ): Promise<void> {
   const log = logger ?? createLogger({ level: 'error', sink: () => undefined });
@@ -96,7 +91,7 @@ export async function dispatch(
   const name = (nameRaw ?? '').toLowerCase();
 
   log.info('command dispatch start', {
-    name, args, userRole,
+    name, args,
     chatId: ctx.inbound.chatId,
     userId: ctx.userId,
   });
@@ -109,11 +104,6 @@ export async function dispatch(
   if (!def) {
     log.info('command unknown', { name });
     await safeReply(ctx, `未知命令: /${name}。发 /help 看全部。`, log);
-    return;
-  }
-  if (!def.role.includes(userRole)) {
-    log.info('command denied', { name, userRole });
-    await safeReply(ctx, `无权限使用 /${def.name}`, log);
     return;
   }
   try {
@@ -188,9 +178,6 @@ export function validateRegistry(): RegistryIssue[] {
     seen.add(def);
     if (typeof def.run !== 'function') {
       issues.push({ name: def.name, message: 'run is not a function' });
-    }
-    if (!Array.isArray(def.role) || def.role.length === 0) {
-      issues.push({ name: def.name, message: 'role must be non-empty array' });
     }
     if (!def.name || def.name !== def.name.toLowerCase()) {
       issues.push({ name: def.name, message: 'name must be non-empty lowercase' });

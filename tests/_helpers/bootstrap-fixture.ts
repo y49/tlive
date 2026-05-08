@@ -29,13 +29,11 @@ import type { LocalSession } from '../../src/session/local-session.js';
 import type { ChannelType } from '../../src/workspace/chat-instance.js';
 import type { ChatInstance } from '../../src/workspace/chat-instance.js';
 import type { Workspace } from '../../src/workspace/config.js';
-import type { Role } from '../../src/workspace/config.js';
 import type { PermissionMode } from '../../src/runtime/types.js';
 import type { PolicyStore, PolicyRule } from '../../src/permission/policy-store.js';
 import { dispatch, resetRegistryForTests } from '../../src/im/command-parser.js';
 import { registerAllCommands } from '../../src/im/commands/index.js';
 import { CallbackRouter } from '../../src/im/callback-router.js';
-import { userRole } from '../../src/im/commands/_shared.js';
 import { FakeAdapter } from '../im/fake-adapter.js';
 
 // --------------------------------------------------------------------------
@@ -46,10 +44,6 @@ export interface BootstrapWorkspaceSpec {
   id: string;
   name: string;
   workdir: string;
-  /** T3-PENDING: roles removed in chat-trust; accepted here for backward compat
-   *  with existing tests until T3 cleans them up. */
-  roles?: Record<string, Role>;
-  defaultRole?: Role;
   bindings: Array<{
     channelType: 'telegram' | 'feishu';
     chatId: string;
@@ -118,10 +112,7 @@ function buildFakeWorkspaceManager(specs: BootstrapWorkspaceSpec[]): WorkspaceMa
     budget: {},
     mcpServers: {},
     createdAt: new Date().toISOString(),
-    // T3-PENDING: stash roles for backward compat (existing tests read them via userRole)
-    _roles: { ...(s.roles ?? {}) } as Record<string, Role>,
-    _defaultRole: (s.defaultRole ?? 'observer') as Role,
-  } as unknown as Workspace));
+  } as Workspace));
 
   // Seed ChatInstances from bindings spec
   const now = new Date().toISOString();
@@ -217,25 +208,6 @@ function buildFakeWorkspaceManager(specs: BootstrapWorkspaceSpec[]): WorkspaceMa
       const removed = chatInstances.filter((c) => c.workspaceId === id);
       chatInstances.splice(0, chatInstances.length, ...chatInstances.filter((c) => c.workspaceId !== id));
       return { workspace: ws, chatInstances: removed };
-    },
-    // T3-PENDING: role methods below will be removed in T3
-    getRole(wsId: string, userId: string): Role {
-      const ws = allWorkspaces.find((w) => w.id === wsId) as unknown as { _roles?: Record<string, Role>; _defaultRole?: Role } | undefined;
-      if (!ws) return 'observer';
-      return (ws._roles?.[userId] as Role | undefined) ?? (ws._defaultRole ?? 'observer');
-    },
-    setRole(wsId: string, userId: string, role: Role): void {
-      const ws = allWorkspaces.find((w) => w.id === wsId) as unknown as { _roles?: Record<string, Role> } | undefined;
-      if (ws?._roles) ws._roles[userId] = role;
-    },
-    claimAdmin(wsId: string, userId: string): boolean {
-      const ws = allWorkspaces.find((w) => w.id === wsId) as unknown as { _roles?: Record<string, Role> } | undefined;
-      if (!ws) throw new Error(`claimAdmin: workspace ${wsId} not found`);
-      const roles = ws._roles ?? {};
-      if (Object.values(roles).some((r) => r === 'admin')) return false;
-      if (!ws._roles) (ws as unknown as Record<string, unknown>)['_roles'] = {};
-      (ws as unknown as { _roles: Record<string, Role> })._roles[userId] = 'admin';
-      return true;
     },
     async save(): Promise<void> { /* no-op */ },
   } as unknown as WorkspaceManager;
@@ -419,10 +391,6 @@ export function setupBootstrap(opts: BootstrapFixtureOpts): BootstrapFixture {
   async function handleInbound(spec: InboundSpec): Promise<void> {
     const { channelType, chatId, userId, text, messageId } = spec;
 
-    // Resolve role from workspace (T3-PENDING: mirrors bootstrap.handleInbound role check).
-    const ws = workspaceManager.workspaceForChat(channelType, chatId);
-    const role = ws ? userRole(ws as unknown as { roles?: Record<string, string>; defaultRole?: string }, userId) : 'observer';
-
     const inbound: InboundEvent = {
       kind: 'message',
       channelType,
@@ -452,7 +420,6 @@ export function setupBootstrap(opts: BootstrapFixtureOpts): BootstrapFixture {
         reply: replyFn,
       },
       text,
-      role,
     );
   }
 

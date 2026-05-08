@@ -195,12 +195,11 @@ describe('e2e: onboarding (empty state → first session)', () => {
         logger: createLogger(),
       }, ev3);
 
-      // Workspace registered, admin claimed, chat bound.
+      // Workspace registered, chat bound (chat-trust: no role check needed).
       const all = env.workspaces.list();
       expect(all).toHaveLength(1);
       const ws = all[0]!;
       expect(ws.workdir).toBe(projectDir);
-      expect(env.workspaces.getRole(ws.id, userId)).toBe('admin');
       expect(env.workspaces.workspaceForChat(channelType, chatId)?.id).toBe(ws.id);
       // Pending state cleared.
       expect(env.brokerCreate.pendingFor(channelType, chatId)).toBeUndefined();

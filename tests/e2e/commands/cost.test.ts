@@ -23,7 +23,6 @@ describe('/cost — workspace + session cost + observer access', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w1', name: 'test-ws', workdir: '/tmp/tlive-e2e-cost-1',
-        roles: { 'u-admin': 'admin' },
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
@@ -53,7 +52,6 @@ describe('/cost — workspace + session cost + observer access', () => {
     env = setupBootstrap({
       workspaces: [{
         id: 'w2', name: 'test-ws', workdir: '/tmp/tlive-e2e-cost-2',
-        defaultRole: 'observer',
         bindings: [{ channelType: 'telegram', chatId: 'c1' }],
       }],
     });
