@@ -488,3 +488,141 @@ describe('PermissionCard — v3.2.4 multi + custom combinations', () => {
     expect(onResolve).toHaveBeenCalledWith(['my answer']);
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────────
+// PermissionCard — category-aware body formatting (Issue 1 fix)
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('PermissionCard — Write tool (file-edit, new file)', () => {
+  it('shows path + line count + content preview, NOT raw JSON', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const card = new PermissionCard(adapter, tgt(), {
+      kind: 'generic',
+      requestId: 'w1',
+      toolName: 'Write',
+      toolInput: { file_path: '/home/y/project/foo.txt', content: 'line1\nline2\n' },
+      category: 'file-edit',
+      diffPreview: { from: '', to: 'line1\nline2\n', added: 2, removed: 0, path: '/home/y/project/foo.txt' },
+      risk: 'medium',
+      onResolve: vi.fn(),
+    });
+    await card.send();
+    const text = adapter.calls[0].args.text as string;
+    // Shows path (last 2 segments)
+    expect(text).toContain('project/foo.txt');
+    // Shows Write label
+    expect(text).toContain('✏ Write');
+    // Shows new-file indicator
+    expect(text).toContain('新文件');
+    // Shows actual content
+    expect(text).toContain('line1');
+    // Does NOT dump raw JSON
+    expect(text).not.toContain('"file_path"');
+    expect(text).not.toContain('"content"');
+  });
+});
+
+describe('PermissionCard — Edit tool (file-edit, modify existing)', () => {
+  it('shows path + +/- counts, NOT raw JSON', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const card = new PermissionCard(adapter, tgt(), {
+      kind: 'generic',
+      requestId: 'e1',
+      toolName: 'Edit',
+      toolInput: { file_path: '/home/y/src/foo.ts', old_string: 'old line', new_string: 'new line 1\nnew line 2\n' },
+      category: 'file-edit',
+      diffPreview: { from: 'old line', to: 'new line 1\nnew line 2\n', added: 1, removed: 1, path: '/home/y/src/foo.ts' },
+      risk: 'medium',
+      onResolve: vi.fn(),
+    });
+    await card.send();
+    const text = adapter.calls[0].args.text as string;
+    // Shows path (last 2 segments)
+    expect(text).toContain('src/foo.ts');
+    // Shows Edit label
+    expect(text).toContain('✏ Edit');
+    // Shows +/- counts
+    expect(text).toMatch(/\+\d/);
+    expect(text).toMatch(/-\d/);
+    // Does NOT dump raw JSON
+    expect(text).not.toContain('"old_string"');
+    expect(text).not.toContain('"new_string"');
+  });
+});
+
+describe('PermissionCard — Bash tool (exec)', () => {
+  it('shows $ command + risk label, NOT raw JSON', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const card = new PermissionCard(adapter, tgt(), {
+      kind: 'generic',
+      requestId: 'b1',
+      toolName: 'Bash',
+      toolInput: { command: 'npx vitest run 2>&1 | tail -20' },
+      category: 'exec',
+      risk: 'low',
+      onResolve: vi.fn(),
+    });
+    await card.send();
+    const text = adapter.calls[0].args.text as string;
+    // Shows $ prefix and command
+    expect(text).toContain('$ npx vitest run');
+    // Shows risk
+    expect(text).toContain('low risk');
+    // Does NOT dump raw JSON
+    expect(text).not.toContain('"command"');
+  });
+
+  it('shows ⚠️ for high-risk commands', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const card = new PermissionCard(adapter, tgt(), {
+      kind: 'generic',
+      requestId: 'b2',
+      toolName: 'Bash',
+      toolInput: { command: 'rm -rf /tmp/test' },
+      category: 'exec',
+      risk: 'high',
+      onResolve: vi.fn(),
+    });
+    await card.send();
+    const text = adapter.calls[0].args.text as string;
+    expect(text).toContain('⚠️');
+    expect(text).toContain('high risk');
+  });
+});
+
+describe('PermissionCard — generic tool (no category)', () => {
+  it('shows toolName + key fields, NOT a full JSON dump', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const card = new PermissionCard(adapter, tgt(), {
+      kind: 'generic',
+      requestId: 'g1',
+      toolName: 'WebFetch',
+      toolInput: { url: 'https://example.com', method: 'GET', extra: 'irrelevant' },
+      // no category set → defaults to generic
+      onResolve: vi.fn(),
+    });
+    await card.send();
+    const text = adapter.calls[0].args.text as string;
+    // Shows url (key heuristic)
+    expect(text).toContain('https://example.com');
+    // Does NOT dump the entire JSON object structure
+    expect(text).not.toContain('"method"');
+    expect(text).not.toContain('"extra"');
+  });
+
+  it('falls back to plain toolName when no recognized key fields', async () => {
+    const adapter = new FakeAdapter('telegram');
+    const card = new PermissionCard(adapter, tgt(), {
+      kind: 'generic',
+      requestId: 'g2',
+      toolName: 'UnknownTool',
+      toolInput: { obscure_key: 'value' },
+      onResolve: vi.fn(),
+    });
+    await card.send();
+    const text = adapter.calls[0].args.text as string;
+    expect(text).toContain('UnknownTool');
+    // No JSON dump
+    expect(text).not.toContain('"obscure_key"');
+  });
+});

@@ -62,9 +62,9 @@ function progressMarkdown(state: HudState, now: number): string {
   const a = state.currentActivity;
   if (a?.kind === 'tool_running') {
     const arg = a.toolArg ? ` · ${a.toolArg}` : '';
-    parts.push(`<font color='orange'>◐ ${a.toolName}${arg} · ${fmtDur(a.elapsedMs)}</font>`);
+    parts.push(`<font color='orange'>◐ ${a.toolName}${arg} · ${fmtDur(elapsedMsForRender(state, now))}</font>`);
   } else if (a?.kind === 'thinking') {
-    parts.push(`<font color='grey'>◐ thinking · ${fmtDur(a.elapsedMs)}</font>`);
+    parts.push(`<font color='grey'>◐ thinking · ${fmtDur(elapsedMsForRender(state, now))}</font>`);
   } else if (a?.kind === 'waiting_permission') {
     parts.push(`<font color='yellow'>⏸ ${a.toolName ?? ''}</font>`);
   }

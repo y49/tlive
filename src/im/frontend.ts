@@ -528,6 +528,9 @@ export class SessionFrontend {
         requestId: req.id,
         toolName: req.toolName,
         toolInput: req.toolInput,
+        category: req.category,
+        diffPreview: req.diffPreview,
+        risk: req.risk,
         onResolve: (decision) => {
           // PermissionCard uses 'always'; broker expects 'allow_always'.
           const brokerDecision = decision === 'always' ? 'allow_always' : decision;

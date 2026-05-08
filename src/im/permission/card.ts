@@ -7,6 +7,7 @@
 
 import type { PlatformAdapter, ReplyMarkup, InlineButton } from '../../platform/types.js';
 import type { RenderTarget } from '../render-target.js';
+import type { PermissionCategory } from '../../runtime/types.js';
 import { escapeHtml } from '../util/html.js';
 
 export type PermissionCardOptions =
@@ -15,6 +16,9 @@ export type PermissionCardOptions =
       requestId: string;
       toolName: string;
       toolInput: unknown;
+      category?: PermissionCategory;
+      diffPreview?: { from: string; to: string; added: number; removed: number; path?: string };
+      risk?: 'low' | 'medium' | 'high';
       onResolve: (decision: 'allow' | 'deny' | 'always') => void;
     }
   | {
@@ -32,12 +36,82 @@ export type PermissionCardOptions =
       onResolve: (chosen: string[]) => void;
     };
 
-function jsonPreview(input: unknown, max = 500): string {
-  try {
-    return escapeHtml(JSON.stringify(input, null, 2).slice(0, max));
-  } catch {
-    return '';
+const CONTENT_MAX_LINES = 30;
+const CONTENT_MAX_CHARS = 1500;
+
+/** Truncate content to first N lines / M chars; append note if clipped. */
+function truncateContent(text: string): string {
+  let clipped = text.length > CONTENT_MAX_CHARS ? text.slice(0, CONTENT_MAX_CHARS) : text;
+  const lines = clipped.split('\n');
+  if (lines.length > CONTENT_MAX_LINES) clipped = lines.slice(0, CONTENT_MAX_LINES).join('\n');
+  const totalLines = text.split('\n').length;
+  const shownLines = clipped.split('\n').length;
+  const note = shownLines < totalLines ? `\n<i>...还有 ${totalLines - shownLines} 行</i>` : '';
+  return escapeHtml(clipped) + note;
+}
+
+/** Extract the most informative 1-2 fields from a toolInput for generic tools. */
+function genericPreview(toolName: string, input: unknown): string {
+  if (input == null || typeof input !== 'object') return '';
+  const obj = input as Record<string, unknown>;
+  const KEY_HINTS: Record<string, string[]> = {
+    WebFetch: ['url'],
+    WebSearch: ['query'],
+    Read: ['file_path'],
+    Grep: ['pattern', 'path'],
+    Glob: ['pattern'],
+    LS: ['path'],
+  };
+  const candidates = KEY_HINTS[toolName] ?? ['url', 'query', 'pattern', 'path', 'file_path', 'command'];
+  const parts: string[] = [];
+  for (const k of candidates) {
+    const v = obj[k];
+    if (typeof v === 'string' && v.length > 0) {
+      parts.push(`<b>${escapeHtml(k)}</b>: <code>${escapeHtml(v.slice(0, 200))}</code>`);
+      if (parts.length >= 2) break;
+    }
   }
+  return parts.join('\n');
+}
+
+/** Build the body text for a generic-kind permission card based on category. */
+function buildGenericBody(opts: Extract<PermissionCardOptions, { kind: 'generic' }>): string {
+  const category = opts.category ?? 'generic';
+
+  if (category === 'file-edit') {
+    const dp = opts.diffPreview;
+    if (!dp) return `🔐 <b>Permission</b>: <code>${escapeHtml(opts.toolName)}</code>`;
+    const shortPath = dp.path
+      ? dp.path.split('/').slice(-2).join('/')
+      : '(unknown path)';
+    const isNew = dp.from === '';
+    const verb = opts.toolName === 'Write' ? '✏ Write' : opts.toolName === 'MultiEdit' ? '✏ MultiEdit' : '✏ Edit';
+    const header = `${verb} — <code>${escapeHtml(shortPath)}</code>`;
+    let diff: string;
+    if (isNew) {
+      const lineCount = dp.to ? dp.to.split('\n').length : 0;
+      diff = `<i>+ ${lineCount} 行 (新文件)</i>\n<pre>${truncateContent(dp.to)}</pre>`;
+    } else {
+      diff = `<i>+${dp.added} / -${dp.removed}</i>`;
+      if (dp.from) diff += `\n<pre>${truncateContent(dp.from)}</pre>`;
+    }
+    return `${header}\n${diff}`;
+  }
+
+  if (category === 'exec') {
+    const input = opts.toolInput as Record<string, unknown> | null ?? {};
+    const cmd = typeof input === 'object' && input !== null
+      ? String((input as Record<string, unknown>).command ?? '')
+      : '';
+    const risk = opts.risk ?? 'low';
+    const riskTag = risk === 'high' ? ' ⚠️ high risk' : risk === 'medium' ? ' · medium risk' : ' · low risk';
+    return `🖥 <b>Bash</b>${riskTag}\n<pre>$ ${escapeHtml(cmd.slice(0, 500))}</pre>`;
+  }
+
+  // generic fallback: tool name + key fields (no JSON dump)
+  const preview = genericPreview(opts.toolName, opts.toolInput);
+  const header = `🔐 <b>Permission</b>: <code>${escapeHtml(opts.toolName)}</code>`;
+  return preview ? `${header}\n${preview}` : header;
 }
 
 export class PermissionCard {
@@ -276,9 +350,7 @@ export class PermissionCard {
 
   private render(): { text: string; markup: ReplyMarkup } {
     if (this.opts.kind === 'generic') {
-      const text =
-        `🔐 <b>Permission</b>: <code>${escapeHtml(this.opts.toolName)}</code>\n` +
-        `<pre>${jsonPreview(this.opts.toolInput)}</pre>`;
+      const text = buildGenericBody(this.opts);
       const buttons: InlineButton[][] = [
         [
           { text: '✅ Allow', callbackData: `perm:${this.opts.requestId}:allow` },

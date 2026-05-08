@@ -61,11 +61,11 @@ describe('integration: Feishu end-to-end', () => {
     });
     await tick();
 
-    // New UX: PermissionCard renders 🔐 Permission: <code>Edit</code> (not 📝 Edit).
+    // New UX: PermissionCard renders ✏ Edit — <path> for file-edit category (not raw JSON).
     const sends = ctx.adapter.byKind('send');
-    expect(sends.some((s) => String(s.args.text ?? '').includes('Permission'))).toBe(true);
+    expect(sends.some((s) => String(s.args.text ?? '').includes('✏'))).toBe(true);
     expect(sends.some((s) => String(s.args.text ?? '').includes('Edit'))).toBe(true);
-    // Tool input JSON preview included in the card.
+    // File path shown in the card (not buried in JSON).
     expect(sends.some((s) => String(s.args.text ?? '').includes('README.md'))).toBe(true);
     // Broker resolved event cleans up the card registry (no crash).
     expect(ctx.adapter.byKind('send').length).toBeGreaterThanOrEqual(1);

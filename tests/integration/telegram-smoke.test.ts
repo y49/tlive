@@ -88,8 +88,8 @@ describe('integration: Telegram end-to-end turn', () => {
     // At least: ReplyDocument placeholder send (turn_start) + permission-card send.
     const sends = ctx.adapter.byKind('send');
     expect(sends.length).toBeGreaterThanOrEqual(2);
-    // Permission card send: PermissionCard uses 🔐 Permission prefix.
-    expect(sends.some((s) => String(s.args.text ?? '').includes('Permission'))).toBe(true);
+    // Permission card send: exec category shows 🖥 Bash + command format (no raw JSON).
+    expect(sends.some((s) => String(s.args.text ?? '').includes('Bash'))).toBe(true);
     // ReplyDocument streams the assistant text via edit() — "Done" lands in
     // an edit of the placeholder, not a fresh send.
     const edits = ctx.adapter.byKind('edit');
@@ -133,8 +133,8 @@ describe('integration: Telegram end-to-end turn', () => {
     expect(sequence[0]!.kind).toBe('send');
     expect(sequence[0]!.text).toMatch(/^<b>/);
 
-    // Permission card send uses 🔐 Permission prefix (PermissionCard).
-    const permission = sequence.find((s) => s.kind === 'send' && s.text.includes('Permission'));
+    // Permission card send: file-edit category shows ✏ Edit — <path> format (no raw JSON).
+    const permission = sequence.find((s) => s.kind === 'send' && s.text.includes('✏'));
     expect(permission).toBeDefined();
     expect(permission!.text).toContain('Edit');
 
