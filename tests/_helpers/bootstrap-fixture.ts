@@ -242,7 +242,13 @@ function buildFakeSessionManager(): SessionManager & {
       createLocalCalls.push(opts);
       const id = `sess-fake-${++counter}`;
       const alias = id.replace(/[^a-z0-9]/g, '').slice(0, 8);
-      const s = { kind: 'local', id, shortAlias: alias, workspaceId: opts.workspaceId, ...opts } as unknown as LocalSession;
+      let _model: string | undefined = opts.model as string | undefined;
+      const s = {
+        kind: 'local', id, shortAlias: alias, workspaceId: opts.workspaceId, ...opts,
+        // Stub setModel / getModel so callback tests can call runtime:model:set:*.
+        async setModel(m: string) { _model = m; },
+        get sdkModel() { return _model; },
+      } as unknown as LocalSession;
       liveSessions.set(id, s);
       return s;
     },

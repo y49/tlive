@@ -3,21 +3,33 @@
 // `/model [<id>]` — show or switch the current session's model.
 // Per spec §3:
 //   no-args  → current model + button list from runtime.supportedModels()
+//              (F2 picker via KNOWN_MODELS fallback when runtime unavailable)
 //              + [✏ 自定义] + [设为 workspace 默认] (when current ≠ ws default)
 //   <id>     → setModel on active session (best effort) + persist as workspace
 //              default so new sessions inherit it.
 //
 // LocalSession.runtime is `private` in TS but exists at runtime; the picker
-// reaches through via a structural cast. Falls through to a picker without
-// model rows when the runtime call fails (offline, runtime not ready, etc.).
+// reaches through via a structural cast. Falls through to F2 KNOWN_MODELS
+// picker when the runtime call fails (offline, runtime not ready, etc.).
 //
 // Callback handlers (runtime:model:set:<id> / :custom / :set-default) are
-// wired in Task 31.
+// handled by CallbackRouter.handleRuntimeModel (Task 8.5 added role check).
 
 import type { CommandDef, CommandContext } from '../command-parser.js';
 import type { ReplyMarkup, InlineButton } from '../../platform/types.js';
 import type { LocalSession } from '../../session/local-session.js';
 import { workspaceForChat } from './_shared.js';
+
+// Known models for fallback when runtime.supportedModels() is unavailable.
+// Displayed via F2 InteractivePicker with runtime:model:set:* callback prefix
+// (handled by CallbackRouter.handleRuntimeModel — Approach 1, additive).
+const KNOWN_MODELS = [
+  { label: 'Claude Opus 4.7 (latest)', value: 'claude-opus-4-7' },
+  { label: 'Claude Sonnet 4.6', value: 'claude-sonnet-4-6' },
+  { label: 'Claude Haiku 4.5', value: 'claude-haiku-4-5-20251001' },
+  { label: 'Claude Opus 4.5', value: 'claude-opus-4-5' },
+  { label: 'Claude Sonnet 4.5', value: 'claude-sonnet-4-5' },
+];
 
 export const modelCmd: CommandDef = {
   name: 'model',
@@ -78,30 +90,43 @@ async function renderPicker(ctx: CommandContext): Promise<void> {
   // back to the workspace default. Tests inject `sdkModel` directly on a
   // fake session; production reads it from LocalSession's getter.
   const sessionAny = session as unknown as { sdkModel?: string } | null;
-  const current = sessionAny?.sdkModel ?? ws.defaults.model ?? '(default)';
+  const current = sessionAny?.sdkModel ?? ws.defaults.model ?? KNOWN_MODELS[0]!.value;
 
   // Pull supported models off the runtime when alive. `runtime` is a private
   // field on LocalSession in TS; the runtime API is stable and present at
   // runtime, so we reach through structurally and swallow failures so the
-  // picker still renders [✏ 自定义] when the SDK isn't reachable.
+  // F2 KNOWN_MODELS picker is used when the SDK isn't reachable.
   let supported: Array<{ id: string; displayName?: string; description?: string }> = [];
   try {
     const runtime = (session as unknown as { runtime?: RuntimeLike } | null)?.runtime;
     if (runtime?.supportedModels) supported = await runtime.supportedModels();
   } catch {
-    /* ignore — picker still useful with [✏ 自定义] */
+    /* ignore — fall through to F2 KNOWN_MODELS picker */
   }
 
-  const lines = ['📊 模型(当前 session)', `   ${current}`];
+  // Build model row buttons from live runtime results, or fall back to
+  // KNOWN_MODELS via F2 InteractivePicker items when the runtime is offline.
+  // Callbacks always use runtime:model:set:<id> so CallbackRouter.handleRuntimeModel
+  // handles them regardless of source (Approach 1 — additive, no migration).
+  const modelSource: Array<{ id: string; label: string }> =
+    supported.length > 0
+      ? supported.map((m) => ({ id: m.id, label: m.displayName ?? m.id }))
+      : KNOWN_MODELS.map((m) => ({ id: m.value, label: m.label }));
+
+  const lines =
+    supported.length > 0
+      ? ['📊 模型(当前 session)', `   ${current}`]
+      : [`选择模型 (当前: ${current})`];
 
   const buttons: InlineButton[][] = [];
-  for (let i = 0; i < supported.length; i += 2) {
+  for (let i = 0; i < modelSource.length; i += 2) {
     const row: InlineButton[] = [];
-    for (let j = i; j < Math.min(i + 2, supported.length); j++) {
-      const m = supported[j]!;
-      const label = m.displayName ?? m.id;
-      const checked = m.id === current ? ' ✓' : '';
-      row.push({ text: `${label}${checked}`, callbackData: `runtime:model:set:${m.id}` });
+    for (let j = i; j < Math.min(i + 2, modelSource.length); j++) {
+      const m = modelSource[j]!;
+      const checked = m.id === current
+        ? (supported.length > 0 ? ' ✓' : ' ✅')
+        : '';
+      row.push({ text: `${m.label}${checked}`, callbackData: `runtime:model:set:${m.id}` });
     }
     buttons.push(row);
   }
