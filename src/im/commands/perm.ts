@@ -42,7 +42,8 @@ export const permCmd: CommandDef = {
       return;
     }
     if (sub === 'allow' || sub === 'deny') {
-      const pattern = args[1];
+      // Join remaining args so patterns with spaces (e.g. "Bash(npm test)") work.
+      const pattern = args.slice(1).join(' ');
       if (!pattern) {
         await ctx.reply(`用法: /perm ${sub} <toolName>`);
         return;

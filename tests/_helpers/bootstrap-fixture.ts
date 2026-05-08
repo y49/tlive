@@ -35,6 +35,7 @@ import type { ChatBinding, ChannelType } from '../../src/workspace/bindings.js';
 import type { Workspace } from '../../src/workspace/config.js';
 import type { Role } from '../../src/workspace/config.js';
 import type { PermissionMode } from '../../src/runtime/types.js';
+import type { PolicyStore, PolicyRule } from '../../src/permission/policy-store.js';
 import { dispatch, resetRegistryForTests } from '../../src/im/command-parser.js';
 import { registerAllCommands } from '../../src/im/commands/index.js';
 import { CallbackRouter } from '../../src/im/callback-router.js';
@@ -61,6 +62,13 @@ export interface BootstrapWorkspaceSpec {
 
 export interface BootstrapFixtureOpts {
   workspaces: BootstrapWorkspaceSpec[];
+  /**
+   * Optional fake PolicyStore factory for /perm tests. When provided, it is
+   * wired into both the CommandContext (policyStoreFor) and the CallbackRouter
+   * deps (policyStoreFor) so both the command and callback paths can manage
+   * policy rules without touching the filesystem.
+   */
+  policyStoreFor?: (workspaceId: string) => PolicyStore;
 }
 
 // --------------------------------------------------------------------------
@@ -290,6 +298,61 @@ function buildFakeSessionManager(): SessionManager & {
 }
 
 // --------------------------------------------------------------------------
+// Fake in-memory PolicyStore (for /perm tests — no filesystem I/O)
+// --------------------------------------------------------------------------
+
+/**
+ * Build a simple in-memory PolicyStore per workspace, returned by a factory
+ * function compatible with BootstrapFixtureOpts.policyStoreFor.
+ * Rules live in a plain array; add/remove are synchronous but wrapped in
+ * resolved promises to satisfy the PolicyStore interface.
+ */
+export function buildFakePolicyStoreFactory(): {
+  factory: (workspaceId: string) => PolicyStore;
+  storeMap: Map<string, PolicyRule[]>;
+} {
+  const storeMap = new Map<string, PolicyRule[]>();
+  let ruleCounter = 0;
+
+  function getOrCreate(wsId: string): PolicyRule[] {
+    if (!storeMap.has(wsId)) storeMap.set(wsId, []);
+    return storeMap.get(wsId)!;
+  }
+
+  function factory(wsId: string): PolicyStore {
+    const rules = getOrCreate(wsId);
+    return {
+      list(): PolicyRule[] { return [...rules]; },
+      async add(
+        pattern: PolicyRule['pattern'],
+        decision: PolicyRule['decision'],
+        scope: PolicyRule['scope'],
+        createdBy: string,
+      ): Promise<PolicyRule> {
+        const rule: PolicyRule = {
+          id: `pol-fake-${++ruleCounter}`,
+          pattern, decision, scope, createdBy,
+          createdAt: new Date().toISOString(),
+        };
+        rules.push(rule);
+        return rule;
+      },
+      async remove(id: string): Promise<boolean> {
+        const idx = rules.findIndex((r) => r.id === id);
+        if (idx === -1) return false;
+        rules.splice(idx, 1);
+        return true;
+      },
+      match() { return null; },
+      async load() { /* no-op */ },
+      async save() { /* no-op */ },
+    } as unknown as PolicyStore;
+  }
+
+  return { factory, storeMap };
+}
+
+// --------------------------------------------------------------------------
 // Main factory
 // --------------------------------------------------------------------------
 
@@ -336,6 +399,8 @@ export function setupBootstrap(opts: BootstrapFixtureOpts): BootstrapFixture {
     elicitationBroker,
     adapters: adaptersRecord,
     workspaceManager,
+    // Wire optional PolicyStore factory for /perm callback tests.
+    ...(opts.policyStoreFor ? { policyStoreFor: opts.policyStoreFor } : {}),
   });
 
   async function handleInbound(spec: InboundSpec): Promise<void> {
@@ -370,6 +435,8 @@ export function setupBootstrap(opts: BootstrapFixtureOpts): BootstrapFixture {
         permissionBroker,
         askBroker,
         elicitationBroker,
+        // Wire optional PolicyStore factory for /perm command tests.
+        ...(opts.policyStoreFor ? { policyStoreFor: opts.policyStoreFor } : {}),
         reply: replyFn,
       },
       text,
