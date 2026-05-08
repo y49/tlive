@@ -53,7 +53,7 @@ afterEach(async () => {
   env = undefined;
 });
 
-describe('/perm — action menu + text subcommands + callback + role (Option A)', () => {
+describe('/perm — action menu + text subcommands + callback', () => {
   it('no-arg /perm renders inline_keyboard with runtime:perm:add:* buttons', async () => {
     const { factory } = buildFakePolicyStoreFactory();
     env = setupBootstrap({

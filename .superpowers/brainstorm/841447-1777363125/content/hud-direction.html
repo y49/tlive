@@ -1,0 +1,87 @@
+<h2>新方向 — HUD pinned message(像 statusline 那样)</h2>
+<p class="subtitle">把 session header + activity sticky + parallel tools + subagents + cache badge 全部折进一条 pinned 消息。像你截图里的 claude-hud 那样,统一一处显示所有 status,edit-in-place 更新。</p>
+
+<div class="section">
+  <h3>现在(B 方向):多个独立消息,各自 edit</h3>
+  <div class="mockup" style="font-size:0.85em">
+    <div style="background:#fff8dc;padding:4px 8px;margin:4px;border-radius:6px">📌 tlive · 8cdfcfb · $0.12</div>
+    <div style="background:#e3f2fd;padding:4px 8px;margin:4px;border-radius:6px;font-size:0.8em">🔧 Bash · 2.1s ⏳<br>  ✅ ToolSearch</div>
+    <div style="background:white;padding:6px 10px;margin:4px;border-radius:8px;display:inline-block;clear:both;border:1px solid #ddd">已经检查完了。</div>
+  </div>
+  <p style="font-size:0.8em;color:#666">3 条独立消息,每条独立的 edit 状态机,容易出 bug 也占空间。</p>
+</div>
+
+<div class="section">
+  <h3>HUD 方向:1 条 pinned 消息聚合所有 status</h3>
+  <div class="mockup" style="font-family:monospace;background:#1e1e2e;color:#cdd6f4;padding:14px;border-radius:8px;font-size:0.85em;line-height:1.5">
+    <div style="color:#89dceb">📌 [Opus 4.7 · 1M context]</div>
+    <div style="color:#a6e3a1">tlive · git(feat/v1.0-architecture*)</div>
+    <div style="margin-top:6px">
+      <span style="color:#bac2de">Context</span>  <span style="background:linear-gradient(to right, #89dceb 73%, #45475a 73%);padding:0 16px;letter-spacing:-1px"></span> 73%
+    </div>
+    <div>
+      <span style="color:#bac2de">Cost</span>     <span style="background:linear-gradient(to right, #f9e2af 12%, #45475a 12%);padding:0 16px;letter-spacing:-1px"></span> $0.12 / $1.00
+    </div>
+    <div>
+      <span style="color:#bac2de">Cache</span>    <span style="color:#f9e2af">🔥 5min</span>
+    </div>
+    <div style="margin-top:8px;color:#fab387">◐ Bash · 2.1s</div>
+    <div style="color:#a6e3a1">✓ ToolSearch ×1 | ✓ Read ×2 | ✓ Bash ×3</div>
+    <div style="color:#cba6f7">↪ session 8cdfcfb · idle 0s · turn 4</div>
+  </div>
+  <div class="mockup" style="font-size:0.85em;margin-top:8px">
+    <div style="background:#dcf8c6;padding:6px 10px;margin:4px;border-radius:8px;text-align:right;display:inline-block;float:right;clear:both">👀 测试一下</div>
+    <div style="clear:both"></div>
+    <div style="background:white;padding:6px 10px;margin:4px;border-radius:8px;display:inline-block;clear:both;border:1px solid #ddd">已经检查完了。代码看起来没问题,主要逻辑在 <code>src/foo.ts</code>。</div>
+  </div>
+  <p style="font-size:0.8em;color:#666">↑ HUD pinned 在最上(用 Telegram 原生 pin,常驻可见),消息流里只有 reply 和 reaction,干净。HUD 用 edit-in-place,reply 用 send-only。</p>
+</div>
+
+<div class="section">
+  <h3>这条 HUD 渲染细节</h3>
+  <ul style="font-size:0.9em;line-height:1.7">
+    <li><b>Header line</b> — model + workspace + git branch</li>
+    <li><b>Progress bars</b> — Context / Cost / 也可加 Token-quota,用 unicode block char 做条</li>
+    <li><b>Cache</b> — 🔥 N min(剩余 cache 时间)</li>
+    <li><b>Current activity</b> — ◐ <code>{tool}</code> · {elapsed}(thinking 时显示 "◐ thinking · 0.2s")</li>
+    <li><b>Tool tally</b> — ✓ Bash ×3 | ✓ Read ×2 (本 session 累计)</li>
+    <li><b>Subagent line</b>(可选) — ✓ general-purpose [sonnet]: Polish — ...</li>
+    <li><b>Footer</b> — session id (短) + idle time + turn 计数</li>
+  </ul>
+  <p style="font-size:0.85em;color:#666;margin-top:8px">所有这些都是 <b>1 条消息的多行内容</b>。每个事件触发一次 <code>adapter.edit</code>,内容整体重 build。</p>
+</div>
+
+<div class="section">
+  <h3>edit-in-place 稳定性方案</h3>
+  <p style="font-size:0.9em">claude-hud 的 statusline 在 terminal 里 reliable 因为是直接重绘。Telegram edit 不可靠 → 解法:</p>
+  <ul style="font-size:0.9em;line-height:1.7">
+    <li><b>节流</b> — 每个事件不立即 edit,debounce 到 ≥500ms,合并 burst</li>
+    <li><b>幂等内容</b> — text 没变(同 hash)就不发 edit</li>
+    <li><b>fallback 策略</b> — edit 失败 → 不重发(避免双消息),记 stderr,等下次更新自然修复</li>
+    <li><b>send-only fallback</b> — 如果 30s 内 edit 失败 ≥3 次,降级为 send-new + delete-old(最坏 case 也只 1 条可见)</li>
+  </ul>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="hud" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>HUD pinned 方向 — 像 statusline</h3>
+      <p>1 条 pinned 消息聚合所有 status + 单独 reply / reaction / permission</p>
+    </div>
+  </div>
+  <div class="option" data-choice="hud-bottom" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>HUD 但放在消息流底部(不 pin)</h3>
+      <p>每次 turn 末尾一条新 HUD 消息,旧的删掉。append-only,无 edit 风险</p>
+    </div>
+  </div>
+  <div class="option" data-choice="adjust" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>方向对,但内容不对</h3>
+      <p>终端说要加 / 减哪些字段</p>
+    </div>
+  </div>
+</div>

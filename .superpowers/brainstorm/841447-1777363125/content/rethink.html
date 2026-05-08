@@ -1,0 +1,107 @@
+<h2>退一步:为什么一直在打补丁?</h2>
+<p class="subtitle">Activity sticky 反复出 bug、edit-in-place 不稳、reaction 时序复杂... 不是 bug 修不完,是<b>架构方向</b>的问题。</p>
+
+<div class="section" style="background:#fff8e1;padding:16px;border-radius:8px;border-left:4px solid #f57c00">
+  <h3 style="margin-top:0">📌 真正的设计冲突</h3>
+  <p>v1.0 的 13-renderer 架构来自 Slack/Discord 的"channel + thread"思维:pinned header 是频道头、sticky 是常驻进度、edit-in-place 是 thread 内更新。</p>
+  <p><b>Telegram 不是这个模型。</b> Telegram 是"消息流"——每条消息都是独立单元,edit 是补充能力(rate limit / parse failure / can't be edited 等 edge case 多),pin 只 1 条且全局可见。强行做状态机 = 跟产品设计逆着干。</p>
+  <p>Result:每个 anchor 都得管"啥时候 send、啥时候 edit、edit 失败咋办、msgId 状态机...",13 个 renderer 13 套状态机,frontend 协调成噩梦。</p>
+</div>
+
+<h3 style="margin-top:32px">两条路再选一次</h3>
+
+<div class="cards">
+  <div class="card" data-choice="b-revised" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup" style="font-size:0.8em">
+        <div style="background:#fff8dc;padding:4px 8px;margin:4px;border-radius:6px;font-size:0.85em">📌 tlive · 8cdfcfb · $0.12</div>
+        <div style="background:#dcf8c6;padding:6px 10px;margin:4px;border-radius:8px;text-align:right;display:inline-block;float:right;clear:both">👀 测试一下</div>
+        <div style="clear:both"></div>
+        <div style="background:#e3f2fd;padding:6px 8px;margin:4px;border-radius:6px;font-size:0.8em;border-left:3px solid #2196f3">
+          🔧 Bash · 2.1s ⏳<br>
+          <span style="font-size:0.85em">  ✅ ToolSearch</span>
+        </div>
+        <p style="font-size:0.7em;color:#888;margin:4px 8px">↑ 这条会随 tool 进度 edit 多次</p>
+        <div style="background:white;padding:6px 10px;margin:4px;border-radius:8px;display:inline-block;clear:both;border:1px solid #ddd">
+          已经检查完了。<br>
+          <span style="font-size:0.75em;color:#888">📊 1.2K tok · $0.03 · 4.2s</span>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B(原方向):6 anchor,sticky edit-in-place</h3>
+      <p><b>2 anchor 需要 edit:</b> session-header(turn_end refresh)、activity-sticky(每个 tool event)。</p>
+      <ul style="margin:8px 0 0 20px;font-size:0.85em">
+        <li>✅ 进度实时,1 turn = 1 sticky 视觉清晰</li>
+        <li>❌ Telegram edit 不稳(rate / parse / not-modified)</li>
+        <li>❌ 当前 bug 反复出</li>
+        <li>❌ Code 复杂:每个 sticky 一套状态机</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card" data-choice="d-native" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup" style="font-size:0.8em">
+        <div style="background:#dcf8c6;padding:6px 10px;margin:4px;border-radius:8px;text-align:right;display:inline-block;float:right;clear:both">👌 测试一下</div>
+        <div style="clear:both"></div>
+        <div style="background:white;padding:6px 10px;margin:4px;border-radius:8px;display:inline-block;clear:both;border:1px solid #ddd">
+          已经检查完了。代码看起来没问题,主要逻辑在 <code>src/foo.ts</code>。<br><br>
+          <span style="font-size:0.75em;color:#888">— 用了 ToolSearch · Read · Bash · 4.2s · $0.03</span>
+        </div>
+        <p style="font-size:0.7em;color:#888;margin:4px 8px">↑ 没 sticky / pinned / 中间消息。reaction 表示状态。Tool 足迹在 reply 末尾。</p>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>D(IM-native):append-only,极少 edit</h3>
+      <p><b>0 anchor 用 edit-in-place:</b> 用户消息 reaction(原生支持,不算 edit)+ 单条 reply 消息(含足迹和 cost)+ permission card(独立 send)。</p>
+      <ul style="margin:8px 0 0 20px;font-size:0.85em">
+        <li>✅ 跟 Telegram 模型对齐,所有 edit edge case 消失</li>
+        <li>✅ 极简实现,复杂度大幅下降</li>
+        <li>✅ 长 prompt 仍有反馈(reaction 切 🤔)</li>
+        <li>⚠️ Tool 进度无中间显示(只有最终 reply 后看足迹)</li>
+        <li>⚠️ 不知 daemon 是否还在跑(但 Telegram 默认有 typing... 提示)</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:24px;background:#f3f8ff;padding:16px;border-radius:8px">
+  <h3 style="margin-top:0">💡 折中可能 D' (D + 一条进度消息)</h3>
+  <p>D 的极简 + 长任务时<b>独立 send 一条进度消息</b>(不 edit),完成时再 send reply。</p>
+  <p style="font-size:0.85em;color:#666">例:用户发 prompt → 5s 没 reply 的 turn → bot send "🤔 还在想…" → 完成时 send 最终 reply。中间消息不动它,append-only。</p>
+  <p>需要的话最多每 30s 一条 "still thinking" — 不会刷屏。</p>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="d-pure" onclick="toggleSelect(this)">
+    <div class="letter">D</div>
+    <div class="content">
+      <h3>纯 D — 极简 IM-native,无 sticky</h3>
+      <p>Reply + reaction + permission card,完。</p>
+    </div>
+  </div>
+  <div class="option" data-choice="d-prime" onclick="toggleSelect(this)">
+    <div class="letter">D'</div>
+    <div class="content">
+      <h3>D' — 加个独立的 thinking 进度消息</h3>
+      <p>慢的时候独立 send,不 edit。极简但有反馈。</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b-keep" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>仍然 B — sticky edit-in-place</h3>
+      <p>承担 bug 风险换实时进度</p>
+    </div>
+  </div>
+  <div class="option" data-choice="other" onclick="toggleSelect(this)">
+    <div class="letter">?</div>
+    <div class="content">
+      <h3>都不对 / 还有别的思路</h3>
+      <p>终端说</p>
+    </div>
+  </div>
+</div>
+
+<p style="margin-top:24px;font-size:0.85em;color:#666">我倾向 <b>D'</b>:用 IM 原生方式表达,bug 面减小 80%,但还能给慢任务一点反馈。</p>

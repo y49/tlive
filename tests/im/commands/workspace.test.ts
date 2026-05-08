@@ -36,7 +36,6 @@ describe('/workspace state-adaptive', () => {
           provider: 'claude', model: 'claude-sonnet-4-6', permissionMode: 'default',
           thinking: 'collapsed', verbose: false, prewarmCache: false, threadPerSession: false,
         },
-        roles: { 'u1': 'admin' },
       },
       userId: 'u1',
       otherWorkspaces: [{ id: 'w2', name: 'api', workdir: '/p/a' }],
@@ -117,7 +116,6 @@ describe('/workspace state-adaptive', () => {
           provider: 'claude', permissionMode: 'default', thinking: 'collapsed',
           verbose: false, prewarmCache: false, threadPerSession: false,
         },
-        roles: { 'u1': 'admin' },
         // Helper seeds a single binding for the inbound chat by default.
       },
       channelType: 'telegram',
@@ -136,7 +134,6 @@ describe('/workspace state-adaptive', () => {
           provider: 'claude', permissionMode: 'default', thinking: 'collapsed',
           verbose: false, prewarmCache: false, threadPerSession: false,
         },
-        roles: { 'u1': 'admin' },
       },
       userId: 'u1',
       otherWorkspaces: [],

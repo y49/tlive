@@ -31,7 +31,7 @@ afterEach(async () => {
   env = undefined;
 });
 
-describe('/mode — picker + direct set + callback + role', () => {
+describe('/mode — picker + direct set + callback', () => {
   it('no-arg /mode renders picker with runtime:mode:set:* callbackData', async () => {
     env = setupBootstrap({
       workspaces: [{

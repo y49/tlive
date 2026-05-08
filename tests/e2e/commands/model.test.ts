@@ -36,7 +36,7 @@ afterEach(async () => {
   env = undefined;
 });
 
-describe('/model — picker + direct set + callback + role', () => {
+describe('/model — picker + direct set + callback', () => {
   it('no-arg /model renders F2 picker with runtime:model:set:* callbackData', async () => {
     env = setupBootstrap({
       workspaces: [{

@@ -35,7 +35,7 @@ afterEach(async () => {
   env = undefined;
 });
 
-describe('/budget — preset picker + direct set + callback + role', () => {
+describe('/budget — preset picker + direct set + callback', () => {
   it('no-arg /budget with active session shows status + preset picker', async () => {
     env = setupBootstrap({
       workspaces: [{

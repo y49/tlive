@@ -31,7 +31,7 @@ afterEach(async () => {
   env = undefined;
 });
 
-describe('/think — picker + direct set + callback + role', () => {
+describe('/think — picker + direct set + callback', () => {
   it('no-arg /think renders picker with runtime:think:set:* callbackData', async () => {
     env = setupBootstrap({
       workspaces: [{

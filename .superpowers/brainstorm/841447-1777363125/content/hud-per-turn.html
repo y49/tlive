@@ -1,0 +1,98 @@
+<h2>方案 D — Per-turn HUD(我的最终倾向)</h2>
+<p class="subtitle">每个 turn 开始时发一条 HUD 消息,turn 进行中只 edit 这一条,turn 结束它就停在那变成"这轮的记录"。下一 turn 开始时发新 HUD。Telegram + 飞书 都用 native edit,无 pin / 无删除。</p>
+
+<div class="section">
+  <h3>视觉(turn 进行中)</h3>
+  <div class="mockup" style="font-size:0.85em">
+    <div style="background:#dcf8c6;padding:6px 10px;margin:4px;border-radius:8px;text-align:right;display:inline-block;float:right;clear:both">🤔 帮我看下 README</div>
+    <div style="clear:both"></div>
+    <div style="font-family:monospace;background:#1e1e2e;color:#cdd6f4;padding:12px;border-radius:8px;font-size:0.82em;line-height:1.6;margin:4px">
+      <div><span style="color:#89dceb">📊 turn 5</span> · opus-4-6 · session 8cdfcfb</div>
+      <div style="color:#bac2de">Context <span style="background:linear-gradient(to right, #89dceb 73%, #45475a 73%);padding:0 14px"></span> 73%</div>
+      <div style="color:#fab387;margin-top:4px">◐ Read · 0.4s</div>
+      <div style="color:#a6e3a1">✓ ToolSearch ×1</div>
+    </div>
+    <p style="font-size:0.7em;color:#888;margin:4px 8px">↑ 同一条消息会随 tool / progress 不断 edit 更新</p>
+  </div>
+</div>
+
+<div class="section">
+  <h3>视觉(turn 结束后,3 turn 已完成)</h3>
+  <div class="mockup" style="font-size:0.85em;background:#fafafa;padding:8px;border-radius:8px;max-height:600px;overflow:auto">
+    <div style="background:#dcf8c6;padding:6px 10px;margin:4px;border-radius:8px;text-align:right;display:inline-block;float:right;clear:both">👌 hi</div>
+    <div style="clear:both"></div>
+    <div style="font-family:monospace;background:#1e1e2e;color:#cdd6f4;padding:10px;border-radius:8px;font-size:0.78em;line-height:1.5;margin:4px">
+      <div><span style="color:#89dceb">📊 turn 1</span> · opus-4-6 · 8cdfcfb</div>
+      <div>$0.01 · 1.2s · Σ $0.01</div>
+    </div>
+    <div style="background:white;padding:6px 10px;margin:4px;border-radius:8px;display:inline-block;clear:both;border:1px solid #ddd">你好,有什么需要帮助的?</div>
+    <div style="clear:both"></div>
+    <div style="background:#dcf8c6;padding:6px 10px;margin:4px;border-radius:8px;text-align:right;display:inline-block;float:right;clear:both">👌 帮我看下 README</div>
+    <div style="clear:both"></div>
+    <div style="font-family:monospace;background:#1e1e2e;color:#cdd6f4;padding:10px;border-radius:8px;font-size:0.78em;line-height:1.5;margin:4px">
+      <div><span style="color:#89dceb">📊 turn 2</span> · opus-4-6 · 8cdfcfb · Context 56%</div>
+      <div style="color:#a6e3a1">✓ Read ×1</div>
+      <div>$0.02 · 2.4s · Σ $0.03</div>
+    </div>
+    <div style="background:white;padding:6px 10px;margin:4px;border-radius:8px;display:inline-block;clear:both;border:1px solid #ddd">README 是项目说明文档,主要包含...</div>
+    <div style="clear:both"></div>
+    <div style="background:#dcf8c6;padding:6px 10px;margin:4px;border-radius:8px;text-align:right;display:inline-block;float:right;clear:both">🤔 帮我跑一下测试</div>
+    <div style="clear:both"></div>
+    <div style="font-family:monospace;background:#1e1e2e;color:#cdd6f4;padding:10px;border-radius:8px;font-size:0.78em;line-height:1.5;margin:4px;border:2px solid #fab387">
+      <div><span style="color:#89dceb">📊 turn 3</span> · opus-4-6 · 8cdfcfb · Context 73%</div>
+      <div style="color:#bac2de">Context <span style="background:linear-gradient(to right, #89dceb 73%, #45475a 73%);padding:0 12px"></span> 73%</div>
+      <div style="color:#fab387">◐ Bash · 1.4s ⏳</div>
+      <div style="color:#a6e3a1">✓ Read ×2 | ✓ Glob ×1</div>
+    </div>
+    <p style="font-size:0.7em;color:#888;margin:4px 8px">↑ turn 3 还在进行中,这一条 HUD 在 edit。前面 turn 1/2 的 HUD 是已 freeze 的历史记录</p>
+  </div>
+</div>
+
+<div class="section" style="background:#e8f5e9;padding:14px;border-radius:8px;border-left:4px solid #2e7d32">
+  <h3 style="margin-top:0">为什么 per-turn 比 pinned 更好(双平台 + 你的约束下)</h3>
+  <ul style="font-size:0.9em;line-height:1.7;margin:8px 0 0 20px">
+    <li><b>无删除/撤回</b> — 历史 turn 的 HUD 自然停留,不动它</li>
+    <li><b>飞书友好</b> — 不需要 pin 权限,只用普通 message edit / card update</li>
+    <li><b>Telegram 友好</b> — 普通 message + edit_message_text(常用、稳定)</li>
+    <li><b>每 turn 一份记录</b> — 可滚动看历史,知道每轮花了多少 / 用了哪些 tool</li>
+    <li><b>edit 范围窄</b> — 只在 turn 内 edit(几秒到几分钟),turn 结束就 freeze,不会出现"5 小时后还在 edit 一个老消息"导致 Telegram 拒绝的边界</li>
+  </ul>
+</div>
+
+<div class="section" style="background:#fff3e0;padding:14px;border-radius:8px;border-left:4px solid #f57c00">
+  <h3 style="margin-top:0">实现细节(关键点)</h3>
+  <ul style="font-size:0.9em;line-height:1.7;margin:8px 0 0 20px">
+    <li><b>1 turn = 2 消息</b>:HUD(edit-in-place)+ reply(send-only)</li>
+    <li><b>HUD 内容 build pipeline</b>:turn_start 初始化 → tool_use_start/result 增量 edit → turn_end 最终 edit(写入 cost / 总耗时 / cache 状态)</li>
+    <li><b>edit 节流</b>:每个事件 schedule edit,debounce 500ms 合并,内容 hash 不变就不发</li>
+    <li><b>edit 失败 fallback</b>:不重发(避免双消息),只 stderr 记 reason,等下个事件自然修复</li>
+    <li><b>飞书 card</b>:用 lark interactive card,update_card API 等价于 edit</li>
+    <li><b>permission card</b> 仍独立(不在 HUD 内,因为有 button 交互)</li>
+    <li><b>reaction</b> 仍在用户消息上(👀 → 🤔 → 👌 / 💔)</li>
+    <li><b>attachment</b> 独立消息(Write 输出文件时)</li>
+  </ul>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="approve" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content">
+      <h3>同意 per-turn HUD,进 design 细化</h3>
+      <p>下一步分章节呈现 architecture / components / tests</p>
+    </div>
+  </div>
+  <div class="option" data-choice="adjust" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>方向对,但 HUD 内容/字段要调</h3>
+      <p>终端说</p>
+    </div>
+  </div>
+  <div class="option" data-choice="rethink" onclick="toggleSelect(this)">
+    <div class="letter">?</div>
+    <div class="content">
+      <h3>per-turn 也不对,得别的</h3>
+      <p>终端说</p>
+    </div>
+  </div>
+</div>

@@ -2,8 +2,8 @@
 //
 // /workspace — single entry for workspace management (chat-trust).
 // Per spec §4 + §5 — state-adaptive, all inline-keyboard:
-//   A: unbound chat, no workspaces (fresh install) → only [➕ 新增]
-//   B: unbound chat, system has workspaces → list with [📁 X] buttons
+//   A: unbound chat, has workspaces → list with [📁 X] buttons
+//   B: unbound chat, no workspaces (fresh install) → only [➕ 新增]
 //   C: bound → state + switch + manage buttons (any user, no role gate)
 
 import type { CommandDef, CommandContext } from '../command-parser.js';
