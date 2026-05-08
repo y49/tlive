@@ -718,6 +718,7 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
           workdir: opts.workdir,
           initialPrompt: opts.initialPrompt,
           source: opts.source,
+          ownerChat: { channelType: ev.channelType, chatId: ev.chatId, threadId: ev.threadId },
         }),
         onBranch: (info) => deps.logger.info('lazyResumeOrCreate branch', info),
         onResumeFailed: (info) => {

@@ -10,8 +10,20 @@ import type { NotificationEvent } from '../runtime/events.js';
 import type { AgentStatus } from './status.js';
 import type { SessionContext } from './context.js';
 import type { CostTracker } from '../cost/tracker.js';
+import type { ChannelType } from '../workspace/bindings.js';
 
 export type SessionKind = 'local' | 'remote';
+
+/**
+ * Identifies the chat that spawned a Session (spec §2 + §4). Carried by
+ * LocalSession so frontend fan-out + /sessions filtering + handoff binding
+ * lookups can identify the owning chat without scanning bindings.
+ */
+export interface OwnerChat {
+  channelType: ChannelType;
+  chatId: string;
+  threadId?: string;
+}
 
 /** Public snapshot returned by SessionLike.snapshot(). UI-friendly subset. */
 export interface SessionInfo {
@@ -32,6 +44,8 @@ export interface SessionInfo {
   };
   createdAt: number;
   lastActivityAt: number;
+  /** Chat that spawned this session. RemoteSession may not have one. */
+  ownerChat?: OwnerChat;
 }
 
 /** Listener fan-out for frontend consumers. */
@@ -58,6 +72,9 @@ export interface SessionLike {
   readonly sdkModel?: string;
   /** Max context window for sdkModel (set alongside sdkModel). */
   readonly sdkMaxContextTokens?: number;
+  /** Chat that spawned this session (spec §2 + §4). Optional because
+   *  RemoteSession does not always have a chat owner. */
+  readonly ownerChat?: OwnerChat;
 
   onEvent(cb: (e: NotificationEvent) => void): () => void;
   onStatusChange(cb: (s: AgentStatus) => void): () => void;

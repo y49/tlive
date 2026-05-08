@@ -11,8 +11,9 @@ import { PermissionBroker } from '../../src/permission/broker.js';
 import { PolicyStore } from '../../src/permission/policy-store.js';
 import { FakeRuntime } from './fake-runtime.js';
 import type { NotificationEvent } from '../../src/runtime/events.js';
+import type { OwnerChat } from '../../src/session/types.js';
 
-async function setup(opts: { maxBudgetUsd?: number } = {}) {
+async function setup(opts: { maxBudgetUsd?: number; ownerChat?: OwnerChat } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'tlive-local-'));
   const persistence = new SessionPersistence(root); await persistence.init();
   const broker = new PermissionBroker();
@@ -214,6 +215,45 @@ describe('LocalSession', () => {
       expect(local.session.status.code).toBe('budget_exceeded');
     }
     await local.session.flushPendingPersistence();
+    await rm(local.root, { recursive: true, force: true });
+  });
+});
+
+describe('LocalSession.ownerChat (Iso #5)', () => {
+  it('exposes ownerChat from creation opts', async () => {
+    const local = await setup({
+      ownerChat: { channelType: 'telegram', chatId: 'c-test' },
+    });
+    expect(local.session.ownerChat).toEqual({
+      channelType: 'telegram',
+      chatId: 'c-test',
+    });
+    expect(local.session.snapshot().ownerChat).toEqual({
+      channelType: 'telegram',
+      chatId: 'c-test',
+    });
+    await local.session.stop();
+    await rm(local.root, { recursive: true, force: true });
+  });
+
+  it('ownerChat undefined when not supplied', async () => {
+    const local = await setup({});
+    expect(local.session.ownerChat).toBeUndefined();
+    expect(local.session.snapshot().ownerChat).toBeUndefined();
+    await local.session.stop();
+    await rm(local.root, { recursive: true, force: true });
+  });
+
+  it('ownerChat carries threadId when provided', async () => {
+    const local = await setup({
+      ownerChat: { channelType: 'feishu', chatId: 'c-fs', threadId: 'thr-1' },
+    });
+    expect(local.session.ownerChat).toEqual({
+      channelType: 'feishu',
+      chatId: 'c-fs',
+      threadId: 'thr-1',
+    });
+    await local.session.stop();
     await rm(local.root, { recursive: true, force: true });
   });
 });

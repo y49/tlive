@@ -108,6 +108,31 @@ describe('misc tool smoke tests', () => {
     expect(findActive()).toBeNull();
   });
 
+  it('handoff release with alias resolves owner via session.ownerChat (Iso #5)', async () => {
+    // Spawn a fresh local session with ownerChat pointing at the misc-c
+    // binding so handoff.release(alias=...) can use session.ownerChat
+    // directly instead of scanning listActiveBindings.
+    const local = await harness.deps.sessions.createLocal({
+      workspaceId: ctx.workspaceId,
+      provider: 'claude',
+      workdir: '/W',
+      source: 'im',
+      ownerChat: { channelType: 'telegram', chatId: 'misc-c' },
+    });
+    harness.deps.workspaces.bindActiveSessionForChat('telegram', 'misc-c', local.id);
+    expect(harness.deps.workspaces.getActiveSessionIdForChat('telegram', 'misc-c')).toBe(local.id);
+
+    const rel = await makeHandoffReleaseTool(harness.deps).handler(
+      { alias: local.shortAlias },
+      { sessionId: local.id, workspaceId: ctx.workspaceId },
+    );
+    expect(rel.isError).toBeFalsy();
+    const parsed = parseText(rel) as { ok: boolean; releasedSdkId: string | null };
+    expect(parsed.releasedSdkId).toBe(local.id);
+    expect(harness.deps.workspaces.getActiveSessionIdForChat('telegram', 'misc-c')).toBeNull();
+    await local.stop();
+  });
+
   it('policy add / list / remove', async () => {
     const added = parseText(await makePolicyAddTool(harness.deps).handler({
       pattern: { toolName: 'Bash' }, decision: 'allow', scope: 'workspace',

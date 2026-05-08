@@ -18,7 +18,7 @@ import type { ElicitationBroker } from '../permission/elicitation-broker.js';
 import { CostTracker } from '../cost/tracker.js';
 import type { AgentStatus } from './status.js';
 import { transition } from './status.js';
-import type { SessionInfo, SessionLike } from './types.js';
+import type { OwnerChat, SessionInfo, SessionLike } from './types.js';
 import { shortId } from '../util/short-id.js';
 import { InputQueue } from './input-queue.js';
 import { CacheWarmth } from './cache-warmth.js';
@@ -48,6 +48,10 @@ export interface SessionInit {
    * sessions so per-day aggregation works.
    */
   rollupStore?: CostRollupStore;
+  /** Chat that spawned this session (spec §2 + §4). Set by SessionManager
+   *  from the inbound IM event so the session knows its origin. Optional
+   *  for CLI / test paths that have no IM owner. */
+  ownerChat?: OwnerChat;
 }
 
 /**
@@ -68,6 +72,7 @@ export class LocalSession implements SessionLike {
   readonly workspaceId: string;
   readonly workdir: string;
   readonly ctx: SessionContext;
+  readonly ownerChat: OwnerChat | undefined;
   title: string | undefined;
   readonly cost = new CostTracker();
   readonly queue = new InputQueue();
@@ -115,6 +120,7 @@ export class LocalSession implements SessionLike {
     this.provider = init.ctx.snapshot.provider;
     this.workspaceId = init.ctx.snapshot.workspaceId;
     this.workdir = init.ctx.snapshot.workdir;
+    this.ownerChat = init.ownerChat;
     this.createdAt = init.ctx.snapshot.createdAt;
     this.lastActivityAt = this.createdAt;
     this.budgetGuard = new BudgetGuard(
@@ -175,6 +181,7 @@ export class LocalSession implements SessionLike {
       },
       createdAt: this.createdAt,
       lastActivityAt: this.lastActivityAt,
+      ownerChat: this.ownerChat,
     };
   }
 

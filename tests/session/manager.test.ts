@@ -139,4 +139,26 @@ describe('SessionManager', () => {
     expect(env.mgr.get(b.id)).toBeUndefined();
     expect(env.mgr.list()).toHaveLength(0);
   });
+
+  it('createLocal forwards ownerChat to the LocalSession (Iso #5)', async () => {
+    const s = await env.mgr.createLocal({
+      workspaceId: 'ws-owner',
+      provider: 'claude',
+      workdir: '/proj',
+      source: 'im',
+      ownerChat: { channelType: 'telegram', chatId: 'c-mgr', threadId: 'thr-99' },
+    });
+    expect(s.ownerChat).toEqual({
+      channelType: 'telegram',
+      chatId: 'c-mgr',
+      threadId: 'thr-99',
+    });
+    // Surfaced in SessionInfo as well.
+    const info = env.mgr.listInfo().find((x) => x.id === s.id);
+    expect(info?.ownerChat).toEqual({
+      channelType: 'telegram',
+      chatId: 'c-mgr',
+      threadId: 'thr-99',
+    });
+  });
 });

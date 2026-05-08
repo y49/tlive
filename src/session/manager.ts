@@ -14,7 +14,7 @@ import type { AgentProvider, AgentRuntime, PermissionMode } from '../runtime/typ
 import { SessionContext } from './context.js';
 import { LocalSession } from './local-session.js';
 import { RemoteSession, type RemoteSessionInit } from './remote-session.js';
-import type { SessionLike, SessionInfo } from './types.js';
+import type { OwnerChat, SessionLike, SessionInfo } from './types.js';
 import type { SessionPersistence, SessionSnapshot } from './persistence.js';
 import type { PermissionBroker } from '../permission/broker.js';
 import type { AskUserQuestionBroker } from '../permission/ask-broker.js';
@@ -38,6 +38,10 @@ export interface CreateLocalSessionOptions {
   effort?: 'low' | 'medium' | 'high' | 'max';
   maxBudgetUsd?: number;
   source: 'cli' | 'im';
+  /** Chat that spawned this session (spec §2 + §4). Forwarded to LocalSession
+   *  so frontend / handoff / /sessions filtering can identify the owner
+   *  without scanning bindings. */
+  ownerChat?: OwnerChat;
 }
 
 /** Back-compat alias — existing bridge IPC handler uses this name. */
@@ -116,6 +120,7 @@ export class SessionManager {
       elicitationBroker: this.deps.elicitationBroker,
       maxBudgetUsd: opts.maxBudgetUsd,
       rollupStore: this.rollupStore ?? undefined,
+      ownerChat: opts.ownerChat,
     });
     await session.prepare({
       model: opts.model,

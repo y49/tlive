@@ -22,34 +22,35 @@ export function makeHandoffReleaseTool(deps: McpToolDeps): McpTool {
       const alias = optionalString(args, 'alias');
       const workspaceId = ctx.workspaceId;
       // Per chat-level isolation (spec §3) the active-session slot lives on
-      // each ChatBinding rather than the Workspace. handoff.release predates
-      // ownerChat plumbing (Iso #5), so we scan listActiveBindings to find
-      // which chat currently owns the alias-resolved session in this
-      // workspace. TODO(Iso #5): rely on session.ownerChat directly.
-      const actives = deps.workspaces.listActiveBindings()
-        .filter((b) => b.workspaceId === workspaceId);
+      // each ChatBinding rather than the Workspace. With ownerChat plumbing
+      // (Iso #5) we look up the session's owner directly instead of scanning
+      // listActiveBindings.
       let current: string | null = null;
-      let owner: { channelType: typeof actives[number]['channelType']; chatId: string } | null = null;
+      let owner: { channelType: 'telegram' | 'feishu'; chatId: string } | null = null;
       if (alias) {
         const s = deps.sessions.getByPrefix(alias).resolved;
         if (!s) return errorResult(`alias not found: ${alias}`);
-        const match = actives.find((b) => b.activeSessionId === s.id);
-        if (match) {
-          current = match.activeSessionId;
-          owner = { channelType: match.channelType, chatId: match.chatId };
-        } else if (actives.length > 0) {
-          // Some other chat in this workspace owns the slot.
-          return errorResult(
-            `active session ${actives[0]!.activeSessionId} does not match alias ${alias}`,
-          );
+        if (s.workspaceId !== workspaceId) {
+          return errorResult(`alias ${alias} not in workspace ${workspaceId}`);
         }
-      } else if (actives.length > 0) {
-        // No alias — release whichever single active session this workspace
-        // has; if multiple, release the first (caller can specify alias to
-        // disambiguate).
-        const first = actives[0]!;
-        current = first.activeSessionId;
-        owner = { channelType: first.channelType, chatId: first.chatId };
+        if (s.ownerChat) {
+          const activeSdkId = deps.workspaces.getActiveSessionIdForChat(
+            s.ownerChat.channelType, s.ownerChat.chatId,
+          );
+          if (activeSdkId === s.id) {
+            current = s.id;
+            owner = { channelType: s.ownerChat.channelType, chatId: s.ownerChat.chatId };
+          }
+        }
+      } else {
+        // No alias — find any active binding in this workspace and release it.
+        const actives = deps.workspaces.listActiveBindings()
+          .filter((b) => b.workspaceId === workspaceId);
+        if (actives.length > 0) {
+          const first = actives[0]!;
+          current = first.activeSessionId;
+          owner = { channelType: first.channelType, chatId: first.chatId };
+        }
       }
       if (owner) {
         deps.workspaces.clearActiveSessionForChat(owner.channelType, owner.chatId);
