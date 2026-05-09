@@ -603,34 +603,36 @@ async function handleInbound(ev: InboundEvent, deps: InboundDeps): Promise<void>
     return;
   }
 
-  // Text starting with '/' → slash command.
   const text = ev.text?.trim() ?? '';
   if (!text) return;
+
+  // Workspace creation pending state — runs BEFORE slash-command routing
+  // because the user-supplied workdir path itself starts with '/' (e.g.
+  // '/home/y/project/foo'), which would otherwise dispatch as an unknown
+  // command. chat-trust: any user in the chat can complete the dialog
+  // (no userId gate).
+  const pendingCreate = deps.workspaceCreateBroker.pendingFor(ev.channelType, ev.chatId);
+  if (pendingCreate) {
+    if (text === '/cancel' || text.toLowerCase() === 'cancel') {
+      deps.workspaceCreateBroker.cancel(ev.channelType, ev.chatId);
+      await deps.adapter.send({
+        chatId: ev.chatId,
+        threadId: ev.threadId,
+        text: '已取消新增工作区',
+      }).catch(() => undefined);
+      return;
+    }
+    await tryCreateWorkspaceFromPath(text, pendingCreate, deps, ev);
+    return;
+  }
+
+  // Text starting with '/' → slash command.
   if (!text.startsWith('/')) {
     // Anchor #1 — reaction tracker: surface the inbound to the IM frontend so
     // it can fire 👁️ on the user's message before the lazyResumeOrCreate
     // round-trip completes. The frontend owns pending-inbound state and
     // applies it to whichever session ends up attached.
     deps.frontend.markInboundReceived(ev.channelType, ev.chatId, ev.messageId, ev.threadId);
-
-    // Workspace creation pending state — if the user clicked [➕ 新增工作区]
-    // and we asked for a path, treat the next plain text as the workdir.
-    // Sister branch to AskUserQuestion relay below; runs first because the
-    // path may itself look like a candidate ask-answer ("/Users/foo" etc.).
-    const pendingCreate = deps.workspaceCreateBroker.pendingFor(ev.channelType, ev.chatId);
-    if (pendingCreate && pendingCreate.userId === ev.userId) {
-      if (text === '/cancel' || text.toLowerCase() === 'cancel') {
-        deps.workspaceCreateBroker.cancel(ev.channelType, ev.chatId);
-        await deps.adapter.send({
-          chatId: ev.chatId,
-          threadId: ev.threadId,
-          text: '已取消新增工作区',
-        }).catch(() => undefined);
-        return;
-      }
-      await tryCreateWorkspaceFromPath(text, pendingCreate, deps, ev);
-      return;
-    }
 
     // AskUserQuestion answer relay: if the agent has a pending question on
     // this chat's active session, treat plain text like "2", "Tea", or
