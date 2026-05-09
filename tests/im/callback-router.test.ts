@@ -628,11 +628,12 @@ describe('CallbackRouter — turn/session/runtime/cost/find handlers (Task 31)',
     expect(sentMsgs[0]?.text).toMatch(/\/find/);
   });
 
-  it('workspace:open replies with hint', async () => {
+  it('workspace:open renders the /workspace card directly (not a hint)', async () => {
     const { router, sentMsgs } = setupAdvanced();
     const out = await router.route(ctx('workspace:open'));
-    expect(out).toEqual({ kind: 'handled', action: 'workspace:open:hint' });
-    expect(sentMsgs[0]?.text).toMatch(/\/workspace/);
+    expect(out).toEqual({ kind: 'handled', action: 'workspace:open' });
+    expect(sentMsgs[0]?.text).toMatch(/此 chat|当前工作区/);
+    expect(sentMsgs[0]?.replyMarkup).toBeTruthy();
   });
 
   it('runtime:perm:clear:do iterates list + removes rules', async () => {

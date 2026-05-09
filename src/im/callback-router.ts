@@ -34,6 +34,7 @@
 // a short alias prefix (SessionManager.getByPrefix).
 
 import { parsePickerCallback } from './picker/index.js';
+import { buildWorkspaceCard } from './commands/workspace.js';
 import type { SessionManager } from '../session/manager.js';
 import type { PermissionBroker } from '../permission/broker.js';
 import type { AskUserQuestionBroker } from '../permission/ask-broker.js';
@@ -598,7 +599,7 @@ export class CallbackRouter {
       case 'create': return this.handleWorkspaceCreate(rest, ctx);
       case 'exit':   return this.handleWorkspaceExit(rest, ctx);
       case 'config': return this.handleWorkspaceConfig(rest, ctx);
-      case 'open':   return this.handleWorkspaceOpenHint(ctx);
+      case 'open':   return this.handleWorkspaceOpen(ctx);
       default:       return { kind: 'unknown', reason: `workspace:bad-verb:${verb}` };
     }
   }
@@ -852,9 +853,16 @@ export class CallbackRouter {
     await this.sendReply(ctx, lines.join('\n'), replyMarkup);
   }
 
-  private async handleWorkspaceOpenHint(ctx: CallbackContext): Promise<CallbackOutcome> {
-    await this.sendReply(ctx, '请发 /workspace 查看/切换工作区');
-    return { kind: 'handled', action: 'workspace:open:hint' };
+  private async handleWorkspaceOpen(ctx: CallbackContext): Promise<CallbackOutcome> {
+    const wm = this.deps.workspaceManager;
+    if (!wm) return { kind: 'unknown', reason: 'workspace:open:no-manager' };
+    const card = buildWorkspaceCard({
+      workspaceManager: wm,
+      channelType: ctx.channelType,
+      chatId: ctx.chatId,
+    });
+    await this.sendReply(ctx, card.text, card.replyMarkup);
+    return { kind: 'handled', action: 'workspace:open' };
   }
 
   // ---- Turn (Task 31) ---------------------------------------------------
