@@ -842,10 +842,13 @@ export class CallbackRouter {
       type: 'inline_keyboard',
       buttons: [
         [
+          { text: '改 provider', callbackData: 'runtime:provider:open' },
           { text: '改 model', callbackData: 'runtime:model:open' },
           { text: '改 mode', callbackData: 'runtime:mode:open' },
-          { text: '改 budget', callbackData: 'runtime:budget:open' },
+        ],
+        [
           { text: '改 think', callbackData: 'runtime:think:open' },
+          { text: '改 budget', callbackData: 'runtime:budget:open' },
         ],
         [{ text: '↩ 返回', callbackData: 'workspace:open' }],
       ],
@@ -1148,6 +1151,7 @@ export class CallbackRouter {
     const [domain, ...rest] = parts;
     if (!domain) return { kind: 'unknown', reason: 'runtime:malformed' };
     switch (domain) {
+      case 'provider': return this.handleRuntimeProvider(rest, ctx);
       case 'model':  return this.handleRuntimeModel(rest, ctx);
       case 'mode':   return this.handleRuntimeMode(rest, ctx);
       case 'think':  return this.handleRuntimeThink(rest, ctx);
@@ -1155,6 +1159,46 @@ export class CallbackRouter {
       case 'perm':   return this.handleRuntimePerm(rest, ctx);
       default:       return { kind: 'unknown', reason: `runtime:bad-domain:${domain}` };
     }
+  }
+
+  private async handleRuntimeProvider(rest: string[], ctx: CallbackContext): Promise<CallbackOutcome> {
+    const [verb, ...providerParts] = rest;
+    const wm = this.deps.workspaceManager;
+    const ws = wm?.workspaceForChat(ctx.channelType, ctx.chatId);
+    if (!ws || !wm) {
+      await this.sendReply(ctx, '此 chat 未绑定工作区');
+      return { kind: 'handled', action: 'runtime:provider:no-ws' };
+    }
+    if (verb === 'open') {
+      const lines = [
+        `🤖 默认 provider: ${ws.defaults.provider}`,
+        '',
+        '选 provider(下次 /new 生效,不影响当前会话):',
+      ];
+      const markup: ReplyMarkup = {
+        type: 'inline_keyboard',
+        buttons: [
+          [
+            { text: 'Claude', callbackData: 'runtime:provider:set:claude' },
+            { text: 'Codex', callbackData: 'runtime:provider:set:codex' },
+          ],
+          [{ text: '↩ 返回', callbackData: 'workspace:config:open' }],
+        ],
+      };
+      await this.sendReply(ctx, lines.join('\n'), markup);
+      return { kind: 'handled', action: 'runtime:provider:open' };
+    }
+    if (verb === 'set') {
+      const provider = providerParts.join(':');
+      if (provider !== 'claude' && provider !== 'codex') {
+        return { kind: 'unknown', reason: `runtime:provider:bad-value:${provider}` };
+      }
+      ws.defaults.provider = provider;
+      await wm.save().catch(() => undefined);
+      await this.sendReply(ctx, `✅ 默认 provider 已切到 ${provider}(下次 /new 生效)`);
+      return { kind: 'handled', action: `runtime:provider:set:${provider}` };
+    }
+    return { kind: 'unknown', reason: `runtime:provider:bad-verb:${verb ?? ''}` };
   }
 
   private async handleRuntimeModel(rest: string[], ctx: CallbackContext): Promise<CallbackOutcome> {
