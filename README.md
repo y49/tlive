@@ -1,174 +1,75 @@
-# tlive v1.0
+# tlive
 
-> **The MCP-native agent fabric for IM.**
-> One install, every agent everywhere gets session memory, IM notifications,
-> remote approval, multi-agent orchestration, scheduled tasks, and a federated
-> MCP registry. Drive Claude Code and Codex from Telegram, Discord, or Feishu
-> with zero terminal interaction — or keep using your terminal and route
-> permissions to your phone via MCP.
+> Drive Claude Code / Codex from your phone via IM. Permission prompts don't block when you're away.
 
-## ⚠ Upgrading from v0.x / v1.0-rc to v1.0
+## What it does
 
-v1.0 是大重构,**schema / 命令 / 信任模型全 breaking change**。
-升级前必须停旧 daemon + 清旧 workspaces.json。
-完整步骤见 [docs/upgrade-v1.0.md](docs/upgrade-v1.0.md)。
+tlive is a small daemon that bridges Telegram or Feishu chats to Claude Code / Codex sessions running on your machine. Use cases:
 
-## Three ways to use tlive
+1. **短暂离开** (coffee, meeting): permission prompts go to your phone via IM; approve there, terminal session continues uninterrupted.
+2. **长时离开** (out of office, commute): hand off your terminal session to the daemon, drive new turns from IM, take it back when you're at a computer again.
 
-- **Daemon mode** — IM is your only interface. `tlive start`, open your bot,
-  send a message. Claude / Codex runs inside tlive's daemon.
-- **Companion mode** — Keep using `claude` / `codex` locally. Configure
-  `permissionPromptToolName: "mcp__tlive__approve"` — every permission goes to
-  IM for remote approval when you're away.
-- **Handoff** — Start on your phone in IM. Grab your laptop.
-  `claude --resume <alias>` picks up exactly where you left off. Or use
-  `/tlive takeback` from your terminal to hand back to IM.
+Built for solo developers who don't want to install yet another app.
+
+## What it is NOT
+
+- Not a framework, plugin marketplace, or extension platform — see `KERNEL.md` for the frozen surface
+- Not multi-tenant — single user assumed
+- Not a Web UI / mobile app — IM is the only frontend
+- Not maintained on a fast roadmap — 1.0 is intentionally frozen for 3 months after release
 
 ## Quick start
 
 ```bash
+# 1. Install
 npm install -g tlive
 
-tlive setup                  # git-aware wizard: workspace + IM tokens
-tlive install-integrations   # wire Claude skill + Codex prompt + MCP entry
-tlive start                  # boot the daemon
-tlive doctor                 # structured health check
+# 2. Configure (interactive)
+tlive setup
+
+# 3. Wire up Claude Code / Codex
+tlive install-integrations
+
+# 4. Register your project as a workspace
+cd ~/your-project
+tlive workspace add
+
+# 5. Start daemon
+tlive start
+
+# 6. From your phone (in TG or Feishu): send any message → it goes to Claude in your project
 ```
-
-## What changed from v0.x
-
-v1.0 is a full rewrite. The PTY wrapper, jsonl file-system scanner, web
-terminal, and hooks-bridge are all removed. IM is the primary interactive
-surface; MCP is the programmatic entry point.
-
-If you used v0.x as an IM-notified terminal wrapper: v1.0 is not backwards-
-compatible. Pin to `tlive@0.8.x` or use plain Claude Code / Codex CLI.
-
-On first run, `tlive setup` migrates your `~/.tlive/config.env` into
-`~/.tlive/config.json`; the v0.x file is backed up at
-`~/.tlive/config.v0-backup.env` (or `.v0-backup.json`).
-
-## Highlights
-
-- **12 IM slash commands + inline keyboards** — mid-session `/model` / `/mode` /
-  `/think` / `/perm` / `/budget` show picker UI (no typing needed); `/workspace`
-  3-state binding flow; `/sessions`, `/cost [--workspace|--all]`, `/find [--workspace|--all]`.
-  Full reference in [docs/commands.md](docs/commands.md).
-- **8-anchor message UX** — reaction ack, session header, activity sticky,
-  streaming agent response, 4-category permission cards, elicitation forms,
-  todo sticky, attachments.
-- **Multimodal** — send images and files from IM, Claude reads them. Claude
-  creates files in the workspace → IM gets download links.
-- **MCP federation** — one `tlive-self` entry in your agent's config gives
-  every agent access to your session history, memory, notifications, and any
-  downstream MCP server you register.
-- **Sampling, resources (`tlive://…`), and prompts (`/prompts tlive-*`)** —
-  tlive is a full MCP citizen, not just a tool namespace.
-- **Warm runtime pool + cache-aware pre-warm** — cuts session start from
-  ~500ms to ~50ms and keeps Anthropic's 5-minute prompt cache hot across
-  your idle gaps.
-- **Scheduled tasks** — `/schedule daily 9am tlive-daily-standup` — your
-  sessions run themselves.
-- **Cross-agent pipelines** — `/pipeline run plan-impl-review "refactor auth"`
-  chains Claude-plans → Codex-implements → Claude-reviews.
-- **Thread-per-session** on Telegram / Discord / Feishu.
-- **Multi-chat mirror** — primary chat gets interactive buttons; mirrors see
-  read-only renders scoped to their own chatId.
-- **Approval policy learning** — click "Learn" on a permission card; the
-  next matching request auto-resolves.
-- **100% native jsonl compatibility** — `claude --resume <sdkSessionId>`
-  works on any tlive-driven session.
-
-## CLI surface
-
-```
-Daemon lifecycle
-  tlive start                      Start the daemon
-  tlive stop                       Stop gracefully
-  tlive status                     Daemon + session snapshot
-  tlive doctor                     Structured health check
-  tlive daemon-logs [N] [-f]       Tail the daemon log
-
-Handoff
-  tlive handoff  <alias>           Release to local claude --resume
-  tlive takeback <sdkSessionId>    Daemon re-adopts a local session
-
-Wizards
-  tlive setup                      Git-aware config wizard
-  tlive install-integrations [all|claude|codex]
-                                   Install Claude skill / Codex prompt
-
-MCP
-  tlive mcp                        stdio MCP server (for Claude / Codex)
-
-Meta
-  tlive version
-  tlive update
-```
-
-Chat, prompts, runtime switching, budget — all driven through IM commands or
-MCP tool calls. The CLI only manages the daemon.
-
-## Config
-
-Config lives at `~/.tlive/config.json`:
-
-```json
-{
-  "version": "1",
-  "workspaces": [
-    { "id": "ws-…", "name": "tlive", "workdir": "/home/me/tlive",
-      "gitRemote": "git@github.com:…", "defaults": { "provider": "claude" } }
-  ],
-  "channels": {
-    "telegram": { "token": "…" },
-    "discord":  { "token": "…" },
-    "feishu":   { "appId": "…", "appSecret": "…" }
-  },
-  "permissions": { "allowedUsers": ["…"], "defaults": { "fs_write": "ask" } },
-  "schedules":   [ /* cron tasks */ ],
-  "mcpRegistry": { /* downstream MCP servers */ }
-}
-```
-
-`tlive setup` edits this interactively and the config schema is validated on
-daemon boot.
 
 ## Architecture
 
-At a glance:
-
-- **Daemon** (`src/daemon/`) — long-lived Node process, owns local Claude /
-  Codex runtimes, routes MCP, fans out to IM adapters.
-- **Runtime** (`src/runtime/`) — single `AgentRuntime` interface; Claude is
-  backed by `@anthropic-ai/claude-agent-sdk`, Codex by `codex app-server`.
-- **Session** (`src/session/`) — LocalSession (daemon owns a runtime) +
-  RemoteSession (MCP-driven). Unified by `SessionLike`.
-- **Permission / Attachment** (`src/permission/`, `src/attachment/`) — 4
-  categories, policy learning, outbound + inbound file handling.
-- **MCP** (`src/mcp/`) — tlive-self server, downstream federation, cron,
-  cross-agent orchestrator, bundled servers.
-- **IM** (`src/im/`, `src/platform/`) — SessionFrontend + 12 renderers +
-  Telegram / Discord / Feishu adapters.
-
-See `docs/superpowers/specs/2026-04-22-t14b-full-cutover-design.md` for the
-complete v1.0 design.
-
-## Development
-
-```bash
-git clone https://github.com/y49/tlive
-cd tlive
-npm install
-npm run typecheck
-npm test
-npm run build
 ```
+┌─ IM Adapters (Telegram / Feishu) ─┐
+│ Kernel (frozen surface)             │
+└─ Runtime Adapters (Claude / Codex) ┘
+```
+
+See `KERNEL.md` for the frozen API contracts and `docs/superpowers/specs/2026-05-11-tlive-kernel-redesign-design.md` for full design rationale.
+
+## CLI
+
+Daemon: `tlive start | stop | restart | status | doctor | daemon-logs`
+Workspaces: `tlive workspace add | list | remove`
+Handoff: `tlive handoff` (terminal session → IM-driven)
+Permission fallback: `tlive approve <requestId> yes|no`
+Setup: `tlive setup | install-integrations`
+MCP server entry: `tlive mcp` (called by Claude/Codex)
+Meta: `tlive version | update`
+
+## IM commands (in your bound chat)
+
+- `/use <ws>` — switch chat to a different workspace
+- `/new` — start new AI session
+- `/sessions` — list active sessions
+- `/resume <id>` — switch to existing session
+- `/handback` — release session for terminal `claude --resume <id>`
+- `/stop` `/kill` — interrupt / kill current session
+- `/help` — full list
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+MIT
