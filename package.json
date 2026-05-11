@@ -4,7 +4,7 @@
   "description": "Terminal live monitoring + IM bridge for AI coding tools",
   "type": "module",
   "bin": {
-    "tlive": "./scripts/cli.js"
+    "tlive": "./dist/src/tlive-cli.mjs"
   },
   "files": [
     "scripts/cli.js",

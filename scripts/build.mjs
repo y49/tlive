@@ -1,13 +1,11 @@
 #!/usr/bin/env node
 // scripts/build.mjs
 //
-// Unified build for tlive. Produces ESM bundles under dist/src/ for:
-//   - daemon entry (src/daemon/main.ts → dist/src/tlive-daemon.mjs) — when present (T9+)
-//   - CLI entries (src/cli/*.ts → dist/src/tlive-<name>.mjs)
+// Unified build for tlive. v1.0 kernel redesign emits exactly 2 entries:
+//   - dist/src/tlive-daemon.mjs (long-running daemon, src/kernel/daemon/main.ts)
+//   - dist/src/tlive-cli.mjs    (CLI dispatcher, src/cli/main.ts; lazy-imports subcommands)
 //
-// CLI files that are merely shared helpers (e.g. ipc-client-lite) are not
-// built as standalone entries. Only files that are user-facing subcommands
-// are emitted here.
+// Removed in Phase 7: 14 separate dist/src/tlive-<sub>.mjs entries (replaced by lazy import).
 
 import { build } from 'esbuild';
 import { existsSync } from 'node:fs';
@@ -31,7 +29,6 @@ const EXTERNAL = [
   'socks-proxy-agent',
 ];
 
-/** Build a single entry. `outfile` is relative to dist/src/. */
 async function buildEntry(entryRel, outBaseName) {
   const entry = join(ROOT, entryRel);
   if (!existsSync(entry)) return false;
@@ -48,34 +45,10 @@ async function buildEntry(entryRel, outBaseName) {
   return true;
 }
 
-// Daemon entry (present from T9 onwards)
-const daemonOk = await buildEntry('src/daemon/main.ts', 'tlive-daemon');
+// Daemon entry — kernel-redesign location (Phase 6)
+const daemonOk = await buildEntry('src/kernel/daemon/main.ts', 'tlive-daemon');
 if (daemonOk) console.log('built dist/src/tlive-daemon.mjs');
 
-// CLI entries — each is a user-facing subcommand dispatched by scripts/cli.js
-const cliEntries = [
-  // Daemon lifecycle
-  'start',
-  'stop',
-  'restart',
-  'status',
-  'doctor',
-  'daemon-logs',
-  // Handoff
-  'handoff',
-  'takeback',
-  // Workspace registration
-  'workspace',
-  // MCP subsystem
-  'mcp',
-  // Wizards / meta
-  'setup',
-  'install-integrations',
-  'version',
-  'update',
-];
-
-for (const name of cliEntries) {
-  const ok = await buildEntry(`src/cli/${name}.ts`, `tlive-${name}`);
-  if (ok) console.log(`built dist/src/tlive-${name}.mjs`);
-}
+// CLI entry — single dispatcher with internal lazy import (Phase 7 redesign)
+const cliOk = await buildEntry('src/cli/main.ts', 'tlive-cli');
+if (cliOk) console.log('built dist/src/tlive-cli.mjs');
