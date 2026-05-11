@@ -1,6 +1,6 @@
 // src/adapters/im/feishu.ts
 //
-// CRITICAL: WSClient holds a ref'd retry timer. stop() must call WSClient.stop()
+// CRITICAL: WSClient holds a ref'd retry timer. stop() must call WSClient.close()
 // AND null out our reference so GC can collect.
 
 import { Client, WSClient, EventDispatcher } from '@larksuiteoapi/node-sdk';
@@ -51,7 +51,7 @@ export class FeishuAdapter implements IMAdapter {
 
   async stop(): Promise<void> {
     if (!this.ws) { this.connected = 'idle'; return; }
-    try { await this.ws.stop(); } catch {}
+    try { this.ws.close(); } catch {}
     this.ws = null;
     this.client = null;
     this.connected = 'idle';
@@ -61,7 +61,6 @@ export class FeishuAdapter implements IMAdapter {
     if (!this.client) throw new Error('feishu not connected');
     if (!this.opts.chatId) throw new Error('feishu chatId not configured');
     const text = out.kind === 'text' ? out.text : `${out.title ?? ''}\n${out.body}`;
-    // @ts-expect-error lark SDK loose typing — params/data shape not fully typed
     const res = await this.client.im.v1.message.create({
       params: { receive_id_type: 'chat_id' },
       data: {
@@ -76,7 +75,6 @@ export class FeishuAdapter implements IMAdapter {
   async edit(messageId: string, out: OutgoingMessage): Promise<void> {
     if (!this.client) throw new Error('feishu not connected');
     const text = out.kind === 'text' ? out.text : `${out.title ?? ''}\n${out.body}`;
-    // @ts-expect-error lark SDK loose typing — path/data shape not fully typed
     await this.client.im.v1.message.patch({
       path: { message_id: messageId },
       data: { content: JSON.stringify({ text }) },

@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 
-const stop = vi.fn();
+const close = vi.fn();
 vi.mock('@larksuiteoapi/node-sdk', () => ({
   Client: class { im = { v1: { message: { create: vi.fn(async () => ({ data: { message_id: 'fmid-1' } })), patch: vi.fn() } } }; },
   WSClient: class {
-    start = vi.fn(); stop = stop;
+    start = vi.fn(); close = close;
   },
   EventDispatcher: class { register = vi.fn(); },
 }));
@@ -18,7 +18,7 @@ describe('FeishuAdapter', () => {
     expect(a.isConnected()).toBe('connected');
     await a.stop();
     expect(a.isConnected()).toBe('idle');
-    expect(stop).toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
   });
 
   it('stop is idempotent', async () => {
