@@ -161,9 +161,17 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     },
   });
 
-  // Start adapters (inbound wiring is Phase 6.4)
+  // Phase 6.4: wire inbound handling
+  const activeSessionForChat = new Map<string, string>();
+  const inbound = new (await import('./inbound-handler.js')).InboundHandler({
+    router, sessions, workspaces,
+    imBy: (ch) => (opts.imAdapters ?? []).find((a) => a.channel === ch),
+    activeSessionForChat,
+    defaultProvider: 'claude',
+  });
   for (const a of opts.imAdapters ?? []) {
     await a.start();
+    a.onInbound((env) => { void inbound.handle(env); });
   }
 
   let stopped = false;
