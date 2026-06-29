@@ -45,7 +45,6 @@ export async function runCli(argv: string[]): Promise<void> {
     case 'status': { const { runStatus } = await import('./subcommands/status.js'); return runStatus(rest); }
     case 'doctor': { const { runDoctor } = await import('./subcommands/doctor.js'); return runDoctor(rest); }
     case 'daemon-logs': { const { runDaemonLogs } = await import('./subcommands/daemon-logs.js'); return runDaemonLogs(rest); }
-    case 'handoff': { const { runHandoff } = await import('./subcommands/handoff.js'); return runHandoff(rest); }
     case 'approve': { const { runApprove } = await import('./subcommands/approve.js'); return runApprove(rest); }
     case 'workspace': { const { runWorkspace } = await import('./subcommands/workspace.js'); return runWorkspace(rest); }
     case 'setup': { const { runSetup } = await import('./subcommands/setup.js'); return runSetup(rest); }

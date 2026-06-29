@@ -5,7 +5,6 @@
 
 export type FrozenSubcommand =
   | 'start' | 'stop' | 'restart' | 'status' | 'doctor' | 'daemon-logs'
-  | 'handoff'
   | 'workspace'
   | 'setup' | 'install-integrations'
   | 'hook'
@@ -14,7 +13,6 @@ export type FrozenSubcommand =
 
 export const FROZEN_CLI_SUBCOMMANDS: readonly FrozenSubcommand[] = [
   'start', 'stop', 'restart', 'status', 'doctor', 'daemon-logs',
-  'handoff',
   'workspace',
   'setup', 'install-integrations',
   'hook',
