@@ -18,3 +18,4 @@ docs/plans/
 
 # Runtime/dev state
 .claude/
+.superpowers/
