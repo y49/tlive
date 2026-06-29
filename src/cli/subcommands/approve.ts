@@ -8,6 +8,6 @@ export async function runApprove(argv: string[]): Promise<void> {
     process.stderr.write('Usage: tlive approve <requestId> <yes|no>\n');
     process.exit(1);
   }
-  await request({ kind: 'mcp.permission.answer', requestId, approved: decision === 'yes' });
+  await request({ kind: 'hook.permission.answer', requestId, approved: decision === 'yes' });
   process.stdout.write(`tlive approve: ${decision}\n`);
 }

@@ -8,7 +8,7 @@ describe('CLI surface contract', () => {
       'handoff',
       'workspace',
       'setup', 'install-integrations',
-      'mcp',
+      'hook',
       'approve',
       'version', 'update',
     ];

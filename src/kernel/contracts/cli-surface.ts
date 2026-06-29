@@ -1,16 +1,14 @@
 // src/kernel/contracts/cli-surface.ts
 //
-// FROZEN SURFACE — DO NOT MODIFY without bumping major version.
-//
-// Adding a subcommand = adding a new metadata operation = should open a
-// new spec for discussion.
+// FROZEN SURFACE (v2.0) — DO NOT MODIFY without bumping major version.
+// v2.0: replaced 'mcp' with 'hook' (hook-layer pivot).
 
 export type FrozenSubcommand =
   | 'start' | 'stop' | 'restart' | 'status' | 'doctor' | 'daemon-logs'
   | 'handoff'
   | 'workspace'
   | 'setup' | 'install-integrations'
-  | 'mcp'
+  | 'hook'
   | 'approve'
   | 'version' | 'update';
 
@@ -19,7 +17,7 @@ export const FROZEN_CLI_SUBCOMMANDS: readonly FrozenSubcommand[] = [
   'handoff',
   'workspace',
   'setup', 'install-integrations',
-  'mcp',
+  'hook',
   'approve',
   'version', 'update',
 ] as const;

@@ -23,7 +23,7 @@ describe('IPC round-trip', () => {
       path: sock,
       handler: async (req: IpcRequest, reply: (r: IpcResponse) => void) => {
         if (req.kind === 'daemon.status') {
-          reply({ kind: 'daemon.status', uptimeMs: 1234, pid: process.pid, sessionCount: 0 });
+          reply({ kind: 'daemon.status', uptimeMs: 1234, pid: process.pid });
         }
       },
     });

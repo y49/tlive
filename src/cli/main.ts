@@ -5,25 +5,23 @@
 
 import { FROZEN_CLI_SUBCOMMANDS, type FrozenSubcommand } from '../kernel/contracts/cli-surface.js';
 
-const HELP = `tlive — IM bridge for Claude Code / Codex
+const HELP = `tlive — hook approval/notification layer for Claude Code / Codex
 
 Usage: tlive <subcommand> [args]
 
 Daemon lifecycle:
   start, stop, restart, status, doctor, daemon-logs
 
-Handoff:
-  handoff [<sdkSessionId>]  — register a terminal session as daemon-driven
+Hook integration:
+  hook <event>              — Claude hook shim (reads stdin, outputs decision)
+  install-integrations      — write ~/.claude/settings.json hooks (idempotent)
   approve <requestId>       — approve a pending permission (CLI fallback)
 
 Workspaces:
   workspace add|list|remove
 
 Wizards:
-  setup, install-integrations
-
-MCP:
-  mcp                       — stdio MCP server (spawned by Claude/Codex)
+  setup
 
 Meta:
   version, update
@@ -52,7 +50,7 @@ export async function runCli(argv: string[]): Promise<void> {
     case 'workspace': { const { runWorkspace } = await import('./subcommands/workspace.js'); return runWorkspace(rest); }
     case 'setup': { const { runSetup } = await import('./subcommands/setup.js'); return runSetup(rest); }
     case 'install-integrations': { const { runInstallIntegrations } = await import('./subcommands/install-integrations.js'); return runInstallIntegrations(rest); }
-    case 'mcp': { const { runMcpEntry } = await import('./subcommands/mcp.js'); return runMcpEntry(); }
+    case 'hook': { const { runHook } = await import('./subcommands/hook.js'); return runHook(rest); }
     case 'version': { const { runVersion } = await import('./subcommands/version.js'); return runVersion(rest); }
     case 'update': { const { runUpdate } = await import('./subcommands/update.js'); return runUpdate(rest); }
   }

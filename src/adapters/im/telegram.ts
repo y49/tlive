@@ -28,6 +28,8 @@ export class TelegramAdapter implements IMAdapter {
   async start(): Promise<void> {
     if (this.connected === 'connected') return;
     this.bot = new Bot(this.opts.token);
+
+    // Text messages
     this.bot.on('message:text', (ctx) => {
       if (!this.inboundHandler) return;
       const env: IncomingEnvelope = {
@@ -41,6 +43,24 @@ export class TelegramAdapter implements IMAdapter {
       };
       this.inboundHandler(env);
     });
+
+    // Inline-keyboard button callbacks (approve:<id> / deny:<id>)
+    this.bot.on('callback_query:data', (ctx) => {
+      if (!this.inboundHandler) return;
+      const data = ctx.callbackQuery.data;
+      const env: IncomingEnvelope = {
+        channel: 'telegram',
+        chatId: String(ctx.callbackQuery.message?.chat.id ?? ''),
+        userId: String(ctx.callbackQuery.from.id),
+        messageId: String(ctx.callbackQuery.message?.message_id ?? ''),
+        text: data,
+        ts: Date.now(),
+      };
+      this.inboundHandler(env);
+      // Acknowledge the callback to remove the loading indicator
+      void ctx.answerCallbackQuery().catch(() => undefined);
+    });
+
     this.abortCtrl = new AbortController();
     // Use grammy's polling but tie to our abort controller via custom client.
     void this.bot.start({ drop_pending_updates: true });

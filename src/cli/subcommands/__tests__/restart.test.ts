@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockRequest = vi.fn();
 const mockRunStop = vi.fn(async () => {});
@@ -29,18 +29,10 @@ afterEach(() => { process.exit = origExit; });
 
 import { runRestart } from '../restart';
 
-import { afterEach } from 'vitest';
-
-describe('runRestart guard', () => {
-  it('refuses with code 2 when active sessions and no --force', async () => {
-    mockRequest.mockResolvedValue({ kind: 'daemon.status', uptimeMs: 1000, pid: 999, sessionCount: 2 });
-    await expect(runRestart([])).rejects.toThrow('__exit_2');
-    expect(mockRunStop).not.toHaveBeenCalled();
-  });
-
-  it('proceeds when --force given even with active sessions', async () => {
-    mockRequest.mockResolvedValue({ kind: 'daemon.status', uptimeMs: 1000, pid: 999, sessionCount: 5 });
-    await runRestart(['--force']);
+describe('runRestart', () => {
+  it('proceeds when daemon running', async () => {
+    mockRequest.mockResolvedValue({ kind: 'daemon.status', uptimeMs: 1000, pid: 999 });
+    await runRestart([]);
     expect(mockRunStop).toHaveBeenCalled();
     expect(mockRunStart).toHaveBeenCalled();
   });
@@ -52,9 +44,9 @@ describe('runRestart guard', () => {
     expect(mockRunStart).toHaveBeenCalled();
   });
 
-  it('proceeds when daemon up but 0 active sessions', async () => {
-    mockRequest.mockResolvedValue({ kind: 'daemon.status', uptimeMs: 1000, pid: 999, sessionCount: 0 });
-    await runRestart([]);
+  it('proceeds with --force flag', async () => {
+    mockRequest.mockResolvedValue({ kind: 'daemon.status', uptimeMs: 1000, pid: 999 });
+    await runRestart(['--force']);
     expect(mockRunStop).toHaveBeenCalled();
     expect(mockRunStart).toHaveBeenCalled();
   });
