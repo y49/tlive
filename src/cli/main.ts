@@ -12,6 +12,7 @@ Usage: tlive <subcommand> [args]   |   tlive --version
   start | stop       daemon lifecycle (IPC + IM + web)
   status             health, configured destinations, paths
   logs [-f]          tail the daemon log
+  run <cmd> [args]   wrap a process: local terminal + web terminal
   hook <event>       hook shim (invoked by Claude/Codex)
 `;
 
@@ -47,6 +48,7 @@ export async function runCli(argv: string[]): Promise<void> {
     case 'stop': { const { runStop } = await import('./subcommands/stop.js'); return runStop(rest); }
     case 'status': { const { runStatus } = await import('./subcommands/status.js'); return runStatus(rest); }
     case 'logs': { const { runLogs } = await import('./subcommands/logs.js'); return runLogs(rest); }
+    case 'run': { const { runRun } = await import('./subcommands/run.js'); return runRun(rest); }
     case 'hook': { const { runHook } = await import('./subcommands/hook.js'); return runHook(rest); }
   }
 }

@@ -1,8 +1,8 @@
 // src/kernel/contracts/cli-surface.ts
 //
-// v2 CLI surface. `run` is planned for a future milestone.
-export type Subcommand = 'setup' | 'start' | 'stop' | 'status' | 'logs' | 'hook';
+// v2 CLI surface.
+export type Subcommand = 'setup' | 'start' | 'stop' | 'status' | 'logs' | 'run' | 'hook';
 
 export const CLI_SUBCOMMANDS: readonly Subcommand[] = [
-  'setup', 'start', 'stop', 'status', 'logs', 'hook',
+  'setup', 'start', 'stop', 'status', 'logs', 'run', 'hook',
 ] as const;
