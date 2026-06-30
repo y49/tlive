@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.0.0 — hook 层重构(从 SDK 桥转向)
+
+**Breaking.** v1.0 是用 Agent SDK 驱动会话的 IM 桥("在手机上聊 Claude、起新任务、
+流式看工具")。2026 年中,官方 Remote Control(Claude)、Codex 手机端远程、官方
+Channels 把"手机驱动 vibe coding"对订阅用户商品化了;而 v1.0 那半双向驾驶其实
+从未接通(`runtime.events()` 无消费者,回复从未回到 IM)。
+
+v2.0 转向**厂商中立、自托管的 hook 审批/监看层**,填补官方结构性空白
+(跨 agent / API key 用户 / 自托管 / 飞书):
+
+### Removed
+- `@anthropic-ai/claude-agent-sdk` 驱动与整个 MCP 层(server + approve/ask/notify
+  工具)。会话归用户自己的 `claude` / `codex` 交互式进程所有——留在订阅池,
+  躲开潜在的 Agent-SDK 计费拆分。
+- `RuntimeAdapter` driver 契约、`SessionManager`(daemon 不再拥有会话)、
+  `tlive mcp` 子命令、依赖 `@modelcontextprotocol/sdk` 与 `discord.js`。
+
+### Added
+- 基于原生 hook 的闭环:`PreToolUse`→审批、`Stop`→续跑、
+  `PostToolUse`/`Notification`→通知,经 `tlive hook` shim → daemon → 飞书/Telegram。
+- 安全默认:无绑定 / 超时 → hook 静默退出 → 回落 Claude 本地 TUI(不自动放行、
+  不全拒)。
+- `tlive install-integrations` 改为写 `~/.claude/settings.json` 的 hooks(幂等)。
+
+### Notes
+- v1.0 SDK 桥架构保留为 git tag `v1.0-sdk-bridge`,架构演进过程公开可查。
+- IPC 协议 `mcp.*` → `hook.*`。
+
 ## 1.0.0 - 2026-04-22
 
 tlive v1.0 — the MCP-native agent fabric for IM. Complete rewrite; the new

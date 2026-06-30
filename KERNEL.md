@@ -1,22 +1,18 @@
-# KERNEL.md — tlive frozen surface (v1.0)
+# KERNEL.md — tlive frozen surface (v2.0)
 
-> ⚠️ **WARNING**: This file documents the frozen API surface of tlive 1.0.
-> Modifying any interface listed here is a breaking change requiring a major
-> version bump. See `docs/superpowers/specs/2026-05-11-tlive-kernel-redesign-design.md`
-> for design rationale and the project commitment to "ship 1.0, freeze 3 months".
+> ⚠️ tlive 2.0 是**厂商中立、自托管的 hook 审批/监看层**(从 v1.0 的 Agent-SDK
+> 桥转向,详见 `CHANGELOG.md`)。下面列出的接口是 CONTRACTS,由 `tests/contract/`
+> 锁定。改动任一接口 = breaking change = bump major。
 >
-> **Freeze period: 2026-05-11 → 2026-08-11.** During this window, only bug
-> fixes are accepted; no new features, no surface changes.
+> v1.0 的 SDK-driver 冻结面(`RuntimeAdapter` / `RuntimeEvent` / MCP 三工具 /
+> `mcp` 与 `handoff` 命令)已在 v2.0 移除——tlive 不再驱动/拥有会话。
 
 ## What "frozen" means
 
-The 6 surfaces below are CONTRACTS. Tests in `tests/contract/` lock them in.
-Any change that breaks a contract test = explicit "breaking change" decision = bump major.
+下面的 surface 是契约,`tests/contract/` 锁死它们。内部实现(kernel 类、adapter
+逻辑、IM 卡片渲染、CLI 内部 dispatch)可以自由改,只要契约测试保持绿。
 
-Internal implementation (kernel classes, adapter logic, MCP server transport, IM card
-rendering, CLI internal dispatch) can change freely as long as contract tests stay green.
-
-## The 6 frozen surfaces
+## The frozen surfaces
 
 ### 1. `IMAdapter` interface
 
@@ -36,43 +32,16 @@ export interface IMAdapter {
 }
 ```
 
-Adding a new IM platform = write a new `IMAdapter` plugin in `src/adapters/im/`. Don't touch kernel.
+加一个 IM 平台 = 在 `src/adapters/im/` 写一个新的 `IMAdapter` plugin。别动 kernel。
 
-### 2. `RuntimeAdapter` interface
-
-File: `src/kernel/contracts/runtime-adapter.ts`
-
-```typescript
-export interface RuntimeAdapter {
-  readonly provider: string;
-  start(opts: {
-    workspaceDir: string;
-    resumeProviderSessionId?: string; // SDK's session id, NOT tlive's
-    modelOpts?: Record<string, unknown>;
-  }): Promise<{ providerSessionId: string }>;
-  sendUser(text: string): Promise<void>;
-  interrupt(): Promise<void>;
-  stop(): Promise<void>;
-  events(): AsyncIterable<RuntimeEvent>;
-  installPermissionHandler(handler: PermissionHandler): void;
-}
-```
-
-Adding a new AI provider = write a new `RuntimeAdapter` plugin in `src/adapters/runtime/`. Don't touch kernel.
-
-### 3. `IncomingEnvelope` + `OutgoingMessage`
+### 2. `IncomingEnvelope` + `OutgoingMessage`
 
 File: `src/kernel/contracts/im-adapter.ts`
 
 ```typescript
 interface IncomingEnvelope {
-  channel: IMChannel;
-  chatId: string;
-  userId: string;
-  messageId: string;
-  text: string;
-  replyToMessageId?: string; // optional
-  ts: number;
+  channel: IMChannel; chatId: string; userId: string; messageId: string;
+  text: string; replyToMessageId?: string; ts: number;
 }
 
 type OutgoingMessage =
@@ -80,74 +49,70 @@ type OutgoingMessage =
   | { kind: 'card'; title?: string; body: string; buttons?: Array<{id: string; label: string}> };
 ```
 
-Any extra IM-specific fields (usernames, emojis, attachments) are DROPPED at the adapter boundary.
+IM 平台特有字段(用户名、表情、附件)在 adapter 边界丢弃。
 
-### 4. `RuntimeEvent` union (9 kinds)
+### 3. Hook 归一事件模型
 
-File: `src/kernel/contracts/runtime-event.ts`
+File: `src/kernel/hook/normalizer.ts`
 
 ```typescript
-type RuntimeEvent =
-  | { kind: 'text_delta'; delta: string }
-  | { kind: 'thinking_delta'; delta: string }
-  | { kind: 'tool_use_start'; toolName: string; input: unknown; toolUseId: string }
-  | { kind: 'tool_use_result'; toolUseId: string; output: unknown; isError: boolean }
-  | { kind: 'permission_request'; toolName: string; input: unknown; requestId: string }
-  | { kind: 'turn_start' }
-  | { kind: 'turn_end'; usage?: Usage }
-  | { kind: 'session_ready'; providerSessionId: string }
-  | { kind: 'error'; message: string; recoverable: boolean };
+type HookEventName = 'pre-tool-use' | 'post-tool-use' | 'stop' | 'notification';
+
+type NormalizedHook =
+  | { event: 'approval-request'; cwd; sessionId; toolName; input }   // PreToolUse
+  | { event: 'activity';         cwd; sessionId; toolName; result }  // PostToolUse
+  | { event: 'attention';        cwd; sessionId; message };          // Stop / Notification
+
+// decision 序列化回 Claude hook 格式:
+permissionDecisionOut(decision: 'allow' | 'deny' | 'defer'): object  // defer = {} = 回落本地 TUI
+continueDecisionOut(reply: string | null): object                    // reply → {decision:'block',reason}
 ```
 
-Provider-specific events MUST collapse into these 9 kinds in the adapter. Kernel doesn't add new event kinds.
+Claude / Codex 的原始 hook JSON 在这里归一。加一个新 AI runtime = 把它的 hook
+事件映射进这套归一模型,kernel 不变。
 
-### 5. MCP tool surface (3 tools)
+### 4. IPC 协议(`hook.*`)
 
-File: `src/kernel/contracts/mcp-tools.ts`
+File: `src/kernel/ipc/protocol.ts`
 
-| Tool | Purpose |
-|---|---|
-| `mcp__tlive__approve` | Permission request (via `--permission-prompt-tool`); routes to bound IM chat |
-| `mcp__tlive__ask` | AI asks user a question via IM; awaits text reply |
-| `mcp__tlive__notify` | Fire-and-forget IM notification |
+消息族(shim ↔ daemon):`hook.permission.request` / `.answer`、
+`hook.continue.request` / `.answer`、`hook.notify`;结果:
+`hook.permission.result`(`allow | deny | defer`)、`hook.continue.result`。
+传输跨平台(POSIX unix socket / Windows 命名管道)。
 
-**No other MCP tools.** Wanting to add `handoff_to_im`, `switch_workspace`, etc.? STOP. Those are CLI/IM commands, not MCP tools (AI shouldn't know about driver/routing metadata).
-
-### 6. CLI subcommand surface (14)
+### 5. CLI subcommand surface (13)
 
 File: `src/kernel/contracts/cli-surface.ts`
 
 ```
-start, stop, restart, status, doctor, daemon-logs,    # daemon lifecycle
-handoff, approve,                                       # permission/handoff
-workspace,                                              # workspace mgmt
-setup, install-integrations,                            # wizards
-mcp,                                                    # stdio MCP server
-version, update                                         # meta
+start, stop, restart, status, doctor, daemon-logs,    # daemon 生命周期
+workspace,                                             # workspace 管理
+setup, install-integrations,                           # 向导
+hook,                                                  # Claude hook shim
+approve,                                               # CLI 兜底审批
+version, update                                        # meta
 ```
 
-Adding a CLI command = adding a new metadata operation = open a discussion issue first.
+加 CLI 命令 = 加一个 metadata 操作 = 先开 issue 讨论。
 
 ## Contributing
 
-Want to add an IM platform? → write a new `IMAdapter` plugin. Don't touch kernel.
-Want to add an AI provider? → write a new `RuntimeAdapter` plugin. Don't touch kernel.
-Want to add an MCP tool? → STOP. Open an issue. We froze at 3.
-Want to add a CLI subcommand? → STOP. Open an issue. We froze at 14.
-Want to refactor kernel internals? → fine, as long as `tests/contract/` stays green.
+- 加 IM 平台 → 写新 `IMAdapter` plugin,别动 kernel。
+- 加 AI runtime → 写「该 runtime 的 hook 事件 → 归一模型」的映射。
+- 改任一契约 → breaking change,bump major + 更新 `tests/contract/`。
+- 重构 kernel 内部 → 随意,只要 `tests/contract/` 保持绿。
 
-## Architecture (for new contributors)
+## Architecture(给新贡献者)
 
 ```
-┌─ IM Adapters (Telegram / Feishu)  ──────┐
-│   Kernel (workspace / session / IPC /     │  ← frozen surface
-│   permission / MCP server / CLI dispatch)│
-└─ Runtime Adapters (Claude / Codex)  ────┘
+┌─ IM Adapters (Telegram / 飞书) ─────────┐
+│  Kernel (workspace / ipc / permission /   │ ← frozen surface
+│  hook normalizer / CLI dispatch)          │
+└─ 你自己的 `claude` / `codex` 会话 ────────┘
+   (hooks 装在 ~/.claude/settings.json)
 ```
 
-- `daemon` runs long on user's dev machine (where AI lives)
-- IM messages → `InboundHandler` → `SessionManager` → `RuntimeAdapter` → AI
-- AI → MCP `approve`/`ask`/`notify` → `PermissionRouter`/`AskBroker`/`NotifyBroker` → IM
-- Driver switching (handoff/takeback) is **out-of-band** (CLI + IM commands), AI never knows
-
-See `docs/superpowers/specs/2026-05-11-tlive-kernel-redesign-design.md` for full design.
+- `daemon` 常驻你的开发机,跑 IPC server + IM adapter。
+- 你自己交互式 `claude`/`codex` 的 hook → `tlive hook` shim → IPC → daemon →
+  撮合(`PermissionRouter` / `ContinueBroker`)→ IM。
+- **不再有 SDK 驱动 / MCP / 会话所有权**:tlive 不拥有会话,只观察 + 审批 + 通知。
