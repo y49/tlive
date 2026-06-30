@@ -4,9 +4,10 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import * as net from 'node:net';
 import { bridge } from '../pty-bridge.js';
 import { SessionHost } from '../../pty/session-host.js';
-import { FrameDecoder, FrameType, encodeAttach, encodeData } from '../stream-protocol.js';
+import { FrameDecoder, FrameType, encodeAttach, encodeData, encodeSize, parseDims } from '../stream-protocol.js';
 
 class FakeWs extends EventEmitter {
   OPEN = 1;
@@ -50,5 +51,38 @@ describe('PtyBridge', () => {
     b.close();
     await host.stop();
     expect(true).toBe(true);
+  });
+
+  it('passes a server→client Size frame through to the ws untouched', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tlive-bridge-size-'));
+    const sockPath = join(dir, 'size.sock');
+
+    // Stand up a minimal unix socket server that sends a Size frame on connect.
+    const server = net.createServer((sock) => {
+      sock.write(encodeSize(120, 40));
+    });
+    await new Promise<void>((resolve) => server.listen(sockPath, resolve));
+
+    const ws = new FakeWs();
+    const b = bridge(ws as never, sockPath);
+
+    // Wait until the fake ws accumulates at least the Size frame bytes.
+    const sent = encodeSize(120, 40);
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('timeout: Size frame not received')), 5000);
+      const iv = setInterval(() => {
+        const total = ws.sent.reduce((n, b) => n + b.length, 0);
+        if (total >= sent.length) { clearTimeout(t); clearInterval(iv); resolve(); }
+      }, 20);
+    });
+
+    const got = Buffer.concat(ws.sent);
+    const frames = new FrameDecoder().push(got);
+    expect(frames).toHaveLength(1);
+    expect(frames[0].type).toBe(FrameType.Size);
+    expect(parseDims(frames[0].payload)).toEqual({ cols: 120, rows: 40 });
+
+    b.close();
+    server.close();
   });
 });
