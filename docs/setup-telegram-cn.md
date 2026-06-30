@@ -1,13 +1,12 @@
-# Telegram 配置指南（v1.0）
+# Telegram 配置指南
 
 [返回入门指南](getting-started-cn.md)
 
-本指南带你创建 Telegram 机器人并将其接入 tlive v1.0。完成后你就能通过
-私聊（或群组 / 话题群组）使用完整的 45 条 IM 命令。
+本指南带你创建 Telegram 机器人并将其接入 tlive。完成后你就能在已配置的
+聊天中收到 Claude Code 工具审批卡片和状态通知。
 
-**v1.0 变更说明：** 配置文件已由 `config.env` 迁移为
-`~/.tlive/config.json`，由 `tlive setup` 向导写入，为首选方式。直接手写
-JSON 仍可行，但向导是推荐路径。
+**v2.0：** 配置文件为 `~/.tlive/config.json`，由 `tlive setup` 向导
+写入，同时安装 Claude Code hooks。
 
 ## 前置条件
 
@@ -103,29 +102,23 @@ chmod 600 ~/.tlive/config.json
 
 ```bash
 tlive start
-tlive doctor
+tlive status
 ```
 
-doctor 输出里 Telegram 探测会调用 `getMe`，✅ 意味着 token 有效、网络可达。
+`tlive status` 输出里 Telegram 探测会调用 `getMe`，✅ 意味着 token
+有效、网络可达。
 
-在 Telegram 里给机器人发 `hello`。你应该看到 👁️ 反应、置顶的会话头
-消息，以及流式回复。
+在配置的 Telegram 聊天中触发一次 Claude 工具调用，你应该看到一张带
+Allow / Deny 按钮的审批卡片。
 
 ---
 
-## v1.0 平台要求（规范 §10.1）
+## v2.0 平台说明
 
 - **传输层：** 默认长轮询；可选 webhook。
-- **MarkdownV2 转义：** `src/platform/telegram/renderer.ts` 会自动转义
-  `_`、`*`、`[`、`]`、`(`、`)`、`~`、`` ` ``、`>`、`#`、`+`、`-`、`=`、
-  `|`、`{`、`}`、`.`、`!`。日常使用无需关心，只需要知道 agent 输出
-  里的 `_foo_` 不会被意外识别为斜体。
-- **话题群组（可选，推荐用于"一会话一话题"体验）：** 机器人在话题群组
-  内为管理员时，每个会话单独开一个 topic。不用话题群组时所有会话走
-  主话题。
-- **Emoji 反应：** 有表情反应权限时会对用户消息打 👁️。
-- **Inline 键盘：** 用于权限卡按钮（Allow / Deny / Always / Learn）。
-- **forceReply：** 用于 elicitation 表单 —— 每次一个问题，汇总答案。
+- **Inline 键盘：** 用于审批卡按钮（Allow / Deny）。
+- **入站过滤：** 适配器只接受来自已配置 `chatId` 的消息和按钮回调，
+  未配置的聊天会被静默丢弃（fail-closed）。
 
 ## Webhook 模式（可选）
 
@@ -173,4 +166,4 @@ fly.io 网关均可）。
   [references/troubleshooting.md](../references/troubleshooting.md)
   的 "Permission card buttons not working" 一节。
 
-返回 [入门指南](getting-started-cn.md) · [IM 命令参考](commands.md)。
+返回 [入门指南](getting-started-cn.md) · [CLI 命令参考](commands.md)。

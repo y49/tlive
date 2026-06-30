@@ -1,14 +1,13 @@
-# Telegram Setup Guide (v1.0)
+# Telegram Setup Guide
 
 [Back to Getting Started](getting-started.md)
 
 This guide walks you through creating a Telegram bot and wiring it into
-tlive v1.0. The result is a bot you can DM (or add to a group / forum
-group) from which the full 45-command IM surface is available.
+tlive. The result is a bot you can DM (or add to a group) from which
+approval cards and status notifications are delivered.
 
-**Changed in v1.0:** config is `~/.tlive/config.json` (not `config.env`),
-and the `tlive setup` wizard writes it for you. The hand-written env-var
-approach still exists, but the wizard is canonical.
+**v2.0:** config is `~/.tlive/config.json`. The `tlive setup` wizard
+writes it for you and also installs the Claude Code hooks.
 
 ## What you'll need
 
@@ -104,35 +103,24 @@ chmod 600 ~/.tlive/config.json
 
 ```bash
 tlive start
-tlive doctor
+tlive status
 ```
 
-In doctor output, the Telegram probe calls `getMe` — a ✅ there means the
-token is valid and tlive can reach the API.
+In `tlive status` output, the Telegram probe calls `getMe` — a ✅ there
+means the token is valid and tlive can reach the API.
 
-Then in Telegram: DM the bot `hello`. You should see the 👁️ reaction, a
-pinned session header, and a streamed reply.
+Then from the configured Telegram chat: DM the bot or send a message
+and trigger a Claude tool call to see the approval card.
 
 ---
 
-## v1.0 platform requirements (spec §10.1)
+## v2.0 platform notes
 
 - **Transport.** Long-polling by default; webhook optional.
-- **MarkdownV2 escaping.** `src/platform/telegram/renderer.ts` escapes
-  special characters (`_`, `*`, `[`, `]`, `(`, `)`, `~`, `` ` ``, `>`,
-  `#`, `+`, `-`, `=`, `|`, `{`, `}`, `.`, `!`). You generally don't
-  care unless you're writing a plugin; just know that agent output
-  containing `_foo_` won't italicise accidentally.
-- **Forum groups (optional, recommended for topic-per-session).** In a
-  Telegram forum group where the bot is admin, each session opens its own
-  topic. Disable the forum feature to route all sessions into the main
-  thread.
-- **Emoji reactions.** Supported for `👁️` acknowledgement via
-  `setMessageReaction` when the bot has reaction permission.
-- **Inline keyboards.** Used for permission-card buttons (Allow / Deny /
-  Always / Learn).
-- **forceReply.** Used for elicitation form rendering — one question per
-  bot message, answers aggregated.
+- **Inline keyboards.** Used for approval-card buttons (Allow / Deny).
+- **Inbound filtering.** The adapter accepts messages and button callbacks
+  only from the configured `chatId`(s). Any chat not in `allowedChatIds`
+  is silently dropped (fail-closed).
 
 ## Webhook mode (optional)
 
@@ -182,4 +170,4 @@ Supported: `http://`, `https://`, `socks4://`, `socks5://`.
   [references/troubleshooting.md](../references/troubleshooting.md)
   ("Permission card buttons not working").
 
-Back to [Getting Started](getting-started.md) · [IM command reference](commands.md).
+Back to [Getting Started](getting-started.md) · [CLI command reference](commands.md).

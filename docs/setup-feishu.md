@@ -1,16 +1,15 @@
-# Feishu / Lark Setup Guide (v1.0)
+# Feishu / Lark Setup Guide
 
 [Back to Getting Started](getting-started.md)
 
 This guide walks you through creating a Feishu (or Lark) custom app and
-wiring it into tlive v1.0. Feishu's setup has more steps than other
-platforms — you create an app, add permissions, subscribe to events,
-publish a version, and get workspace-admin approval. Once done, the bot
-supports interactive cards, forms, and topic-per-session on new-style
-groups.
+wiring it into tlive. Feishu's setup has more steps than other platforms —
+you create an app, add permissions, subscribe to events, publish a version,
+and get workspace-admin approval. Once done, the bot delivers approval cards
+and status notifications from Claude Code.
 
-**Changed in v1.0:** config is `~/.tlive/config.json` (JSON). `tlive setup`
-is the recommended way to populate the `channels.feishu` block.
+**v2.0:** config is `~/.tlive/config.json` (JSON). `tlive setup` is the
+recommended way to populate the `channels.feishu` block and install hooks.
 
 ## What you'll need
 
@@ -157,34 +156,27 @@ chmod 600 ~/.tlive/config.json
 
 ```bash
 tlive start
-tlive doctor
+tlive status
 ```
 
 The Feishu probe calls
 `auth/v3/tenant_access_token/internal`. Code `0` = credentials valid.
 
 Open Feishu, search for the app name — the bot should appear under
-**Bots** / **Apps**. DM it `hello`.
-
-Expected: a 👁️ ack (where supported — Feishu has no reaction API, so tlive
-falls back to a dedicated reply message with just "👁️"), a session header
-card, and a streaming agent response rendered as card updates.
+**Bots** / **Apps**. DM it or send a message in the configured chat, then
+trigger a Claude tool call to see the approval card.
 
 ---
 
-## v1.0 platform requirements (spec §10.3)
+## v2.0 platform notes
 
-- **Event transport.** WebSocket (long connection) only.
-- **No reaction API.** 👁️ ack is rendered as a distinct bot message per
-  spec §7.3. ReactionTracker treats this as the fallback path.
-- **Interactive card markup.** `renderer.ts` emits card blocks (markdown,
-  actions, columns, fields); schema v2.
-- **Form cards.** Elicitation uses native form card blocks (`form` element
-  type) submitted via `card.action.trigger`.
-- **Attachments.** `upload_image` / `upload_file` for outbound, image/file
-  keys embedded in the card or sent as standalone messages.
-- **Topics (new-style groups).** When supported, each session gets its own
-  topic thread. Falls back to main chat when not supported.
+- **Event transport.** WebSocket (long connection) only. No public URL
+  required — the daemon connects outbound to Feishu.
+- **Interactive card markup.** Approval cards use Feishu Card schema v2
+  with callback button behaviors.
+- **Inbound filtering.** The adapter accepts messages and card button
+  callbacks only from the configured `chatId`. Any other chat is silently
+  dropped (fail-closed).
 
 ## Lark (international)
 
@@ -212,4 +204,4 @@ All scopes, event names, and API shapes are the same.
   missing from `config.json`, or `tlive start` wasn't run after config
   edit.
 
-Back to [Getting Started](getting-started.md) · [IM command reference](commands.md).
+Back to [Getting Started](getting-started.md) · [CLI command reference](commands.md).

@@ -30,6 +30,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const configuredChats = (): PermChat[] => {
     const out: PermChat[] = [];
     const tg = cfg.adapters.telegram;
+    // chatId here is a routing target (presence gate); the adapter enforces the real inbound filter.
     if (tg?.token && tg.chatIdAllowList?.length) out.push({ channel: 'telegram', chatId: tg.chatIdAllowList[0] });
     const fs = cfg.adapters.feishu;
     if (fs?.chatId) out.push({ channel: 'feishu', chatId: fs.chatId });

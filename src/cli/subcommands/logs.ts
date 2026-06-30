@@ -9,7 +9,7 @@ export async function runLogs(argv: string[]): Promise<void> {
   const home = process.env.TLIVE_HOME ?? join(homedir(), '.tlive');
   const logPath = join(home, 'daemon.log');
   if (!existsSync(logPath)) {
-    process.stderr.write(`tlive daemon-logs: no log file at ${logPath}\n`);
+    process.stderr.write(`tlive logs: no log file at ${logPath}\n`);
     process.exit(1);
   }
   const follow = argv.includes('--follow') || argv.includes('-f');

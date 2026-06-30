@@ -32,9 +32,12 @@ export class TelegramAdapter implements IMAdapter {
     // Text messages
     this.bot.on('message:text', (ctx) => {
       if (!this.inboundHandler) return;
+      const chatId = String(ctx.chat.id);
+      // Fail-closed: only forward inbound from a configured chat.
+      if (!this.opts.allowedChatIds?.length || !this.opts.allowedChatIds.includes(chatId)) return;
       const env: IncomingEnvelope = {
         channel: 'telegram',
-        chatId: String(ctx.chat.id),
+        chatId,
         userId: String(ctx.from?.id ?? ''),
         messageId: String(ctx.message.message_id),
         text: ctx.message.text,
@@ -47,10 +50,13 @@ export class TelegramAdapter implements IMAdapter {
     // Inline-keyboard button callbacks (approve:<id> / deny:<id>)
     this.bot.on('callback_query:data', (ctx) => {
       if (!this.inboundHandler) return;
+      const chatId = String(ctx.callbackQuery.message?.chat.id ?? '');
+      // Fail-closed: only forward callbacks from a configured chat.
+      if (!this.opts.allowedChatIds?.length || !this.opts.allowedChatIds.includes(chatId)) return;
       const data = ctx.callbackQuery.data;
       const env: IncomingEnvelope = {
         channel: 'telegram',
-        chatId: String(ctx.callbackQuery.message?.chat.id ?? ''),
+        chatId,
         userId: String(ctx.callbackQuery.from.id),
         messageId: String(ctx.callbackQuery.message?.message_id ?? ''),
         text: data,

@@ -1,14 +1,14 @@
-# 飞书 / Lark 配置指南（v1.0）
+# 飞书 / Lark 配置指南
 
 [返回入门指南](getting-started-cn.md)
 
-本指南带你创建飞书（或 Lark）自建应用并接入 tlive v1.0。飞书配置步骤
+本指南带你创建飞书（或 Lark）自建应用并接入 tlive。飞书配置步骤
 比其他平台略多 —— 需要创建应用、添加权限、订阅事件、发布版本并让
-企业管理员审批。完成后你会拥有一个支持交互卡片、表单、新版群组
-话题（topic-per-session）的机器人。
+企业管理员审批。完成后你会拥有一个在配置的聊天中收发
+Claude Code 审批卡片和状态通知的机器人。
 
-**v1.0 变更说明：** 配置文件改为 `~/.tlive/config.json`（JSON）。推荐
-用 `tlive setup` 向导填充 `channels.feishu` 字段。
+**v2.0：** 配置文件为 `~/.tlive/config.json`（JSON）。推荐用
+`tlive setup` 向导填充 `channels.feishu` 字段并安装 hooks。
 
 ## 前置条件
 
@@ -147,32 +147,25 @@ chmod 600 ~/.tlive/config.json
 
 ```bash
 tlive start
-tlive doctor
+tlive status
 ```
 
 飞书探测会调用 `auth/v3/tenant_access_token/internal`，返回
 `code: 0` 即凭证有效。
 
 打开飞书搜索应用名，机器人应出现在 **机器人** / **应用** 分类下。
-私聊发 `hello`。
-
-预期：看到 👁️ ack（飞书没有反应 API，tlive 会退而用一条仅含 "👁️"
-的回复消息）、一个会话头卡片，以及作为卡片增量更新渲染的流式回复。
+在已配置的聊天中触发一次 Claude 工具调用，你应看到一张带
+Allow / Deny 按钮的审批卡片。
 
 ---
 
-## v1.0 平台要求（规范 §10.3）
+## v2.0 平台说明
 
-- **事件传输：** 仅长连接（WebSocket）。
-- **无反应 API：** 👁️ ack 走独立消息回退路径（规范 §7.3）。
-  ReactionTracker 把这个当作 fallback 分支处理。
-- **交互卡片：** `renderer.ts` 用 card v2 schema（markdown / actions /
-  columns / fields）。
-- **表单卡：** elicitation 用原生 `form` 元素，通过
-  `card.action.trigger` 提交答案。
-- **附件：** 出站用 `upload_image` / `upload_file`，card 或独立消息引用
-  image/file key。
-- **新版群组 topic：** 支持时每会话独立 topic，否则回退主话题。
+- **事件传输：** 仅长连接（WebSocket）。无需公网地址——守护进程主动
+  向外连接飞书。
+- **交互卡片：** 审批卡使用飞书卡片 schema v2 的 callback 按钮行为。
+- **入站过滤：** 适配器只接受来自已配置 `chatId` 的消息和卡片回调，
+  其他聊天会被静默丢弃（fail-closed）。
 
 ## Lark 国际版
 
@@ -197,4 +190,4 @@ tlive doctor
 - **飞书里机器人有回复但 tlive 日志什么也没有。** `config.json` 漏了
   `channels.feishu`，或者改完配置没有重新 `tlive start`。
 
-返回 [入门指南](getting-started-cn.md) · [IM 命令参考](commands.md)。
+返回 [入门指南](getting-started-cn.md) · [CLI 命令参考](commands.md)。

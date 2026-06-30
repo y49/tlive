@@ -63,6 +63,8 @@ export class FeishuAdapter implements IMAdapter {
         if (!this.inboundHandler) return;
         const d = data as { event: { sender: { sender_id: { user_id: string } }; message: { message_id: string; chat_id: string; content: string; create_time: string } } };
         const ev = d.event;
+        // Fail-closed: only forward inbound from the configured chat.
+        if (!this.opts.chatId || ev.message.chat_id !== this.opts.chatId) return;
         // content is JSON like {"text":"..."}
         let text = '';
         try { text = (JSON.parse(ev.message.content) as { text?: string }).text ?? ''; } catch {}
@@ -78,11 +80,14 @@ export class FeishuAdapter implements IMAdapter {
       // Card button taps → synthesize envelope with text = button id ("approve:<id>"/"deny:<id>").
       'card.action.trigger': async (data: unknown) => {
         const d = data as { event?: { operator?: { user_id?: string; open_id?: string }; action?: { value?: { tlive?: string } }; context?: { open_chat_id?: string; open_message_id?: string } } };
+        const chatId = d.event?.context?.open_chat_id ?? '';
+        // Fail-closed: only forward callbacks from the configured chat.
+        if (!this.opts.chatId || chatId !== this.opts.chatId) return;
         const val = d.event?.action?.value?.tlive;
         if (val && this.inboundHandler) {
           this.inboundHandler({
             channel: 'feishu',
-            chatId: d.event?.context?.open_chat_id ?? this.opts.chatId ?? '',
+            chatId,
             userId: d.event?.operator?.user_id ?? d.event?.operator?.open_id ?? '',
             messageId: d.event?.context?.open_message_id ?? '',
             text: val,

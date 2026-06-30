@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased — CLI surface cleanup + inbound chat filter
+
+### Breaking
+
+- **CLI 13 → 6 commands.** Shipped surface is exactly:
+  `setup`, `start`, `stop`, `status`, `logs`, `hook`.
+  Removed: `restart`, `doctor` (folded into `status`),
+  `daemon-logs` (renamed `logs`), `install-integrations` (folded into `setup`),
+  `approve`, `workspace`, `version`, `update`.
+- **`tlive setup` now installs hooks.** `tlive setup` runs the credential
+  wizard AND writes the Claude Code hook entries into
+  `~/.claude/settings.json` (idempotent). `--hooks-only` reinstalls only
+  the hooks. The separate `tlive install-integrations` subcommand is gone.
+- **Workspace subsystem removed.** The `workspace` CLI subcommand, the
+  `/use` IM command, and the chat-binding model are all gone. Notifications
+  go to all configured chats. Global mute is controlled by `/perm on|off`.
+- **`tlive doctor` removed.** Use `tlive status`; it now also runs
+  per-platform credential probes.
+- **`tlive daemon-logs` removed.** Use `tlive logs`.
+
+### Security
+
+- **Inbound chat filter (fail-closed) — adapter layer.**
+  Both IM adapters now enforce that inbound text messages and button
+  callbacks must come from the configured chat. If no chat is configured
+  (`allowedChatIds` empty/absent for Telegram, `chatId` absent for Feishu),
+  all inbound is dropped. "Trust the configured chat" is enforced at the
+  adapter boundary.
+
+---
+
 ## 2.0.0 — hook 层重构(从 SDK 桥转向)
 
 **Breaking.** v1.0 是用 Agent SDK 驱动会话的 IM 桥("在手机上聊 Claude、起新任务、

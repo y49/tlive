@@ -56,34 +56,28 @@ better and for free. tlive only does approval, notification, and monitoring.
 ```bash
 npm install -g tlive
 
-tlive setup                 # wizard: workspace + IM credentials (Telegram / Feishu)
-tlive install-integrations  # write hooks into ~/.claude/settings.json
-tlive start                 # start the long-running daemon
+tlive setup    # wizard: IM credentials (Telegram / Feishu) + installs hooks into ~/.claude/settings.json
+tlive start    # start the long-running daemon
 
-# then run, as usual, in your workspace directory:
+# then run, as usual, in your working directory:
 claude
 ```
 
-When a tool call needs approval, your bound Feishu / Telegram receives a card
+When a tool call needs approval, your configured Feishu / Telegram receives a card
 with buttons.
 
 ## CLI surface
 
 ```
 Daemon lifecycle
-  tlive start | stop | restart | status | doctor | daemon-logs
+  tlive start | stop | status | logs
 
 Hook integration
-  tlive hook <event>          Claude hook shim (reads stdin, outputs decision; called by Claude)
-  tlive install-integrations  write ~/.claude/settings.json hooks (idempotent)
-  tlive approve <requestId>   CLI fallback to approve a pending permission
-
-Workspace
-  tlive workspace add | list | remove
+  tlive hook <event>   Claude hook shim (reads stdin, outputs decision; called by Claude)
 
 Wizard / Meta
-  tlive setup
-  tlive version | update
+  tlive setup          wizard + installs hooks (idempotent); --hooks-only reinstalls hooks only
+  tlive --version
 ```
 
 ## Architecture
@@ -93,8 +87,8 @@ Wizard / Meta
 - **Hook shim** (`src/cli/subcommands/hook.ts` + `src/kernel/hook/normalizer.ts`)
   — the thin entry Claude calls: stdin → IPC → decision.
 - **Brokers** (`src/kernel/daemon/permission-router.ts`,
-  `src/kernel/permission/continue-broker.ts`) — route a request to the IM chat
-  bound to its workspace and block for the answer.
+  `src/kernel/permission/continue-broker.ts`) — route a request to the configured
+  chat(s) and block for the answer.
 - **IM adapters** (`src/adapters/im/`) — Telegram (grammy), Feishu (lark).
 - **IPC** (`src/kernel/ipc/`) — cross-platform unix socket / Windows named pipe.
 
@@ -105,7 +99,7 @@ the hooks in their settings — no SDK, no version pinning, no vendor cloud.
 
 v1.0 was an IM bridge that drove sessions via the Agent SDK. v2.0 switches to
 the hook layer (see `CHANGELOG.md`). This is a breaking change with no automatic
-migration: re-run `tlive setup` + `tlive install-integrations`. The v1.0
+migration: re-run `tlive setup` (which now also installs hooks). The v1.0
 architecture is preserved at git tag `v1.0-sdk-bridge`.
 
 ## Development
