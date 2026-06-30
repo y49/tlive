@@ -7,11 +7,13 @@ import { ContinueBroker } from '../permission/continue-broker.js';
 import { SenderGuard } from './sender-guard.js';
 import { loadConfig } from '../config/loader.js';
 import type { IMAdapter } from '../contracts/im-adapter.js';
+import { SessionRegistry } from '../web/session-registry.js';
 
 export interface DaemonHandle {
   shutdown(): Promise<void>;
   permissionRouter: PermissionRouter;
   continueBroker: ContinueBroker;
+  sessions: SessionRegistry;
   ipcSocketPath: string;
 }
 
@@ -77,6 +79,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     }
   });
 
+  const sessions = new SessionRegistry();
+
   const senderGuard = new SenderGuard(cfg.allowedSenders);
 
   const sockPath = join(opts.home, 'daemon.sock');
@@ -114,6 +118,17 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           reply({ kind: 'ack' });
           return;
         }
+        case 'session.register':
+          sessions.register(req.session);
+          reply({ kind: 'ack' });
+          return;
+        case 'session.unregister':
+          sessions.unregister(req.id);
+          reply({ kind: 'ack' });
+          return;
+        case 'session.list':
+          reply({ kind: 'session.list', sessions: sessions.list() });
+          return;
         default:
           reply({ kind: 'error', message: `unhandled request: ${(req as { kind: string }).kind}` });
       }
@@ -146,5 +161,5 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     }, 2000).unref();
   }
 
-  return { shutdown, permissionRouter, continueBroker, ipcSocketPath: sockPath };
+  return { shutdown, permissionRouter, continueBroker, sessions, ipcSocketPath: sockPath };
 }
