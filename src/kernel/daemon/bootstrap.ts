@@ -1,6 +1,5 @@
 // src/kernel/daemon/bootstrap.ts
-import { join } from 'node:path';
-import { dirname } from 'node:path';
+import { join, dirname } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { startIpcServer, type IpcServer } from '../ipc/server.js';
@@ -174,14 +173,19 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   async function shutdown(): Promise<void> {
     if (stopped) return;
     stopped = true;
-    for (const a of opts.imAdapters ?? []) await a.stop();
-    if (web) await web.close();
-    await ipc.close();
-    setTimeout(() => {
+    const forceExit = setTimeout(() => {
       // eslint-disable-next-line no-console
       console.error('tlive daemon: forced exit (event loop did not drain in 2s)');
       process.exit(0);
-    }, 2000).unref();
+    }, 2000);
+    forceExit.unref();
+    try {
+      for (const a of opts.imAdapters ?? []) await a.stop();
+      if (web) await web.close();
+      await ipc.close();
+    } finally {
+      clearTimeout(forceExit);
+    }
   }
 
   return { shutdown, permissionRouter, continueBroker, sessions, webUrl, ipcSocketPath: sockPath };

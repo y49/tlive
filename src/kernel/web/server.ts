@@ -3,10 +3,10 @@
 // Daemon web server: http (static + /api/sessions) + ws /ws/term/<id>, single token.
 // On a valid ?token= the response sets an httpOnly cookie so the token leaves the URL.
 
-import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { existsSync, readFileSync } from 'node:fs';
-import { join, extname, normalize } from 'node:path';
+import { join, extname, normalize, sep } from 'node:path';
 import type { SessionRegistry } from './session-registry.js';
 import { bridge } from './pty-bridge.js';
 
@@ -37,7 +37,7 @@ export async function startWebServer(opts: WebServerOpts): Promise<WebServerHand
     const url = new URL(req.url ?? '/', `http://${opts.bind}`);
     if (tokenFromReq(url, req) !== opts.token) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return; }
     const m = url.pathname.match(/^\/ws\/term\/(.+)$/);
-    if (!m) { socket.destroy(); return; }
+    if (!m) { socket.write('HTTP/1.1 400 Bad Request\r\n\r\n'); socket.destroy(); return; }
     const session = opts.sessions.get(decodeURIComponent(m[1]));
     if (!session) { socket.write('HTTP/1.1 404 Not Found\r\n\r\n'); socket.destroy(); return; }
     wss.handleUpgrade(req, socket, head, (ws) => { bridge(ws as never, session.sockPath); });
@@ -54,7 +54,7 @@ export async function startWebServer(opts: WebServerOpts): Promise<WebServerHand
     port,
     async close() {
       wss.close();
-      await new Promise<void>((r) => http.close(() => r()));
+      await new Promise<void>((r) => { http.close(() => r()); http.closeAllConnections?.(); });
     },
   };
 }
@@ -78,7 +78,7 @@ function handleHttp(req: IncomingMessage, res: ServerResponse, opts: WebServerOp
   let rel = url.pathname === '/' ? '/index.html' : url.pathname;
   rel = normalize(rel).replace(/^(\.\.[/\\])+/, '');
   const filePath = join(opts.webDir, rel);
-  if (!filePath.startsWith(normalize(opts.webDir))) { res.writeHead(403); res.end('Forbidden'); return; }
+  if (!filePath.startsWith(normalize(opts.webDir) + sep)) { res.writeHead(403); res.end('Forbidden'); return; }
   if (existsSync(filePath)) {
     res.writeHead(200, { 'Content-Type': MIME[extname(filePath)] ?? 'application/octet-stream', ...setCookie });
     res.end(readFileSync(filePath));
