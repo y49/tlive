@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PermissionRouter } from '../permission-router';
 import { WorkspaceRegistry } from '../../workspace/registry';
 import { mkdtempSync } from 'node:fs';
@@ -6,6 +6,24 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 describe('PermissionRouter (cwd-based, allow/deny/defer)', () => {
+  it('defers with defer decision after timeout (finding 1: bounded pending)', async () => {
+    vi.useFakeTimers();
+    const home = mkdtempSync(join(tmpdir(), 'tlive-pr-'));
+    const ws = new WorkspaceRegistry({ home });
+    ws.add('ws-foo', '/projects/foo');
+    const r = new PermissionRouter({
+      workspaces: ws,
+      chatsForWorkspace: () => [{ channel: 'telegram', chatId: 'c1' }],
+      sendToChat: vi.fn().mockResolvedValue(undefined),
+    });
+    const p = r.requestPermission({ cwd: '/projects/foo', toolName: 'Bash', input: {} });
+    // Advance past the 250 s timeout
+    vi.advanceTimersByTime(251_000);
+    const result = await p;
+    expect(result.decision).toBe('defer');
+    vi.useRealTimers();
+  });
+
   it('defers when no workspace matches cwd', async () => {
     const home = mkdtempSync(join(tmpdir(), 'tlive-pr-'));
     const ws = new WorkspaceRegistry({ home });

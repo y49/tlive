@@ -34,6 +34,14 @@ export class InboundHandler {
   constructor(private deps: InboundHandlerDeps) {}
 
   async handle(env: IncomingEnvelope): Promise<void> {
+    // Button callback: approve:<id> or deny:<id> — checked BEFORE router.route() unbound
+    // early-exit: requestId is global and chat binding is not required.
+    const cb = parseCallback(env.text);
+    if (cb) {
+      this.deps.permissionRouter.answer(cb.requestId, cb.approved);
+      return;
+    }
+
     // Route
     const routed = this.deps.router.route(env);
     if (routed.kind === 'drop') return;
@@ -44,13 +52,6 @@ export class InboundHandler {
     }
     const wsId = routed.workspaceId;
 
-    // Button callback: approve:<id> or deny:<id>
-    const cb = parseCallback(env.text);
-    if (cb) {
-      this.deps.permissionRouter.answer(cb.requestId, cb.approved);
-      return;
-    }
-
     // IM command
     const cmd = parseImCommand(env.text);
     if (cmd) {
@@ -58,12 +59,14 @@ export class InboundHandler {
       return;
     }
 
-    // Free text: if there is a pending continue request for this workspace, answer it
+    // Free text: if there is a pending continue request for this workspace, answer it.
+    // answer() returns false when the requestId is stale (timed out) — fall through to
+    // help hint in that case so the message is not silently swallowed.
     const continueId = this.deps.latestContinueId.get(wsId);
     if (continueId) {
       this.deps.latestContinueId.delete(wsId);
-      this.deps.continueBroker.answer(continueId, env.text);
-      return;
+      const hit = this.deps.continueBroker.answer(continueId, env.text);
+      if (hit) return;
     }
 
     // Otherwise: help hint

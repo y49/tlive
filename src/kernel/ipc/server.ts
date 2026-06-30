@@ -18,6 +18,8 @@ export async function startIpcServer(opts: {
 }): Promise<IpcServer> {
   if (existsSync(opts.path)) unlinkSync(opts.path);
   const server: Server = createServer((sock: Socket) => {
+    // Suppress EPIPE / ECONNRESET from writes to a disconnected socket.
+    sock.on('error', () => {});
     let buf = '';
     sock.on('data', (chunk) => {
       buf += chunk.toString('utf-8');
@@ -32,13 +34,13 @@ export async function startIpcServer(opts: {
           // Best-effort SO_PEERCRED via raw socket. Linux only.
           // (Skipped here for portability; daemon can read /proc/<pid>/comm later.)
           const reply = (r: IpcResponse) => {
-            sock.write(JSON.stringify(r) + '\n');
+            if (!sock.destroyed) sock.write(JSON.stringify(r) + '\n');
           };
           Promise.resolve(opts.handler(req, reply, ctx)).catch((e) => {
             reply({ kind: 'error', message: (e as Error).message });
           });
         } catch (e) {
-          sock.write(JSON.stringify({ kind: 'error', message: 'bad-json' }) + '\n');
+          if (!sock.destroyed) sock.write(JSON.stringify({ kind: 'error', message: 'bad-json' }) + '\n');
         }
       }
     });

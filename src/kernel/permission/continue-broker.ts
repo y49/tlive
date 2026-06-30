@@ -31,10 +31,13 @@ export class ContinueBroker {
     });
   }
 
-  answer(requestId: string, reply: string): void {
+  /** Returns true when the requestId was found in pending (live request answered),
+   *  false when stale (timed out or already answered). */
+  answer(requestId: string, reply: string): boolean {
     const r = this.pending.get(requestId);
-    if (!r) return;
+    if (!r) return false;
     this.pending.delete(requestId);
     r(reply);
+    return true;
   }
 }

@@ -13,6 +13,10 @@ export interface PermissionRouterDeps {
 
 export type Decision = 'allow' | 'deny' | 'defer';
 
+/** Timeout before an unanswered permission request auto-defers (seconds).
+ *  Must be less than the shim's IPC timeout (290 s for PreToolUse). */
+const PERMISSION_TIMEOUT_SEC = 250;
+
 export class PermissionRouter {
   /** requestId → resolve. */
   private pending = new Map<string, (d: Decision) => void>();
@@ -27,6 +31,13 @@ export class PermissionRouter {
     const requestId = randomUUID();
     const decision = await new Promise<Decision>((resolve) => {
       this.pending.set(requestId, resolve);
+      // Bounded timeout: resolve 'defer' so pending never leaks (e.g. write to closed socket).
+      setTimeout(() => {
+        if (this.pending.has(requestId)) {
+          this.pending.delete(requestId);
+          resolve('defer');
+        }
+      }, PERMISSION_TIMEOUT_SEC * 1000).unref();
       for (const t of targets) {
         void this.deps.sendToChat(t, {
           title: `权限请求: ${opts.toolName}`,

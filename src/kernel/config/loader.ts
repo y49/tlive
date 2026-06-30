@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 export interface AdapterCreds {
   telegram?: { token: string; chatIdAllowList?: string[] };
-  feishu?: { appId: string; appSecret: string };
+  feishu?: { appId: string; appSecret: string; chatId?: string };
 }
 
 export interface KernelConfig {

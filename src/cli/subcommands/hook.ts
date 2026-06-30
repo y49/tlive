@@ -41,7 +41,7 @@ export async function runHook(argv: string[]): Promise<void> {
           toolName: n.toolName,
           input: n.input,
         },
-        { timeoutMs: 300_000 },
+        { timeoutMs: 290_000 },
       );
       const decision = r.kind === 'hook.permission.result' ? r.decision : 'defer';
       process.stdout.write(JSON.stringify(permissionDecisionOut(decision)));
@@ -56,7 +56,7 @@ export async function runHook(argv: string[]): Promise<void> {
           sessionId: n.sessionId,
           context: (n as { message: string }).message,
         },
-        { timeoutMs: 180_000 },
+        { timeoutMs: 175_000 },
       );
       const reply = r.kind === 'hook.continue.result' ? r.reply : null;
       process.stdout.write(JSON.stringify(continueDecisionOut(reply)));

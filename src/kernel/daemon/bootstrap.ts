@@ -32,7 +32,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const workspaces = new WorkspaceRegistry({ home: opts.home });
   const router = new ChatRouter({ bindings: cfg.chatBindings, allowedSenders: cfg.allowedSenders });
 
-  // Build per-workspace chat lookup from config (channel:chatId → workspaceId reversed)
+  // Build per-workspace chat lookup from config (channel:chatId → workspaceId reversed).
+  // NOTE: current design assumes single-channel-single-chat per workspace (sendToChat
+  // iterates all bound chats for the workspace; multi-chat routing is not redesigned here).
   const chatsForWorkspace = (wsId: string): Array<{ channel: string; chatId: string }> => {
     const out: Array<{ channel: string; chatId: string }> = [];
     for (const [chatKey, ws] of Object.entries(cfg.chatBindings)) {
@@ -115,10 +117,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           reply({ kind: 'hook.continue.result', reply: reply_text });
           return;
         }
-        case 'hook.continue.answer':
-          continueBroker.answer(req.requestId, req.reply);
-          reply({ kind: 'ack' });
-          return;
         case 'hook.notify': {
           const ws = workspaces.lookupByCwd(req.cwd);
           const targets = ws ? chatsForWorkspace(ws.id) : [];

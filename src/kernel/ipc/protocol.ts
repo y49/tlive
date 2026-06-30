@@ -6,7 +6,6 @@ export type IpcRequest =
   | { kind: 'hook.permission.request'; cwd: string; sessionId: string; toolName: string; input: unknown }
   | { kind: 'hook.permission.answer'; requestId: string; approved: boolean }
   | { kind: 'hook.continue.request'; cwd: string; sessionId: string; context: string }
-  | { kind: 'hook.continue.answer'; requestId: string; reply: string }
   | { kind: 'hook.notify'; cwd: string; sessionId: string; level: 'info' | 'warn' | 'error'; message: string };
 
 export type IpcResponse =
