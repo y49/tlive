@@ -7,7 +7,6 @@
     "tlive": "./dist/src/tlive-cli.mjs"
   },
   "files": [
-    "scripts/cli.js",
     "scripts/build.mjs",
     "scripts/postinstall.js",
     "scripts/preuninstall.js",

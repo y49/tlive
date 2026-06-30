@@ -1,104 +1,40 @@
 #!/usr/bin/env node
-// preuninstall: clean up installed binaries, scripts, and docs from ~/.tlive/
-// Preserves user data: config.env, data/, logs/, runtime/
-import { existsSync, unlinkSync, readdirSync, rmdirSync, readFileSync, writeFileSync } from 'node:fs';
+// preuninstall: best-effort stop the daemon and remove tlive's Claude hooks.
+// User data in ~/.tlive (config.json, daemon.log) is preserved.
+import { execSync } from 'node:child_process';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { execSync } from 'node:child_process';
 
-const TLIVE_HOME = join(homedir(), '.tlive');
-const BIN_DIR = join(TLIVE_HOME, 'bin');
-const DOCS_DIR = join(TLIVE_HOME, 'docs');
+// 1. Best-effort stop the daemon (ignore if not running).
+try { execSync('tlive stop', { stdio: 'ignore', timeout: 5000 }); } catch {}
 
-// Stop bridge daemon if running
-function stopBridge() {
-  const pidFile = join(TLIVE_HOME, 'runtime', 'bridge.pid');
-  if (!existsSync(pidFile)) return;
+// 2. Remove tlive's Claude hooks (tagged _tlive:true) from ~/.claude/settings.json.
+//    The _tlive tag is the contract shared with install-hooks.ts (installClaudeHooks).
+function removeTliveHooks() {
+  const p = join(homedir(), '.claude', 'settings.json');
+  if (!existsSync(p)) return;
   try {
-    const pid = parseInt(readFileSync(pidFile, 'utf-8').trim(), 10);
-    process.kill(pid);
-    unlinkSync(pidFile);
-    console.log(`Stopped bridge daemon (PID ${pid})`);
-  } catch {
-    // Already dead or no permission
-  }
-}
-
-// Remove files installed by postinstall
-function cleanBinDir() {
-  const files = [
-    'tlive-core', 'tlive-core.exe',
-    '.core-version',
-    // Legacy .sh files (from versions <= 0.4.2)
-    'hook-handler.sh', 'notify-handler.sh', 'stop-handler.sh',
-    // Legacy .mjs copies (from early 0.4.3 builds)
-    'hook-handler.mjs', 'notify-handler.mjs', 'stop-handler.mjs', 'statusline.mjs',
-  ];
-  let removed = 0;
-  for (const f of files) {
-    const p = join(BIN_DIR, f);
-    if (existsSync(p)) {
-      unlinkSync(p);
-      removed++;
-    }
-  }
-  // Remove bin/ if empty
-  try {
-    if (existsSync(BIN_DIR) && readdirSync(BIN_DIR).length === 0) {
-      rmdirSync(BIN_DIR);
-    }
-  } catch {}
-  if (removed > 0) console.log(`Removed ${removed} file(s) from ${BIN_DIR}`);
-}
-
-// Remove reference docs installed by postinstall
-function cleanDocs() {
-  if (!existsSync(DOCS_DIR)) return;
-  const docs = ['setup-guides.md', 'token-validation.md', 'troubleshooting.md'];
-  for (const doc of docs) {
-    const p = join(DOCS_DIR, doc);
-    if (existsSync(p)) unlinkSync(p);
-  }
-  // Remove docs/ if empty
-  try {
-    if (readdirSync(DOCS_DIR).length === 0) rmdirSync(DOCS_DIR);
-  } catch {}
-  console.log(`Removed reference docs from ${DOCS_DIR}`);
-}
-
-// Remove Claude Code hooks that point to our scripts
-function cleanHooks() {
-  const settingsPath = join(homedir(), '.claude', 'settings.json');
-  if (!existsSync(settingsPath)) return;
-  try {
-    const settings = JSON.parse(readFileSync(settingsPath, 'utf-8'));
-    if (!settings.hooks) return;
-
+    const cfg = JSON.parse(readFileSync(p, 'utf-8'));
+    const hooks = cfg.hooks;
+    if (!hooks || typeof hooks !== 'object') return;
     let changed = false;
-    for (const hookType of ['PermissionRequest', 'Notification', 'Stop', 'PreToolUse']) {
-      const entries = settings.hooks[hookType];
-      if (!Array.isArray(entries)) continue;
-      const filtered = entries.filter(e => {
-        if (e.hooks) return !e.hooks.some(h => /hook-handler\.(sh|mjs)|notify-handler\.(sh|mjs)|stop-handler\.(sh|mjs)/.test(h.command || ''));
-        return !/hook-handler\.(sh|mjs)|notify-handler\.(sh|mjs)|stop-handler\.(sh|mjs)/.test(e.command || '');
-      });
-      if (filtered.length !== entries.length) {
+    for (const event of Object.keys(hooks)) {
+      const groups = hooks[event];
+      if (!Array.isArray(groups)) continue;
+      const filtered = groups.filter((g) => !(g.hooks ?? []).some((h) => h && h._tlive));
+      if (filtered.length !== groups.length) {
         changed = true;
-        if (filtered.length === 0) delete settings.hooks[hookType];
-        else settings.hooks[hookType] = filtered;
+        if (filtered.length === 0) delete hooks[event];
+        else hooks[event] = filtered;
       }
     }
-
     if (changed) {
-      writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-      console.log('Removed TLive hooks from Claude Code settings');
+      writeFileSync(p, JSON.stringify(cfg, null, 2));
+      console.log('Removed tlive hooks from ~/.claude/settings.json');
     }
-  } catch {}
+  } catch { /* malformed settings — leave it alone */ }
 }
 
-console.log('Cleaning up TLive...');
-stopBridge();
-cleanBinDir();
-cleanDocs();
-await cleanHooks();
-console.log('TLive uninstalled. User data preserved in ~/.tlive/ (config, sessions, logs).');
+removeTliveHooks();
+console.log('tlive uninstalled. ~/.tlive (config, logs) preserved.');
