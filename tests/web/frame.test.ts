@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { FrameType, encodeData, encodeAttach, FrameDecoder } from '../../web/src/frame';
-import { encodeData as nodeEncodeData } from '../../src/kernel/web/stream-protocol';
+import { FrameType, encodeData, encodeAttach, parseDims, FrameDecoder } from '../../web/src/frame';
+import { encodeData as nodeEncodeData, encodeSize as nodeEncodeSize } from '../../src/kernel/web/stream-protocol';
 
 const dec = (chunks: Uint8Array[]) => {
   const d = new FrameDecoder();
@@ -31,5 +31,10 @@ describe('browser frame codec', () => {
     const out = dec([new Uint8Array(nodeFrame)]);
     expect(out[0].type).toBe(FrameType.Data);
     expect(new TextDecoder().decode(out[0].payload)).toBe('héllo');
+  });
+  it('parseDims reads a Node-encoded Size frame (wire-compatible)', () => {
+    const out = dec([new Uint8Array(nodeEncodeSize(120, 40))]);
+    expect(out[0].type).toBe(FrameType.Size);
+    expect(parseDims(out[0].payload)).toEqual({ cols: 120, rows: 40 });
   });
 });

@@ -25,6 +25,10 @@ function encodeDims(t: number, cols: number, rows: number): Uint8Array {
 }
 export function encodeAttach(cols: number, rows: number): Uint8Array { return encodeDims(FrameType.Attach, cols, rows); }
 export function encodeResize(cols: number, rows: number): Uint8Array { return encodeDims(FrameType.Resize, cols, rows); }
+export function parseDims(payload: Uint8Array): { cols: number; rows: number } {
+  const o = JSON.parse(new TextDecoder().decode(payload)) as { cols: number; rows: number };
+  return { cols: Number(o.cols), rows: Number(o.rows) };
+}
 
 export class FrameDecoder {
   private buf = new Uint8Array(0);
