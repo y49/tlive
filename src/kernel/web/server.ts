@@ -1,0 +1,94 @@
+// src/kernel/web/server.ts
+//
+// Daemon web server: http (static + /api/sessions) + ws /ws/term/<id>, single token.
+// On a valid ?token= the response sets an httpOnly cookie so the token leaves the URL.
+
+import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
+import { WebSocketServer } from 'ws';
+import { existsSync, readFileSync } from 'node:fs';
+import { join, extname, normalize } from 'node:path';
+import type { SessionRegistry } from './session-registry.js';
+import { bridge } from './pty-bridge.js';
+
+export interface WebServerOpts {
+  bind: string;
+  port: number;
+  token: string;
+  sessions: SessionRegistry;
+  webDir: string;
+}
+export interface WebServerHandle { url: string; port: number; close(): Promise<void> }
+
+const MIME: Record<string, string> = { '.html': 'text/html', '.css': 'text/css', '.js': 'application/javascript', '.map': 'application/json' };
+
+function tokenFromReq(url: URL, req: IncomingMessage): string | null {
+  const q = url.searchParams.get('token');
+  if (q) return q;
+  const cookie = req.headers.cookie ?? '';
+  const m = cookie.match(/(?:^|;\s*)tlive_token=([^;]+)/);
+  return m && m[1] ? decodeURIComponent(m[1]) : null;
+}
+
+export async function startWebServer(opts: WebServerOpts): Promise<WebServerHandle> {
+  const http = createServer((req, res) => handleHttp(req, res, opts));
+  const wss = new WebSocketServer({ noServer: true });
+
+  http.on('upgrade', (req, socket, head) => {
+    const url = new URL(req.url ?? '/', `http://${opts.bind}`);
+    if (tokenFromReq(url, req) !== opts.token) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return; }
+    const m = url.pathname.match(/^\/ws\/term\/(.+)$/);
+    if (!m) { socket.destroy(); return; }
+    const session = opts.sessions.get(decodeURIComponent(m[1]));
+    if (!session) { socket.write('HTTP/1.1 404 Not Found\r\n\r\n'); socket.destroy(); return; }
+    wss.handleUpgrade(req, socket, head, (ws) => { bridge(ws as never, session.sockPath); });
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    http.once('error', reject);
+    http.listen(opts.port, opts.bind, () => resolve());
+  });
+  const addr = http.address();
+  const port = typeof addr === 'object' && addr ? addr.port : opts.port;
+  return {
+    url: `http://${opts.bind}:${port}/?token=${opts.token}`,
+    port,
+    async close() {
+      wss.close();
+      await new Promise<void>((r) => http.close(() => r()));
+    },
+  };
+}
+
+function handleHttp(req: IncomingMessage, res: ServerResponse, opts: WebServerOpts): void {
+  const url = new URL(req.url ?? '/', `http://${opts.bind}`);
+  const tok = tokenFromReq(url, req);
+  if (tok !== opts.token) { res.writeHead(401, { 'Content-Type': 'text/plain' }); res.end('Unauthorized'); return; }
+  // first ?token= match → set httpOnly cookie so the token leaves the URL
+  const setCookie = url.searchParams.get('token') === opts.token
+    ? { 'Set-Cookie': `tlive_token=${encodeURIComponent(opts.token)}; HttpOnly; SameSite=Strict; Path=/` }
+    : {};
+
+  if (url.pathname === '/api/sessions') {
+    res.writeHead(200, { 'Content-Type': 'application/json', ...setCookie });
+    res.end(JSON.stringify(opts.sessions.list()));
+    return;
+  }
+
+  // static (Plan 5 ships dist/web; until then most paths 404 with a placeholder index)
+  let rel = url.pathname === '/' ? '/index.html' : url.pathname;
+  rel = normalize(rel).replace(/^(\.\.[/\\])+/, '');
+  const filePath = join(opts.webDir, rel);
+  if (!filePath.startsWith(normalize(opts.webDir))) { res.writeHead(403); res.end('Forbidden'); return; }
+  if (existsSync(filePath)) {
+    res.writeHead(200, { 'Content-Type': MIME[extname(filePath)] ?? 'application/octet-stream', ...setCookie });
+    res.end(readFileSync(filePath));
+    return;
+  }
+  if (url.pathname === '/') {
+    res.writeHead(200, { 'Content-Type': 'text/html', ...setCookie });
+    res.end('<!doctype html><meta charset=utf-8><title>tlive</title><body style="font-family:system-ui;padding:2rem"><h2>tlive web</h2><p>Terminal UI ships in a later milestone. API: <code>/api/sessions</code>.</p>');
+    return;
+  }
+  res.writeHead(404, { 'Content-Type': 'text/plain', ...setCookie });
+  res.end('Not found');
+}
