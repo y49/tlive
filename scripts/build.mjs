@@ -6,7 +6,7 @@
 //   - dist/src/tlive-cli.mjs    (CLI dispatcher, src/cli/main.ts; lazy-imports subcommands)
 
 import { build } from 'esbuild';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -45,3 +45,22 @@ if (daemonOk) console.log('built dist/src/tlive-daemon.mjs');
 
 const cliOk = await buildEntry('src/cli/main.ts', 'tlive-cli');
 if (cliOk) console.log('built dist/src/tlive-cli.mjs');
+
+// Frontend bundle (browser) — xterm terminal page → dist/web
+mkdirSync(join(ROOT, 'dist', 'web'), { recursive: true });
+const feEntry = join(ROOT, 'web', 'src', 'terminal.ts');
+if (existsSync(feEntry)) {
+  await build({
+    entryPoints: [feEntry],
+    bundle: true,
+    platform: 'browser',
+    format: 'iife',
+    target: ['es2020'],
+    outfile: join(ROOT, 'dist', 'web', 'terminal.js'),
+    loader: { '.css': 'css' },
+    minify: true,
+    logLevel: 'warning',
+  });
+  copyFileSync(join(ROOT, 'web', 'terminal.html'), join(ROOT, 'dist', 'web', 'terminal.html'));
+  console.log('built dist/web/terminal.js + terminal.html');
+}

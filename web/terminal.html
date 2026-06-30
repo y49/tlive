@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>tlive terminal</title>
+  <link rel="stylesheet" href="/terminal.css" />
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+    #term { position: absolute; inset: 0 0 44px 0; padding: 4px; }
+    #bar { position: absolute; left: 0; right: 0; bottom: 0; height: 44px; display: flex; gap: 6px;
+           align-items: center; padding: 0 8px; background: #111; overflow-x: auto; }
+    #bar button { flex: 0 0 auto; height: 30px; min-width: 42px; border: 1px solid #333; border-radius: 6px;
+                  background: #1c1c1c; color: #ddd; font: 13px monospace; }
+    #bar button:active { background: #333; }
+  </style>
+</head>
+<body>
+  <div id="term"></div>
+  <div id="bar"></div>
+  <script src="/terminal.js"></script>
+</body>
+</html>
