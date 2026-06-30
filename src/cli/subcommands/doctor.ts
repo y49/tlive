@@ -26,9 +26,6 @@ export async function runDoctor(_argv: string[]): Promise<void> {
   checks.push({ name: 'telegram', ok: !!cfg.adapters.telegram?.token, detail: cfg.adapters.telegram?.token ? 'token configured' : 'no token (skip)' });
   checks.push({ name: 'feishu', ok: !!(cfg.adapters.feishu?.appId && cfg.adapters.feishu?.appSecret), detail: cfg.adapters.feishu ? 'creds configured' : 'no creds (skip)' });
 
-  // workspaces registered?
-  checks.push({ name: 'workspaces', ok: Object.keys(cfg.workspaces).length > 0, detail: `${Object.keys(cfg.workspaces).length} registered` });
-
   // claude jsonl access?
   const claudeProj = join(homedir(), '.claude', 'projects');
   checks.push({ name: 'claude jsonl', ok: existsSync(claudeProj), detail: claudeProj });

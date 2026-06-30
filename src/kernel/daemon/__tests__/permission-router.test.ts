@@ -1,86 +1,41 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { PermissionRouter } from '../permission-router';
-import { WorkspaceRegistry } from '../../workspace/registry';
-import { mkdtempSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 
-describe('PermissionRouter (cwd-based, allow/deny/defer)', () => {
-  it('defers with defer decision after timeout (finding 1: bounded pending)', async () => {
+const chats = () => [{ channel: 'telegram', chatId: 'c1' }];
+
+describe('PermissionRouter (configured-chats, allow/deny/defer)', () => {
+  it('defers after timeout (bounded pending)', async () => {
     vi.useFakeTimers();
-    const home = mkdtempSync(join(tmpdir(), 'tlive-pr-'));
-    const ws = new WorkspaceRegistry({ home });
-    ws.add('ws-foo', '/projects/foo');
-    const r = new PermissionRouter({
-      workspaces: ws,
-      chatsForWorkspace: () => [{ channel: 'telegram', chatId: 'c1' }],
-      sendToChat: vi.fn().mockResolvedValue(undefined),
-    });
-    const p = r.requestPermission({ cwd: '/projects/foo', toolName: 'Bash', input: {} });
-    // Advance past the 250 s timeout
+    const r = new PermissionRouter({ configuredChats: chats, sendToChat: vi.fn().mockResolvedValue(undefined), isMuted: () => false });
+    const p = r.requestPermission({ cwd: '/p/foo', toolName: 'Bash', input: {} });
     vi.advanceTimersByTime(251_000);
-    const result = await p;
-    expect(result.decision).toBe('defer');
+    expect((await p).decision).toBe('defer');
     vi.useRealTimers();
   });
-
-  it('defers when no workspace matches cwd', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'tlive-pr-'));
-    const ws = new WorkspaceRegistry({ home });
-    const r = new PermissionRouter({
-      workspaces: ws,
-      chatsForWorkspace: () => [],
-      sendToChat: vi.fn(),
-    });
-    const result = await r.requestPermission({ cwd: '/nowhere', toolName: 'Bash', input: {} });
-    expect(result.decision).toBe('defer');
+  it('defers immediately when muted', async () => {
+    const send = vi.fn();
+    const r = new PermissionRouter({ configuredChats: chats, sendToChat: send, isMuted: () => true });
+    expect((await r.requestPermission({ cwd: '/x', toolName: 'Bash', input: {} })).decision).toBe('defer');
+    expect(send).not.toHaveBeenCalled();
   });
-
-  it('defers when workspace found but no chat bound', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'tlive-pr-'));
-    const ws = new WorkspaceRegistry({ home });
-    ws.add('ws-foo', '/projects/foo');
-    const r = new PermissionRouter({
-      workspaces: ws,
-      chatsForWorkspace: () => [],
-      sendToChat: vi.fn(),
-    });
-    const result = await r.requestPermission({ cwd: '/projects/foo/src', toolName: 'Edit', input: {} });
-    expect(result.decision).toBe('defer');
+  it('defers when no chat configured', async () => {
+    const r = new PermissionRouter({ configuredChats: () => [], sendToChat: vi.fn(), isMuted: () => false });
+    expect((await r.requestPermission({ cwd: '/nowhere', toolName: 'Bash', input: {} })).decision).toBe('defer');
   });
-
-  it('returns allow when answered true', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'tlive-pr-'));
-    const ws = new WorkspaceRegistry({ home });
-    ws.add('ws-foo', '/projects/foo');
-    let capturedId = '';
-    const r = new PermissionRouter({
-      workspaces: ws,
-      chatsForWorkspace: () => [{ channel: 'telegram', chatId: 'c1' }],
-      sendToChat: async (_, card) => { capturedId = card.requestId; },
-    });
-    const p = r.requestPermission({ cwd: '/projects/foo', toolName: 'Bash', input: { cmd: 'ls' } });
-    // Wait a tick for sendToChat to be called (captures requestId)
+  it('allow when answered true', async () => {
+    let id = '';
+    const r = new PermissionRouter({ configuredChats: chats, sendToChat: async (_t, c) => { id = c.requestId; }, isMuted: () => false });
+    const p = r.requestPermission({ cwd: '/p/foo', toolName: 'Bash', input: { cmd: 'ls' } });
     await new Promise((res) => setTimeout(res, 0));
-    r.answer(capturedId, true);
-    const result = await p;
-    expect(result.decision).toBe('allow');
+    r.answer(id, true);
+    expect((await p).decision).toBe('allow');
   });
-
-  it('returns deny when answered false', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'tlive-pr-'));
-    const ws = new WorkspaceRegistry({ home });
-    ws.add('ws-foo', '/projects/foo');
-    let capturedId = '';
-    const r = new PermissionRouter({
-      workspaces: ws,
-      chatsForWorkspace: () => [{ channel: 'telegram', chatId: 'c1' }],
-      sendToChat: async (_, card) => { capturedId = card.requestId; },
-    });
-    const p = r.requestPermission({ cwd: '/projects/foo/src', toolName: 'Write', input: {} });
+  it('deny when answered false', async () => {
+    let id = '';
+    const r = new PermissionRouter({ configuredChats: chats, sendToChat: async (_t, c) => { id = c.requestId; }, isMuted: () => false });
+    const p = r.requestPermission({ cwd: '/p/foo', toolName: 'Write', input: {} });
     await new Promise((res) => setTimeout(res, 0));
-    r.answer(capturedId, false);
-    const result = await p;
-    expect(result.decision).toBe('deny');
+    r.answer(id, false);
+    expect((await p).decision).toBe('deny');
   });
 });

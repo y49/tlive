@@ -25,8 +25,6 @@ export async function runSetup(_argv: string[]): Promise<void> {
   };
 
   const cfg = { ...existing };
-  cfg.workspaces ??= {};
-  cfg.chatBindings ??= {};
   cfg.allowedSenders ??= [];
   cfg.adapters ??= {};
 
@@ -36,13 +34,6 @@ export async function runSetup(_argv: string[]): Promise<void> {
   const fsAppId = await ask('Feishu appId (blank to skip)', cfg.adapters.feishu?.appId);
   const fsSecret = fsAppId ? await ask('Feishu appSecret', cfg.adapters.feishu?.appSecret) : '';
   if (fsAppId && fsSecret) cfg.adapters.feishu = { appId: fsAppId, appSecret: fsSecret };
-
-  const firstWs = await ask('Add workspace (path, blank to skip)');
-  if (firstWs) {
-    const id = `ws-${firstWs.split('/').filter(Boolean).pop() ?? 'default'}`;
-    cfg.workspaces[id] = firstWs;
-    process.stdout.write(`(workspace ${id} added)\n`);
-  }
 
   rl.close();
   writeFileSync(configPath, JSON.stringify(cfg, null, 2));

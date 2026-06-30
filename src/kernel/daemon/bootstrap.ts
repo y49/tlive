@@ -1,19 +1,15 @@
 // src/kernel/daemon/bootstrap.ts
-
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { startIpcServer, type IpcServer } from '../ipc/server.js';
-import { WorkspaceRegistry } from '../workspace/registry.js';
-import { ChatRouter } from '../workspace/chat-router.js';
-import { PermissionRouter } from './permission-router.js';
+import { PermissionRouter, type PermChat } from './permission-router.js';
 import { ContinueBroker } from '../permission/continue-broker.js';
+import { SenderGuard } from './sender-guard.js';
 import { loadConfig } from '../config/loader.js';
 import type { IMAdapter } from '../contracts/im-adapter.js';
 
 export interface DaemonHandle {
   shutdown(): Promise<void>;
-  workspaces: WorkspaceRegistry;
-  router: ChatRouter;
   permissionRouter: PermissionRouter;
   continueBroker: ContinueBroker;
   ipcSocketPath: string;
@@ -29,25 +25,20 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const cfg = loadConfig(opts.home);
   const startedAt = Date.now();
 
-  const workspaces = new WorkspaceRegistry({ home: opts.home });
-  const router = new ChatRouter({ bindings: cfg.chatBindings, allowedSenders: cfg.allowedSenders });
+  let muted = false;
 
-  // Build per-workspace chat lookup from config (channel:chatId → workspaceId reversed).
-  // NOTE: current design assumes single-channel-single-chat per workspace (sendToChat
-  // iterates all bound chats for the workspace; multi-chat routing is not redesigned here).
-  const chatsForWorkspace = (wsId: string): Array<{ channel: string; chatId: string }> => {
-    const out: Array<{ channel: string; chatId: string }> = [];
-    for (const [chatKey, ws] of Object.entries(cfg.chatBindings)) {
-      if (ws !== wsId) continue;
-      const [channel, chatId] = chatKey.split(':', 2);
-      if (channel && chatId) out.push({ channel, chatId });
-    }
+  const configuredChats = (): PermChat[] => {
+    const out: PermChat[] = [];
+    const tg = cfg.adapters.telegram;
+    if (tg?.token && tg.chatIdAllowList?.length) out.push({ channel: 'telegram', chatId: tg.chatIdAllowList[0] });
+    const fs = cfg.adapters.feishu;
+    if (fs?.chatId) out.push({ channel: 'feishu', chatId: fs.chatId });
     return out;
   };
 
   const sendToChat = async (
-    target: { channel: string; chatId: string },
-    msg: { title?: string; body?: string; text?: string; level?: string; requestId?: string },
+    target: PermChat,
+    msg: { title?: string; body?: string; text?: string; requestId?: string },
   ): Promise<void> => {
     const adapter = (opts.imAdapters ?? []).find((a) => a.channel === target.channel);
     if (!adapter) return;
@@ -69,24 +60,23 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   };
 
   const permissionRouter = new PermissionRouter({
-    workspaces,
-    chatsForWorkspace,
-    sendToChat: async (t, card) => sendToChat(t, { title: card.title, body: card.body, requestId: card.requestId }),
+    configuredChats,
+    sendToChat: (t, card) => sendToChat(t, { title: card.title, body: card.body, requestId: card.requestId }),
+    isMuted: () => muted,
   });
 
   const continueBroker = new ContinueBroker();
-  // workspaceId → latest continueRequestId (for inbound free-text routing)
-  const latestContinueId = new Map<string, string>();
+  let latestContinueId: string | null = null;
 
   continueBroker.onRequest((req) => {
-    const ws = workspaces.lookupByCwd(req.cwd);
-    if (!ws) return;
-    latestContinueId.set(ws.id, req.requestId);
-    const targets = chatsForWorkspace(ws.id);
-    for (const t of targets) {
-      void sendToChat(t, { text: `⏸ ${req.context}\n回复本条以续跑 (continueId: ${req.requestId})` });
+    latestContinueId = req.requestId;
+    if (muted) return;
+    for (const t of configuredChats()) {
+      void sendToChat(t, { text: `⏸ ${req.context}\n回复本条以续跑 (id: ${req.requestId})` });
     }
   });
+
+  const senderGuard = new SenderGuard(cfg.allowedSenders);
 
   const sockPath = join(opts.home, 'daemon.sock');
   const ipc: IpcServer = await startIpcServer({
@@ -94,7 +84,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     handler: async (req, reply, ctx) => {
       // eslint-disable-next-line no-console
       console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'info', msg: 'ipc.request', kind: req.kind, callerPid: ctx.callerPid ?? null }));
-
       switch (req.kind) {
         case 'daemon.status':
           reply({ kind: 'daemon.status', uptimeMs: Date.now() - startedAt, pid: process.pid });
@@ -118,9 +107,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           return;
         }
         case 'hook.notify': {
-          const ws = workspaces.lookupByCwd(req.cwd);
-          const targets = ws ? chatsForWorkspace(ws.id) : [];
-          await Promise.all(targets.map((t) => sendToChat(t, { text: `[${req.level}] ${req.message}` })));
+          if (!muted) {
+            await Promise.all(configuredChats().map((t) => sendToChat(t, { text: `[${req.level}] ${req.message}` })));
+          }
           reply({ kind: 'ack' });
           return;
         }
@@ -130,13 +119,13 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     },
   });
 
-  // Wire inbound handling
   const inbound = new (await import('./inbound-handler.js')).InboundHandler({
-    router, workspaces,
+    senderGuard,
     imBy: (ch) => (opts.imAdapters ?? []).find((a) => a.channel === ch),
     permissionRouter,
     continueBroker,
-    latestContinueId,
+    takeLatestContinueId: () => { const id = latestContinueId; latestContinueId = null; return id; },
+    setMuted: (m: boolean) => { muted = m; },
   });
   for (const a of opts.imAdapters ?? []) {
     await a.start();
@@ -149,7 +138,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     stopped = true;
     for (const a of opts.imAdapters ?? []) await a.stop();
     await ipc.close();
-    // ZOMBIE FIX: force-exit if event loop won't drain in 2s.
     setTimeout(() => {
       // eslint-disable-next-line no-console
       console.error('tlive daemon: forced exit (event loop did not drain in 2s)');
@@ -157,8 +145,5 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     }, 2000).unref();
   }
 
-  return {
-    shutdown, workspaces, router, permissionRouter, continueBroker,
-    ipcSocketPath: sockPath,
-  };
+  return { shutdown, permissionRouter, continueBroker, ipcSocketPath: sockPath };
 }
