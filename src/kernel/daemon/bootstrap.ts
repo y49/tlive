@@ -1,6 +1,8 @@
 // src/kernel/daemon/bootstrap.ts
 import { join } from 'node:path';
+import { dirname } from 'node:path';
 import { mkdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { startIpcServer, type IpcServer } from '../ipc/server.js';
 import { PermissionRouter, type PermChat } from './permission-router.js';
 import { ContinueBroker } from '../permission/continue-broker.js';
@@ -8,6 +10,8 @@ import { SenderGuard } from './sender-guard.js';
 import { loadConfig } from '../config/loader.js';
 import type { IMAdapter } from '../contracts/im-adapter.js';
 import { SessionRegistry } from '../web/session-registry.js';
+import { startWebServer, type WebServerHandle } from '../web/server.js';
+import { loadOrCreateToken } from '../web/token.js';
 
 export interface DaemonHandle {
   shutdown(): Promise<void>;
@@ -15,6 +19,7 @@ export interface DaemonHandle {
   continueBroker: ContinueBroker;
   sessions: SessionRegistry;
   ipcSocketPath: string;
+  webUrl?: string;
 }
 
 export interface BootstrapOpts {
@@ -80,6 +85,23 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   });
 
   const sessions = new SessionRegistry();
+
+  let web: WebServerHandle | null = null;
+  let webUrl: string | undefined;
+  if (cfg.web?.enabled !== false) {
+    const bind = cfg.web?.bind ?? '127.0.0.1';
+    const port = cfg.web?.port ?? 7681;
+    const token = loadOrCreateToken(opts.home);
+    const here = dirname(fileURLToPath(import.meta.url)); // dist/src
+    const webDir = join(here, '..', 'web'); // dist/web (Plan 5)
+    try {
+      web = await startWebServer({ bind, port, token, sessions, webDir });
+      webUrl = web.url;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(`tlive web server failed to start: ${(e as Error).message}`);
+    }
+  }
 
   const senderGuard = new SenderGuard(cfg.allowedSenders);
 
@@ -153,6 +175,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     if (stopped) return;
     stopped = true;
     for (const a of opts.imAdapters ?? []) await a.stop();
+    if (web) await web.close();
     await ipc.close();
     setTimeout(() => {
       // eslint-disable-next-line no-console
@@ -161,5 +184,5 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     }, 2000).unref();
   }
 
-  return { shutdown, permissionRouter, continueBroker, sessions, ipcSocketPath: sockPath };
+  return { shutdown, permissionRouter, continueBroker, sessions, webUrl, ipcSocketPath: sockPath };
 }
