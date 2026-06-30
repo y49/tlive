@@ -15,7 +15,6 @@ fit.fit();
 
 const enc = new TextEncoder();
 let ws: WebSocket | null = null;
-const dec = new FrameDecoder();
 let retry = 0;
 
 function wsUrl(): string {
@@ -24,6 +23,7 @@ function wsUrl(): string {
 }
 
 function connect(): void {
+  const dec = new FrameDecoder();
   const sock = new WebSocket(wsUrl());
   sock.binaryType = 'arraybuffer';
   ws = sock;
@@ -36,7 +36,7 @@ function connect(): void {
   sock.onclose = () => {
     if (ws === sock) ws = null;
     retry = Math.min(retry + 1, 6);
-    setTimeout(connect, 500 * retry); // reconnect with backoff
+    setTimeout(connect, 500 * retry); // linear backoff, capped at ~3s (retry maxes at 6)
   };
   sock.onerror = () => sock.close();
 }
