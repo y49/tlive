@@ -1,8 +1,6 @@
-// src/cli/subcommands/install-integrations.ts
+// src/kernel/integrations/install-hooks.ts
 //
-// Write Claude hook entries into ~/.claude/settings.json (idempotent).
-// Each entry is tagged with _tlive:true so it can be cleanly removed/replaced.
-
+// Write tlive's Claude hook entries into ~/.claude/settings.json (idempotent).
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -17,32 +15,23 @@ const HOOK = (cmd: string, timeout?: number): HookEntry => ({
   _tlive: true,
 });
 
-export async function runInstallIntegrations(_argv: string[]): Promise<void> {
+export function installClaudeHooks(): string {
   const dir = join(homedir(), '.claude');
   const p = join(dir, 'settings.json');
   mkdirSync(dir, { recursive: true });
-
   const cfg: Record<string, unknown> = existsSync(p)
     ? (JSON.parse(readFileSync(p, 'utf-8')) as Record<string, unknown>)
     : {};
-
   if (!cfg.hooks || typeof cfg.hooks !== 'object') cfg.hooks = {};
   const hooks = cfg.hooks as Record<string, HookGroup[]>;
-
-  // Idempotent: remove existing tlive entries before re-adding.
   const put = (event: string, group: HookGroup): void => {
-    hooks[event] = (hooks[event] ?? []).filter(
-      (g) => !(g.hooks ?? []).some((h: HookEntry) => h._tlive),
-    );
+    hooks[event] = (hooks[event] ?? []).filter((g) => !(g.hooks ?? []).some((h: HookEntry) => h._tlive));
     hooks[event].push(group);
   };
-
   put('PreToolUse', { matcher: '*', hooks: [HOOK('pre-tool-use', 300)] });
   put('Stop', { hooks: [HOOK('stop', 180)] });
   put('PostToolUse', { matcher: '*', hooks: [HOOK('post-tool-use')] });
   put('Notification', { hooks: [HOOK('notification')] });
-
   writeFileSync(p, JSON.stringify(cfg, null, 2));
-  process.stdout.write(`✓ tlive hooks written to ${p}\n`);
-  process.stdout.write('Restart claude for hook changes to take effect.\n');
+  return p;
 }

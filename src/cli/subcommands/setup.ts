@@ -1,14 +1,21 @@
 // src/cli/subcommands/setup.ts
 //
-// Minimal interactive wizard: prompts for IM tokens + 1st workspace, writes config.
+// Minimal interactive wizard: prompts for IM tokens, writes config, installs Claude hooks.
 
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { installClaudeHooks } from '../../kernel/integrations/install-hooks.js';
 
-export async function runSetup(_argv: string[]): Promise<void> {
+export async function runSetup(argv: string[]): Promise<void> {
+  if (argv.includes('--hooks-only')) {
+    const p = installClaudeHooks();
+    process.stdout.write(`✓ tlive hooks written to ${p}\nRestart claude for changes to take effect.\n`);
+    return;
+  }
+
   const home = process.env.TLIVE_HOME ?? join(homedir(), '.tlive');
   mkdirSync(home, { recursive: true });
   const configPath = join(home, 'config.json');
@@ -29,7 +36,8 @@ export async function runSetup(_argv: string[]): Promise<void> {
   cfg.adapters ??= {};
 
   const tgToken = await ask('Telegram bot token (blank to skip)', cfg.adapters.telegram?.token);
-  if (tgToken) cfg.adapters.telegram = { ...(cfg.adapters.telegram ?? {}), token: tgToken };
+  const tgChat = tgToken ? await ask('Telegram chat id (destination)', cfg.adapters.telegram?.chatIdAllowList?.[0]) : '';
+  if (tgToken) cfg.adapters.telegram = { token: tgToken, ...(tgChat ? { chatIdAllowList: [tgChat] } : {}) };
 
   const fsAppId = await ask('Feishu appId (blank to skip)', cfg.adapters.feishu?.appId);
   const fsSecret = fsAppId ? await ask('Feishu appSecret', cfg.adapters.feishu?.appSecret) : '';
@@ -37,5 +45,6 @@ export async function runSetup(_argv: string[]): Promise<void> {
 
   rl.close();
   writeFileSync(configPath, JSON.stringify(cfg, null, 2));
-  process.stdout.write(`\nWritten ${configPath}\nNext: tlive install-integrations && tlive start\n`);
+  const hooksPath = installClaudeHooks();
+  process.stdout.write(`\nWritten ${configPath}\n✓ hooks installed at ${hooksPath}\nNext: tlive start\n`);
 }

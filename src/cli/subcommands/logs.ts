@@ -1,11 +1,11 @@
-// src/cli/subcommands/daemon-logs.ts
+// src/cli/subcommands/logs.ts
 import { createReadStream, statSync, existsSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { watch } from 'node:fs';
 
-export async function runDaemonLogs(argv: string[]): Promise<void> {
+export async function runLogs(argv: string[]): Promise<void> {
   const home = process.env.TLIVE_HOME ?? join(homedir(), '.tlive');
   const logPath = join(home, 'daemon.log');
   if (!existsSync(logPath)) {

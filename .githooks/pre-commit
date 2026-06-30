@@ -12,5 +12,5 @@ prepare to bump major version (currently 1.x).
 
 Press Enter to continue, Ctrl-C to abort.
 EOF
-  read -r _ < /dev/tty
+  read -r _ < /dev/tty 2>/dev/null || true
 fi

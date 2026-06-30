@@ -1,20 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { FROZEN_CLI_SUBCOMMANDS, type FrozenSubcommand } from '../../src/kernel/contracts/cli-surface';
-
-describe('CLI surface contract', () => {
-  it('exactly the agreed subcommand set', () => {
-    const expected: FrozenSubcommand[] = [
-      'start', 'stop', 'restart', 'status', 'doctor', 'daemon-logs',
-      'workspace',
-      'setup', 'install-integrations',
-      'hook',
-      'approve',
-      'version', 'update',
-    ];
-    expect([...FROZEN_CLI_SUBCOMMANDS].sort()).toEqual([...expected].sort());
-  });
-
-  it('subcommand count is 13', () => {
-    expect(FROZEN_CLI_SUBCOMMANDS).toHaveLength(13);
+import { CLI_SUBCOMMANDS } from '../../src/kernel/contracts/cli-surface.js';
+describe('CLI surface (v2.1)', () => {
+  it('is exactly setup/start/stop/status/logs/hook', () => {
+    expect([...CLI_SUBCOMMANDS].sort()).toEqual(['hook', 'logs', 'setup', 'start', 'status', 'stop']);
   });
 });

@@ -1,57 +1,53 @@
 // src/cli/main.ts
-//
-// Single-entry tlive CLI. Internal dispatch with lazy import per subcommand
-// to keep startup fast.
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { CLI_SUBCOMMANDS, type Subcommand } from '../kernel/contracts/cli-surface.js';
 
-import { FROZEN_CLI_SUBCOMMANDS, type FrozenSubcommand } from '../kernel/contracts/cli-surface.js';
+const HELP = `tlive — vendor-neutral hook approval + web terminal for Claude Code / Codex
 
-const HELP = `tlive — hook approval/notification layer for Claude Code / Codex
+Usage: tlive <subcommand> [args]   |   tlive --version
 
-Usage: tlive <subcommand> [args]
-
-Daemon lifecycle:
-  start, stop, restart, status, doctor, daemon-logs
-
-Hook integration:
-  hook <event>              — Claude hook shim (reads stdin, outputs decision)
-  install-integrations      — write ~/.claude/settings.json hooks (idempotent)
-  approve <requestId>       — approve a pending permission (CLI fallback)
-
-Workspaces:
-  workspace add|list|remove
-
-Wizards:
-  setup
-
-Meta:
-  version, update
+  setup              configure IM + install Claude hooks (--hooks-only to reinstall hooks only)
+  start | stop       daemon lifecycle (IPC + IM + web)
+  status             health, configured destinations, paths
+  logs [-f]          tail the daemon log
+  hook <event>       hook shim (invoked by Claude/Codex)
 `;
+
+function printVersion(): void {
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  const pkgPath = join(__dirname, '..', '..', 'package.json');
+  try {
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version?: string };
+    process.stdout.write(`${pkg.version ?? 'unknown'}\n`);
+  } catch {
+    process.stdout.write('unknown\n');
+  }
+}
 
 export async function runCli(argv: string[]): Promise<void> {
   const [subcommand, ...rest] = argv;
+  if (subcommand === '--version' || subcommand === '-v' || subcommand === 'version') {
+    printVersion();
+    return;
+  }
   if (!subcommand || subcommand === '-h' || subcommand === '--help' || subcommand === 'help') {
     process.stdout.write(HELP);
     return;
   }
-  if (!(FROZEN_CLI_SUBCOMMANDS as readonly string[]).includes(subcommand)) {
+  if (!(CLI_SUBCOMMANDS as readonly string[]).includes(subcommand)) {
     process.stderr.write(`tlive: unknown subcommand '${subcommand}'\n`);
     process.exit(1);
   }
-  const name = subcommand as FrozenSubcommand;
+  const name = subcommand as Subcommand;
   switch (name) {
+    case 'setup': { const { runSetup } = await import('./subcommands/setup.js'); return runSetup(rest); }
     case 'start': { const { runStart } = await import('./subcommands/start.js'); return runStart(rest); }
     case 'stop': { const { runStop } = await import('./subcommands/stop.js'); return runStop(rest); }
-    case 'restart': { const { runRestart } = await import('./subcommands/restart.js'); return runRestart(rest); }
     case 'status': { const { runStatus } = await import('./subcommands/status.js'); return runStatus(rest); }
-    case 'doctor': { const { runDoctor } = await import('./subcommands/doctor.js'); return runDoctor(rest); }
-    case 'daemon-logs': { const { runDaemonLogs } = await import('./subcommands/daemon-logs.js'); return runDaemonLogs(rest); }
-    case 'approve': { const { runApprove } = await import('./subcommands/approve.js'); return runApprove(rest); }
-    case 'workspace': { const { runWorkspace } = await import('./subcommands/workspace.js'); return runWorkspace(rest); }
-    case 'setup': { const { runSetup } = await import('./subcommands/setup.js'); return runSetup(rest); }
-    case 'install-integrations': { const { runInstallIntegrations } = await import('./subcommands/install-integrations.js'); return runInstallIntegrations(rest); }
+    case 'logs': { const { runLogs } = await import('./subcommands/logs.js'); return runLogs(rest); }
     case 'hook': { const { runHook } = await import('./subcommands/hook.js'); return runHook(rest); }
-    case 'version': { const { runVersion } = await import('./subcommands/version.js'); return runVersion(rest); }
-    case 'update': { const { runUpdate } = await import('./subcommands/update.js'); return runUpdate(rest); }
   }
 }
 
