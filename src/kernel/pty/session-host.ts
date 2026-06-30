@@ -61,6 +61,8 @@ export class SessionHost {
     });
 
     this.pty.onData((data: string) => {
+      // node-pty onData yields a decoded string; utf8 round-trips terminal content.
+      // For raw-binary passthrough we'd spawn with encoding:null (deferred).
       const buf = Buffer.from(data, 'utf8');
       if (this.attachLocal) process.stdout.write(buf);
       const frame = encodeData(buf);
@@ -83,7 +85,15 @@ export class SessionHost {
 
     if (existsSync(this.opts.sockPath)) unlinkSync(this.opts.sockPath);
     this.server = createServer((socket) => this.onClient(socket));
-    await new Promise<void>((resolve) => this.server!.listen(this.opts.sockPath, () => resolve()));
+    try {
+      await new Promise<void>((resolve, reject) => {
+        this.server!.once('error', reject);
+        this.server!.listen(this.opts.sockPath, () => resolve());
+      });
+    } catch (e) {
+      this.cleanup();
+      throw e;
+    }
     try { chmodSync(this.opts.sockPath, 0o600); } catch { /* best-effort perms */ }
   }
 

@@ -53,7 +53,12 @@ export async function runRun(argv: string[]): Promise<void> {
   };
   host.onExit(finish);
 
-  const onSignal = (): void => { void host.stop().finally(() => finish(130)); };
+  let exiting = false;
+  const onSignal = (): void => {
+    if (exiting) return;
+    exiting = true;
+    void host.stop().finally(() => finish(130));
+  };
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
 }
