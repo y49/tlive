@@ -1,13 +1,14 @@
 //
 // Foreground owner of a wrapped pty. Mirrors to the local terminal (stdout always
 // when attachLocal; stdin raw only on a TTY) AND serves pty bytes over a per-session
-// unix socket using the stream-protocol. Multiple clients share one screen; pty size
-// = min-of-attached (local TTY + every attached socket client).
+// unix socket using the stream-protocol. Multiple clients share one screen;
+// pty size = last-input authority (the source that most recently typed owns the grid);
+// the authoritative size is broadcast to every socket client as a Size frame.
 
 import { spawn, type IPty } from 'node-pty';
 import { createServer, type Server, type Socket } from 'node:net';
 import { existsSync, unlinkSync, chmodSync } from 'node:fs';
-import { FrameDecoder, FrameType, encodeData, parseDims } from '../web/stream-protocol.js';
+import { FrameDecoder, FrameType, encodeData, encodeSize, parseDims } from '../web/stream-protocol.js';
 
 export interface SessionHostOpts {
   id: string;
@@ -20,25 +21,30 @@ export interface SessionHostOpts {
   attachLocal?: boolean;
 }
 
-interface Client {
-  socket: Socket;
-  cols: number; // 0 until the client sends attach/resize
-  rows: number;
+export interface SizeSource { cols: number; rows: number; lastInputSeq: number; isLocal?: boolean }
+
+/** Last-input authority: the source that most recently sent input owns the pty grid.
+ *  Ties (nobody has typed yet) prefer the local TTY, else the first known size. */
+export function authoritativeSize(sources: SizeSource[]): { cols: number; rows: number } {
+  const valid = sources.filter((s) => s.cols > 0 && s.rows > 0);
+  if (valid.length === 0) return { cols: 80, rows: 24 };
+  let best = valid[0];
+  for (const s of valid) {
+    if (s.lastInputSeq > best.lastInputSeq) best = s;
+    else if (s.lastInputSeq === best.lastInputSeq && s.isLocal && !best.isLocal) best = s;
+  }
+  return { cols: best.cols, rows: best.rows };
 }
 
-export function computeSize(dims: Array<{ cols: number; rows: number }>): { cols: number; rows: number } {
-  if (dims.length === 0) return { cols: 80, rows: 24 };
-  return {
-    cols: Math.max(1, Math.min(...dims.map((d) => d.cols))),
-    rows: Math.max(1, Math.min(...dims.map((d) => d.rows))),
-  };
-}
+interface Client extends SizeSource { socket: Socket }
 
 export class SessionHost {
   private pty: IPty | null = null;
   private server: Server | null = null;
   private clients = new Set<Client>();
-  private localTty: { cols: number; rows: number } | null = null;
+  private localTty: SizeSource | null = null;
+  private inputSeq = 0;
+  private appliedSize: { cols: number; rows: number } | null = null;
   private attachLocal: boolean;
   private onExitCb: ((code: number) => void) | null = null;
   private cleanedUp = false;
@@ -49,7 +55,7 @@ export class SessionHost {
 
   async start(): Promise<void> {
     if (this.attachLocal && process.stdout.isTTY) {
-      this.localTty = { cols: process.stdout.columns ?? 80, rows: process.stdout.rows ?? 24 };
+      this.localTty = { cols: process.stdout.columns ?? 80, rows: process.stdout.rows ?? 24, lastInputSeq: ++this.inputSeq, isLocal: true };
     }
     const size = this.currentSize();
     this.pty = spawn(this.opts.cmd, this.opts.args, {
@@ -105,29 +111,35 @@ export class SessionHost {
   }
 
   private onLocalInput = (chunk: Buffer): void => {
+    if (this.localTty) { this.localTty.lastInputSeq = ++this.inputSeq; this.applySize(); }
     this.pty?.write(chunk.toString('utf8'));
   };
 
   private onLocalResize = (): void => {
-    if (process.stdout.isTTY) {
-      this.localTty = { cols: process.stdout.columns ?? 80, rows: process.stdout.rows ?? 24 };
+    if (process.stdout.isTTY && this.localTty) {
+      this.localTty.cols = process.stdout.columns ?? 80;
+      this.localTty.rows = process.stdout.rows ?? 24;
       this.applySize();
     }
   };
 
   private onClient(socket: Socket): void {
     socket.on('error', () => { /* ignore broken pipe */ });
-    const client: Client = { socket, cols: 0, rows: 0 };
+    const client: Client = { socket, cols: 0, rows: 0, lastInputSeq: 0 };
     this.clients.add(client);
     const dec = new FrameDecoder();
     socket.on('data', (chunk: Buffer) => {
       for (const f of dec.push(chunk)) {
         if (f.type === FrameType.Data) {
+          client.lastInputSeq = ++this.inputSeq;
+          this.applySize();
           this.pty?.write(f.payload.toString('utf8'));
         } else if (f.type === FrameType.Attach || f.type === FrameType.Resize) {
           const { cols, rows } = parseDims(f.payload);
           client.cols = cols; client.rows = rows;
           this.applySize();
+          const auth = this.currentSize();
+          if (socket.writable) socket.write(encodeSize(auth.cols, auth.rows));
         } else if (f.type === FrameType.Detach) {
           this.removeClient(client);
         }
@@ -141,15 +153,19 @@ export class SessionHost {
   }
 
   private currentSize(): { cols: number; rows: number } {
-    const dims: Array<{ cols: number; rows: number }> = [];
-    if (this.localTty) dims.push(this.localTty);
-    for (const c of this.clients) if (c.cols > 0 && c.rows > 0) dims.push({ cols: c.cols, rows: c.rows });
-    return computeSize(dims);
+    const sources: SizeSource[] = [];
+    if (this.localTty) sources.push(this.localTty);
+    for (const c of this.clients) sources.push(c);
+    return authoritativeSize(sources);
   }
 
   private applySize(): void {
-    const { cols, rows } = this.currentSize();
-    try { this.pty?.resize(cols, rows); } catch { /* pty gone */ }
+    const next = this.currentSize();
+    if (this.appliedSize && this.appliedSize.cols === next.cols && this.appliedSize.rows === next.rows) return;
+    this.appliedSize = next;
+    try { this.pty?.resize(next.cols, next.rows); } catch { /* pty gone */ }
+    const frame = encodeSize(next.cols, next.rows);
+    for (const c of this.clients) { if (c.socket.writable) c.socket.write(frame); }
   }
 
   private cleanup(): void {

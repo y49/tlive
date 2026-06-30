@@ -33,6 +33,9 @@ export function encodeResize(cols: number, rows: number): Buffer {
 export function encodeAttach(cols: number, rows: number): Buffer {
   return encodeDims(FrameType.Attach, cols, rows);
 }
+export function encodeSize(cols: number, rows: number): Buffer {
+  return encodeDims(FrameType.Size, cols, rows);
+}
 export function encodeDetach(): Buffer {
   return encodeFrame(FrameType.Detach);
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   FrameType, encodeData, encodeResize, encodeAttach, encodeDetach,
-  encodeSnapshotReply, FrameDecoder, parseDims,
+  encodeSnapshotReply, encodeSize, FrameDecoder, parseDims,
 } from '../stream-protocol';
 
 describe('stream-protocol frame codec', () => {
@@ -46,5 +46,11 @@ describe('stream-protocol frame codec', () => {
     const out = dec.push(whole.subarray(3));
     expect(out).toHaveLength(1);
     expect(out[0].payload.toString()).toBe('split-me');
+  });
+
+  it('round-trips a server→client Size frame', () => {
+    const f = new FrameDecoder().push(encodeSize(120, 40))[0];
+    expect(f.type).toBe(FrameType.Size);
+    expect(parseDims(f.payload)).toEqual({ cols: 120, rows: 40 });
   });
 });
