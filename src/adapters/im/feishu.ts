@@ -2,6 +2,12 @@
 //
 // CRITICAL: WSClient holds a ref'd retry timer. stop() must call WSClient.close()
 // AND null out our reference so GC can collect.
+//
+// Approval buttons use Feishu Card "callback" behaviors; taps arrive as
+// `card.action.trigger` events and are mapped to an IncomingEnvelope whose
+// text is the button id ("approve:<id>" / "deny:<id>") — same routing as
+// Telegram's callback_query. NOTE: the exact card.action.trigger payload paths
+// should be verified against a live Feishu app (no creds available in CI).
 
 import { Client, WSClient, EventDispatcher } from '@larksuiteoapi/node-sdk';
 import type { IMAdapter, IncomingEnvelope, OutgoingMessage } from '../../kernel/contracts/im-adapter.js';
@@ -11,6 +17,31 @@ export interface FeishuAdapterOpts {
   appSecret: string;
   /** chat ID to send to; for now require single chat. */
   chatId?: string;
+}
+
+type CardMessage = Extract<OutgoingMessage, { kind: 'card' }>;
+
+/** Build a Feishu interactive card; approval buttons carry their id via a callback behavior. */
+export function buildCard(out: CardMessage): object {
+  const elements: object[] = [
+    { tag: 'div', text: { tag: 'lark_md', content: out.body } },
+  ];
+  if (out.buttons?.length) {
+    elements.push({
+      tag: 'action',
+      actions: out.buttons.map((b) => ({
+        tag: 'button',
+        text: { tag: 'plain_text', content: b.label },
+        type: b.id.startsWith('deny') ? 'danger' : 'primary',
+        behaviors: [{ type: 'callback', value: { tlive: b.id } }],
+      })),
+    });
+  }
+  return {
+    config: { wide_screen_mode: true },
+    ...(out.title ? { header: { title: { tag: 'plain_text', content: out.title } } } : {}),
+    elements,
+  };
 }
 
 export class FeishuAdapter implements IMAdapter {
@@ -44,6 +75,23 @@ export class FeishuAdapter implements IMAdapter {
           ts: Number(ev.message.create_time) || Date.now(),
         });
       },
+      // Card button taps → synthesize envelope with text = button id ("approve:<id>"/"deny:<id>").
+      'card.action.trigger': async (data: unknown) => {
+        const d = data as { event?: { operator?: { user_id?: string; open_id?: string }; action?: { value?: { tlive?: string } }; context?: { open_chat_id?: string; open_message_id?: string } } };
+        const val = d.event?.action?.value?.tlive;
+        if (val && this.inboundHandler) {
+          this.inboundHandler({
+            channel: 'feishu',
+            chatId: d.event?.context?.open_chat_id ?? this.opts.chatId ?? '',
+            userId: d.event?.operator?.user_id ?? d.event?.operator?.open_id ?? '',
+            messageId: d.event?.context?.open_message_id ?? '',
+            text: val,
+            ts: Date.now(),
+          });
+        }
+        // Acknowledge so the card stops spinning.
+        return { toast: { type: 'success', content: '已收到' } };
+      },
     });
     await this.ws.start({ eventDispatcher: dispatcher });
     this.connected = 'connected';
@@ -60,25 +108,19 @@ export class FeishuAdapter implements IMAdapter {
   async send(out: OutgoingMessage): Promise<{ messageId: string }> {
     if (!this.client) throw new Error('feishu not connected');
     if (!this.opts.chatId) throw new Error('feishu chatId not configured');
-    const text = out.kind === 'text' ? out.text : `${out.title ?? ''}\n${out.body}`;
-    const res = await this.client.im.v1.message.create({
-      params: { receive_id_type: 'chat_id' },
-      data: {
-        receive_id: this.opts.chatId,
-        msg_type: 'text',
-        content: JSON.stringify({ text }),
-      },
-    });
+    const data = out.kind === 'card'
+      ? { receive_id: this.opts.chatId, msg_type: 'interactive', content: JSON.stringify(buildCard(out)) }
+      : { receive_id: this.opts.chatId, msg_type: 'text', content: JSON.stringify({ text: out.text }) };
+    const res = await this.client.im.v1.message.create({ params: { receive_id_type: 'chat_id' }, data });
     return { messageId: (res as { data?: { message_id?: string } }).data?.message_id ?? '' };
   }
 
   async edit(messageId: string, out: OutgoingMessage): Promise<void> {
     if (!this.client) throw new Error('feishu not connected');
-    const text = out.kind === 'text' ? out.text : `${out.title ?? ''}\n${out.body}`;
-    await this.client.im.v1.message.patch({
-      path: { message_id: messageId },
-      data: { content: JSON.stringify({ text }) },
-    });
+    const content = out.kind === 'card'
+      ? JSON.stringify(buildCard(out))
+      : JSON.stringify({ text: out.text });
+    await this.client.im.v1.message.patch({ path: { message_id: messageId }, data: { content } });
   }
 
   onInbound(handler: (env: IncomingEnvelope) => void): void {
