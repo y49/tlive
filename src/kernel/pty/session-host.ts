@@ -137,9 +137,9 @@ export class SessionHost {
         } else if (f.type === FrameType.Attach || f.type === FrameType.Resize) {
           const { cols, rows } = parseDims(f.payload);
           client.cols = cols; client.rows = rows;
-          this.applySize();
-          const auth = this.currentSize();
-          if (socket.writable) socket.write(encodeSize(auth.cols, auth.rows));
+          const applied = this.applySize();
+          // Late-joiner guarantee: if the broadcast didn't fire (size unchanged), tell this client directly.
+          if (!applied.broadcast && socket.writable) socket.write(encodeSize(applied.cols, applied.rows));
         } else if (f.type === FrameType.Detach) {
           this.removeClient(client);
         }
@@ -159,13 +159,16 @@ export class SessionHost {
     return authoritativeSize(sources);
   }
 
-  private applySize(): void {
+  private applySize(): { cols: number; rows: number; broadcast: boolean } {
     const next = this.currentSize();
-    if (this.appliedSize && this.appliedSize.cols === next.cols && this.appliedSize.rows === next.rows) return;
+    if (this.appliedSize && this.appliedSize.cols === next.cols && this.appliedSize.rows === next.rows) {
+      return { cols: next.cols, rows: next.rows, broadcast: false };
+    }
     this.appliedSize = next;
     try { this.pty?.resize(next.cols, next.rows); } catch { /* pty gone */ }
     const frame = encodeSize(next.cols, next.rows);
     for (const c of this.clients) { if (c.socket.writable) c.socket.write(frame); }
+    return { cols: next.cols, rows: next.rows, broadcast: true };
   }
 
   private cleanup(): void {

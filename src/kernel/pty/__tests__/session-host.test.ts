@@ -76,23 +76,24 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
     });
     await host.start();
 
-    // Wait until a given client's decoder has seen a Size frame matching {cols,rows}.
-    const waitForSize = (sock: ReturnType<typeof createConnection>, dec: FrameDecoder, cols: number, rows: number) =>
+    // Resolve once this socket receives a Size frame matching {cols,rows}. Self-contained:
+    // own decoder + removes its listener so concurrent/sequential waits don't cross-decode.
+    const waitForSize = (sock: ReturnType<typeof createConnection>, cols: number, rows: number) =>
       new Promise<void>((resolve, reject) => {
-        const t = setTimeout(() => reject(new Error(`timeout waiting for Size ${cols}x${rows}`)), 8000);
-        sock.on('data', (chunk: Buffer) => {
+        const dec = new FrameDecoder();
+        const onData = (chunk: Buffer): void => {
           for (const f of dec.push(chunk)) {
             if (f.type === FrameType.Size) {
               const d = parseDims(f.payload);
-              if (d.cols === cols && d.rows === rows) { clearTimeout(t); resolve(); }
+              if (d.cols === cols && d.rows === rows) { cleanup(); resolve(); }
             }
           }
-        });
+        };
+        const cleanup = (): void => { clearTimeout(t); sock.off('data', onData); };
+        const t = setTimeout(() => { cleanup(); reject(new Error(`timeout waiting for Size ${cols}x${rows}`)); }, 8000);
+        sock.on('data', onData);
         sock.on('error', reject);
       });
-
-    const decA = new FrameDecoder();
-    const decB = new FrameDecoder();
     const a = createConnection(sockPath);
     const b = createConnection(sockPath);
     await new Promise<void>((r) => a.on('connect', () => r()));
@@ -102,15 +103,16 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
     b.write(encodeAttach(120, 40));
 
     // B types → B (120x40) becomes authoritative → both clients get Size 120x40.
-    const aGets = waitForSize(a, decA, 120, 40);
-    const bGets = waitForSize(b, decB, 120, 40);
+    const aGets = waitForSize(a, 120, 40);
+    const bGets = waitForSize(b, 120, 40);
     b.write(encodeData(Buffer.from('x')));
     await Promise.all([aGets, bGets]);
 
-    // A types → A (80x24) becomes authoritative → broadcast 80x24.
-    const aGets2 = waitForSize(a, decA, 80, 24);
+    // A types → A (80x24) becomes authoritative → broadcast 80x24 to BOTH clients.
+    const aGets2 = waitForSize(a, 80, 24);
+    const bGets3 = waitForSize(b, 80, 24);
     a.write(encodeData(Buffer.from('y')));
-    await aGets2;
+    await Promise.all([aGets2, bGets3]);
 
     a.end(); b.end();
     await host.stop();
