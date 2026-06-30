@@ -4,15 +4,8 @@
 // `data` payloads are raw pty bytes (binary-safe); control payloads are UTF-8 JSON.
 // Shared by SessionHost (server side) and PtyBridge (daemon client side).
 
-export const FrameType = {
-  Data: 0x01,
-  Resize: 0x02,
-  Attach: 0x03,
-  Detach: 0x04,
-  SnapshotRequest: 0x05,
-  SnapshotReply: 0x06,
-} as const;
-export type FrameType = (typeof FrameType)[keyof typeof FrameType];
+import { FrameType } from './frame-types.js';
+export { FrameType };
 
 export interface Frame {
   type: FrameType;
