@@ -74,6 +74,19 @@ function handleHttp(req: IncomingMessage, res: ServerResponse, opts: WebServerOp
     return;
   }
 
+  // /s/<id> → the terminal SPA (the page reads <id> + token from the URL)
+  if (url.pathname.startsWith('/s/')) {
+    const page = join(opts.webDir, 'terminal.html');
+    if (existsSync(page)) {
+      res.writeHead(200, { 'Content-Type': 'text/html', ...setCookie });
+      res.end(readFileSync(page));
+    } else {
+      res.writeHead(404, { 'Content-Type': 'text/plain', ...setCookie });
+      res.end('terminal UI not built (run: npm run build)');
+    }
+    return;
+  }
+
   // static (Plan 5 ships dist/web; until then most paths 404 with a placeholder index)
   let rel = url.pathname === '/' ? '/index.html' : url.pathname;
   rel = normalize(rel).replace(/^(\.\.[/\\])+/, '');

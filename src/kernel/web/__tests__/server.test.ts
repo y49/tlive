@@ -1,6 +1,6 @@
 // src/kernel/web/__tests__/server.test.ts
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { WebSocket } from 'ws';
@@ -57,6 +57,18 @@ describe('WebServer', () => {
       ws.on('error', reject);
     });
     expect(true).toBe(true);
+  });
+
+  it('serves the terminal page at /s/<id> (token-gated)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tlive-webdir-'));
+    writeFileSync(join(dir, 'terminal.html'), '<!doctype html><title>t</title><script src="/terminal.js"></script>');
+    const sessions = new SessionRegistry();
+    handle = await startWebServer({ bind: '127.0.0.1', port: 0, token: 'secret', sessions, webDir: dir });
+    const noTok = await fetch(`http://127.0.0.1:${handle.port}/s/anything`);
+    expect(noTok.status).toBe(401);
+    const ok = await fetch(`http://127.0.0.1:${handle.port}/s/anything?token=secret`);
+    expect(ok.status).toBe(200);
+    expect(await ok.text()).toContain('/terminal.js');
   });
 
   it('rejects ws upgrade with a bad token (401, no connection)', async () => {
