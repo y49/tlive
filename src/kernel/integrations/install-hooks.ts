@@ -28,7 +28,7 @@ export function installClaudeHooks(): string {
     hooks[event] = (hooks[event] ?? []).filter((g) => !(g.hooks ?? []).some((h: HookEntry) => h._tlive));
     hooks[event].push(group);
   };
-  put('PreToolUse', { matcher: '*', hooks: [HOOK('pre-tool-use', 300)] });
+  put('PreToolUse', { matcher: '*', hooks: [HOOK('pre-tool-use', 600)] });
   put('Stop', { hooks: [HOOK('stop', 180)] });
   put('PostToolUse', { matcher: '*', hooks: [HOOK('post-tool-use')] });
   put('Notification', { hooks: [HOOK('notification')] });
