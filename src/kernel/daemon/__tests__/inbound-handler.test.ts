@@ -89,12 +89,25 @@ describe('InboundHandler', () => {
     expect(setMuted).toHaveBeenCalledWith(true);
   });
 
-  it('"pause:" callback and /trust on both call setTrust(true)', async () => {
+  it('/trust on calls setTrust(true), /trust off calls setTrust(false)', async () => {
     const setTrust = vi.fn();
     const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter([]), setTrust }));
-    await h.handle(envelope({ text: 'pause:anything', messageId: 'm' }));
+    await h.handle(envelope({ text: '/trust on' }));
     expect(setTrust).toHaveBeenCalledWith(true);
-    await h.handle(envelope({ text: '/trust off', messageId: 'm2' }));
+    await h.handle(envelope({ text: '/trust off' }));
     expect(setTrust).toHaveBeenCalledWith(false);
+  });
+
+  it('"pause:<id>" approves the in-hand request and sets trust', async () => {
+    const setTrust = vi.fn();
+    const permAnswer = vi.fn();
+    const h = new InboundHandler(baseDeps({
+      imBy: () => makeAdapter([]),
+      setTrust,
+      permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
+    }));
+    await h.handle(envelope({ text: 'pause:REQ123' }));
+    expect(setTrust).toHaveBeenCalledWith(true);
+    expect(permAnswer).toHaveBeenCalledWith('REQ123', true);
   });
 });

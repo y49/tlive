@@ -5,6 +5,10 @@
 // (does NOT touch the frozen im-adapter contract). Renders diffs/commands,
 // flags risky shell patterns, masks secrets. Shared by IM (M5) and web (M6).
 // MUST NOT reference any CC/Codex-specific field or path.
+//
+// Secret masking covers key=value / URL params / Bearer headers / JSON secret-values.
+// Sensitive-path flagging (.env/.ssh/*.key) and high-entropy long-string masking are
+// deliberately out of scope (trusted-user audience).
 
 export interface RenderRequest {
   toolName: string;
@@ -15,7 +19,9 @@ export interface RenderRequest {
 export function maskSecrets(s: string): string {
   return s
     .replace(/([?&][\w-]*(?:token|key|auth|password|secret)[\w-]*=)[^&\s]+/gi, '$1***')
-    .replace(/\b([A-Z_]*(?:TOKEN|KEY|SECRET|PASSWORD)[A-Z_]*=)\S+/g, '$1***');
+    .replace(/\b([A-Z_]*(?:TOKEN|KEY|SECRET|PASSWORD)[A-Z_]*=)\S+/g, '$1***')
+    .replace(/\b(Bearer\s+)\S+/gi, '$1***')
+    .replace(/("(?:\w*(?:token|key|secret|password|auth)\w*)"\s*:\s*")[^"]+/gi, '$1***');
 }
 
 const RISKY = [/\brm\s+-[rf]/, /\bsudo\b/, /\bcurl\b[^\n]*\|\s*(?:sh|bash)/, /:\(\)\s*\{/, /\bmkfs\b/, /\bdd\s+if=/];
@@ -40,7 +46,7 @@ export function renderApprovalCard(req: RenderRequest): { title: string; body: s
       const diff = [
         ...oldS.split('\n').map((l) => `- ${l}`),
         ...newS.split('\n').map((l) => `+ ${l}`),
-      ].join('\n');
+      ].join('\n').slice(0, 1500);
       return { title, body: `\`${fp}\`\n\`\`\`diff\n${diff}\n\`\`\`` };
     }
     case 'Write': {

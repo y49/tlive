@@ -34,8 +34,10 @@ export class InboundHandler {
     if (!this.deps.senderGuard.allows(env.channel, env.userId)) return;
 
     if (env.text.startsWith('pause:')) {
+      const requestId = env.text.slice('pause:'.length);
       this.deps.setTrust(true);
-      await this.reply(env, { kind: 'text', text: '已暂停审批:后续操作自动放行,发送 /trust off 恢复。' });
+      this.deps.permissionRouter.answer(requestId, true); // approve the in-hand op too
+      await this.reply(env, { kind: 'text', text: '已暂停审批:当前操作已放行,后续自动放行,发送 /trust off 恢复。' });
       return;
     }
 
@@ -59,7 +61,7 @@ export class InboundHandler {
 
     await this.reply(env, {
       kind: 'text',
-      text: 'tlive: 只接受 /perm, /help 和审批按钮回调。自由文本可用于响应「续跑」提示。',
+      text: 'tlive: 只接受 /perm, /trust, /help 和审批按钮回调。自由文本可用于响应「续跑」提示。',
     });
   }
 

@@ -9,6 +9,11 @@ describe('maskSecrets', () => {
   it('masks export FOO_KEY=... assignments', () => {
     expect(maskSecrets('export OPENAI_API_KEY=sk-secret')).toBe('export OPENAI_API_KEY=***');
   });
+  it('masks Bearer tokens and JSON secret values', () => {
+    expect(maskSecrets('curl -H "Authorization: Bearer sk-live-abc"')).toContain('Bearer ***');
+    expect(maskSecrets('{"token":"ghp_xxx","q":1}')).toContain('"token":"***"');
+    expect(maskSecrets('{"token":"ghp_xxx","q":1}')).toContain('"q":1');
+  });
 });
 
 describe('renderApprovalCard', () => {
