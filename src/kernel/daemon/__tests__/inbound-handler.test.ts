@@ -28,6 +28,7 @@ const baseDeps = (over: Partial<InboundHandlerDeps> = {}): InboundHandlerDeps =>
   continueBroker: { answer: vi.fn().mockReturnValue(false), request: vi.fn(), onRequest: vi.fn() } as unknown as ContinueBroker,
   takeLatestContinueId: () => null,
   setMuted: vi.fn(),
+  setTrust: vi.fn(),
   ...over,
 });
 
@@ -86,5 +87,14 @@ describe('InboundHandler', () => {
     const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter([]), setMuted }));
     await h.handle(envelope({ text: '/perm off' }));
     expect(setMuted).toHaveBeenCalledWith(true);
+  });
+
+  it('"pause:" callback and /trust on both call setTrust(true)', async () => {
+    const setTrust = vi.fn();
+    const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter([]), setTrust }));
+    await h.handle(envelope({ text: 'pause:anything', messageId: 'm' }));
+    expect(setTrust).toHaveBeenCalledWith(true);
+    await h.handle(envelope({ text: '/trust off', messageId: 'm2' }));
+    expect(setTrust).toHaveBeenCalledWith(false);
   });
 });

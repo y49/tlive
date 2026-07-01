@@ -1,9 +1,10 @@
 // src/kernel/daemon/im-commands.ts
 //
-// v2.1 command set: /perm, /help. (/use removed — no workspace binding.)
+// v2.1 command set: /perm, /trust, /help. (/use removed — no workspace binding.)
 
 export type ImCommand =
   | { kind: 'perm'; enabled: boolean }
+  | { kind: 'trust'; enabled: boolean }
   | { kind: 'help' }
   | { kind: 'unknown'; name: string };
 
@@ -15,6 +16,10 @@ export function parseImCommand(text: string): ImCommand | null {
     case 'perm':
       if (args[0] === 'on') return { kind: 'perm', enabled: true };
       if (args[0] === 'off') return { kind: 'perm', enabled: false };
+      return { kind: 'unknown', name: cmd };
+    case 'trust':
+      if (args[0] === 'on') return { kind: 'trust', enabled: true };
+      if (args[0] === 'off') return { kind: 'trust', enabled: false };
       return { kind: 'unknown', name: cmd };
     case 'help':
       return { kind: 'help' };

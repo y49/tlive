@@ -17,6 +17,8 @@ export interface InboundHandlerDeps {
   takeLatestContinueId: () => string | null;
   /** Toggle global notification mute (`/perm on|off`). */
   setMuted: (muted: boolean) => void;
+  /** Toggle the trust switch (auto-allow all until off). */
+  setTrust: (trusted: boolean) => void;
 }
 
 function parseCallback(text: string): { requestId: string; approved: boolean } | null {
@@ -30,6 +32,12 @@ export class InboundHandler {
 
   async handle(env: IncomingEnvelope): Promise<void> {
     if (!this.deps.senderGuard.allows(env.channel, env.userId)) return;
+
+    if (env.text.startsWith('pause:')) {
+      this.deps.setTrust(true);
+      await this.reply(env, { kind: 'text', text: '已暂停审批:后续操作自动放行,发送 /trust off 恢复。' });
+      return;
+    }
 
     const cb = parseCallback(env.text);
     if (cb) {
@@ -61,8 +69,12 @@ export class InboundHandler {
         this.deps.setMuted(!cmd.enabled); // /perm on ⇒ 通知开 ⇒ 不静音
         await this.reply(env, { kind: 'text', text: `通知已${cmd.enabled ? '开启' : '静音'}` });
         return;
+      case 'trust':
+        this.deps.setTrust(cmd.enabled);
+        await this.reply(env, { kind: 'text', text: `审批已${cmd.enabled ? '暂停(自动放行)' : '恢复'}` });
+        return;
       case 'help':
-        await this.reply(env, { kind: 'text', text: '/perm on|off — 开启/静音通知\n/help — 本帮助' });
+        await this.reply(env, { kind: 'text', text: '/perm on|off — 开启/静音通知\n/trust on|off — 暂停/恢复审批(自动放行)\n/help — 本帮助' });
         return;
       case 'unknown':
       default:

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { parseImCommand } from '../im-commands';
 
-describe('parseImCommand (v2.1: perm/help)', () => {
+describe('parseImCommand (v2.1: perm/help/trust)', () => {
   it('recognizes /perm on|off', () => {
     expect(parseImCommand('/perm on')).toEqual({ kind: 'perm', enabled: true });
     expect(parseImCommand('/perm off')).toEqual({ kind: 'perm', enabled: false });
@@ -18,5 +18,10 @@ describe('parseImCommand (v2.1: perm/help)', () => {
   it('unknown slash command → unknown kind', () => {
     expect(parseImCommand('/use ws-foo')).toEqual({ kind: 'unknown', name: 'use' });
     expect(parseImCommand('/unknown')).toEqual({ kind: 'unknown', name: 'unknown' });
+  });
+  it('parses /trust on|off', () => {
+    expect(parseImCommand('/trust on')).toEqual({ kind: 'trust', enabled: true });
+    expect(parseImCommand('/trust off')).toEqual({ kind: 'trust', enabled: false });
+    expect(parseImCommand('/trust')).toEqual({ kind: 'unknown', name: 'trust' });
   });
 });

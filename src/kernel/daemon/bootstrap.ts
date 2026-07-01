@@ -63,6 +63,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           buttons: [
             { id: `approve:${msg.requestId}`, label: '✅ 允许' },
             { id: `deny:${msg.requestId}`, label: '❌ 拒绝' },
+            { id: `pause:${msg.requestId}`, label: '⏸ 暂停审批' },
           ],
         } : {}),
       });
@@ -172,6 +173,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     continueBroker,
     takeLatestContinueId: () => { const id = latestContinueId; latestContinueId = null; return id; },
     setMuted: (m: boolean) => { muted = m; },
+    setTrust: (t: boolean) => { policyState.trustUntilRevoked = t; },
   });
   for (const a of opts.imAdapters ?? []) {
     await a.start();
