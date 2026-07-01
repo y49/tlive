@@ -33,7 +33,8 @@ export function authoritativeSize(sources: SizeSource[]): { cols: number; rows: 
     if (s.lastInputSeq > best.lastInputSeq) best = s;
     else if (s.lastInputSeq === best.lastInputSeq && s.isLocal && !best.isLocal) best = s;
   }
-  return { cols: best.cols, rows: best.rows };
+  const clamp = (n: number): number => Math.max(1, Math.min(1000, Math.floor(n)));
+  return { cols: clamp(best.cols), rows: clamp(best.rows) };
 }
 
 interface Client extends SizeSource { socket: Socket }

@@ -21,8 +21,23 @@ const enc = new TextEncoder();
 let ws: WebSocket | null = null;
 let retry = 0;
 
-/** What this viewport could hold at 1:1 (propose, don't actually resize the grid). */
+/** What THIS device's viewport could hold at 1:1, in grid cells.
+ *  NOTE: fit.proposeDimensions() measures #term (content-sized to the grid),
+ *  so it would just echo the current grid — a fixed point. We divide the real
+ *  viewport by xterm's measured cell size instead, so typing reflows the pty
+ *  to this device. Cell metrics come from the same render-service field FitAddon reads. */
 function idealDims(): { cols: number; rows: number } {
+  const core = (term as unknown as {
+    _core?: { _renderService?: { dimensions?: { css?: { cell?: { width: number; height: number } } } } };
+  })._core;
+  const cell = core?._renderService?.dimensions?.css?.cell;
+  if (cell && cell.width > 0 && cell.height > 0) {
+    return {
+      cols: Math.max(1, Math.floor(viewport.clientWidth / cell.width)),
+      rows: Math.max(1, Math.floor(viewport.clientHeight / cell.height)),
+    };
+  }
+  // Before the first render the metrics aren't ready; fall back to the fitted proposal.
   const d = fit.proposeDimensions();
   return { cols: Math.max(1, d?.cols ?? 80), rows: Math.max(1, d?.rows ?? 24) };
 }

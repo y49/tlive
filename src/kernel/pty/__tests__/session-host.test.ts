@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionHost, authoritativeSize } from '../session-host';
-import { FrameDecoder, FrameType, encodeAttach, encodeData, encodeResize, parseDims } from '../../web/stream-protocol.js';
+import { FrameDecoder, FrameType, encodeAttach, encodeData, parseDims } from '../../web/stream-protocol.js';
 
 describe('authoritativeSize', () => {
   it('defaults to 80x24 with no sources', () => {
@@ -24,6 +24,10 @@ describe('authoritativeSize', () => {
       { cols: 120, rows: 40, lastInputSeq: 0 },
       { cols: 80, rows: 24, lastInputSeq: 0, isLocal: true },
     ])).toEqual({ cols: 80, rows: 24 });
+  });
+  it('floors fractional dims and clamps oversized dims', () => {
+    expect(authoritativeSize([{ cols: 80.7, rows: 24.9, lastInputSeq: 1 }])).toEqual({ cols: 80, rows: 24 });
+    expect(authoritativeSize([{ cols: 99999, rows: 88888, lastInputSeq: 1 }])).toEqual({ cols: 1000, rows: 1000 });
   });
 });
 
