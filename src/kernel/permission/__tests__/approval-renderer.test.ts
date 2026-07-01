@@ -1,0 +1,39 @@
+import { describe, it, expect } from 'vitest';
+import { renderApprovalCard, maskSecrets } from '../approval-renderer';
+
+describe('maskSecrets', () => {
+  it('masks URL query token/key/password params', () => {
+    expect(maskSecrets('curl https://x.com/a?token=abc123&z=1')).toContain('token=***');
+    expect(maskSecrets('curl https://x.com/a?token=abc123&z=1')).toContain('z=1');
+  });
+  it('masks export FOO_KEY=... assignments', () => {
+    expect(maskSecrets('export OPENAI_API_KEY=sk-secret')).toBe('export OPENAI_API_KEY=***');
+  });
+});
+
+describe('renderApprovalCard', () => {
+  it('Edit → unified diff of old→new', () => {
+    const { title, body } = renderApprovalCard({ toolName: 'Edit', input: { file_path: '/a.ts', old_string: 'x', new_string: 'y' } });
+    expect(title).toBe('权限请求: Edit');
+    expect(body).toContain('/a.ts');
+    expect(body).toContain('- x');
+    expect(body).toContain('+ y');
+  });
+  it('Write → file path + content preview', () => {
+    const { body } = renderApprovalCard({ toolName: 'Write', input: { file_path: '/b.txt', content: 'hello' } });
+    expect(body).toContain('/b.txt');
+    expect(body).toContain('hello');
+  });
+  it('Bash → command block, flags risky commands, masks secrets', () => {
+    const risky = renderApprovalCard({ toolName: 'Bash', input: { command: 'rm -rf /tmp/x', description: 'clean' } });
+    expect(risky.body).toContain('clean');
+    expect(risky.body).toContain('rm -rf /tmp/x');
+    expect(risky.body).toContain('高危');
+    const secret = renderApprovalCard({ toolName: 'Bash', input: { command: 'curl h?token=abc' } });
+    expect(secret.body).toContain('token=***');
+  });
+  it('unknown/MCP tool → masked JSON fallback', () => {
+    const { body } = renderApprovalCard({ toolName: 'mcp__s__t', input: { password: 'p', q: 1 } });
+    expect(body).toContain('json');
+  });
+});
