@@ -12,7 +12,7 @@ export interface SessionMeta {
 export type IpcRequest =
   | { kind: 'daemon.status' }
   | { kind: 'daemon.stop' }
-  | { kind: 'hook.permission.request'; cwd: string; sessionId: string; toolName: string; input: unknown }
+  | { kind: 'hook.permission.request'; cwd: string; sessionId: string; toolName: string; input: unknown; permissionMode?: string }
   | { kind: 'hook.permission.answer'; requestId: string; approved: boolean }
   | { kind: 'hook.continue.request'; cwd: string; sessionId: string; context: string }
   | { kind: 'hook.notify'; cwd: string; sessionId: string; level: 'info' | 'warn' | 'error'; message: string }

@@ -5,41 +5,40 @@ export type Decision = 'allow' | 'deny' | 'defer';
 export interface PermChat { channel: string; chatId: string }
 
 export interface PermissionRouterDeps {
-  /** Notification destinations (one per configured channel). */
   configuredChats: () => PermChat[];
-  /** Push an approval card to one IM chat. */
   sendToChat: (target: PermChat, card: { title: string; body: string; requestId: string }) => Promise<void>;
-  /** Global notification mute (`/perm off`). When muted, requests auto-defer. */
   isMuted: () => boolean;
+  /** Vendor-neutral policy: allow (auto) vs ask (send card). Never auto-denies. */
+  policyDecide: (req: { toolName: string; input: unknown; permissionMode?: string }) => { decision: 'allow' | 'ask'; reason?: string };
+  /** Render the approval card body from the normalized request. */
+  renderCard: (req: { toolName: string; input: unknown }) => { title: string; body: string };
 }
 
-/** Timeout before an unanswered request auto-defers (seconds).
- *  Must be < the shim's IPC timeout (290 s for PreToolUse). */
-const PERMISSION_TIMEOUT_SEC = 250;
+/** Unanswered request auto-defers after this (s). Must be < shim IPC (590s) < hook timeout (600s). */
+const PERMISSION_TIMEOUT_SEC = 580;
 
 export class PermissionRouter {
   private pending = new Map<string, (d: Decision) => void>();
   constructor(private deps: PermissionRouterDeps) {}
 
-  async requestPermission(opts: { cwd: string; toolName: string; input: unknown }): Promise<{ decision: Decision }> {
+  async requestPermission(opts: { cwd: string; toolName: string; input: unknown; permissionMode?: string }): Promise<{ decision: Decision }> {
+    // Policy first: an auto-allow (read-only / trust switch) skips the card even when muted.
+    const pd = this.deps.policyDecide({ toolName: opts.toolName, input: opts.input, permissionMode: opts.permissionMode });
+    if (pd.decision === 'allow') return { decision: 'allow' };
+
     if (this.deps.isMuted()) return { decision: 'defer' };
     const targets = this.deps.configuredChats();
     if (targets.length === 0) return { decision: 'defer' };
+
     const requestId = randomUUID();
+    const { title, body } = this.deps.renderCard({ toolName: opts.toolName, input: opts.input });
     const decision = await new Promise<Decision>((resolve) => {
       this.pending.set(requestId, resolve);
       setTimeout(() => {
-        if (this.pending.has(requestId)) {
-          this.pending.delete(requestId);
-          resolve('defer');
-        }
+        if (this.pending.has(requestId)) { this.pending.delete(requestId); resolve('defer'); }
       }, PERMISSION_TIMEOUT_SEC * 1000).unref();
       for (const t of targets) {
-        void this.deps.sendToChat(t, {
-          title: `权限请求: ${opts.toolName}`,
-          body: JSON.stringify(opts.input).slice(0, 500),
-          requestId,
-        }).catch(() => undefined);
+        void this.deps.sendToChat(t, { title, body, requestId }).catch(() => undefined);
       }
     });
     return { decision };

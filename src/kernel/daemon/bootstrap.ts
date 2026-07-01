@@ -4,6 +4,8 @@ import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { startIpcServer, type IpcServer } from '../ipc/server.js';
 import { PermissionRouter, type PermChat } from './permission-router.js';
+import { decide as policyDecide, type PolicyState } from '../permission/policy-engine.js';
+import { renderApprovalCard } from '../permission/approval-renderer.js';
 import { ContinueBroker } from '../permission/continue-broker.js';
 import { SenderGuard } from './sender-guard.js';
 import { loadConfig } from '../config/loader.js';
@@ -32,6 +34,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const startedAt = Date.now();
 
   let muted = false;
+  const policyState: PolicyState = { trustUntilRevoked: false };
 
   const configuredChats = (): PermChat[] => {
     const out: PermChat[] = [];
@@ -70,6 +73,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     configuredChats,
     sendToChat: (t, card) => sendToChat(t, { title: card.title, body: card.body, requestId: card.requestId }),
     isMuted: () => muted,
+    policyDecide: (req) => {
+      const d = policyDecide({ toolName: req.toolName, permissionMode: req.permissionMode }, policyState);
+      if (d.decision === 'allow') console.log(`[policy] auto-allow ${req.toolName} (${d.reason})`); // 审计
+      return d;
+    },
+    renderCard: (req) => renderApprovalCard({ toolName: req.toolName, input: req.input }),
   });
 
   const continueBroker = new ContinueBroker();
@@ -119,7 +128,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           setTimeout(() => { void shutdown(); }, 10).unref?.();
           return;
         case 'hook.permission.request': {
-          const r = await permissionRouter.requestPermission({ cwd: req.cwd, toolName: req.toolName, input: req.input });
+          const r = await permissionRouter.requestPermission({ cwd: req.cwd, toolName: req.toolName, input: req.input, permissionMode: req.permissionMode });
           reply({ kind: 'hook.permission.result', decision: r.decision });
           return;
         }

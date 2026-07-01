@@ -40,8 +40,9 @@ export async function runHook(argv: string[]): Promise<void> {
           sessionId: n.sessionId,
           toolName: n.toolName,
           input: n.input,
+          permissionMode: (n as { permissionMode?: string }).permissionMode,
         },
-        { timeoutMs: 290_000 },
+        { timeoutMs: 590_000 },
       );
       const decision = r.kind === 'hook.permission.result' ? r.decision : 'defer';
       process.stdout.write(JSON.stringify(permissionDecisionOut(decision)));
