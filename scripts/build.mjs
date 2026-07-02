@@ -64,3 +64,20 @@ if (existsSync(feEntry)) {
   copyFileSync(join(ROOT, 'web', 'terminal.html'), join(ROOT, 'dist', 'web', 'terminal.html'));
   console.log('built dist/web/terminal.js + terminal.html');
 }
+
+// Frontend bundle (browser) — dashboard page → dist/web
+const dashEntry = join(ROOT, 'web', 'src', 'dashboard.ts');
+if (existsSync(dashEntry)) {
+  await build({
+    entryPoints: [dashEntry],
+    bundle: true,
+    platform: 'browser',
+    format: 'iife',
+    target: ['es2020'],
+    outfile: join(ROOT, 'dist', 'web', 'dashboard.js'),
+    minify: true,
+    logLevel: 'warning',
+  });
+  copyFileSync(join(ROOT, 'web', 'dashboard.html'), join(ROOT, 'dist', 'web', 'dashboard.html'));
+  console.log('built dist/web/dashboard.js + dashboard.html');
+}

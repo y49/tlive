@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>tlive dashboard</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body { background: #0b0d10; color: #e6e6e6;
+           font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px;
+             padding: 12px 16px; background: #11141a; border-bottom: 1px solid #1e232b; }
+    header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .3px; }
+    #conn { margin-left: auto; font-size: 12px; color: #8a94a6; }
+    #conn.up { color: #4ade80; } #conn.down { color: #f87171; }
+    #grid { display: grid; gap: 12px; padding: 16px;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+    #empty { padding: 48px 16px; text-align: center; color: #6b7280; }
+    .card { background: #12161d; border: 1px solid #1e232b; border-radius: 10px; padding: 14px;
+            display: flex; flex-direction: column; gap: 10px; }
+    .card .top { display: flex; align-items: center; gap: 8px; }
+    .label { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cwd { font-size: 11px; color: #6b7280; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .badge { flex: 0 0 auto; font-size: 11px; padding: 2px 8px; border-radius: 999px;
+             border: 1px solid transparent; }
+    .badge.active { color: #93c5fd; background: #172033; }
+    .badge.idle { color: #9ca3af; background: #1a1e25; }
+    .badge.waiting-approval { color: #fca5a5; background: #2a1416; border-color: #7f1d1d; }
+    .badge.waiting-input { color: #fcd34d; background: #241d0a; }
+    .stale { margin-left: auto; font-size: 11px; color: #f59e0b; }
+    .msg { font-size: 12px; color: #c7ccd4; background: #0d1015; border: 1px solid #1a1e25;
+           border-radius: 6px; padding: 6px 8px; max-height: 84px; overflow: auto; white-space: pre-wrap;
+           word-break: break-word; }
+    .msg .k { color: #6b7280; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    button { font: inherit; font-size: 12px; padding: 6px 12px; border-radius: 7px; cursor: pointer;
+             border: 1px solid #2a3038; background: #1a1f27; color: #e6e6e6; }
+    button:hover { background: #222834; }
+    button.ok { border-color: #14532d; background: #0f2417; color: #86efac; }
+    button.no { border-color: #7f1d1d; background: #241113; color: #fca5a5; }
+    button.on { border-color: #3b4252; background: #2a3140; color: #cbd5e1; }
+    a.term { text-decoration: none; }
+    .reply { display: flex; gap: 8px; }
+    .reply input { flex: 1 1 auto; min-width: 0; font: inherit; font-size: 12px; padding: 6px 8px;
+                   border-radius: 7px; border: 1px solid #2a3038; background: #0d1015; color: #e6e6e6; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>tlive</h1>
+    <span id="conn" class="down">connecting…</span>
+  </header>
+  <div id="empty">No active sessions yet.</div>
+  <div id="grid"></div>
+  <script src="/dashboard.js"></script>
+</body>
+</html>
