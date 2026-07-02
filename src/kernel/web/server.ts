@@ -39,8 +39,9 @@ export async function startWebServer(opts: WebServerOpts): Promise<WebServerHand
     const m = url.pathname.match(/^\/ws\/term\/(.+)$/);
     if (!m) { socket.write('HTTP/1.1 400 Bad Request\r\n\r\n'); socket.destroy(); return; }
     const session = opts.sessions.get(decodeURIComponent(m[1]));
-    if (!session) { socket.write('HTTP/1.1 404 Not Found\r\n\r\n'); socket.destroy(); return; }
-    wss.handleUpgrade(req, socket, head, (ws) => { bridge(ws as never, session.sockPath); });
+    if (!session?.sockPath) { socket.write('HTTP/1.1 404 Not Found\r\n\r\n'); socket.destroy(); return; }
+    const sockPath = session.sockPath;
+    wss.handleUpgrade(req, socket, head, (ws) => { bridge(ws as never, sockPath); });
   });
 
   await new Promise<void>((resolve, reject) => {

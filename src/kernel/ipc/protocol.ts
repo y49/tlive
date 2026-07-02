@@ -1,5 +1,7 @@
 // src/kernel/ipc/protocol.ts
 
+import type { SessionView } from '../web/session-registry.js';
+
 export interface SessionMeta {
   id: string;
   label: string;
@@ -26,5 +28,5 @@ export type IpcResponse =
   | { kind: 'ack' }
   | { kind: 'hook.permission.result'; decision: 'allow' | 'deny' | 'defer' }
   | { kind: 'hook.continue.result'; reply: string | null }
-  | { kind: 'session.list'; sessions: SessionMeta[] }
+  | { kind: 'session.list'; sessions: SessionView[] }
   | { kind: 'error'; message: string };
