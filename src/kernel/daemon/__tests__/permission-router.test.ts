@@ -47,6 +47,33 @@ describe('PermissionRouter (configured-chats, allow/deny/defer)', () => {
   });
 });
 
+describe('PermissionRouter pending lifecycle callbacks', () => {
+  it('fires onPending when a card is sent and onResolved when answered', async () => {
+    const pend: unknown[] = [];
+    const done: unknown[] = [];
+    let id = '';
+    const r = new PermissionRouter(base({
+      renderCard: () => ({ title: 'T', body: 'B' }),
+      sendToChat: async (_t: unknown, c: { requestId: string }) => { id = c.requestId; },
+      onPending: (p: unknown) => pend.push(p),
+      onResolved: (p: unknown) => done.push(p),
+    }));
+    const p = r.requestPermission({ cwd: '/p/foo', toolName: 'Bash', input: {} });
+    await new Promise((res) => setTimeout(res, 0));
+    expect(pend).toEqual([{ cwd: '/p/foo', requestId: id, title: 'T', body: 'B' }]);
+    r.answer(id, true);
+    await p;
+    expect(done).toEqual([{ cwd: '/p/foo', requestId: id }]);
+  });
+
+  it('does not fire onPending when muted (deferred before a card)', async () => {
+    const pend: unknown[] = [];
+    const r = new PermissionRouter(base({ isMuted: () => true, onPending: (p: unknown) => pend.push(p) }));
+    await r.requestPermission({ cwd: '/x', toolName: 'Bash', input: {} });
+    expect(pend).toEqual([]);
+  });
+});
+
 describe('PermissionRouter policy short-circuit', () => {
   it('auto-allows without sending a card when policy says allow', async () => {
     const send = vi.fn();

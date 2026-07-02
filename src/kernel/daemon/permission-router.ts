@@ -12,6 +12,10 @@ export interface PermissionRouterDeps {
   policyDecide: (req: { toolName: string; input: unknown; permissionMode?: string }) => { decision: 'allow' | 'ask'; reason?: string };
   /** Render the approval card body from the normalized request. */
   renderCard: (req: { toolName: string; input: unknown }) => { title: string; body: string };
+  /** Fired when a card is created & sent (session enters waiting-approval). */
+  onPending?: (p: { cwd: string; requestId: string; title: string; body: string }) => void;
+  /** Fired when the request resolves (answered / timed out / deferred after a card). */
+  onResolved?: (p: { cwd: string; requestId: string }) => void;
 }
 
 /** Unanswered request auto-defers after this (s). Must be < shim IPC (590s) < hook timeout (600s). */
@@ -32,6 +36,7 @@ export class PermissionRouter {
 
     const requestId = randomUUID();
     const { title, body } = this.deps.renderCard({ toolName: opts.toolName, input: opts.input });
+    this.deps.onPending?.({ cwd: opts.cwd, requestId, title, body });
     const decision = await new Promise<Decision>((resolve) => {
       this.pending.set(requestId, resolve);
       setTimeout(() => {
@@ -41,6 +46,7 @@ export class PermissionRouter {
         void this.deps.sendToChat(t, { title, body, requestId }).catch(() => undefined);
       }
     });
+    this.deps.onResolved?.({ cwd: opts.cwd, requestId });
     return { decision };
   }
 
