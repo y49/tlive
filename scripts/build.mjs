@@ -6,7 +6,7 @@
 //   - dist/src/tlive-cli.mjs    (CLI dispatcher, src/cli/main.ts; lazy-imports subcommands)
 
 import { build } from 'esbuild';
-import { existsSync, mkdirSync, copyFileSync } from 'node:fs';
+import { existsSync, mkdirSync, copyFileSync, chmodSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -24,7 +24,7 @@ const EXTERNAL = [
   'socks-proxy-agent',
 ];
 
-async function buildEntry(entryRel, outBaseName) {
+async function buildEntry(entryRel, outBaseName, { shebang = false } = {}) {
   const entry = join(ROOT, entryRel);
   if (!existsSync(entry)) return false;
   await build({
@@ -35,6 +35,8 @@ async function buildEntry(entryRel, outBaseName) {
     format: 'esm',
     outfile: join(ROOT, 'dist', 'src', `${outBaseName}.mjs`),
     external: EXTERNAL,
+    // The CLI is the package `bin` — it must be directly executable when linked as `tlive`.
+    ...(shebang ? { banner: { js: '#!/usr/bin/env node' } } : {}),
     logLevel: 'warning',
   });
   return true;
@@ -43,8 +45,11 @@ async function buildEntry(entryRel, outBaseName) {
 const daemonOk = await buildEntry('src/kernel/daemon/main.ts', 'tlive-daemon');
 if (daemonOk) console.log('built dist/src/tlive-daemon.mjs');
 
-const cliOk = await buildEntry('src/cli/main.ts', 'tlive-cli');
-if (cliOk) console.log('built dist/src/tlive-cli.mjs');
+const cliOk = await buildEntry('src/cli/main.ts', 'tlive-cli', { shebang: true });
+if (cliOk) {
+  chmodSync(join(ROOT, 'dist', 'src', 'tlive-cli.mjs'), 0o755);
+  console.log('built dist/src/tlive-cli.mjs');
+}
 
 // Frontend bundle (browser) — xterm terminal page → dist/web
 mkdirSync(join(ROOT, 'dist', 'web'), { recursive: true });

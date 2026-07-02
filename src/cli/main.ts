@@ -1,7 +1,7 @@
 // src/cli/main.ts
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CLI_SUBCOMMANDS, type Subcommand } from '../kernel/contracts/cli-surface.js';
 
 const HELP = `tlive — vendor-neutral hook approval + web terminal for Claude Code / Codex
@@ -53,7 +53,19 @@ export async function runCli(argv: string[]): Promise<void> {
   }
 }
 
-if (process.argv[1]?.endsWith('tlive-cli.mjs') || process.argv[1]?.endsWith('cli.js')) {
+// Run when invoked as the program entry. argv[1] is the invoked path — which,
+// for a globally-installed/linked `bin`, is a SYMLINK (e.g. ~/.local/bin/tlive),
+// so a filename check fails. Resolve the symlink and compare to this module.
+function isMain(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
+  } catch {
+    return false;
+  }
+}
+if (isMain()) {
   runCli(process.argv.slice(2)).catch((e) => {
     process.stderr.write(`tlive: ${(e as Error).stack ?? e}\n`);
     process.exit(1);
