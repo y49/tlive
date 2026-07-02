@@ -89,8 +89,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     onPending: ({ cwd, requestId, title, body }) => {
       events.broadcast({ type: 'session-upsert', session: sessions.upsert({ cwd, status: 'waiting-approval', pending: { requestId, title, body } }) });
     },
-    onResolved: ({ cwd }) => {
-      events.broadcast({ type: 'session-upsert', session: sessions.upsert({ cwd, status: 'active', pending: null }) });
+    onResolved: ({ cwd, decision }) => {
+      // Non-approved outcomes (deny/defer) leave the session idle; only allow → active.
+      events.broadcast({ type: 'session-upsert', session: sessions.upsert({ cwd, status: decision === 'allow' ? 'active' : 'idle', pending: null }) });
     },
   });
 

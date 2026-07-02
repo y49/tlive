@@ -15,7 +15,7 @@ export interface PermissionRouterDeps {
   /** Fired when a card is created & sent (session enters waiting-approval). */
   onPending?: (p: { cwd: string; requestId: string; title: string; body: string }) => void;
   /** Fired when the request resolves (answered / timed out / deferred after a card). */
-  onResolved?: (p: { cwd: string; requestId: string }) => void;
+  onResolved?: (p: { cwd: string; requestId: string; decision: Decision }) => void;
 }
 
 /** Unanswered request auto-defers after this (s). Must be < shim IPC (590s) < hook timeout (600s). */
@@ -46,7 +46,7 @@ export class PermissionRouter {
         void this.deps.sendToChat(t, { title, body, requestId }).catch(() => undefined);
       }
     });
-    this.deps.onResolved?.({ cwd: opts.cwd, requestId });
+    this.deps.onResolved?.({ cwd: opts.cwd, requestId, decision });
     return { decision };
   }
 

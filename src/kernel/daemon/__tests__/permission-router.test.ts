@@ -63,7 +63,7 @@ describe('PermissionRouter pending lifecycle callbacks', () => {
     expect(pend).toEqual([{ cwd: '/p/foo', requestId: id, title: 'T', body: 'B' }]);
     r.answer(id, true);
     await p;
-    expect(done).toEqual([{ cwd: '/p/foo', requestId: id }]);
+    expect(done).toEqual([{ cwd: '/p/foo', requestId: id, decision: 'allow' }]);
   });
 
   it('does not fire onPending when muted (deferred before a card)', async () => {

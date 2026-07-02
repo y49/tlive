@@ -44,11 +44,41 @@ describe('applyMonitorEvent', () => {
     }
   });
 
-  it('session-end → remove frame + purges registry', () => {
+  it('session-end → remove frame + purges registry (hook-kind)', () => {
     const r = new SessionRegistry();
     r.upsert({ cwd: '/r', status: 'active' });
     const f = applyMonitorEvent(r, { event: 'session-end', cwd: '/r', sessionId: 's', reason: 'clear' });
     expect(f).toEqual({ type: 'session-remove', id: '/r' });
     expect(r.get('/r')).toBeUndefined();
+  });
+
+  it('session-end preserves wrapped session on /clear (kind-aware: downgrade to idle)', () => {
+    const r = new SessionRegistry();
+    // register a wrapped session (tlive run)
+    r.register({ id: 'u1', label: 'myapp', cmd: 'claude', cwd: '/w', pid: 1, sockPath: '/s.sock' });
+    const f = applyMonitorEvent(r, { event: 'session-end', cwd: '/w', sessionId: 's', reason: 'clear' });
+    // returns upsert (not remove) — session survives
+    expect(f.type).toBe('session-upsert');
+    if (f.type === 'session-upsert') {
+      expect(f.session.kind).toBe('wrapped');
+      expect(f.session.status).toBe('idle');
+      expect(f.session.sockPath).toBe('/s.sock');
+    }
+    // registry still has the session
+    const v = r.get('/w');
+    expect(v).toBeDefined();
+    expect(v?.kind).toBe('wrapped');
+    expect(v?.sockPath).toBe('/s.sock');
+    // actual removal happens via unregister(metaId) — metaId→cwd mapping still intact
+    r.unregister('u1');
+    expect(r.get('/w')).toBeUndefined();
+  });
+
+  it('session-end removes hook-kind session (not wrapped)', () => {
+    const r = new SessionRegistry();
+    r.upsert({ cwd: '/h', kind: 'hook', status: 'active' });
+    const f = applyMonitorEvent(r, { event: 'session-end', cwd: '/h', sessionId: 's', reason: 'exit' });
+    expect(f).toEqual({ type: 'session-remove', id: '/h' });
+    expect(r.get('/h')).toBeUndefined();
   });
 });

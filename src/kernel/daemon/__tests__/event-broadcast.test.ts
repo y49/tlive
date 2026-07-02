@@ -76,6 +76,40 @@ describe('daemon → /ws/events downstream broadcast', () => {
     expect(rm).toBeTruthy();
   });
 
+  it('Stop hook (hook.continue.request) broadcasts waiting-input + drives ContinueBroker', async () => {
+    // Capture the IM message that bootstrap sends on continue request (contains requestId).
+    let capturedMsg = '';
+    const adapter = makeFakeAdapter('telegram');
+    const origSend = adapter.send.bind(adapter);
+    adapter.send = async (out: OutgoingMessage) => {
+      if (out.kind === 'text') capturedMsg = out.text;
+      return origSend(out);
+    };
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const frames = await openEvents();
+
+    // Fire the blocking continue request in the background.
+    const p = request(
+      { kind: 'hook.continue.request', cwd: '/stop/cwd', sessionId: 's', context: 'stop ctx', lastMessage: 'last_msg' },
+      { socketPath: sock, timeoutMs: 8000 },
+    );
+
+    // Effect 1: broadcast waiting-input with lastMessage.
+    const f = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/stop/cwd' && x.session.status === 'waiting-input');
+    expect(f.session.lastMessage).toBe('last_msg');
+
+    // Effect 2: ContinueBroker received the request → IM message sent containing requestId.
+    await new Promise((r) => setTimeout(r, 100));
+    expect(capturedMsg).toMatch(/stop ctx/);
+    const match = capturedMsg.match(/id: ([a-f0-9-]{36})/);
+    expect(match).toBeTruthy();
+
+    // Unblock the IPC handler by answering the broker.
+    h.continueBroker.answer(match![1], 'go');
+    await p;
+  });
+
   it('sets registry.pending on approval-ask and clears it on answer', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
     h = await bootstrapDaemon({ home: tmp, imAdapters: [makeFakeAdapter('telegram')] });
