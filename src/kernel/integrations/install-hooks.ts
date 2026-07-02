@@ -32,6 +32,9 @@ export function installClaudeHooks(): string {
   put('Stop', { hooks: [HOOK('stop', 180)] });
   put('PostToolUse', { matcher: '*', hooks: [HOOK('post-tool-use')] });
   put('Notification', { hooks: [HOOK('notification')] });
+  put('UserPromptSubmit', { hooks: [HOOK('user-prompt-submit')] });
+  put('SessionStart', { hooks: [HOOK('session-start')] });
+  put('SessionEnd', { hooks: [HOOK('session-end')] });
   writeFileSync(p, JSON.stringify(cfg, null, 2));
   return p;
 }

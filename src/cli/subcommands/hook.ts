@@ -12,6 +12,7 @@ import {
   permissionDecisionOut,
   continueDecisionOut,
   type HookEventName,
+  type MonitorEvent,
 } from '../../kernel/hook/normalizer.js';
 
 async function readStdin(): Promise<unknown> {
@@ -21,10 +22,12 @@ async function readStdin(): Promise<unknown> {
   try { return s ? JSON.parse(s) : {}; } catch { return {}; }
 }
 
+const USAGE = 'Usage: tlive hook <pre-tool-use|post-tool-use|stop|notification|user-prompt-submit|session-start|session-end>\n';
+
 export async function runHook(argv: string[]): Promise<void> {
   const event = argv[0] as HookEventName | undefined;
   if (!event) {
-    process.stderr.write('Usage: tlive hook <pre-tool-use|post-tool-use|stop|notification>\n');
+    process.stderr.write(USAGE);
     process.exit(1);
   }
 
@@ -40,7 +43,7 @@ export async function runHook(argv: string[]): Promise<void> {
           sessionId: n.sessionId,
           toolName: n.toolName,
           input: n.input,
-          permissionMode: (n as { permissionMode?: string }).permissionMode,
+          permissionMode: n.permissionMode,
         },
         { timeoutMs: 590_000 },
       );
@@ -50,12 +53,14 @@ export async function runHook(argv: string[]): Promise<void> {
     }
 
     if (event === 'stop') {
+      const att = n as { cwd: string; sessionId: string; message: string; lastMessage?: string };
       const r = await request(
         {
           kind: 'hook.continue.request',
-          cwd: n.cwd,
-          sessionId: n.sessionId,
-          context: (n as { message: string }).message,
+          cwd: att.cwd,
+          sessionId: att.sessionId,
+          context: att.message,
+          ...(att.lastMessage ? { lastMessage: att.lastMessage } : {}),
         },
         { timeoutMs: 175_000 },
       );
@@ -64,16 +69,19 @@ export async function runHook(argv: string[]): Promise<void> {
       return;
     }
 
-    // post-tool-use / notification: fire-and-forget
-    const a = n as { event: string; cwd: string; sessionId: string; toolName?: string; message?: string };
+    if (event === 'notification') {
+      const att = n as { cwd: string; sessionId: string; message: string };
+      await request(
+        { kind: 'hook.notify', cwd: att.cwd, sessionId: att.sessionId, level: 'info', message: att.message },
+        { timeoutMs: 4_000 },
+      ).catch(() => undefined);
+      process.stdout.write('{}');
+      return;
+    }
+
+    // post-tool-use / user-prompt-submit / session-start / session-end → monitoring
     await request(
-      {
-        kind: 'hook.notify',
-        cwd: a.cwd,
-        sessionId: a.sessionId,
-        level: 'info',
-        message: a.message ?? `▸ ${a.toolName ?? event}`,
-      },
+      { kind: 'hook.event', event: n as MonitorEvent },
       { timeoutMs: 4_000 },
     ).catch(() => undefined);
     process.stdout.write('{}');

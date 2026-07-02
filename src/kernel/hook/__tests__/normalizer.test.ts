@@ -31,4 +31,20 @@ describe('hook normalizer', () => {
     expect(continueDecisionOut('run tests')).toEqual({ decision: 'block', reason: 'run tests' });
     expect(continueDecisionOut(null)).toEqual({});
   });
+  it('parses Stop with last_assistant_message into attention.lastMessage', () => {
+    const n = parseHookInput('stop', { cwd: '/r', session_id: 's', last_assistant_message: 'all done' });
+    expect(n).toEqual({ event: 'attention', cwd: '/r', sessionId: 's', message: 'Claude 已完成,回复以续跑', lastMessage: 'all done' });
+  });
+  it('parses UserPromptSubmit as prompt', () => {
+    const n = parseHookInput('user-prompt-submit', { cwd: '/r', session_id: 's', prompt: 'fix the bug' });
+    expect(n).toEqual({ event: 'prompt', cwd: '/r', sessionId: 's', prompt: 'fix the bug' });
+  });
+  it('parses SessionStart with source', () => {
+    const n = parseHookInput('session-start', { cwd: '/r', session_id: 's', source: 'startup' });
+    expect(n).toEqual({ event: 'session-start', cwd: '/r', sessionId: 's', source: 'startup' });
+  });
+  it('parses SessionEnd with reason', () => {
+    const n = parseHookInput('session-end', { cwd: '/r', session_id: 's', reason: 'clear' });
+    expect(n).toEqual({ event: 'session-end', cwd: '/r', sessionId: 's', reason: 'clear' });
+  });
 });
