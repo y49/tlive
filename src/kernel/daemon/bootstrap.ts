@@ -13,12 +13,15 @@ import type { IMAdapter } from '../contracts/im-adapter.js';
 import { SessionRegistry } from '../web/session-registry.js';
 import { startWebServer, type WebServerHandle } from '../web/server.js';
 import { loadOrCreateToken } from '../web/token.js';
+import { EventHub } from '../web/event-hub.js';
+import { applyMonitorEvent } from '../web/session-events.js';
 
 export interface DaemonHandle {
   shutdown(): Promise<void>;
   permissionRouter: PermissionRouter;
   continueBroker: ContinueBroker;
   sessions: SessionRegistry;
+  events: EventHub;
   ipcSocketPath: string;
   webUrl?: string;
 }
@@ -70,6 +73,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     }
   };
 
+  const sessions = new SessionRegistry();
+  const events = new EventHub();
+
   const permissionRouter = new PermissionRouter({
     configuredChats,
     sendToChat: (t, card) => sendToChat(t, { title: card.title, body: card.body, requestId: card.requestId }),
@@ -80,6 +86,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       return d;
     },
     renderCard: (req) => renderApprovalCard({ toolName: req.toolName, input: req.input }),
+    onPending: ({ cwd, requestId, title, body }) => {
+      events.broadcast({ type: 'session-upsert', session: sessions.upsert({ cwd, status: 'waiting-approval', pending: { requestId, title, body } }) });
+    },
+    onResolved: ({ cwd }) => {
+      events.broadcast({ type: 'session-upsert', session: sessions.upsert({ cwd, status: 'active', pending: null }) });
+    },
   });
 
   const continueBroker = new ContinueBroker();
@@ -93,8 +105,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     }
   });
 
-  const sessions = new SessionRegistry();
-
   let web: WebServerHandle | null = null;
   let webUrl: string | undefined;
   if (cfg.web?.enabled !== false) {
@@ -104,7 +114,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     const here = dirname(fileURLToPath(import.meta.url)); // dist/src
     const webDir = join(here, '..', 'web'); // dist/web (Plan 5)
     try {
-      web = await startWebServer({ bind, port, token, sessions, webDir });
+      web = await startWebServer({ bind, port, token, sessions, events, webDir });
       webUrl = web.url;
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -138,6 +148,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           reply({ kind: 'ack' });
           return;
         case 'hook.continue.request': {
+          events.broadcast({ type: 'session-upsert', session: sessions.upsert({ cwd: req.cwd, status: 'waiting-input', ...(req.lastMessage ? { lastMessage: req.lastMessage } : {}) }) });
           const reply_text = await continueBroker.request({ cwd: req.cwd, context: req.context, timeoutSec: 170 });
           reply({ kind: 'hook.continue.result', reply: reply_text });
           return;
@@ -146,17 +157,26 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           if (!muted) {
             await Promise.all(configuredChats().map((t) => sendToChat(t, { text: `[${req.level}] ${req.message}` })));
           }
+          events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.message }));
           reply({ kind: 'ack' });
           return;
         }
-        case 'session.register':
-          sessions.register(req.session);
+        case 'hook.event': {
+          events.broadcast(applyMonitorEvent(sessions, req.event));
           reply({ kind: 'ack' });
           return;
-        case 'session.unregister':
-          sessions.unregister(req.id);
+        }
+        case 'session.register': {
+          events.broadcast({ type: 'session-upsert', session: sessions.register(req.session) });
           reply({ kind: 'ack' });
           return;
+        }
+        case 'session.unregister': {
+          const removed = sessions.unregister(req.id);
+          if (removed) events.broadcast({ type: 'session-remove', id: removed.id });
+          reply({ kind: 'ack' });
+          return;
+        }
         case 'session.list':
           reply({ kind: 'session.list', sessions: sessions.list() });
           return;
@@ -199,5 +219,5 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     }
   }
 
-  return { shutdown, permissionRouter, continueBroker, sessions, webUrl, ipcSocketPath: sockPath };
+  return { shutdown, permissionRouter, continueBroker, sessions, events, webUrl, ipcSocketPath: sockPath };
 }
