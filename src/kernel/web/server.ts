@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, extname, normalize, sep } from 'node:path';
 import type { SessionRegistry } from './session-registry.js';
 import { bridge } from './pty-bridge.js';
-import type { EventHub, EventClient } from './event-hub.js';
+import { type EventHub, type EventClient, type EventAction, parseEventAction } from './event-hub.js';
 
 export interface WebServerOpts {
   bind: string;
@@ -17,6 +17,8 @@ export interface WebServerOpts {
   token: string;
   sessions: SessionRegistry;
   events?: EventHub;
+  /** Handle an upstream action from a /ws/events client (approve/reply/mute). */
+  onAction?: (action: EventAction) => void;
   webDir: string;
 }
 export interface WebServerHandle { url: string; port: number; close(): Promise<void> }
@@ -44,6 +46,12 @@ export async function startWebServer(opts: WebServerOpts): Promise<WebServerHand
       wss.handleUpgrade(req, socket, head, (ws) => {
         const client = ws as unknown as EventClient;
         hub.add(client);
+        if (opts.onAction) {
+          ws.on('message', (data) => {
+            const action = parseEventAction(data.toString());
+            if (action) opts.onAction!(action);
+          });
+        }
         ws.on('close', () => hub.remove(client));
         ws.on('error', () => hub.remove(client));
       });
@@ -101,8 +109,8 @@ function handleHttp(req: IncomingMessage, res: ServerResponse, opts: WebServerOp
     return;
   }
 
-  // static (Plan 5 ships dist/web; until then most paths 404 with a placeholder index)
-  let rel = url.pathname === '/' ? '/index.html' : url.pathname;
+  // / → the dashboard SPA (session cards + upstream actions over /ws/events)
+  let rel = url.pathname === '/' ? '/dashboard.html' : url.pathname;
   rel = normalize(rel).replace(/^(\.\.[/\\])+/, '');
   const filePath = join(opts.webDir, rel);
   if (!filePath.startsWith(normalize(opts.webDir) + sep)) { res.writeHead(403); res.end('Forbidden'); return; }
@@ -113,7 +121,7 @@ function handleHttp(req: IncomingMessage, res: ServerResponse, opts: WebServerOp
   }
   if (url.pathname === '/') {
     res.writeHead(200, { 'Content-Type': 'text/html', ...setCookie });
-    res.end('<!doctype html><meta charset=utf-8><title>tlive</title><body style="font-family:system-ui;padding:2rem"><h2>tlive web</h2><p>Terminal UI ships in a later milestone. API: <code>/api/sessions</code>.</p>');
+    res.end('<!doctype html><meta charset=utf-8><title>tlive</title><body style="font-family:system-ui;padding:2rem"><h2>tlive web</h2><p>Dashboard UI not built (run: npm run build). API: <code>/api/sessions</code>.</p>');
     return;
   }
   res.writeHead(404, { 'Content-Type': 'text/plain', ...setCookie });

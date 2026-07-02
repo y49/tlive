@@ -79,7 +79,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const permissionRouter = new PermissionRouter({
     configuredChats,
     sendToChat: (t, card) => sendToChat(t, { title: card.title, body: card.body, requestId: card.requestId }),
-    isMuted: () => muted,
+    isMuted: (cwd) => muted || (sessions.get(cwd)?.muted ?? false),
     policyDecide: (req) => {
       const d = policyDecide({ toolName: req.toolName, permissionMode: req.permissionMode }, policyState);
       if (d.decision === 'allow') console.log(`[policy] auto-allow ${req.toolName} (${d.reason})`); // 审计
@@ -100,11 +100,30 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
 
   continueBroker.onRequest((req) => {
     latestContinueId = req.requestId;
-    if (muted) return;
+    // Thread the continue requestId into the session so a dashboard client can reply to it.
+    events.broadcast({ type: 'session-upsert', session: sessions.upsert({ cwd: req.cwd, status: 'waiting-input', continueId: req.requestId }) });
+    if (muted || sessions.get(req.cwd)?.muted) return;
     for (const t of configuredChats()) {
       void sendToChat(t, { text: `⏸ ${req.context}\n回复本条以续跑 (id: ${req.requestId})` });
     }
   });
+
+  // Upstream actions from a dashboard client (/ws/events): approve/reply/mute.
+  const onAction = (action: import('../web/event-hub.js').EventAction): void => {
+    switch (action.type) {
+      case 'approve':
+        permissionRouter.answer(action.requestId, action.approved);
+        return;
+      case 'reply':
+        continueBroker.answer(action.requestId, action.text);
+        return;
+      case 'mute': {
+        const v = sessions.setMuted(action.id, action.muted);
+        if (v) events.broadcast({ type: 'session-upsert', session: v });
+        return;
+      }
+    }
+  };
 
   let web: WebServerHandle | null = null;
   let webUrl: string | undefined;
@@ -115,7 +134,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     const here = dirname(fileURLToPath(import.meta.url)); // dist/src
     const webDir = join(here, '..', 'web'); // dist/web (Plan 5)
     try {
-      web = await startWebServer({ bind, port, token, sessions, events, webDir });
+      web = await startWebServer({ bind, port, token, sessions, events, onAction, webDir });
       webUrl = web.url;
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -151,6 +170,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         case 'hook.continue.request': {
           events.broadcast({ type: 'session-upsert', session: sessions.upsert({ cwd: req.cwd, status: 'waiting-input', ...(req.lastMessage ? { lastMessage: req.lastMessage } : {}) }) });
           const reply_text = await continueBroker.request({ cwd: req.cwd, context: req.context, timeoutSec: 170 });
+          // Resolved (replied or timed out): clear the reply target; back to active if continuing, else idle.
+          events.broadcast({ type: 'session-upsert', session: sessions.upsert({ cwd: req.cwd, status: reply_text ? 'active' : 'idle', continueId: null }) });
           reply({ kind: 'hook.continue.result', reply: reply_text });
           return;
         }

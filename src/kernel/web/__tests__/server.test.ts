@@ -101,6 +101,30 @@ describe('WebServer', () => {
     expect(true).toBe(true);
   });
 
+  it('dispatches upstream /ws/events actions to onAction', async () => {
+    const sessions = new SessionRegistry();
+    const events = new EventHub();
+    const got: unknown[] = [];
+    handle = await startWebServer({ bind: '127.0.0.1', port: 0, token: 'secret', sessions, events, onAction: (a) => got.push(a), webDir: join(tmpdir(), 'nope') });
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('no dispatch')), 8000);
+      const ws = new WebSocket(`ws://127.0.0.1:${handle!.port}/ws/events?token=secret`);
+      ws.on('open', () => {
+        ws.send(JSON.stringify({ type: 'approve', requestId: 'r1', approved: true }));
+        ws.send('garbage-not-json'); // must be ignored, not crash
+        ws.send(JSON.stringify({ type: 'mute', id: '/repo', muted: true }));
+      });
+      const check = setInterval(() => {
+        if (got.length >= 2) { clearInterval(check); clearTimeout(t); ws.close(); resolve(); }
+      }, 20);
+      ws.on('error', reject);
+    });
+    expect(got).toEqual([
+      { type: 'approve', requestId: 'r1', approved: true },
+      { type: 'mute', id: '/repo', muted: true },
+    ]);
+  });
+
   it('rejects /ws/events with a bad token (no connection)', async () => {
     const sessions = new SessionRegistry();
     const events = new EventHub();

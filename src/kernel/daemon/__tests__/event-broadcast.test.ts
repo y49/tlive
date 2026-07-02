@@ -27,17 +27,21 @@ function makeFakeAdapter(channel: IMChannel): IMAdapter {
   };
 }
 
-async function openEvents(): Promise<Array<Record<string, any>>> {
+async function openEventsWs(): Promise<{ frames: Array<Record<string, any>>; ws: WebSocket }> {
   const url = new URL(h.webUrl!);
   const frames: Array<Record<string, any>> = [];
-  await new Promise<void>((resolve, reject) => {
-    const ws = new WebSocket(`ws://${url.host}/ws/events?token=${url.searchParams.get('token')}`);
-    sockets.push(ws);
-    ws.on('message', (d: Buffer) => frames.push(JSON.parse(d.toString())));
-    ws.on('open', () => resolve());
-    ws.on('error', reject);
+  const ws = await new Promise<WebSocket>((resolve, reject) => {
+    const s = new WebSocket(`ws://${url.host}/ws/events?token=${url.searchParams.get('token')}`);
+    sockets.push(s);
+    s.on('message', (d: Buffer) => frames.push(JSON.parse(d.toString())));
+    s.on('open', () => resolve(s));
+    s.on('error', reject);
   });
-  return frames;
+  return { frames, ws };
+}
+
+async function openEvents(): Promise<Array<Record<string, any>>> {
+  return (await openEventsWs()).frames;
 }
 
 async function waitFor(frames: Array<Record<string, any>>, pred: (f: Record<string, any>) => boolean, ms = 4000): Promise<Record<string, any>> {
@@ -123,5 +127,42 @@ describe('daemon → /ws/events downstream broadcast', () => {
     await p;
     const cleared = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/repo/c' && x.session.status === 'active');
     expect(cleared.session.pending).toBeUndefined();
+  });
+
+  it('upstream approve action over /ws/events resolves the permission request', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [makeFakeAdapter('telegram')] });
+    const { frames, ws } = await openEventsWs();
+    const p = request({ kind: 'hook.permission.request', cwd: '/repo/act', sessionId: 's', toolName: 'Bash', input: { command: 'ls' } }, { socketPath: sock, timeoutMs: 5000 });
+    const ask = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/repo/act' && x.session.status === 'waiting-approval');
+    ws.send(JSON.stringify({ type: 'approve', requestId: ask.session.pending.requestId, approved: false }));
+    const res = (await p) as { decision: string };
+    expect(res.decision).toBe('deny');
+  });
+
+  it('upstream reply action over /ws/events answers the continue broker (session carries continueId)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 } }));
+    h = await bootstrapDaemon({ home: tmp });
+    const { frames, ws } = await openEventsWs();
+    const p = request({ kind: 'hook.continue.request', cwd: '/stop/x', sessionId: 's', context: 'ctx', lastMessage: 'lm' }, { socketPath: sock, timeoutMs: 8000 });
+    const wait = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/stop/x' && x.session.continueId);
+    ws.send(JSON.stringify({ type: 'reply', requestId: wait.session.continueId, text: 'keep going' }));
+    const res = (await p) as { reply: string | null };
+    expect(res.reply).toBe('keep going');
+    // continueId cleared, status back to active
+    const done = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/stop/x' && x.session.status === 'active');
+    expect(done.session.continueId).toBeUndefined();
+  });
+
+  it('upstream mute action over /ws/events toggles per-session mute and re-broadcasts', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 } }));
+    h = await bootstrapDaemon({ home: tmp });
+    const { frames, ws } = await openEventsWs();
+    // create the session first
+    await request({ kind: 'hook.event', event: { event: 'activity', cwd: '/repo/m', sessionId: 's', toolName: 'Bash', result: {} } }, { socketPath: sock, timeoutMs: 2000 });
+    await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/repo/m');
+    ws.send(JSON.stringify({ type: 'mute', id: '/repo/m', muted: true }));
+    const muted = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/repo/m' && x.session.muted === true);
+    expect(muted.session.muted).toBe(true);
   });
 });

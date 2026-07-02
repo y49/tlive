@@ -17,6 +17,33 @@ export type EventFrame =
   | { type: 'session-upsert'; session: SessionView }
   | { type: 'session-remove'; id: string };
 
+/** Upstream actions a dashboard client sends over /ws/events. Vendor-neutral. */
+export type EventAction =
+  | { type: 'approve'; requestId: string; approved: boolean }
+  | { type: 'reply'; requestId: string; text: string }
+  | { type: 'mute'; id: string; muted: boolean };
+
+/** Parse an inbound /ws/events text frame into a validated EventAction, or null. */
+export function parseEventAction(raw: string): EventAction | null {
+  let v: unknown;
+  try { v = JSON.parse(raw); } catch { return null; }
+  if (typeof v !== 'object' || v === null) return null;
+  const a = v as Record<string, unknown>;
+  switch (a.type) {
+    case 'approve':
+      return typeof a.requestId === 'string' && typeof a.approved === 'boolean'
+        ? { type: 'approve', requestId: a.requestId, approved: a.approved } : null;
+    case 'reply':
+      return typeof a.requestId === 'string' && typeof a.text === 'string'
+        ? { type: 'reply', requestId: a.requestId, text: a.text } : null;
+    case 'mute':
+      return typeof a.id === 'string' && typeof a.muted === 'boolean'
+        ? { type: 'mute', id: a.id, muted: a.muted } : null;
+    default:
+      return null;
+  }
+}
+
 export class EventHub {
   private clients = new Set<EventClient>();
 

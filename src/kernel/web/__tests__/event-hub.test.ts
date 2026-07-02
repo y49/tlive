@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { EventHub, type EventClient, type EventFrame } from '../event-hub';
+import { EventHub, parseEventAction, type EventClient, type EventFrame } from '../event-hub';
 
 class FakeClient implements EventClient {
   OPEN = 1;
@@ -50,5 +50,25 @@ describe('EventHub', () => {
     hub.add(a); hub.remove(a);
     hub.broadcast(frame);
     expect(a.sent).toEqual([]);
+  });
+});
+
+describe('parseEventAction', () => {
+  it('parses a valid approve/reply/mute action', () => {
+    expect(parseEventAction(JSON.stringify({ type: 'approve', requestId: 'r1', approved: true })))
+      .toEqual({ type: 'approve', requestId: 'r1', approved: true });
+    expect(parseEventAction(JSON.stringify({ type: 'reply', requestId: 'c1', text: 'go' })))
+      .toEqual({ type: 'reply', requestId: 'c1', text: 'go' });
+    expect(parseEventAction(JSON.stringify({ type: 'mute', id: '/repo', muted: true })))
+      .toEqual({ type: 'mute', id: '/repo', muted: true });
+  });
+
+  it('rejects malformed / unknown / wrong-typed actions', () => {
+    expect(parseEventAction('not json')).toBeNull();
+    expect(parseEventAction('123')).toBeNull();
+    expect(parseEventAction(JSON.stringify({ type: 'nope' }))).toBeNull();
+    expect(parseEventAction(JSON.stringify({ type: 'approve', requestId: 'r1' }))).toBeNull(); // missing approved
+    expect(parseEventAction(JSON.stringify({ type: 'approve', requestId: 1, approved: true }))).toBeNull();
+    expect(parseEventAction(JSON.stringify({ type: 'mute', id: '/r', muted: 'yes' }))).toBeNull();
   });
 });

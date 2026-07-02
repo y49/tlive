@@ -60,4 +60,24 @@ describe('SessionRegistry rich model', () => {
     expect(r.remove('/repo')?.cwd).toBe('/repo');
     expect(r.unregister('s1')).toBeUndefined(); // mapping purged
   });
+
+  it('upsert sets and clears continueId (continueId:null clears)', () => {
+    const r = new SessionRegistry();
+    r.upsert({ cwd: '/repo', status: 'waiting-input', continueId: 'c1', lastActivityAt: 1 });
+    expect(r.get('/repo')?.continueId).toBe('c1');
+    // an unrelated merge leaves continueId intact
+    const kept = r.upsert({ cwd: '/repo', lastMessage: 'x', lastActivityAt: 2 });
+    expect(kept.continueId).toBe('c1');
+    const cleared = r.upsert({ cwd: '/repo', continueId: null, status: 'active', lastActivityAt: 3 });
+    expect(cleared.continueId).toBeUndefined();
+  });
+
+  it('setMuted toggles per-session mute; returns undefined for an unknown id', () => {
+    const r = new SessionRegistry();
+    r.upsert({ cwd: '/repo', status: 'idle', lastActivityAt: 1 });
+    expect(r.setMuted('/repo', true)?.muted).toBe(true);
+    expect(r.get('/repo')?.muted).toBe(true);
+    expect(r.setMuted('/repo', false)?.muted).toBe(false);
+    expect(r.setMuted('/nope', true)).toBeUndefined();
+  });
 });

@@ -28,6 +28,8 @@ export interface SessionView {
   lastMessage?: string;
   lastPrompt?: string;
   pending?: PendingApproval;
+  /** Live Stop-hook continue requestId while status is waiting-input (reply target). */
+  continueId?: string;
   muted: boolean;
   sockPath?: string; // wrapped sessions only
 }
@@ -42,6 +44,8 @@ export interface UpsertPatch {
   lastPrompt?: string;
   /** object → set; null → clear; undefined → leave unchanged. */
   pending?: PendingApproval | null;
+  /** string → set; null → clear; undefined → leave unchanged. */
+  continueId?: string | null;
   sockPath?: string;
 }
 
@@ -74,7 +78,23 @@ export class SessionRegistry {
     } else if (prev?.pending !== undefined) {
       next.pending = prev.pending;
     }
+    if (patch.continueId === null) {
+      // cleared: leave next.continueId undefined
+    } else if (patch.continueId !== undefined) {
+      next.continueId = patch.continueId;
+    } else if (prev?.continueId !== undefined) {
+      next.continueId = prev.continueId;
+    }
     this.byCwd.set(patch.cwd, next);
+    return next;
+  }
+
+  /** Toggle per-session mute; returns the updated view, or undefined if absent. */
+  setMuted(id: string, muted: boolean): SessionView | undefined {
+    const prev = this.byCwd.get(id);
+    if (!prev) return undefined;
+    const next = { ...prev, muted };
+    this.byCwd.set(id, next);
     return next;
   }
 

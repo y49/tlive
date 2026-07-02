@@ -7,7 +7,7 @@ export interface PermChat { channel: string; chatId: string }
 export interface PermissionRouterDeps {
   configuredChats: () => PermChat[];
   sendToChat: (target: PermChat, card: { title: string; body: string; requestId: string }) => Promise<void>;
-  isMuted: () => boolean;
+  isMuted: (cwd: string) => boolean;
   /** Vendor-neutral policy: allow (auto) vs ask (send card). Never auto-denies. */
   policyDecide: (req: { toolName: string; input: unknown; permissionMode?: string }) => { decision: 'allow' | 'ask'; reason?: string };
   /** Render the approval card body from the normalized request. */
@@ -30,7 +30,7 @@ export class PermissionRouter {
     const pd = this.deps.policyDecide({ toolName: opts.toolName, input: opts.input, permissionMode: opts.permissionMode });
     if (pd.decision === 'allow') return { decision: 'allow' };
 
-    if (this.deps.isMuted()) return { decision: 'defer' };
+    if (this.deps.isMuted(opts.cwd)) return { decision: 'defer' };
     const targets = this.deps.configuredChats();
     if (targets.length === 0) return { decision: 'defer' };
 
