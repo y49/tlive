@@ -9,12 +9,14 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, extname, normalize, sep } from 'node:path';
 import type { SessionRegistry } from './session-registry.js';
 import { bridge } from './pty-bridge.js';
+import type { EventHub, EventClient } from './event-hub.js';
 
 export interface WebServerOpts {
   bind: string;
   port: number;
   token: string;
   sessions: SessionRegistry;
+  events?: EventHub;
   webDir: string;
 }
 export interface WebServerHandle { url: string; port: number; close(): Promise<void> }
@@ -36,6 +38,17 @@ export async function startWebServer(opts: WebServerOpts): Promise<WebServerHand
   http.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', `http://${opts.bind}`);
     if (tokenFromReq(url, req) !== opts.token) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return; }
+    if (url.pathname === '/ws/events') {
+      if (!opts.events) { socket.write('HTTP/1.1 404 Not Found\r\n\r\n'); socket.destroy(); return; }
+      const hub = opts.events;
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        const client = ws as unknown as EventClient;
+        hub.add(client);
+        ws.on('close', () => hub.remove(client));
+        ws.on('error', () => hub.remove(client));
+      });
+      return;
+    }
     const m = url.pathname.match(/^\/ws\/term\/(.+)$/);
     if (!m) { socket.write('HTTP/1.1 400 Bad Request\r\n\r\n'); socket.destroy(); return; }
     const session = opts.sessions.get(decodeURIComponent(m[1]));

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { WebSocket } from 'ws';
 import { startWebServer, type WebServerHandle } from '../server.js';
 import { SessionRegistry } from '../session-registry.js';
+import { EventHub } from '../event-hub.js';
 import { SessionHost } from '../../pty/session-host.js';
 import { FrameDecoder, FrameType, encodeAttach, encodeData } from '../stream-protocol.js';
 
@@ -80,5 +81,45 @@ describe('WebServer', () => {
       ws.on('error', () => resolve()); // expected: handshake rejected
     });
     expect(true).toBe(true);
+  });
+
+  it('broadcasts registry frames to /ws/events clients (token-gated)', async () => {
+    const sessions = new SessionRegistry();
+    const events = new EventHub();
+    handle = await startWebServer({ bind: '127.0.0.1', port: 0, token: 'secret', sessions, events, webDir: join(tmpdir(), 'nope') });
+    const frame = { type: 'session-upsert', session: { id: '/r', label: 'r', cwd: '/r', kind: 'hook', status: 'idle', lastActivityAt: 1, muted: false } };
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('no event')), 8000);
+      const ws = new WebSocket(`ws://127.0.0.1:${handle!.port}/ws/events?token=secret`);
+      ws.on('open', () => { events.broadcast(frame as never); });
+      ws.on('message', (data: Buffer) => {
+        const f = JSON.parse(data.toString());
+        if (f.type === 'session-upsert' && f.session.id === '/r') { clearTimeout(t); ws.close(); resolve(); }
+      });
+      ws.on('error', reject);
+    });
+    expect(true).toBe(true);
+  });
+
+  it('rejects /ws/events with a bad token (no connection)', async () => {
+    const sessions = new SessionRegistry();
+    const events = new EventHub();
+    handle = await startWebServer({ bind: '127.0.0.1', port: 0, token: 'secret', sessions, events, webDir: join(tmpdir(), 'nope') });
+    await new Promise<void>((resolve) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${handle!.port}/ws/events?token=wrong`);
+      ws.on('open', () => { ws.close(); resolve(); });
+      ws.on('error', () => resolve());
+    });
+    expect(events.size()).toBe(0);
+  });
+
+  it('/api/sessions returns the rich snapshot', async () => {
+    const sessions = new SessionRegistry();
+    sessions.upsert({ cwd: '/repo', status: 'active', lastActivityAt: 5, lastMessage: 'hi' });
+    const events = new EventHub();
+    handle = await startWebServer({ bind: '127.0.0.1', port: 0, token: 'secret', sessions, events, webDir: join(tmpdir(), 'nope') });
+    const r = await get(`http://127.0.0.1:${handle.port}/api/sessions?token=secret`);
+    const arr = JSON.parse(r.body);
+    expect(arr[0]).toMatchObject({ id: '/repo', cwd: '/repo', kind: 'hook', status: 'active', lastMessage: 'hi', muted: false });
   });
 });
