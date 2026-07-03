@@ -71,7 +71,9 @@ export class SessionHost {
       cols: size.cols,
       rows: size.rows,
       cwd: this.opts.cwd,
-      env: { ...(this.opts.env ?? process.env) } as Record<string, string>,
+      // TLIVE_SESSION marks "you are inside a tlive-wrapped pty" (like $TMUX):
+      // lets scripts detect the wrapper and lets `tlive run` refuse to nest.
+      env: { ...(this.opts.env ?? process.env), TLIVE_SESSION: this.opts.id } as Record<string, string>,
     });
 
     this.shadow = new HeadlessTerminal({ cols: size.cols, rows: size.rows, scrollback: 1000, allowProposedApi: true });

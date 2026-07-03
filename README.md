@@ -144,6 +144,10 @@ Quote-reply any session message to type into that session.
 - **Scroll on phone**: view mode converts touch-drag into wheel events —
   full-screen TUIs (claude) scroll their transcript exactly like a desktop
   mouse wheel. Use `Ctrl-R` on the key bar for claude's transcript mode.
+- **Am I wrapped?** Wrapped processes see `TLIVE_SESSION=<id>` in their
+  environment (like `$TMUX`). `tlive run` refuses to nest inside a wrapped
+  session; running two wrapped sessions from the SAME directory is not
+  supported (session cards key by cwd).
 - **Windows**: supported by design (named pipes, ConPTY) but less battle-tested
   than Linux/macOS — issues welcome.
 

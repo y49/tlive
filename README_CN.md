@@ -126,6 +126,9 @@ IM 命令:`/perm on|off`(静音)、`/trust on|off`、`/help`。
   远程层。
 - **手机上滚动**:查看模式下手指滑动会转成滚轮事件——全屏 TUI(claude)的
   对话区像桌面鼠标滚轮一样滚动。看完整历史用键条上的 `Ctrl-R`(transcript)。
+- **如何感知被包裹?** 被包裹的进程环境里有 `TLIVE_SESSION=<id>`(类似
+  `$TMUX`)。`tlive run` 在包裹内拒绝嵌套;同一目录同时开两个包裹会话不受
+  支持(会话卡以 cwd 为键)。
 - **Windows**:设计上支持(命名管道、ConPTY),但实测少于 Linux/macOS——
   欢迎提 issue。
 

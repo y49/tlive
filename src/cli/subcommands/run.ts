@@ -29,6 +29,18 @@ export async function runRun(argv: string[]): Promise<void> {
     process.stderr.write('Usage: tlive run <cmd> [args...]\n');
     process.exit(1);
   }
+  // Refuse to nest (same policy as tmux): a wrapped-in-wrapped pty doubles the
+  // relay AND both sessions share one cwd — the registry keys by cwd, so the
+  // two cards would clobber each other's socket.
+  if (process.env.TLIVE_SESSION) {
+    process.stderr.write(
+      'tlive: already inside a tlive session (TLIVE_SESSION is set) — nesting is disabled.\n' +
+      '       This terminal is already served on the web; open another terminal to start a second session,\n' +
+      '       or force with: TLIVE_SESSION= tlive run <cmd>\n',
+    );
+    process.exit(1);
+  }
+
   const [cmd, ...args] = argv;
   const home = process.env.TLIVE_HOME ?? join(homedir(), '.tlive');
   mkdirSync(join(home, 'sessions'), { recursive: true });

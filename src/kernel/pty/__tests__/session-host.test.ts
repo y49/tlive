@@ -158,4 +158,37 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
     await host.stop();
   });
 
+
+  it('injects TLIVE_SESSION=<id> into the wrapped process env', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tlive-host-'));
+    const sockPath = join(dir, 's.sock');
+    const host = new SessionHost({
+      id: 'env-1',
+      cmd: process.execPath,
+      args: ['-e', 'process.stdout.write("TS=" + process.env.TLIVE_SESSION); setInterval(()=>{},1000);'],
+      cwd: dir,
+      sockPath,
+      attachLocal: false,
+    });
+    await host.start();
+    const dec = new FrameDecoder();
+    const got = await new Promise<string>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('no env output')), 8000);
+      const chunks: Buffer[] = [];
+      const sock = createConnection(sockPath, () => { sock.write(encodeAttach(80, 24)); });
+      sock.on('error', reject);
+      sock.on('data', (chunk: Buffer) => {
+        for (const f of dec.push(chunk)) {
+          if (f.type === FrameType.Data) {
+            chunks.push(f.payload);
+            const s = Buffer.concat(chunks).toString('utf8');
+            if (s.includes('TS=env-1')) { clearTimeout(t); sock.end(); resolve(s); }
+          }
+        }
+      });
+    });
+    expect(got).toContain('TS=env-1');
+    await host.stop();
+  });
+
 });
