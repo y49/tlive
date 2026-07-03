@@ -197,7 +197,7 @@ const BAR: Array<[string, string]> = [
   ['PgUp', '\x1b[5~'], ['PgDn', '\x1b[6~'],
 ];
 const bar = document.getElementById('bar') as HTMLElement;
-{ // collapsible key bar: ⌨ floating button toggles it (persisted)
+{ // collapsible key bar: ⌨ floating button toggles it (persisted); draggable
   const fab = document.getElementById('fab') as HTMLElement;
   const setOpen = (open: boolean): void => {
     app.classList.toggle('bar-open', open);
@@ -205,7 +205,35 @@ const bar = document.getElementById('bar') as HTMLElement;
     localStorage.setItem('tlive-bar', open ? 'open' : 'closed');
   };
   setOpen(localStorage.getItem('tlive-bar') === 'open'); // default: collapsed
-  fab.addEventListener('click', () => setOpen(!app.classList.contains('bar-open')));
+
+  // drag to reposition (persisted); a real drag suppresses the toggle click
+  try {
+    const p = JSON.parse(localStorage.getItem('tlive-fab') ?? 'null') as { r: number; b: number } | null;
+    if (p) { fab.style.right = `${p.r}px`; fab.style.bottom = `${p.b}px`; }
+  } catch { /* ignore */ }
+  fab.style.touchAction = 'none';
+  let sx = 0, sy = 0, r0 = 0, b0 = 0, moved = false;
+  fab.addEventListener('pointerdown', (e) => {
+    sx = e.clientX; sy = e.clientY; moved = false;
+    const cs = getComputedStyle(fab);
+    r0 = parseFloat(cs.right); b0 = parseFloat(cs.bottom);
+    fab.setPointerCapture(e.pointerId);
+  });
+  fab.addEventListener('pointermove', (e) => {
+    if (!fab.hasPointerCapture(e.pointerId)) return;
+    const dx = e.clientX - sx, dy = e.clientY - sy;
+    if (Math.abs(dx) + Math.abs(dy) > 8) moved = true;
+    if (!moved) return;
+    fab.style.right = `${Math.min(window.innerWidth - 46, Math.max(4, r0 - dx))}px`;
+    fab.style.bottom = `${Math.min(window.innerHeight - 46, Math.max(4, b0 - dy))}px`;
+  });
+  fab.addEventListener('pointerup', () => {
+    if (moved) localStorage.setItem('tlive-fab', JSON.stringify({ r: parseFloat(fab.style.right), b: parseFloat(fab.style.bottom) }));
+  });
+  fab.addEventListener('click', (e) => {
+    if (moved) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+    setOpen(!app.classList.contains('bar-open'));
+  });
 }
 { // back to the session list
   const b = document.createElement('button');
@@ -228,12 +256,36 @@ function setMode(input: boolean): void {
     if (!shield) {
       shield = document.createElement('div');
       shield.id = 'shield';
+      shield.style.touchAction = 'none';
+      attachTouchScroll(shield);
       app.appendChild(shield);
     }
     modeBtn.textContent = '⌨ 输入';
     term.blur();
     (document.activeElement as HTMLElement | null)?.blur?.();
   }
+}
+
+// Touch-drag on the shield → synthetic wheel events on the grid. This rides
+// xterm's normal wheel path, so a full-screen TUI (claude) receives the same
+// scroll sequences a desktop mouse wheel produces: transcript scrolls, the
+// prompt stays put. Finger up = content up = wheel down (natural scrolling).
+function attachTouchScroll(el: HTMLElement): void {
+  const target = (): Element => termEl.querySelector('.xterm-screen') ?? termEl;
+  let lastY = 0, acc = 0;
+  el.addEventListener('touchstart', (e) => { lastY = e.touches[0].clientY; acc = 0; }, { passive: true });
+  el.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    const y = e.touches[0].clientY;
+    acc += lastY - y;
+    lastY = y;
+    const STEP = 18; // px of finger travel per wheel tick
+    while (Math.abs(acc) >= STEP) {
+      const dir = Math.sign(acc);
+      acc -= dir * STEP;
+      target().dispatchEvent(new WheelEvent('wheel', { deltaY: dir * 60, bubbles: true, cancelable: true }));
+    }
+  }, { passive: false });
 }
 { // mode toggle — first key on the bar
   modeBtn.addEventListener('click', (e) => { e.preventDefault(); setMode(!!shield); });
