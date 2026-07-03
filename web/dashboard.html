@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -69,7 +69,7 @@
     .preview { height: 170px; /* replaced by width-fit height in JS */ overflow: hidden; border: 1px solid var(--line); border-radius: 8px;
                background: var(--panel2); cursor: pointer; position: relative; }
     .preview:hover { border-color: var(--line2); }
-    .preview::after { content: '⛶ 打开终端'; position: absolute; right: 8px; bottom: 6px; font-size: 11px;
+    .preview::after { content: '⛶ open terminal'; position: absolute; right: 8px; bottom: 6px; font-size: 11px;
                       color: var(--dim); background: rgba(13,16,21,.85); border: 1px solid var(--line);
                       border-radius: 6px; padding: 2px 8px; opacity: 0; transition: opacity .15s; }
     .preview:hover::after { opacity: 1; }
@@ -106,12 +106,12 @@
   <header>
     <div class="logo"><span class="dot"></span>tlive</div>
     <span id="count">0</span>
-    <span id="conn">连接中…</span>
+    <span id="conn">connecting…</span>
   </header>
   <div id="empty">
     <div class="big">◫</div>
-    <div>暂无活动会话</div>
-    <p>在项目目录运行 <code>tlive run claude</code> 开始</p>
+    <div>No active sessions</div>
+    <p>Run <code>tlive run claude</code> in a project directory to begin</p>
   </div>
   <div id="grid"></div>
   <script src="/dashboard.js"></script>

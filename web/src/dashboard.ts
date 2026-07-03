@@ -48,7 +48,7 @@ function connect(): void {
   const sock = new WebSocket(wsUrl());
   ws = sock;
   sock.onopen = () => {
-    retry = 0; conn.textContent = '已连接'; conn.className = 'up';
+    retry = 0; conn.textContent = 'live'; conn.className = 'up';
     // Reconcile after (re)connect: frames missed while disconnected (e.g. a
     // session-remove) would otherwise leave ghost cards forever.
     void reconcile();
@@ -62,7 +62,7 @@ function connect(): void {
   };
   sock.onclose = () => {
     if (ws === sock) ws = null;
-    conn.textContent = '重连中…'; conn.className = 'down';
+    conn.textContent = 'reconnecting…'; conn.className = 'down';
     retry = Math.min(retry + 1, 6);
     setTimeout(connect, 500 * retry);
   };
@@ -91,11 +91,11 @@ function fmtDur(ms: number): string {
 function staleness(s: SessionView): string {
   if (s.status !== 'waiting-approval' && s.status !== 'waiting-input') return '';
   const ms = Date.now() - s.lastActivityAt;
-  return ms >= 60000 ? `⏱ 卡住 ${fmtDur(ms)}` : '';
+  return ms >= 60000 ? `⏱ stuck ${fmtDur(ms)}` : '';
 }
 
 const STATUS_LABEL: Record<Status, string> = {
-  'active': '运行中', 'idle': '空闲', 'waiting-approval': '待审批', 'waiting-input': '等回复',
+  'active': 'running', 'idle': 'idle', 'waiting-approval': 'needs approval', 'waiting-input': 'awaiting reply',
 };
 
 function esc(t: string): string {
@@ -230,12 +230,12 @@ function card(s: SessionView): HTMLElement {
   } else if (s.lastMessage) {
     const m = document.createElement('div');
     m.className = 'msg';
-    m.innerHTML = `<span class="k">最后回复:</span> ${esc(s.lastMessage)}`;
+    m.innerHTML = `<span class="k">last:</span> ${esc(s.lastMessage)}`;
     el.appendChild(m);
   } else if (s.lastPrompt) {
     const m = document.createElement('div');
     m.className = 'msg';
-    m.innerHTML = `<span class="k">最后输入:</span> ${esc(s.lastPrompt)}`;
+    m.innerHTML = `<span class="k">prompt:</span> ${esc(s.lastPrompt)}`;
     el.appendChild(m);
   }
 
@@ -245,15 +245,15 @@ function card(s: SessionView): HTMLElement {
   if (s.pending) {
     const rid = s.pending.requestId;
     const tool = s.pending.toolName;
-    const ok = document.createElement('button'); ok.className = 'ok'; ok.textContent = '✅ 允许';
+    const ok = document.createElement('button'); ok.className = 'ok'; ok.textContent = '✅ Allow';
     ok.onclick = () => send({ type: 'approve', requestId: rid, approved: true });
-    const no = document.createElement('button'); no.className = 'no'; no.textContent = '❌ 拒绝';
+    const no = document.createElement('button'); no.className = 'no'; no.textContent = '❌ Deny';
     no.onclick = () => send({ type: 'approve', requestId: rid, approved: false });
     actions.append(ok, no);
     if (tool) {
       const always = document.createElement('button'); always.className = 'ok';
-      always.textContent = `✅ 总是允许 ${tool}`;
-      always.title = '本次放行,且 daemon 重启前该工具自动允许';
+      always.textContent = `✅ Always allow ${tool}`;
+      always.title = 'Allow now AND auto-allow this tool until the daemon restarts';
       always.onclick = () => send({ type: 'approve', requestId: rid, approved: true, alwaysAllowTool: tool });
       actions.append(always);
     }
@@ -261,8 +261,8 @@ function card(s: SessionView): HTMLElement {
 
   const mute = document.createElement('button');
   mute.className = s.muted ? 'on' : '';
-  mute.textContent = s.muted ? '🔔 取消静音' : '🔕 静音';
-  mute.title = '静音后该会话的审批卡与通知不再发到 IM';
+  mute.textContent = s.muted ? '🔔' : '🔕';
+  mute.title = s.muted ? 'Unmute: resume IM cards/notifications for this session' : 'Mute: stop sending this session\'s IM cards/notifications';
   mute.onclick = () => send({ type: 'mute', id: s.id, muted: !s.muted });
   actions.appendChild(mute);
 
@@ -270,7 +270,7 @@ function card(s: SessionView): HTMLElement {
     // 📎 upload a file → inject its inbox path into the session's pty
     const clip = document.createElement('button');
     clip.textContent = '📎';
-    clip.title = '发送文件/图片到该会话(上传后注入路径)';
+    clip.title = 'Send a file/photo to this session (uploads, then types the path)';
     clip.onclick = () => {
       const input = document.createElement('input');
       input.type = 'file'; input.multiple = true;
@@ -292,7 +292,7 @@ function card(s: SessionView): HTMLElement {
     link.className = 'term';
     link.href = `/s/${encodeURIComponent(s.id)}?token=${encodeURIComponent(token)}`;
     link.target = '_blank'; link.rel = 'noopener';
-    const b = document.createElement('button'); b.textContent = '🖥 终端';
+    const b = document.createElement('button'); b.textContent = '🖥 Terminal';
     link.appendChild(b);
     actions.appendChild(link);
   }
@@ -303,8 +303,8 @@ function card(s: SessionView): HTMLElement {
     const row = document.createElement('div');
     row.className = 'reply';
     const input = document.createElement('input');
-    input.placeholder = '回复以继续会话…';
-    const btn = document.createElement('button'); btn.className = 'ok'; btn.textContent = '发送';
+    input.placeholder = 'reply to continue…';
+    const btn = document.createElement('button'); btn.className = 'ok'; btn.textContent = 'Send';
     const fire = () => { const t = input.value.trim(); if (t) { send({ type: 'reply', requestId: cid, text: t }); input.value = ''; } };
     btn.onclick = fire;
     input.onkeydown = (e) => { if (e.key === 'Enter') fire(); };

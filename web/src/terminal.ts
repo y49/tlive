@@ -63,7 +63,7 @@ function applyScale(): void {
     return;
   }
   if (s < 0.995) {
-    hint.textContent = `${term.cols}×${term.rows}(缩放 ${Math.round(s * 100)}%)— 输入即适配本机`;
+    hint.textContent = `${term.cols}×${term.rows} (scaled ${Math.round(s * 100)}%) — type to fit this device`;
     hint.style.display = 'block';
   } else {
     hint.style.display = 'none';
@@ -75,6 +75,7 @@ function applyScale(): void {
 // viewport so the key bar sits right above the keyboard and the grid re-fits.
 const app = document.getElementById('app') as HTMLElement;
 const vv = window.visualViewport;
+let onVvSettled: (() => void) | null = null;
 let lastSent = { cols: 0, rows: 0 };
 /** Publish this device's CURRENT ideal grid to the host (throttled to changes).
  *  Doesn't steal authority — it applies when we type. */
@@ -84,8 +85,14 @@ function sendIdeal(): void {
   lastSent = d;
   send(encodeResize(d.cols, d.rows));
 }
+// Pinch-zoom fights the visual-viewport sync (layout thrash → flicker); the
+// terminal has its own A± font controls, so page zoom is disabled outright.
+document.addEventListener('touchmove', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+
 if (vv) {
   const sync = (): void => {
+    // Mid-pinch (some browsers still report scale≠1 transiently): don't thrash layout.
+    if (vv.scale && Math.abs(vv.scale - 1) > 0.01) return;
     app.style.height = `${vv.height}px`;
     app.style.transform = `translateY(${vv.offsetTop}px)`; // counter iOS auto-scroll
     window.scrollTo(0, 0);
@@ -93,6 +100,7 @@ if (vv) {
     // Keyboard open/close changes the visual viewport WITHOUT a window resize —
     // refresh our ideal size so the next keystroke reflows into the visible area.
     sendIdeal();
+    onVvSettled?.(); // mode logic hooks in later (declared below)
   };
   vv.addEventListener('resize', sync);
   vv.addEventListener('scroll', sync);
@@ -162,18 +170,18 @@ function showEnded(): void {
     + 'align-items:center;justify-content:center;background:rgba(0,0,0,.82);color:#e6e6e6;'
     + 'font:15px ui-monospace,Menlo,monospace;text-align:center;padding:24px;';
   const msg = document.createElement('div');
-  msg.textContent = '⏹ 会话已结束';
+  msg.textContent = '⏹ Session ended';
   const sub = document.createElement('div');
   sub.style.cssText = 'color:#9ca3af;font-size:13px;';
   const back = document.createElement('a');
   back.href = `/?token=${encodeURIComponent(token)}`;
-  back.textContent = '返回会话列表';
+  back.textContent = 'Back to sessions';
   back.style.cssText = 'color:#93c5fd;font-size:14px;';
   overlay.append(msg, sub, back);
   document.body.appendChild(overlay);
   let left = 5;
   const tick = (): void => {
-    sub.textContent = `${left} 秒后自动返回会话列表`;
+    sub.textContent = `returning to the list in ${left}s`;
     if (left-- <= 0) { location.href = back.href; return; }
     setTimeout(tick, 1000);
   };
@@ -193,7 +201,7 @@ window.addEventListener('resize', () => {
 async function uploadAndType(files: FileList | File[]): Promise<void> {
   const paths: string[] = [];
   for (const f of Array.from(files)) {
-    hint.textContent = `⬆ 上传 ${f.name}…`;
+    hint.textContent = `⬆ uploading ${f.name}…`;
     hint.style.display = 'block';
     try {
       const res = await fetch(`/api/upload?name=${encodeURIComponent(f.name || 'pasted.png')}&token=${encodeURIComponent(token)}`, {
@@ -204,7 +212,7 @@ async function uploadAndType(files: FileList | File[]): Promise<void> {
     } catch { /* ignore this file */ }
   }
   hint.style.display = 'none';
-  if (!paths.length) { hint.textContent = '上传失败'; hint.style.display = 'block'; setTimeout(() => { hint.style.display = 'none'; }, 2000); return; }
+  if (!paths.length) { hint.textContent = 'upload failed'; hint.style.display = 'block'; setTimeout(() => { hint.style.display = 'none'; }, 2000); return; }
   // bracketed paste (no trailing Enter — the user reviews before submitting)
   send(encodeData(enc.encode(`\x1b[200~${paths.join(' ')}\x1b[201~`)));
   term.focus();
@@ -268,7 +276,8 @@ const bar = document.getElementById('bar') as HTMLElement;
 }
 { // back to the session list
   const b = document.createElement('button');
-  b.textContent = '☰ 列表';
+  b.textContent = '☰';
+  b.title = 'Session list';
   b.addEventListener('click', () => { location.href = `/?token=${encodeURIComponent(token)}`; });
   bar.appendChild(b);
 }
@@ -276,12 +285,14 @@ const bar = document.getElementById('bar') as HTMLElement;
 // xterm swallows every touch (tap → focus → keyboard; long-press select dies).
 // View mode overlays a shield: taps do nothing, keyboard stays down, the key
 // bar still works (frames don't need focus). Touch devices default to VIEW.
+const COARSE = matchMedia('(pointer: coarse)').matches;
 const modeBtn = document.createElement('button');
 let shield: HTMLElement | null = null;
 function setMode(input: boolean): void {
   if (input) {
     shield?.remove(); shield = null;
-    modeBtn.textContent = '👁 查看';
+    modeBtn.textContent = '👁';
+    modeBtn.title = 'View mode (dismiss keyboard)';
     term.focus();
   } else {
     if (!shield) {
@@ -289,9 +300,18 @@ function setMode(input: boolean): void {
       shield.id = 'shield';
       shield.style.touchAction = 'none';
       attachTouchScroll(shield);
+      // double-tap the screen to start typing (the visible affordance is the ⌨ key)
+      let lastTap = 0;
+      shield.addEventListener('touchend', (e) => {
+        const now = Date.now();
+        if (now - lastTap < 350 && e.changedTouches.length === 1) { e.preventDefault(); setMode(true); }
+        lastTap = now;
+      });
+      shield.addEventListener('dblclick', () => setMode(true));
       app.appendChild(shield);
     }
-    modeBtn.textContent = '⌨ 输入';
+    modeBtn.textContent = '⌨';
+    modeBtn.title = 'Input mode (double-tap the screen also works)';
     term.blur();
     (document.activeElement as HTMLElement | null)?.blur?.();
   }
@@ -324,7 +344,8 @@ function attachTouchScroll(el: HTMLElement): void {
 }
 { // copy the current screen text (clipboard API needs HTTPS → selectable modal)
   const b = document.createElement('button');
-  b.textContent = '⎘ 复制';
+  b.textContent = '⧉';
+  b.title = 'Copy screen text';
   const modal = document.getElementById('copym') as HTMLElement;
   const ta = modal.querySelector('textarea') as HTMLTextAreaElement;
   (document.getElementById('copym-close') as HTMLElement).addEventListener('click', () => modal.classList.remove('open'));
@@ -346,7 +367,12 @@ for (const [label, seq] of BAR) {
   bar.appendChild(b);
 }
 // touch devices start in VIEW mode (no keyboard until you ask); desktops in INPUT
-setMode(!matchMedia('(pointer: coarse)').matches);
+setMode(!COARSE);
+// Keyboard dismissed by the system (not via our toggle) → drop back to view
+// mode on touch devices so stray taps don't summon it again.
+onVvSettled = () => {
+  if (COARSE && !shield && vv && vv.height >= window.innerHeight * 0.9) setMode(false);
+};
 
 { // font-size controls (persisted); resizing re-fits and re-requests our ideal grid
   const sp = document.createElement('div');
