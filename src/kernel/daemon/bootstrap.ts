@@ -36,6 +36,16 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const cfg = loadConfig(opts.home);
   const startedAt = Date.now();
 
+  // Reap IM inbox attachments older than 48h (downloaded photos/files for injection).
+  try {
+    const inbox = join(opts.home, 'inbox');
+    const { readdirSync, statSync, unlinkSync } = await import('node:fs');
+    for (const f of readdirSync(inbox)) {
+      const p = join(inbox, f);
+      if (Date.now() - statSync(p).mtimeMs > 48 * 3600_000) unlinkSync(p);
+    }
+  } catch { /* no inbox yet */ }
+
   let muted = false;
   const policyState: PolicyState = { trustUntilRevoked: false, allowTools: new Set<string>() };
 

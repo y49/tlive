@@ -199,3 +199,49 @@ describe('reply-to routing & injection', () => {
     expect(permAnswer).toHaveBeenCalledWith('rid-1', true);
   });
 });
+
+describe('attachment injection', () => {
+  it('quoted reply with attachments injects caption + local paths', async () => {
+    const inject = vi.fn().mockResolvedValue(undefined);
+    const msgs: Array<{ kind: string; text?: string }> = [];
+    const h = new InboundHandler(baseDeps({
+      imBy: () => makeAdapter(msgs),
+      resolveReply: () => '/repo',
+      sessionInfo: () => ({ kind: 'wrapped' as const, label: 'l', sockPath: '/s.sock' }),
+      inject,
+    }));
+    await h.handle(envelope({
+      text: '看看这张报错截图',
+      replyToMessageId: 'q1',
+      attachments: [{ name: 'err.png', mime: 'image/png', localPath: '/home/u/.tlive/inbox/ab-err.png', sizeBytes: 12345 }],
+    }));
+    expect(inject).toHaveBeenCalledWith('/s.sock', '看看这张报错截图\n/home/u/.tlive/inbox/ab-err.png');
+    expect(msgs.some((m) => m.text?.includes('1 个附件'))).toBe(true);
+  });
+
+  it('attachment-only message (no caption) still injects the path, skips continue', async () => {
+    const inject = vi.fn().mockResolvedValue(undefined);
+    const answer = vi.fn().mockReturnValue(true);
+    const h = new InboundHandler(baseDeps({
+      imBy: () => makeAdapter([]),
+      resolveReply: () => '/repo',
+      sessionInfo: () => ({ kind: 'wrapped' as const, label: 'l', sockPath: '/s.sock', continueId: 'c1' }),
+      continueBroker: { answer, request: vi.fn(), onRequest: vi.fn() } as never,
+      inject,
+    }));
+    await h.handle(envelope({
+      text: '',
+      replyToMessageId: 'q1',
+      attachments: [{ name: 'a.png', mime: 'image/png', localPath: '/inbox/a.png', sizeBytes: 1 }],
+    }));
+    expect(answer).not.toHaveBeenCalled(); // empty continue reply is meaningless
+    expect(inject).toHaveBeenCalledWith('/s.sock', '/inbox/a.png');
+  });
+
+  it('empty text without attachments is dropped silently', async () => {
+    const msgs: Array<{ kind: string; text?: string }> = [];
+    const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter(msgs) }));
+    await h.handle(envelope({ text: '' }));
+    expect(msgs).toHaveLength(0);
+  });
+});

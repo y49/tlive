@@ -10,6 +10,10 @@
 // should be verified against a live Feishu app (no creds available in CI).
 
 import { Client, WSClient, EventDispatcher } from '@larksuiteoapi/node-sdk';
+import { mkdirSync } from 'node:fs';
+import { join, basename } from 'node:path';
+import { homedir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import type { IMAdapter, IncomingEnvelope, OutgoingMessage } from '../../kernel/contracts/im-adapter.js';
 
 export interface FeishuAdapterOpts {
@@ -53,6 +57,22 @@ export class FeishuAdapter implements IMAdapter {
 
   constructor(private opts: FeishuAdapterOpts) {}
 
+  /** Download an inbound message resource (image/file) to ~/.tlive/inbox.
+   *  NOTE: messageResource.get streaming path is doc-derived — untested live. */
+  private async downloadToInbox(messageId: string, fileKey: string, type: 'image' | 'file', name: string): Promise<string> {
+    if (!this.client) throw new Error('feishu not connected');
+    const res = await this.client.im.v1.messageResource.get({
+      path: { message_id: messageId, file_key: fileKey },
+      params: { type },
+    });
+    const inbox = join(process.env.TLIVE_HOME ?? join(homedir(), '.tlive'), 'inbox');
+    mkdirSync(inbox, { recursive: true });
+    const dest = join(inbox, `${randomUUID().slice(0, 8)}-${basename(name)}`);
+    // lark SDK responses expose writeFile for binary payloads
+    await (res as unknown as { writeFile: (p: string) => Promise<void> }).writeFile(dest);
+    return dest;
+  }
+
   async start(): Promise<void> {
     if (this.connected === 'connected') return;
     this.client = new Client({ appId: this.opts.appId, appSecret: this.opts.appSecret });
@@ -61,13 +81,26 @@ export class FeishuAdapter implements IMAdapter {
     dispatcher.register({
       'im.message.receive_v1': async (data: unknown) => {
         if (!this.inboundHandler) return;
-        const d = data as { event: { sender: { sender_id: { user_id: string } }; message: { message_id: string; chat_id: string; content: string; create_time: string; parent_id?: string; root_id?: string } } };
+        const d = data as { event: { sender: { sender_id: { user_id: string } }; message: { message_id: string; chat_id: string; content: string; create_time: string; message_type?: string; parent_id?: string; root_id?: string } } };
         const ev = d.event;
         // Fail-closed: only forward inbound from the configured chat.
         if (!this.opts.chatId || ev.message.chat_id !== this.opts.chatId) return;
-        // content is JSON like {"text":"..."}
+        // content is JSON: text → {"text"}; image → {"image_key"}; file → {"file_key","file_name"}
         let text = '';
-        try { text = (JSON.parse(ev.message.content) as { text?: string }).text ?? ''; } catch {}
+        let attachments: IncomingEnvelope['attachments'];
+        try {
+          const c = JSON.parse(ev.message.content) as { text?: string; image_key?: string; file_key?: string; file_name?: string };
+          text = c.text ?? '';
+          const key = c.image_key ?? c.file_key;
+          if (key) {
+            const isImage = !!c.image_key;
+            const name = c.file_name ?? (isImage ? `image-${key.slice(-8)}.png` : 'file');
+            try {
+              const localPath = await this.downloadToInbox(ev.message.message_id, key, isImage ? 'image' : 'file', name);
+              attachments = [{ name, mime: isImage ? 'image/png' : 'application/octet-stream', localPath, sizeBytes: 0 }];
+            } catch { /* skip failed downloads */ }
+          }
+        } catch { /* not JSON */ }
         // parent_id = the message this one replies to (Feishu "回复"); root_id as fallback.
         const replyTo = ev.message.parent_id ?? ev.message.root_id;
         this.inboundHandler({
@@ -76,6 +109,7 @@ export class FeishuAdapter implements IMAdapter {
           userId: ev.sender.sender_id.user_id,
           messageId: ev.message.message_id,
           text,
+          ...(attachments ? { attachments } : {}),
           ...(replyTo ? { replyToMessageId: replyTo } : {}),
           ts: Number(ev.message.create_time) || Date.now(),
         });

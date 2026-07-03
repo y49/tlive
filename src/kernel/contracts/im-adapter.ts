@@ -12,6 +12,9 @@ export interface IncomingEnvelope {
   messageId: string;
   text: string;
   replyToMessageId?: string;
+  /** Inbound photos/files, already downloaded by the adapter to a local path
+   *  (e.g. ~/.tlive/inbox/). Consumers see filesystem paths only. */
+  attachments?: Array<{ name: string; mime: string; localPath: string; sizeBytes: number }>;
   ts: number;
 }
 

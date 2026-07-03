@@ -42,6 +42,7 @@ export class InboundHandler {
 
   async handle(env: IncomingEnvelope): Promise<void> {
     if (!this.deps.senderGuard.allows(env.channel, env.userId)) return;
+    if (!env.text && !env.attachments?.length) return;
 
     if (env.text.startsWith('pause:')) {
       const requestId = env.text.slice('pause:'.length);
@@ -83,7 +84,7 @@ export class InboundHandler {
       return;
     }
 
-    const continueId = this.deps.takeLatestContinueId();
+    const continueId = env.text ? this.deps.takeLatestContinueId() : null;
     if (continueId) {
       const hit = this.deps.continueBroker.answer(continueId, env.text);
       if (hit) return;
@@ -119,7 +120,8 @@ export class InboundHandler {
       return;
     }
     // A pending Stop-continue is the official resume path — prefer it over injection.
-    if (s.continueId && this.deps.continueBroker.answer(s.continueId, env.text)) return;
+    // (Attachment-only messages skip this: an empty continue reply is meaningless.)
+    if (s.continueId && env.text && this.deps.continueBroker.answer(s.continueId, env.text)) return;
     if (s.kind === 'wrapped' && s.sockPath) {
       await this.injectTo(env, s.sockPath, s.label);
       return;
@@ -128,9 +130,15 @@ export class InboundHandler {
   }
 
   private async injectTo(env: IncomingEnvelope, sockPath: string, label: string): Promise<void> {
+    // Attachments arrive as local paths (downloaded by the adapter) — hand the
+    // agent the paths alongside the caption text; it reads them itself.
+    const paths = (env.attachments ?? []).map((a) => a.localPath);
+    const text = [env.text, ...paths].filter(Boolean).join('\n');
+    if (!text) return;
     try {
-      await this.deps.inject(sockPath, env.text);
-      await this.reply(env, { kind: 'text', text: `⌨ 已发送到 [${label}]` });
+      await this.deps.inject(sockPath, text);
+      const n = paths.length;
+      await this.reply(env, { kind: 'text', text: `⌨ 已发送到 [${label}]${n ? `(含 ${n} 个附件路径)` : ''}` });
     } catch {
       await this.reply(env, { kind: 'text', text: `[${label}] 注入失败:会话可能已退出。` });
     }
