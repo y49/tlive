@@ -15,11 +15,14 @@ export interface SessionMeta {
 export type IpcRequest =
   | { kind: 'daemon.status' }
   | { kind: 'daemon.stop' }
-  | { kind: 'hook.permission.request'; cwd: string; sessionId: string; toolName: string; input: unknown; permissionMode?: string }
+  // wrappedId: TLIVE_SESSION inherited by the hook process when the agent runs
+  // inside `tlive run` — routes hook traffic to that EXACT session card (so
+  // several wrapped sessions can share one cwd).
+  | { kind: 'hook.permission.request'; cwd: string; sessionId: string; toolName: string; input: unknown; permissionMode?: string; wrappedId?: string }
   | { kind: 'hook.permission.answer'; requestId: string; approved: boolean }
-  | { kind: 'hook.continue.request'; cwd: string; sessionId: string; context: string; lastMessage?: string }
-  | { kind: 'hook.event'; event: MonitorEvent }
-  | { kind: 'hook.notify'; cwd: string; sessionId: string; level: 'info' | 'warn' | 'error'; message: string }
+  | { kind: 'hook.continue.request'; cwd: string; sessionId: string; context: string; lastMessage?: string; wrappedId?: string }
+  | { kind: 'hook.event'; event: MonitorEvent; wrappedId?: string }
+  | { kind: 'hook.notify'; cwd: string; sessionId: string; level: 'info' | 'warn' | 'error'; message: string; wrappedId?: string }
   | { kind: 'session.register'; session: SessionMeta }
   | { kind: 'session.unregister'; id: string }
   | { kind: 'session.list' };

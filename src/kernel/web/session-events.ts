@@ -28,29 +28,31 @@ export function pidAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-export function applyMonitorEvent(sessions: SessionRegistry, evt: MonitorEvent): EventFrame {
+/** @param key registry key this event belongs to — the wrapped session's uuid
+ *  when the hook ran inside `tlive run` (TLIVE_SESSION), else the cwd. */
+export function applyMonitorEvent(sessions: SessionRegistry, evt: MonitorEvent, key = evt.cwd): EventFrame {
   switch (evt.event) {
     case 'activity':
-      return { type: 'session-upsert', session: sessions.upsert({ cwd: evt.cwd, status: 'active' }) };
+      return { type: 'session-upsert', session: sessions.upsert({ key, cwd: evt.cwd, status: 'active' }) };
     case 'attention':
       // lastMessage is reused for both Stop's last_assistant_message and Notification text —
       // a deliberate lightweight tradeoff; a distinct notificationText field is a later refinement.
-      return { type: 'session-upsert', session: sessions.upsert({ cwd: evt.cwd, status: 'waiting-input', lastMessage: evt.lastMessage ?? evt.message }) };
+      return { type: 'session-upsert', session: sessions.upsert({ key, cwd: evt.cwd, status: 'waiting-input', lastMessage: evt.lastMessage ?? evt.message }) };
     case 'prompt':
-      return { type: 'session-upsert', session: sessions.upsert({ cwd: evt.cwd, status: 'active', lastPrompt: evt.prompt }) };
+      return { type: 'session-upsert', session: sessions.upsert({ key, cwd: evt.cwd, status: 'active', lastPrompt: evt.prompt }) };
     case 'session-start':
-      return { type: 'session-upsert', session: sessions.upsert({ cwd: evt.cwd, kind: 'hook', status: 'idle' }) };
+      return { type: 'session-upsert', session: sessions.upsert({ key, cwd: evt.cwd, kind: 'hook', status: 'idle' }) };
     case 'session-end': {
-      const existing = sessions.get(evt.cwd);
+      const existing = sessions.get(key);
       if (existing?.kind === 'wrapped') {
         // Claude Code fires SessionEnd(reason="clear") on /clear WITHOUT exiting the process
         // (immediately followed by SessionStart). Do NOT remove a live wrapped session —
         // downgrade it to idle and clear pending; session.unregister(uuid) removes it on exit.
-        const session = sessions.upsert({ cwd: evt.cwd, status: 'idle', pending: null });
+        const session = sessions.upsert({ key, cwd: evt.cwd, status: 'idle', pending: null });
         return { type: 'session-upsert', session };
       }
-      const removed = sessions.remove(evt.cwd);
-      return { type: 'session-remove', id: removed?.id ?? evt.cwd };
+      const removed = sessions.remove(key);
+      return { type: 'session-remove', id: removed?.id ?? key };
     }
   }
 }

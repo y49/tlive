@@ -56,7 +56,7 @@ describe('applyMonitorEvent', () => {
     const r = new SessionRegistry();
     // register a wrapped session (tlive run)
     r.register({ id: 'u1', label: 'myapp', cmd: 'claude', cwd: '/w', pid: 1, sockPath: '/s.sock' });
-    const f = applyMonitorEvent(r, { event: 'session-end', cwd: '/w', sessionId: 's', reason: 'clear' });
+    const f = applyMonitorEvent(r, { event: 'session-end', cwd: '/w', sessionId: 's', reason: 'clear' }, 'u1');
     // returns upsert (not remove) — session survives
     expect(f.type).toBe('session-upsert');
     if (f.type === 'session-upsert') {
@@ -65,13 +65,13 @@ describe('applyMonitorEvent', () => {
       expect(f.session.sockPath).toBe('/s.sock');
     }
     // registry still has the session
-    const v = r.get('/w');
+    const v = r.get('u1');
     expect(v).toBeDefined();
     expect(v?.kind).toBe('wrapped');
     expect(v?.sockPath).toBe('/s.sock');
     // actual removal happens via unregister(metaId) — metaId→cwd mapping still intact
     r.unregister('u1');
-    expect(r.get('/w')).toBeUndefined();
+    expect(r.get('u1')).toBeUndefined();
   });
 
   it('session-end removes hook-kind session (not wrapped)', () => {
@@ -90,9 +90,9 @@ describe('sweepDeadSessions', () => {
     r.register({ id: 'u2', label: 'b', cmd: 'x', cwd: '/live', pid: 222, sockPath: '/b.sock' });
     r.upsert({ cwd: '/hook', kind: 'hook', status: 'active' }); // no pid — never swept
     const frames = sweepDeadSessions(r, (pid) => pid === 222);
-    expect(frames).toEqual([{ type: 'session-remove', id: '/dead' }]);
-    expect(r.get('/dead')).toBeUndefined();
-    expect(r.get('/live')).toBeDefined();
+    expect(frames).toEqual([{ type: 'session-remove', id: 'u1' }]);
+    expect(r.get('u1')).toBeUndefined();
+    expect(r.get('u2')).toBeDefined();
     expect(r.get('/hook')).toBeDefined();
   });
 });

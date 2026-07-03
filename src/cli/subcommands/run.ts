@@ -54,7 +54,7 @@ export async function runRun(argv: string[]): Promise<void> {
   // Banner BEFORE the pty attaches (raw mode + program output start after host.start()).
   const urls = resolveWebUrls(home);
   if (urls.enabled && urls.token) {
-    const sess = (base: string): string => base.replace('/?', `/s/${encodeURIComponent(cwd)}?`);
+    const sess = (base: string): string => base.replace('/?', `/s/${encodeURIComponent(id)}?`);
     process.stdout.write('\ntlive web UI:\n');
     if (urls.local) process.stdout.write(`  Local:    ${sess(urls.local)}\n`);
     if (urls.network) process.stdout.write(`  Network:  ${sess(urls.network)}\n`);

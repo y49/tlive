@@ -33,6 +33,9 @@ export async function runHook(argv: string[]): Promise<void> {
 
   const raw = await readStdin();
   const n = parseHookInput(event, raw);
+  // Inherited from a `tlive run` pty (like $TMUX): routes this hook's traffic
+  // to that exact session card, so several wrapped sessions can share one cwd.
+  const wrappedId = process.env.TLIVE_SESSION;
 
   try {
     if (n.event === 'approval-request') {
@@ -44,6 +47,7 @@ export async function runHook(argv: string[]): Promise<void> {
           toolName: n.toolName,
           input: n.input,
           permissionMode: n.permissionMode,
+          ...(wrappedId ? { wrappedId } : {}),
         },
         { timeoutMs: 590_000 },
       );
@@ -61,6 +65,7 @@ export async function runHook(argv: string[]): Promise<void> {
           sessionId: att.sessionId,
           context: att.message,
           ...(att.lastMessage ? { lastMessage: att.lastMessage } : {}),
+          ...(wrappedId ? { wrappedId } : {}),
         },
         { timeoutMs: 175_000 },
       );
@@ -72,7 +77,7 @@ export async function runHook(argv: string[]): Promise<void> {
     if (event === 'notification') {
       const att = n as { cwd: string; sessionId: string; message: string };
       await request(
-        { kind: 'hook.notify', cwd: att.cwd, sessionId: att.sessionId, level: 'info', message: att.message },
+        { kind: 'hook.notify', cwd: att.cwd, sessionId: att.sessionId, level: 'info', message: att.message, ...(wrappedId ? { wrappedId } : {}) },
         { timeoutMs: 4_000 },
       ).catch(() => undefined);
       process.stdout.write('{}');
@@ -81,7 +86,7 @@ export async function runHook(argv: string[]): Promise<void> {
 
     // post-tool-use / user-prompt-submit / session-start / session-end → monitoring
     await request(
-      { kind: 'hook.event', event: n as MonitorEvent },
+      { kind: 'hook.event', event: n as MonitorEvent, ...(wrappedId ? { wrappedId } : {}) },
       { timeoutMs: 4_000 },
     ).catch(() => undefined);
     process.stdout.write('{}');

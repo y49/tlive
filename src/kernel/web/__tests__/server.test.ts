@@ -42,7 +42,7 @@ describe('WebServer', () => {
 
     await new Promise<void>((resolve, reject) => {
       const t = setTimeout(() => reject(new Error('no echo')), 8000);
-      const ws = new WebSocket(`ws://127.0.0.1:${handle!.port}/ws/term/${encodeURIComponent(dir)}?token=secret`);
+      const ws = new WebSocket(`ws://127.0.0.1:${handle!.port}/ws/term/w1?token=secret`);
       const dec = new FrameDecoder();
       ws.on('open', () => {
         ws.send(encodeAttach(80, 24));

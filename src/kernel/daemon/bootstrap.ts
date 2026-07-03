@@ -64,6 +64,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const sessions = new SessionRegistry();
   const events = new EventHub();
 
+  /** Hook traffic → registry key: the wrapped session's uuid when the hook ran
+   *  inside `tlive run` (TLIVE_SESSION) and that session is registered; else cwd. */
+  const resolveKey = (cwd: string, wrappedId?: string): string =>
+    wrappedId && sessions.get(wrappedId) ? wrappedId : cwd;
+
   // IM messageId → session cwd, for reply-to routing (bounded; daemon-lifetime only).
   const msgToCwd = new Map<string, string>();
   const rememberMsg = (channel: string, messageId: string, cwd: string): void => {
@@ -140,11 +145,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     },
     renderCard: (req) => renderApprovalCard({ toolName: req.toolName, input: req.input }),
     onPending: ({ cwd, requestId, title, body, toolName }) => {
-      events.broadcast({ type: 'session-upsert', session: sessions.upsert({ cwd, status: 'waiting-approval', pending: { requestId, title, body, toolName } }) });
+      // `cwd` here is the resolved registry key (see resolveKey).
+      events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key: cwd, cwd, status: 'waiting-approval', pending: { requestId, title, body, toolName } }) });
     },
     onResolved: ({ cwd, requestId, decision }) => {
       // Non-approved outcomes (deny/defer) leave the session idle; only allow → active.
-      events.broadcast({ type: 'session-upsert', session: sessions.upsert({ cwd, status: decision === 'allow' ? 'active' : 'idle', pending: null }) });
+      events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key: cwd, cwd, status: decision === 'allow' ? 'active' : 'idle', pending: null }) });
       // Rewrite the IM cards to their outcome (buttons removed) — no zombie cards.
       const cards = sentCards.get(requestId);
       if (cards) {
@@ -164,7 +170,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   continueBroker.onRequest((req) => {
     latestContinueId = req.requestId;
     // Thread the continue requestId into the session so a dashboard client can reply to it.
-    events.broadcast({ type: 'session-upsert', session: sessions.upsert({ cwd: req.cwd, status: 'waiting-input', continueId: req.requestId }) });
+    events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key: req.cwd, cwd: req.cwd, status: 'waiting-input', continueId: req.requestId }) });
     if (muted || sessions.get(req.cwd)?.muted) return;
     for (const t of configuredChats()) {
       void sendToChat(t, { text: `⏸ ${req.context}\n回复本条以续跑 (id: ${req.requestId})`, cwd: req.cwd });
@@ -234,7 +240,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           setTimeout(() => { void shutdown(); }, 10).unref?.();
           return;
         case 'hook.permission.request': {
-          const r = await permissionRouter.requestPermission({ cwd: req.cwd, toolName: req.toolName, input: req.input, permissionMode: req.permissionMode });
+          const key = resolveKey(req.cwd, req.wrappedId);
+          const r = await permissionRouter.requestPermission({ cwd: key, toolName: req.toolName, input: req.input, permissionMode: req.permissionMode });
           reply({ kind: 'hook.permission.result', decision: r.decision });
           return;
         }
@@ -243,10 +250,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           reply({ kind: 'ack' });
           return;
         case 'hook.continue.request': {
-          events.broadcast({ type: 'session-upsert', session: sessions.upsert({ cwd: req.cwd, status: 'waiting-input', ...(req.lastMessage ? { lastMessage: req.lastMessage } : {}) }) });
-          const reply_text = await continueBroker.request({ cwd: req.cwd, context: req.context, timeoutSec: 170 });
+          const key = resolveKey(req.cwd, req.wrappedId);
+          events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'waiting-input', ...(req.lastMessage ? { lastMessage: req.lastMessage } : {}) }) });
+          const reply_text = await continueBroker.request({ cwd: key, context: req.context, timeoutSec: 170 });
           // Resolved (replied or timed out): clear the reply target; back to active if continuing, else idle.
-          events.broadcast({ type: 'session-upsert', session: sessions.upsert({ cwd: req.cwd, status: reply_text ? 'active' : 'idle', continueId: null }) });
+          events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: reply_text ? 'active' : 'idle', continueId: null }) });
           reply({ kind: 'hook.continue.result', reply: reply_text });
           return;
         }
@@ -254,12 +262,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           if (!muted) {
             await Promise.all(configuredChats().map((t) => sendToChat(t, { text: `[${req.level}] ${req.message}`, cwd: req.cwd })));
           }
-          events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.message }));
+          events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.message }, resolveKey(req.cwd, req.wrappedId)));
           reply({ kind: 'ack' });
           return;
         }
         case 'hook.event': {
-          events.broadcast(applyMonitorEvent(sessions, req.event));
+          events.broadcast(applyMonitorEvent(sessions, req.event, resolveKey(req.event.cwd, req.wrappedId)));
           reply({ kind: 'ack' });
           return;
         }

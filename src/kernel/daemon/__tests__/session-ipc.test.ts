@@ -27,7 +27,7 @@ describe('session.* over IPC', () => {
     expect(listed.kind).toBe('session.list');
     if (listed.kind === 'session.list') {
       expect(listed.sessions).toHaveLength(1);
-      expect(listed.sessions[0].id).toBe('/tmp');
+      expect(listed.sessions[0].id).toBe('s1');
       expect(listed.sessions[0].sockPath).toBe('/tmp/s1.sock');
     }
 

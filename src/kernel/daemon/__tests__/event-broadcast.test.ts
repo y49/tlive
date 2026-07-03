@@ -73,10 +73,10 @@ describe('daemon → /ws/events downstream broadcast', () => {
     h = await bootstrapDaemon({ home: tmp });
     const frames = await openEvents();
     await request({ kind: 'session.register', session: { id: 'u1', label: 'l', cmd: 'claude', cwd: '/repo/b', pid: 1, sockPath: '/s.sock' } }, { socketPath: sock, timeoutMs: 2000 });
-    const up = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/repo/b');
+    const up = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 'u1');
     expect(up.session.kind).toBe('wrapped');
     await request({ kind: 'session.unregister', id: 'u1' }, { socketPath: sock, timeoutMs: 2000 });
-    const rm = await waitFor(frames, (x) => x.type === 'session-remove' && x.id === '/repo/b');
+    const rm = await waitFor(frames, (x) => x.type === 'session-remove' && x.id === 'u1');
     expect(rm).toBeTruthy();
   });
 
@@ -249,6 +249,26 @@ describe('daemon → /ws/events downstream broadcast', () => {
     // next Edit request auto-allows without a card
     const r2 = await request({ kind: 'hook.permission.request', cwd: '/aa', sessionId: 's', toolName: 'Edit', input: {} }, { socketPath: sock, timeoutMs: 3000 });
     expect((r2 as { decision: string }).decision).toBe('allow');
+  });
+
+
+  it('hook events with wrappedId land on that exact card — two wrapped sessions share one cwd', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 } }));
+    h = await bootstrapDaemon({ home: tmp });
+    const frames = await openEvents();
+    // two wrapped sessions in the SAME cwd
+    await request({ kind: 'session.register', session: { id: 'w-a', label: 'claude', cmd: 'claude', cwd: '/same', pid: 1, sockPath: '/a.sock' } }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'session.register', session: { id: 'w-b', label: 'bash', cmd: 'bash', cwd: '/same', pid: 2, sockPath: '/b.sock' } }, { socketPath: sock, timeoutMs: 2000 });
+    // hook activity from INSIDE session w-a (TLIVE_SESSION → wrappedId)
+    await request({ kind: 'hook.event', event: { event: 'activity', cwd: '/same', sessionId: 's', toolName: 'Bash', result: {} }, wrappedId: 'w-a' }, { socketPath: sock, timeoutMs: 2000 });
+    const f = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 'w-a' && x.session.status === 'active');
+    expect(f.session.sockPath).toBe('/a.sock'); // merged into w-a, not w-b, no third card
+    const api = await fetch(`${new URL(h.webUrl!).origin}/api/sessions${new URL(h.webUrl!).search}`);
+    const arr = (await api.json()) as Array<Record<string, any>>;
+    expect(arr).toHaveLength(2); // still exactly two cards
+    // hook event WITHOUT wrappedId (bare claude in the same dir) → its own hook card
+    await request({ kind: 'hook.event', event: { event: 'activity', cwd: '/same', sessionId: 's', toolName: 'Read', result: {} } }, { socketPath: sock, timeoutMs: 2000 });
+    await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/same' && x.session.kind === 'hook');
   });
 
 });

@@ -1,10 +1,11 @@
 //
-// In-memory rich registry of AI-coding sessions, keyed/merged by cwd (id = cwd).
-// Unifies wrapped sessions (`tlive run`, has a pty sockPath) and hook-only
-// sessions (no pty, upserted from hook events). Vendor-neutral: no CC/Codex
-// field names appear here. Stores only current state per session — never
-// history/timelines. Staleness ("stuck Nm") is computed by the frontend from
-// lastActivityAt; this layer only stores the timestamp.
+// In-memory rich registry of AI-coding sessions.
+// Keying: wrapped sessions (`tlive run`) key by their run uuid — several may
+// share one cwd; hook-only sessions key by cwd (hooks carry nothing better).
+// Hook traffic from INSIDE a wrapped pty carries TLIVE_SESSION and is routed
+// to that exact card by the daemon. Vendor-neutral; stores only current state
+// per session — never history/timelines. Staleness ("stuck Nm") is computed
+// by the frontend from lastActivityAt; this layer only stores the timestamp.
 
 import { basename } from 'node:path';
 import type { SessionMeta } from '../ipc/protocol.js';
@@ -20,7 +21,7 @@ export interface PendingApproval {
 }
 
 export interface SessionView {
-  id: string; // = cwd
+  id: string; // wrapped: run uuid; hook-only: cwd
   label: string;
   cwd: string;
   kind: SessionKind;
@@ -37,6 +38,8 @@ export interface SessionView {
 }
 
 export interface UpsertPatch {
+  /** Registry key. Defaults to cwd (hook-only sessions). */
+  key?: string;
   cwd: string;
   label?: string;
   kind?: SessionKind;
@@ -53,16 +56,17 @@ export interface UpsertPatch {
 }
 
 export class SessionRegistry {
-  private byCwd = new Map<string, SessionView>();
-  private metaIdToCwd = new Map<string, string>();
+  private byKey = new Map<string, SessionView>();
 
-  /** Merge a patch into the session keyed by cwd; create it if absent. */
+  /** Merge a patch into the session under `key ?? cwd`; create it if absent. */
   upsert(patch: UpsertPatch): SessionView {
-    const prev = this.byCwd.get(patch.cwd);
+    const key = patch.key ?? patch.cwd;
+    const prev = this.byKey.get(key);
+    const cwd = prev?.cwd ?? patch.cwd; // the display cwd never mutates after creation
     const next: SessionView = {
-      id: patch.cwd,
-      cwd: patch.cwd,
-      label: patch.label ?? prev?.label ?? (basename(patch.cwd) || patch.cwd),
+      id: key,
+      cwd,
+      label: patch.label ?? prev?.label ?? (basename(cwd) || cwd),
       kind: prev?.kind === 'wrapped' ? 'wrapped' : (patch.kind ?? prev?.kind ?? 'hook'),
       status: patch.status ?? prev?.status ?? 'idle',
       lastActivityAt: patch.lastActivityAt ?? Date.now(),
@@ -90,45 +94,42 @@ export class SessionRegistry {
     } else if (prev?.continueId !== undefined) {
       next.continueId = prev.continueId;
     }
-    this.byCwd.set(patch.cwd, next);
+    this.byKey.set(key, next);
     return next;
   }
 
   /** Toggle per-session mute; returns the updated view, or undefined if absent. */
   setMuted(id: string, muted: boolean): SessionView | undefined {
-    const prev = this.byCwd.get(id);
+    const prev = this.byKey.get(id);
     if (!prev) return undefined;
     const next = { ...prev, muted };
-    this.byCwd.set(id, next);
+    this.byKey.set(id, next);
     return next;
   }
 
-  /** Remove by id (= cwd). Returns the removed view for broadcast, or undefined. */
+  /** Remove by id. Returns the removed view for broadcast, or undefined. */
   remove(id: string): SessionView | undefined {
-    const v = this.byCwd.get(id);
+    const v = this.byKey.get(id);
     if (!v) return undefined;
-    this.byCwd.delete(id);
-    for (const [mid, cwd] of this.metaIdToCwd) if (cwd === id) this.metaIdToCwd.delete(mid);
+    this.byKey.delete(id);
     return v;
   }
 
-  /** Wrapped session (`tlive run`): upsert kind=wrapped + sockPath, keyed by cwd. */
+  /** Wrapped session (`tlive run`): keyed by its run uuid — several wrapped
+   *  sessions may share one cwd. */
   register(meta: SessionMeta): SessionView {
-    this.metaIdToCwd.set(meta.id, meta.cwd);
-    return this.upsert({ cwd: meta.cwd, label: meta.label, kind: 'wrapped', sockPath: meta.sockPath, pid: meta.pid, status: 'active' });
+    return this.upsert({ key: meta.id, cwd: meta.cwd, label: meta.label, kind: 'wrapped', sockPath: meta.sockPath, pid: meta.pid, status: 'active' });
   }
 
   /** `tlive run` exit: remove the wrapped session by its (uuid) meta id. */
   unregister(metaId: string): SessionView | undefined {
-    const cwd = this.metaIdToCwd.get(metaId);
-    if (cwd === undefined) return undefined;
-    return this.remove(cwd);
+    return this.remove(metaId);
   }
 
   get(id: string): SessionView | undefined {
-    return this.byCwd.get(id);
+    return this.byKey.get(id);
   }
   list(): SessionView[] {
-    return [...this.byCwd.values()];
+    return [...this.byKey.values()];
   }
 }
