@@ -29,6 +29,7 @@ const sessions = new Map<string, SessionView>();
 const grid = document.getElementById('grid') as HTMLElement;
 const empty = document.getElementById('empty') as HTMLElement;
 const conn = document.getElementById('conn') as HTMLElement;
+const count = document.getElementById('count') as HTMLElement;
 
 let ws: WebSocket | null = null;
 let retry = 0;
@@ -45,7 +46,7 @@ function send(action: Action): void {
 function connect(): void {
   const sock = new WebSocket(wsUrl());
   ws = sock;
-  sock.onopen = () => { retry = 0; conn.textContent = 'live'; conn.className = 'up'; };
+  sock.onopen = () => { retry = 0; conn.textContent = '已连接'; conn.className = 'up'; };
   sock.onmessage = (ev) => {
     let f: Frame;
     try { f = JSON.parse(String(ev.data)); } catch { return; }
@@ -55,7 +56,7 @@ function connect(): void {
   };
   sock.onclose = () => {
     if (ws === sock) ws = null;
-    conn.textContent = 'reconnecting…'; conn.className = 'down';
+    conn.textContent = '重连中…'; conn.className = 'down';
     retry = Math.min(retry + 1, 6);
     setTimeout(connect, 500 * retry);
   };
@@ -72,18 +73,45 @@ async function snapshot(): Promise<void> {
   } catch { /* ws will populate */ }
 }
 
+function fmtDur(ms: number): string {
+  const m = Math.floor(ms / 60000);
+  return m >= 60 ? `${Math.floor(m / 60)}h${m % 60 ? `${m % 60}m` : ''}` : `${m}m`;
+}
+
 function staleness(s: SessionView): string {
   if (s.status !== 'waiting-approval' && s.status !== 'waiting-input') return '';
-  const mins = Math.floor((Date.now() - s.lastActivityAt) / 60000);
-  return mins >= 1 ? `⏱ stuck ${mins}m` : '';
+  const ms = Date.now() - s.lastActivityAt;
+  return ms >= 60000 ? `⏱ 卡住 ${fmtDur(ms)}` : '';
 }
 
 const STATUS_LABEL: Record<Status, string> = {
-  'active': 'active', 'idle': 'idle', 'waiting-approval': 'needs approval', 'waiting-input': 'waiting reply',
+  'active': '运行中', 'idle': '空闲', 'waiting-approval': '待审批', 'waiting-input': '等回复',
 };
 
 function esc(t: string): string {
   const d = document.createElement('div'); d.textContent = t; return d.innerHTML;
+}
+
+/** Render the markdown-ish approval body (fences + diff lines) with colors. */
+function renderApprovalBody(body: string): string {
+  const out: string[] = [];
+  let fence: string | null = null; // 'diff' | 'bash' | other
+  for (const raw of body.split('\n')) {
+    const m = raw.match(/^```(\w*)/);
+    if (m) { fence = fence === null ? (m[1] || 'txt') : null; continue; }
+    const line = esc(raw);
+    if (fence === 'diff') {
+      if (raw.startsWith('+')) { out.push(`<span class="d-add">${line}</span>`); continue; }
+      if (raw.startsWith('-')) { out.push(`<span class="d-del">${line}</span>`); continue; }
+      if (raw.startsWith('@@')) { out.push(`<span class="d-hunk">${line}</span>`); continue; }
+    } else if (fence === 'bash') {
+      out.push(`<span class="d-cmd">${line}</span>`); continue;
+    }
+    if (raw.includes('⚠️')) { out.push(`<span class="d-del">${line.replace(/\*\*/g, '')}</span>`); continue; }
+    // `inline code` outside fences → dim
+    out.push(line.replace(/`([^`]+)`/g, '<span class="k">$1</span>'));
+  }
+  return out.join('\n');
 }
 
 // ---- live terminal previews (wrapped sessions) --------------------------------
@@ -154,7 +182,7 @@ function disposePreview(id: string): void {
 
 function card(s: SessionView): HTMLElement {
   const el = document.createElement('div');
-  el.className = 'card';
+  el.className = `card st-${s.status}`;
 
   const top = document.createElement('div');
   top.className = 'top';
@@ -165,10 +193,12 @@ function card(s: SessionView): HTMLElement {
     (badge ? `<span class="stale">${badge}</span>` : '');
   el.appendChild(top);
 
-  const cwd = document.createElement('div');
-  cwd.className = 'cwd';
-  cwd.textContent = s.pid !== undefined ? `PID ${s.pid} · ${s.cwd}` : s.cwd;
-  el.appendChild(cwd);
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.innerHTML =
+    (s.pid !== undefined ? `<span class="pid">PID ${s.pid}</span>` : '') +
+    `<span class="path" title="${esc(s.cwd)}">${esc(s.cwd)}</span>`;
+  el.appendChild(meta);
 
   if (s.kind === 'wrapped' && s.sockPath) {
     const pv = previews.get(s.id) ?? createPreview(s.id);
@@ -178,18 +208,18 @@ function card(s: SessionView): HTMLElement {
 
   if (s.pending) {
     const m = document.createElement('div');
-    m.className = 'msg';
-    m.innerHTML = `<span class="k">${esc(s.pending.title)}</span>\n${esc(s.pending.body)}`;
+    m.className = 'msg approval';
+    m.innerHTML = `<span class="k">${esc(s.pending.title)}</span>\n${renderApprovalBody(s.pending.body)}`;
     el.appendChild(m);
   } else if (s.lastMessage) {
     const m = document.createElement('div');
     m.className = 'msg';
-    m.innerHTML = `<span class="k">last:</span> ${esc(s.lastMessage)}`;
+    m.innerHTML = `<span class="k">最后回复:</span> ${esc(s.lastMessage)}`;
     el.appendChild(m);
   } else if (s.lastPrompt) {
     const m = document.createElement('div');
     m.className = 'msg';
-    m.innerHTML = `<span class="k">prompt:</span> ${esc(s.lastPrompt)}`;
+    m.innerHTML = `<span class="k">最后输入:</span> ${esc(s.lastPrompt)}`;
     el.appendChild(m);
   }
 
@@ -198,16 +228,17 @@ function card(s: SessionView): HTMLElement {
 
   if (s.pending) {
     const rid = s.pending.requestId;
-    const ok = document.createElement('button'); ok.className = 'ok'; ok.textContent = '✅ Allow';
+    const ok = document.createElement('button'); ok.className = 'ok'; ok.textContent = '✅ 允许';
     ok.onclick = () => send({ type: 'approve', requestId: rid, approved: true });
-    const no = document.createElement('button'); no.className = 'no'; no.textContent = '❌ Deny';
+    const no = document.createElement('button'); no.className = 'no'; no.textContent = '❌ 拒绝';
     no.onclick = () => send({ type: 'approve', requestId: rid, approved: false });
     actions.append(ok, no);
   }
 
   const mute = document.createElement('button');
   mute.className = s.muted ? 'on' : '';
-  mute.textContent = s.muted ? '🔔 Unmute' : '🔕 Mute';
+  mute.textContent = s.muted ? '🔔 取消静音' : '🔕 静音';
+  mute.title = '静音后该会话的审批卡与通知不再发到 IM';
   mute.onclick = () => send({ type: 'mute', id: s.id, muted: !s.muted });
   actions.appendChild(mute);
 
@@ -216,7 +247,7 @@ function card(s: SessionView): HTMLElement {
     link.className = 'term';
     link.href = `/s/${encodeURIComponent(s.id)}?token=${encodeURIComponent(token)}`;
     link.target = '_blank'; link.rel = 'noopener';
-    const b = document.createElement('button'); b.textContent = '🖥 Terminal';
+    const b = document.createElement('button'); b.textContent = '🖥 终端';
     link.appendChild(b);
     actions.appendChild(link);
   }
@@ -227,8 +258,8 @@ function card(s: SessionView): HTMLElement {
     const row = document.createElement('div');
     row.className = 'reply';
     const input = document.createElement('input');
-    input.placeholder = 'reply to continue…';
-    const btn = document.createElement('button'); btn.className = 'ok'; btn.textContent = 'Send';
+    input.placeholder = '回复以继续会话…';
+    const btn = document.createElement('button'); btn.className = 'ok'; btn.textContent = '发送';
     const fire = () => { const t = input.value.trim(); if (t) { send({ type: 'reply', requestId: cid, text: t }); input.value = ''; } };
     btn.onclick = fire;
     input.onkeydown = (e) => { if (e.key === 'Enter') fire(); };
@@ -246,6 +277,7 @@ function render(): void {
   const list = [...sessions.values()].sort((a, b) =>
     RANK[a.status] - RANK[b.status] || b.lastActivityAt - a.lastActivityAt);
   empty.style.display = list.length ? 'none' : 'block';
+  count.textContent = String(list.length);
   grid.replaceChildren(...list.map(card));
   // Reap previews for sessions that no longer exist (or lost their pty).
   for (const id of [...previews.keys()]) {

@@ -12,7 +12,13 @@ const scaler = document.getElementById('scaler') as HTMLElement;
 const viewport = document.getElementById('viewport') as HTMLElement;
 const hint = document.getElementById('hint') as HTMLElement;
 
-const term = new Terminal({ cursorBlink: true, fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 14, theme: { background: '#000000' } });
+const savedFont = parseInt(localStorage.getItem('tlive-font') ?? '', 10);
+const term = new Terminal({
+  cursorBlink: true,
+  fontFamily: 'ui-monospace, Menlo, monospace',
+  fontSize: Number.isFinite(savedFont) && savedFont >= 8 && savedFont <= 28 ? savedFont : 14,
+  theme: { background: '#000000' },
+});
 const fit = new FitAddon();
 term.loadAddon(fit);
 term.open(termEl);
@@ -156,4 +162,26 @@ for (const [label, seq] of BAR) {
   b.textContent = label;
   b.addEventListener('click', (e) => { e.preventDefault(); send(encodeData(enc.encode(seq))); term.focus(); });
   bar.appendChild(b);
+}
+{ // font-size controls (persisted); resizing re-fits and re-requests our ideal grid
+  const sp = document.createElement('div');
+  sp.className = 'sp';
+  bar.appendChild(sp);
+  const setFont = (delta: number): void => {
+    const next = Math.min(28, Math.max(8, term.options.fontSize! + delta));
+    if (next === term.options.fontSize) return;
+    term.options.fontSize = next;
+    localStorage.setItem('tlive-font', String(next));
+    requestAnimationFrame(() => {
+      const d = idealDims();
+      send(encodeResize(d.cols, d.rows)); // if we hold authority, the pty reflows to the new cell grid
+      applyScale();
+    });
+  };
+  for (const [label, delta] of [['A−', -1], ['A+', 1]] as Array<[string, number]>) {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.addEventListener('click', (e) => { e.preventDefault(); setFont(delta); });
+    bar.appendChild(b);
+  }
 }

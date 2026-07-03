@@ -1,65 +1,118 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>tlive dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0d10" />
+  <title>tlive</title>
   <link rel="stylesheet" href="/dashboard.css" />
   <style>
-    .preview { height: 160px; overflow: hidden; border: 1px solid #1a1e25; border-radius: 6px;
-               background: #0d1015; cursor: pointer; position: relative; }
-    .preview:hover { border-color: #2a3038; }
-    .pv-scaler { transform-origin: top left; position: absolute; top: 0; left: 0; }
-  </style>
-  <style>
-    :root { color-scheme: dark; }
+    :root {
+      color-scheme: dark;
+      --bg: #0b0d10; --panel: #12161d; --panel2: #0d1015; --line: #1e232b; --line2: #2a3038;
+      --text: #e6e6e6; --dim: #8a94a6; --faint: #6b7280;
+      --green: #4ade80; --blue: #93c5fd; --amber: #fcd34d; --red: #f87171;
+      --r: 12px;
+    }
     * { box-sizing: border-box; }
-    html, body { margin: 0; height: 100%; }
-    body { background: #0b0d10; color: #e6e6e6;
-           font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    html, body { margin: 0; min-height: 100%; }
+    body { background: var(--bg); color: var(--text);
+           font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+           padding-bottom: env(safe-area-inset-bottom); }
+
     header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px;
-             padding: 12px 16px; background: #11141a; border-bottom: 1px solid #1e232b; }
-    header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .3px; }
-    #conn { margin-left: auto; font-size: 12px; color: #8a94a6; }
-    #conn.up { color: #4ade80; } #conn.down { color: #f87171; }
-    #grid { display: grid; gap: 12px; padding: 16px;
-            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
-    #empty { padding: 48px 16px; text-align: center; color: #6b7280; }
-    .card { background: #12161d; border: 1px solid #1e232b; border-radius: 10px; padding: 14px;
-            display: flex; flex-direction: column; gap: 10px; }
-    .card .top { display: flex; align-items: center; gap: 8px; }
-    .label { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .cwd { font-size: 11px; color: #6b7280; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .badge { flex: 0 0 auto; font-size: 11px; padding: 2px 8px; border-radius: 999px;
-             border: 1px solid transparent; }
-    .badge.active { color: #93c5fd; background: #172033; }
+             padding: calc(10px + env(safe-area-inset-top)) 18px 10px; background: rgba(13,16,21,.92);
+             backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+    header .logo { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; letter-spacing: .4px; }
+    header .logo .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green);
+                        box-shadow: 0 0 8px rgba(74,222,128,.7); }
+    #count { font-size: 11px; color: var(--dim); background: var(--panel); border: 1px solid var(--line);
+             border-radius: 999px; padding: 2px 9px; }
+    #conn { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); }
+    #conn::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--red); }
+    #conn.up::before { background: var(--green); }
+
+    #empty { padding: 72px 24px; text-align: center; color: var(--faint); }
+    #empty .big { font-size: 34px; margin-bottom: 12px; opacity: .5; }
+    #empty code { color: var(--dim); background: var(--panel); border: 1px solid var(--line);
+                  border-radius: 6px; padding: 2px 8px; }
+
+    #grid { display: grid; gap: 14px; padding: 16px;
+            grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr)); }
+
+    .card { position: relative; background: var(--panel); border: 1px solid var(--line);
+            border-radius: var(--r); padding: 14px 14px 12px 17px; display: flex; flex-direction: column; gap: 10px;
+            transition: border-color .15s; overflow: hidden; }
+    .card:hover { border-color: var(--line2); }
+    .card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+                    background: var(--faint); opacity: .55; }
+    .card.st-active::before { background: var(--blue); }
+    .card.st-waiting-approval::before { background: var(--red); opacity: 1; }
+    .card.st-waiting-input::before { background: var(--amber); opacity: 1; }
+    .card.st-waiting-approval { border-color: #7f1d1d; }
+
+    .top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .label { font-weight: 700; font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .badge { flex: 0 0 auto; font-size: 11px; padding: 2px 9px; border-radius: 999px; border: 1px solid transparent; }
+    .badge.active { color: var(--blue); background: #172033; }
     .badge.idle { color: #9ca3af; background: #1a1e25; }
     .badge.waiting-approval { color: #fca5a5; background: #2a1416; border-color: #7f1d1d; }
-    .badge.waiting-input { color: #fcd34d; background: #241d0a; }
-    .stale { margin-left: auto; font-size: 11px; color: #f59e0b; }
-    .msg { font-size: 12px; color: #c7ccd4; background: #0d1015; border: 1px solid #1a1e25;
-           border-radius: 6px; padding: 6px 8px; max-height: 84px; overflow: auto; white-space: pre-wrap;
+    .badge.waiting-input { color: var(--amber); background: #241d0a; }
+    .stale { margin-left: auto; flex: 0 0 auto; font-size: 12px; font-weight: 700; color: #f59e0b; }
+
+    .meta { display: flex; gap: 8px; align-items: center; font-size: 11px; color: var(--faint);
+            overflow: hidden; white-space: nowrap; }
+    .meta .pid { flex: 0 0 auto; color: var(--dim); background: var(--panel2); border: 1px solid var(--line);
+                 border-radius: 5px; padding: 1px 6px; }
+    .meta .path { overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+
+    .preview { height: 170px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px;
+               background: var(--panel2); cursor: pointer; position: relative; }
+    .preview:hover { border-color: var(--line2); }
+    .preview::after { content: '⛶ 打开终端'; position: absolute; right: 8px; bottom: 6px; font-size: 11px;
+                      color: var(--dim); background: rgba(13,16,21,.85); border: 1px solid var(--line);
+                      border-radius: 6px; padding: 2px 8px; opacity: 0; transition: opacity .15s; }
+    .preview:hover::after { opacity: 1; }
+    .pv-scaler { transform-origin: top left; position: absolute; top: 0; left: 0; }
+
+    .msg { font-size: 12.5px; color: #c7ccd4; background: var(--panel2); border: 1px solid var(--line);
+           border-radius: 8px; padding: 8px 10px; max-height: 132px; overflow: auto; white-space: pre-wrap;
            word-break: break-word; }
-    .msg .k { color: #6b7280; }
+    .msg .k { color: var(--faint); }
+    .msg.approval { border-color: #3f1d1d; max-height: 240px; }
+    .msg .d-add { color: #86efac; } .msg .d-del { color: #fca5a5; } .msg .d-hunk { color: #67e8f9; }
+    .msg .d-cmd { color: #fde68a; }
+
     .actions { display: flex; flex-wrap: wrap; gap: 8px; }
-    button { font: inherit; font-size: 12px; padding: 6px 12px; border-radius: 7px; cursor: pointer;
-             border: 1px solid #2a3038; background: #1a1f27; color: #e6e6e6; }
+    button { font: inherit; font-size: 12.5px; padding: 7px 14px; border-radius: 8px; cursor: pointer;
+             border: 1px solid var(--line2); background: #1a1f27; color: var(--text); transition: background .12s; }
     button:hover { background: #222834; }
+    button:active { transform: translateY(1px); }
     button.ok { border-color: #14532d; background: #0f2417; color: #86efac; }
+    button.ok:hover { background: #143020; }
     button.no { border-color: #7f1d1d; background: #241113; color: #fca5a5; }
+    button.no:hover { background: #2e1517; }
     button.on { border-color: #3b4252; background: #2a3140; color: #cbd5e1; }
-    a.term { text-decoration: none; }
+    a.term { text-decoration: none; margin-left: auto; }
+
     .reply { display: flex; gap: 8px; }
-    .reply input { flex: 1 1 auto; min-width: 0; font: inherit; font-size: 12px; padding: 6px 8px;
-                   border-radius: 7px; border: 1px solid #2a3038; background: #0d1015; color: #e6e6e6; }
+    .reply input { flex: 1 1 auto; min-width: 0; font: inherit; font-size: 13px; padding: 8px 10px;
+                   border-radius: 8px; border: 1px solid var(--line2); background: var(--panel2); color: var(--text); }
+    .reply input:focus { outline: none; border-color: #3b4a63; }
+    .reply input::placeholder { color: var(--faint); }
   </style>
 </head>
 <body>
   <header>
-    <h1>tlive</h1>
-    <span id="conn" class="down">connecting…</span>
+    <div class="logo"><span class="dot"></span>tlive</div>
+    <span id="count">0</span>
+    <span id="conn">连接中…</span>
   </header>
-  <div id="empty">No active sessions yet.</div>
+  <div id="empty">
+    <div class="big">◫</div>
+    <div>暂无活动会话</div>
+    <p>在项目目录运行 <code>tlive run claude</code> 开始</p>
+  </div>
   <div id="grid"></div>
   <script src="/dashboard.js"></script>
 </body>

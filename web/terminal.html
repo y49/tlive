@@ -1,24 +1,32 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#000000" />
   <title>tlive terminal</title>
   <link rel="stylesheet" href="/terminal.css" />
   <style>
+    :root { --bar-h: calc(46px + env(safe-area-inset-bottom)); }
     html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
-    #viewport { position: absolute; inset: 0 0 44px 0; overflow: hidden; }
+    #viewport { position: absolute; inset: 0 0 var(--bar-h) 0; overflow: hidden; }
     #scaler { position: absolute; top: 0; left: 0; transform-origin: top left; }
     #term { display: inline-block; }
-    #hint { position: absolute; top: 6px; left: 50%; transform: translateX(-50%);
-            max-width: 92%; padding: 4px 10px; border-radius: 8px; background: rgba(20,20,20,.85);
-            color: #bbb; font: 12px ui-monospace, Menlo, monospace; white-space: nowrap;
-            overflow: hidden; text-overflow: ellipsis; display: none; pointer-events: none; z-index: 5; }
-    #bar { position: absolute; left: 0; right: 0; bottom: 0; height: 44px; display: flex; gap: 6px;
-           align-items: center; padding: 0 8px; background: #111; overflow-x: auto; }
-    #bar button { flex: 0 0 auto; height: 30px; min-width: 42px; border: 1px solid #333; border-radius: 6px;
-                  background: #1c1c1c; color: #ddd; font: 13px monospace; }
-    #bar button:active { background: #333; }
+    #hint { position: absolute; top: calc(6px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
+            max-width: 92%; padding: 5px 12px; border-radius: 999px; background: rgba(18,22,29,.9);
+            border: 1px solid #2a3038; color: #9ca3af; font: 12px ui-monospace, Menlo, monospace;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: none;
+            pointer-events: none; z-index: 5; backdrop-filter: blur(6px); }
+    #bar { position: absolute; left: 0; right: 0; bottom: 0; height: var(--bar-h); display: flex; gap: 6px;
+           align-items: flex-start; padding: 7px 10px calc(7px + env(safe-area-inset-bottom));
+           background: rgba(13,16,21,.96); border-top: 1px solid #1e232b; overflow-x: auto;
+           scrollbar-width: none; }
+    #bar::-webkit-scrollbar { display: none; }
+    #bar button { flex: 0 0 auto; height: 32px; min-width: 44px; padding: 0 12px;
+                  border: 1px solid #2a3038; border-radius: 8px;
+                  background: #1a1f27; color: #d5dae2; font: 13px ui-monospace, Menlo, monospace; }
+    #bar button:active { background: #2a3140; }
+    #bar .sp { flex: 1 0 8px; }
   </style>
 </head>
 <body>
