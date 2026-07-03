@@ -75,12 +75,24 @@ function applyScale(): void {
 // viewport so the key bar sits right above the keyboard and the grid re-fits.
 const app = document.getElementById('app') as HTMLElement;
 const vv = window.visualViewport;
+let lastSent = { cols: 0, rows: 0 };
+/** Publish this device's CURRENT ideal grid to the host (throttled to changes).
+ *  Doesn't steal authority — it applies when we type. */
+function sendIdeal(): void {
+  const d = idealDims();
+  if (d.cols === lastSent.cols && d.rows === lastSent.rows) return;
+  lastSent = d;
+  send(encodeResize(d.cols, d.rows));
+}
 if (vv) {
   const sync = (): void => {
     app.style.height = `${vv.height}px`;
     app.style.transform = `translateY(${vv.offsetTop}px)`; // counter iOS auto-scroll
     window.scrollTo(0, 0);
     applyScale();
+    // Keyboard open/close changes the visual viewport WITHOUT a window resize —
+    // refresh our ideal size so the next keystroke reflows into the visible area.
+    sendIdeal();
   };
   vv.addEventListener('resize', sync);
   vv.addEventListener('scroll', sync);
@@ -104,7 +116,7 @@ function connect(): void {
   const sock = new WebSocket(wsUrl());
   sock.binaryType = 'arraybuffer';
   ws = sock;
-  sock.onopen = () => { retry = 0; const d = idealDims(); sock.send(encodeAttach(d.cols, d.rows)); };
+  sock.onopen = () => { retry = 0; const d = idealDims(); lastSent = d; sock.send(encodeAttach(d.cols, d.rows)); };
   sock.onmessage = (ev) => {
     for (const f of dec.push(new Uint8Array(ev.data as ArrayBuffer))) {
       if (f.type === FrameType.Data) {
@@ -173,9 +185,8 @@ function send(buf: Uint8Array): void { if (ws && ws.readyState === WebSocket.OPE
 
 term.onData((d) => send(encodeData(enc.encode(d))));
 window.addEventListener('resize', () => {
-  const d = idealDims();
-  send(encodeResize(d.cols, d.rows)); // request authority at our ideal size; server echoes a Size frame
-  applyScale();                       // re-fit the current grid to the new viewport immediately
+  sendIdeal();  // publish our ideal size; server echoes a Size frame when it applies
+  applyScale(); // re-fit the current grid to the new viewport immediately
 });
 
 // mobile key bar — keys phones lack (⇧Tab = Claude Code permission-mode cycle)
@@ -212,16 +223,31 @@ for (const [label, seq] of BAR) {
   const sp = document.createElement('div');
   sp.className = 'sp';
   bar.appendChild(sp);
+  const cellWidth = (): number => {
+    const core = (term as unknown as {
+      _core?: { _renderService?: { dimensions?: { css?: { cell?: { width: number } } } } };
+    })._core;
+    return core?._renderService?.dimensions?.css?.cell?.width ?? 0;
+  };
   const setFont = (delta: number): void => {
     const next = Math.min(28, Math.max(8, term.options.fontSize! + delta));
     if (next === term.options.fontSize) return;
+    const prevCell = cellWidth();
     term.options.fontSize = next;
     localStorage.setItem('tlive-font', String(next));
-    requestAnimationFrame(() => {
-      const d = idealDims();
-      send(encodeResize(d.cols, d.rows)); // if we hold authority, the pty reflows to the new cell grid
-      applyScale();
-    });
+    // Cell metrics update asynchronously with the renderer — measuring too early
+    // reads the OLD cell size and computes an unchanged grid (font button "does
+    // nothing"). Poll briefly until the metric actually moves.
+    let tries = 0;
+    const settle = (): void => {
+      if (cellWidth() !== prevCell || tries++ > 20) {
+        sendIdeal();  // reflow to the new cell grid (applies when we hold authority)
+        applyScale();
+        return;
+      }
+      requestAnimationFrame(settle);
+    };
+    requestAnimationFrame(settle);
   };
   for (const [label, delta] of [['A−', -1], ['A+', 1]] as Array<[string, number]>) {
     const b = document.createElement('button');
