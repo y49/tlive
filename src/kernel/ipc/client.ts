@@ -10,6 +10,18 @@ export function defaultSocketPath(): string {
   return join(process.env.TLIVE_HOME ?? join(homedir(), '.tlive'), 'daemon.sock');
 }
 
+/** Per-session pty socket endpoint. Windows has no unix sockets — use a named
+ *  pipe (not a filesystem path; exists/unlink/chmod don't apply there). */
+export function sessionSocketPath(home: string, id: string): string {
+  if (process.platform === 'win32') return `\\\\.\\pipe\\tlive-session-${id}`;
+  return join(home, 'sessions', `${id}.sock`);
+}
+
+/** True when the endpoint is a Windows named pipe (skip fs ops on it). */
+export function isPipePath(p: string): boolean {
+  return p.startsWith('\\\\.\\pipe\\');
+}
+
 export interface IpcRequestOpts {
   socketPath?: string;
   timeoutMs?: number;

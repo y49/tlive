@@ -10,6 +10,7 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { existsSync, unlinkSync, chmodSync } from 'node:fs';
 import { Terminal as HeadlessTerminal } from '@xterm/headless';
 import { SerializeAddon } from '@xterm/addon-serialize';
+import { isPipePath } from '../ipc/client.js';
 import { FrameDecoder, FrameType, encodeData, encodeSize, parseDims } from '../web/stream-protocol.js';
 
 export interface SessionHostOpts {
@@ -101,7 +102,9 @@ export class SessionHost {
       process.stdout.on('resize', this.onLocalResize);
     }
 
-    if (existsSync(this.opts.sockPath)) unlinkSync(this.opts.sockPath);
+    // Windows named pipes aren't filesystem entries — exists/unlink/chmod don't apply.
+    const isPipe = isPipePath(this.opts.sockPath);
+    if (!isPipe && existsSync(this.opts.sockPath)) unlinkSync(this.opts.sockPath);
     this.server = createServer((socket) => this.onClient(socket));
     try {
       await new Promise<void>((resolve, reject) => {
@@ -112,7 +115,7 @@ export class SessionHost {
       this.cleanup();
       throw e;
     }
-    try { chmodSync(this.opts.sockPath, 0o600); } catch { /* best-effort perms */ }
+    if (!isPipe) { try { chmodSync(this.opts.sockPath, 0o600); } catch { /* best-effort perms */ } }
   }
 
   onExit(cb: (code: number) => void): void { this.onExitCb = cb; }
@@ -209,6 +212,6 @@ export class SessionHost {
     try { this.shadow?.dispose(); } catch { /* ignore */ }
     this.shadow = null; this.serializer = null;
     if (this.server) { try { this.server.close(); } catch { /* ignore */ } this.server = null; }
-    if (existsSync(this.opts.sockPath)) { try { unlinkSync(this.opts.sockPath); } catch { /* ignore */ } }
+    if (!isPipePath(this.opts.sockPath) && existsSync(this.opts.sockPath)) { try { unlinkSync(this.opts.sockPath); } catch { /* ignore */ } }
   }
 }

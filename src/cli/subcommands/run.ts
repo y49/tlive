@@ -4,7 +4,7 @@ import { join, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { SessionHost } from '../../kernel/pty/session-host.js';
-import { defaultSocketPath, request } from '../../kernel/ipc/client.js';
+import { defaultSocketPath, sessionSocketPath, request } from '../../kernel/ipc/client.js';
 import type { SessionMeta } from '../../kernel/ipc/protocol.js';
 import { resolveWebUrls } from '../web-url.js';
 
@@ -31,11 +31,10 @@ export async function runRun(argv: string[]): Promise<void> {
   }
   const [cmd, ...args] = argv;
   const home = process.env.TLIVE_HOME ?? join(homedir(), '.tlive');
-  const sessDir = join(home, 'sessions');
-  mkdirSync(sessDir, { recursive: true });
+  mkdirSync(join(home, 'sessions'), { recursive: true });
 
   const id = randomUUID();
-  const sockPath = join(sessDir, `${id}.sock`);
+  const sockPath = sessionSocketPath(home, id);
   const cwd = process.cwd();
   const label = deriveLabel(cmd, cwd);
   const sock = defaultSocketPath();

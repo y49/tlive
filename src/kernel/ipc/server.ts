@@ -2,6 +2,7 @@
 
 import { createServer, type Server, type Socket } from 'node:net';
 import { unlinkSync, existsSync } from 'node:fs';
+import { isPipePath } from './client.js';
 import type { IpcRequest, IpcResponse } from './protocol.js';
 
 export interface IpcCallContext {
@@ -16,7 +17,7 @@ export async function startIpcServer(opts: {
   path: string;
   handler: (req: IpcRequest, reply: (r: IpcResponse) => void, ctx: IpcCallContext) => void | Promise<void>;
 }): Promise<IpcServer> {
-  if (existsSync(opts.path)) unlinkSync(opts.path);
+  if (!isPipePath(opts.path) && existsSync(opts.path)) unlinkSync(opts.path);
   const server: Server = createServer((sock: Socket) => {
     // Suppress EPIPE / ECONNRESET from writes to a disconnected socket.
     sock.on('error', () => {});
@@ -49,7 +50,7 @@ export async function startIpcServer(opts: {
   return {
     async close() {
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      if (existsSync(opts.path)) unlinkSync(opts.path);
+      if (!isPipePath(opts.path) && existsSync(opts.path)) unlinkSync(opts.path);
     },
   };
 }

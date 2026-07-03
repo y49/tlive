@@ -217,7 +217,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
 
   const senderGuard = new SenderGuard(cfg.allowedSenders);
 
-  const sockPath = join(opts.home, 'daemon.sock');
+  // Windows: the CLI/hook clients dial the named pipe (defaultSocketPath) —
+  // the server must listen on the SAME endpoint, not a filesystem path.
+  const sockPath = process.platform === 'win32' ? '\\\\.\\pipe\\tlive-daemon' : join(opts.home, 'daemon.sock');
   const ipc: IpcServer = await startIpcServer({
     path: sockPath,
     handler: async (req, reply, ctx) => {
