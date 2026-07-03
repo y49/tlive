@@ -6,110 +6,155 @@
 
 [English](README.md)
 
-> **厂商中立、自托管的 AI 编码 agent「远程审批 + 监看」层。**
+> **厂商中立、自托管的 AI 编码 agent 远程审批 + 实时监看层。**
 >
-> 你在沙发上、在路上,Claude Code / Codex 卡在权限确认上——tlive 用两家都已
-> 支持的**开放 hook 机制**,把权限审批、状态通知推到**你选的渠道(含飞书)**,
-> 手机上一键批准让它继续。跨 Claude / Codex,**不挑订阅还是 API key**,
-> **会话和数据都不出你的机器**。
+> 你的 `claude` / `codex` 照常在终端里跑。tlive 借两家都支持的**开放 hook 机制**,
+> 把审批卡和状态推到 **Telegram / 飞书**,并在你自己的机器上提供 **web 仪表板 +
+> 真实终端**——在任何设备上批准、回复、发截图,甚至接管打字。**订阅还是 API key
+> 都能用**,会话与数据永不离开你的机器。
 
-## 它怎么工作
-
-tlive **不驱动你的会话**——你照常在终端里跑你自己的 `claude` / `codex`。
-tlive 只往 `~/.claude/settings.json` 装几个 hook:
-
-- **`PreToolUse`** → 每次工具调用前,把审批卡推到飞书/Telegram,你点"允许/拒绝",
-  hook 阻塞等你的回应。
-- **`Stop`** → Claude 停下时推通知,你回一句话作为续跑指令。
-- **`Notification` / `PostToolUse`** → 状态 / 工具活动通知。
-
-会话始终是你本地交互式的 `claude` —— 留在订阅额度内,不经任何厂商云中转。
-**没绑定 chat / 超时时,hook 静默退出、回落到本地终端弹窗**(不自动批、不全拒)。
-
-## 为什么不用官方自带的远程?
-
-官方远程(Claude Remote Control / Codex 手机端)有**结构性、不会消失的空白**:
-
-- **跨 agent** —— Anthropic 的远程不会控制 Codex,反之亦然;tlive 一套同时管两家。
-- **API key 用户** —— 官方远程明确不支持;tlive 不挑鉴权。
-- **自托管** —— 官方跑厂商云;tlive 跑在你机器上。
-- **飞书** —— 官方 Channels 只有 Telegram / Discord / iMessage;tlive 原生飞书。
-
-tlive 填的就是这块——**官方结构上做不到、也不会做的那一层**。
-
-**不做什么**:tlive 不做"在手机上从零写代码"——那块交给官方 Remote Control /
-Codex 手机端,它们做得更好且免费。tlive 只做审批、通知、监看。
-
-## 快速开始
+## 30 秒跑起来
 
 ```bash
 npm install -g tlive
 
-tlive setup                 # 向导:workspace + IM 凭证(Telegram / 飞书)
-tlive install-integrations  # 往 ~/.claude/settings.json 写 hooks
-tlive start                 # 启动常驻 daemon
+tlive setup        # 向导:IM 凭据 + 把 hooks 写进 ~/.claude/settings.json
+tlive start        # 起 daemon —— 打印 web 地址 + 手机扫码二维码
 
-# 然后照常在你的 workspace 目录里跑:
-claude
+tlive run claude   # (可选)包装会话 → 实时 web 终端 + 预览卡
 ```
 
-工具调用需要审批时,你绑定的飞书 / Telegram 会收到带按钮的卡片。
+扫一次码,dashboard 列出所有会话。工具调用需要审批时,IM 收到带
+**允许 / 拒绝 / 总是允许** 按钮的卡片,web 卡片同步亮红。
 
-## CLI 命令面
+## 两档集成
+
+| | 只装 hooks(照常跑 `claude`) | 包装(`tlive run claude`) |
+|---|---|---|
+| 审批卡(IM + web) | ✅ | ✅ |
+| IM 回复续跑 | ✅(续跑窗口内) | ✅ |
+| dashboard 会话卡 | ✅ 状态 / 最后一句 | ✅ + 实时终端预览 |
+| 真实 web 终端(xterm) | — | ✅ 多设备、手机键条 |
+| IM 引用回复 → 打字进终端 | — | ✅ |
+| IM 发图/文件 → agent | — | ✅(下载后注入路径) |
+| web 粘贴/拖拽上传 | — | ✅ |
+
+只装 hooks 永远可用,包装是纯加法。IM 消息带标签区分:`[⌨ label]`(包装,可注入)
+vs `[label]`(仅 hooks)。
+
+## 功能一览
+
+- **审批** —— `PreToolUse` hook 阻塞等你在 IM 按钮或 web 卡上回答。diff/命令
+  渲染、高危模式标记、secret 打码。策略引擎自动放行只读工具;**"总是允许
+  \<工具\>"** 按工具放行(内存态,重启清零);`/trust on|off` 整体暂停审批。
+  **绝不自动拒绝**;超时回落到本地终端提示。
+- **续跑** —— `Stop` 时回复 IM 消息(或 web 回复框),会话继续。
+- **web 终端** —— `tlive run <cmd>` 在 `/s/<id>` 提供 pty:xterm.js、多设备
+  **last-input 布局权**(谁打字网格归谁,其他端等比缩放)、晚到客户端全屏重建、
+  软键盘感知布局、触屏查看/输入双模式、可拖动可收起的快捷键条
+  (Esc/Tab/⇧Tab/Ctrl-C/…)、字号调节、复制屏幕弹层。
+- **dashboard** —— `/` 列出会话:状态徽章、"卡住 Nm"、最后一句、着色审批卡、
+  实时终端预览、per-session 静音、📎 上传、回复框。
+- **给 agent 喂任何东西** —— IM 引用回复文本、IM 图片/文件、终端页粘贴/拖拽、
+  dashboard 📎。统一落 `~/.tlive/inbox`(自动清理:48 小时 / 256MB 总量),
+  以 bracketed paste 打进 pty。
+
+## 为什么不用官方远程?
+
+官方远程(Claude Remote Control / Codex 手机端 / Channels)有 tlive 正好补上的
+结构性空白:
+
+- **跨 agent** —— 一套配置同时管 Claude Code 和 Codex。
+- **API-key 用户** —— 官方远程不支持;tlive 不关心你怎么认证。
+- **自托管** —— 链路上没有厂商云;web 由单 token 把门。
+- **飞书** —— 官方渠道不覆盖。
+
+tlive 刻意**不做**"手机从零 vibe coding"——官方远程做得更好。tlive 是给你已经
+在跑的会话做审批 / 监看 / 插话的那一层。
+
+## 安全模型
+
+- **web**:每个 HTTP/WS 请求都要 token(`~/.tlive/web-token`,0600)。默认绑
+  `0.0.0.0` 方便手机走局域网——token 是门。想只留本机,设
+  `web.bind: "127.0.0.1"`。
+- **`web.publicUrl`**(可选,如 tailscale/HTTPS 反代):设置后 IM 消息携带
+  **含 token 的**深链——聊天必须可信,否则别设。
+- **IM 入站**:fail-closed。非配置 chat 的消息/按钮一律丢弃;群聊场景可加
+  `allowedSenders` 按用户加固。
+- **`/trust on` 与"总是允许"是高危开关**:会自动放行。两者皆内存态、daemon
+  重启即清。优先用按工具放行而非 `/trust`。你自己 Claude 设置里的
+  `permissions.deny` 永远赢——hook 无法越过它。
+- **兜底是静默**:没配 chat、超时、daemon 没起 → hook 输出 `{}`,Claude 在
+  本地终端照常提示,就像 tlive 不存在。
+
+## CLI
 
 ```
-Daemon 生命周期
-  tlive start | stop | restart | status | doctor | daemon-logs
-
-Hook 集成
-  tlive hook <event>          Claude hook shim(读 stdin,输出 decision;由 Claude 调用)
-  tlive install-integrations  写 ~/.claude/settings.json hooks(幂等)
-  tlive approve <requestId>   命令行兜底批准一个待处理权限
-
-Workspace
-  tlive workspace add | list | remove
-
-向导 / Meta
-  tlive setup
-  tlive version | update
+tlive setup            向导 + 装 hooks(幂等);--hooks-only 只重装 hooks
+tlive start | stop     daemon 生命周期(stop 幂等)
+tlive status           健康态、web 地址 + 二维码、配置路径
+tlive logs [-f]        看 daemon 日志
+tlive run <cmd> …      包装进程:本地终端 + web 终端
+tlive hook <event>     hook shim(Claude/Codex 调用,不是给你用的)
 ```
+
+IM 命令:`/perm on|off`(静音)、`/trust on|off`、`/help`。
+引用任意会话消息回复 = 打字进那个会话。
+
+## 配置(`~/.tlive/config.json`)
+
+```jsonc
+{
+  "adapters": {
+    "telegram": { "token": "…", "chatIdAllowList": ["123"] },
+    "feishu":   { "appId": "…", "appSecret": "…", "chatId": "oc_…" }
+  },
+  "web": {
+    "enabled": true,          // 默认 true
+    "bind": "0.0.0.0",        // 默认;只留本机用 127.0.0.1
+    "port": 7681,
+    "publicUrl": "https://dev.example.ts.net"  // 可选:IM 深链
+  },
+  "allowedSenders": [{ "channel": "telegram", "userId": "42" }]  // 可选
+}
+```
+
+## 使用技巧
+
+- **会话保活**:tlive 有意不拥有会话——`tlive run` 随终端退出而结束。想要
+  detach/reattach:`tmux new -s work tlive run claude`。tmux 管保活,tlive 管
+  远程层。
+- **手机上滚动**:查看模式下手指滑动会转成滚轮事件——全屏 TUI(claude)的
+  对话区像桌面鼠标滚轮一样滚动。看完整历史用键条上的 `Ctrl-R`(transcript)。
+- **Windows**:设计上支持(命名管道、ConPTY),但实测少于 Linux/macOS——
+  欢迎提 issue。
 
 ## 架构
 
-- **Daemon**(`src/kernel/daemon/`)—— 常驻 Node 进程,跑 IPC server + IM adapter,
-  撮合审批 / 续跑 / 通知。
-- **Hook shim**(`src/cli/subcommands/hook.ts` + `src/kernel/hook/normalizer.ts`)
-  —— Claude 调用的薄入口,stdin → IPC → decision。
-- **撮合**(`src/kernel/daemon/permission-router.ts`、
-  `src/kernel/permission/continue-broker.ts`)—— 按 workspace 把请求路由到绑定的
-  IM chat,阻塞等回应。
-- **IM adapters**(`src/adapters/im/`)—— Telegram(grammy)、飞书(lark)。
-- **IPC**(`src/kernel/ipc/`)—— 跨平台 unix socket / Windows 命名管道。
+```
+你自己的 claude/codex ──hooks──▶ tlive hook shim ──IPC──▶ daemon
+tlive run <cmd>(前台拥有 pty)── per-session socket ──▶ 桥接
+                                                        daemon ──▶ IM adapters(Telegram/飞书)
+                                                        daemon ──▶ web(token 门):dashboard + /s/<id>
+```
 
-`claude` / `codex` 是**你自己的进程**,tlive 通过它们 settings 里的 hook 做松耦合
-集成——没有 SDK、没有版本绑定、不经厂商云。
+- **daemon 不拥有会话**:只撮合审批/续跑、fan-out pty 字节、服务 web。
+- **冻结面**(由 `tests/contract/` 锁定的契约)见 [KERNEL.md](KERNEL.md)。
 
 ## 从 v1.0 升级
 
-v1.0 是用 Agent SDK 驱动会话的 IM 桥。v2.0 改为 hook 层(详见 `CHANGELOG.md`)。
-这是 breaking change,不提供自动迁移:重新跑 `tlive setup` + `tlive install-integrations`。
-v1.0 架构保留为 git tag `v1.0-sdk-bridge`。
+v1.0 用 Agent SDK 驱动会话;v2 转向 hook 层(见 `CHANGELOG.md`)。Breaking、
+无迁移:重跑 `tlive setup`。v1.0 保留在 git tag `v1.0-sdk-bridge`。
 
 ## 开发
 
 ```bash
 git clone https://github.com/y49/tlive
 cd tlive
-npm install
-npm run typecheck
-npm test
-npm run build
+pnpm install
+npm run typecheck && npm test && npm run build
 ```
 
-## License
+## 许可
 
-MIT。详见 [LICENSE](LICENSE)。
-
-## Contributing
-
-见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+MIT,见 [LICENSE](LICENSE)。贡献指南:[CONTRIBUTING.md](CONTRIBUTING.md)。

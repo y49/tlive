@@ -64,9 +64,25 @@ tlive start
 tlive status
 ```
 
-`tlive status` 显示守护进程运行时间、PID、已配置的适配器，并执行
-轻量级凭证探测。遇到问题时可用它排查；它取代了已删除的
-`tlive doctor` 子命令。
+`tlive start` 会打印 web 地址(本机 + 局域网)**和一个二维码**——手机扫一次
+即可打开 dashboard。`tlive status` 显示守护进程运行时间、PID、已配置的适配器
+和同样的地址/二维码;它取代了已删除的 `tlive doctor` 子命令。
+
+## 包装会话(可选但推荐)
+
+```bash
+cd your-project
+tlive run claude
+```
+
+`tlive run` 在只装 hooks 的基础上给**同一个会话**三项额外能力:
+
+- `/s/<id>` 的**实时 web 终端**(多设备;谁打字布局归谁)+ dashboard 实时预览卡;
+- **IM 引用注入** —— 引用该会话的任意 IM 消息回复文本,直接打进终端;
+- **喂图片/文件** —— IM 里发图(或 web 页粘贴/拖拽、dashboard 📎):落到
+  `~/.tlive/inbox`,路径自动打进会话。
+
+想让会话在关掉终端后活着?配合 tmux:`tmux new -s work tlive run claude`。
 
 ---
 

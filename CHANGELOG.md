@@ -2,34 +2,94 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased — CLI surface cleanup + inbound chat filter
+## Unreleased — v2: web terminal + dashboard + IM interaction layer
+
+### Added — web terminal (`tlive run`)
+
+- **`tlive run <cmd>`** wraps a process: your local terminal as usual PLUS a
+  real web terminal at `/s/<id>` (xterm.js, self-hosted, zero CDN).
+- **Last-input sizing**: whoever typed last owns the pty grid; other devices
+  see a scaled view with a hint. Keyboard-aware on mobile (VisualViewport),
+  ideal-grid re-published on keyboard open/close.
+- **Screen rebuild for late joiners**: a headless-xterm shadow screen is
+  serialized on attach — pages open showing the live screen, not blank.
+- Mobile terminal UX: view/input modes (touch defaults to view; taps don't
+  summon the keyboard), touch-drag → wheel events (full-screen TUIs scroll
+  like a desktop mouse), draggable collapsible key bar
+  (Esc/Tab/⇧Tab/Ctrl-C/D/Z/R/L/PgUp/PgDn), font-size controls (persisted),
+  copy-screen modal (native selection; clipboard API needs HTTPS),
+  destroyed-session overlay with auto-return.
+- **`tlive start`/`status` print Local + Network URLs and a QR code**;
+  default web bind is `0.0.0.0` (token gates every request; set
+  `web.bind: "127.0.0.1"` for loopback-only).
+
+### Added — dashboard (`/`)
+
+- Session cards: status badge + color bar, "stuck Nm" staleness, PID chip,
+  last assistant message, colored approval body (diff +/− , bash, risk
+  flags), live terminal previews (read-only mini xterm, width-fit,
+  bottom-pinned), per-session mute, reply box for Stop-resume, 📎 upload.
+- `/ws/events` is bidirectional: downstream session frames; upstream
+  approve / reply / mute / inject actions. Full reconcile on (re)connect.
+- Dead wrapped sessions are reaped by a 30s pid-liveness sweep.
+
+### Added — approvals
+
+- **PolicyEngine**: read-only tools auto-allow; **"Always allow <tool>"**
+  button (IM + web; in-memory, cleared on restart); `/trust on|off` pause
+  switch. **Never auto-denies**; timeout → defer → local terminal prompt.
+- Approval cards render diffs/commands with risky-pattern flags and secret
+  masking; PreToolUse hook timeout raised to 600s (async-approval window).
+- Cards are **edited to their outcome** (✅/❌/⏳) once resolved — no zombie
+  buttons. All IM messages carry a session tag: `[⌨ label]` wrapped /
+  `[label]` hooks-only.
+
+### Added — IM as an input channel
+
+- **Quote-reply injection**: reply to any tlive message with text → typed
+  into that session's pty via bracketed paste (wrapped sessions). A live
+  Stop-continue takes precedence; hooks-only sessions get guidance. Bare
+  text injects when exactly one session is active.
+- **Photos & files**: IM attachments are downloaded to `~/.tlive/inbox` and
+  their paths injected; web adds paste/drag-drop on the terminal page and a
+  📎 button on cards (`POST /api/upload`, token-gated, 32MB).
+- Inbox housekeeping: hourly sweep, 48h age limit + 256MB total cap.
+- New monitoring hooks: UserPromptSubmit / SessionStart / SessionEnd +
+  Stop `last_assistant_message` feed the dashboard (per-tool IM spam from
+  PostToolUse is gone — activity lives on the dashboard).
+- `web.publicUrl` (optional): IM messages carry a deep link to the web UI.
+
+### Fixed
+
+- Windows: daemon listened on a filesystem path while clients dialed the
+  named pipe (could never come up); per-session sockets now use named pipes
+  on win32; fs ops skipped on pipe endpoints. Windows is supported by
+  design (ConPTY) but less battle-tested than Linux/macOS.
+- CLI: bin lacked a shebang and the is-main guard failed through symlinks
+  (global installs were silent no-ops); `stop` is idempotent; EPIPE on
+  piped output no longer crashes; `start` found the daemon bundle at the
+  wrong relative path.
 
 ### Breaking
 
-- **CLI 13 → 6 commands.** Shipped surface is exactly:
-  `setup`, `start`, `stop`, `status`, `logs`, `hook`.
+- **CLI 13 → 7 commands.** Shipped surface is exactly:
+  `setup`, `start`, `stop`, `status`, `logs`, `run`, `hook`.
   Removed: `restart`, `doctor` (folded into `status`),
-  `daemon-logs` (renamed `logs`), `install-integrations` (folded into `setup`),
-  `approve`, `workspace`, `version`, `update`.
-- **`tlive setup` now installs hooks.** `tlive setup` runs the credential
-  wizard AND writes the Claude Code hook entries into
-  `~/.claude/settings.json` (idempotent). `--hooks-only` reinstalls only
-  the hooks. The separate `tlive install-integrations` subcommand is gone.
-- **Workspace subsystem removed.** The `workspace` CLI subcommand, the
-  `/use` IM command, and the chat-binding model are all gone. Notifications
-  go to all configured chats. Global mute is controlled by `/perm on|off`.
-- **`tlive doctor` removed.** Use `tlive status`; it now also runs
-  per-platform credential probes.
-- **`tlive daemon-logs` removed.** Use `tlive logs`.
+  `daemon-logs` (renamed `logs`), `install-integrations` (folded into
+  `setup`), `approve`, `workspace`, `version`, `update`.
+- **`tlive setup` now installs hooks.** `--hooks-only` reinstalls only the
+  hooks.
+- **Workspace subsystem removed.** No `/use`, no chat binding.
+  Notifications go to all configured chats; `/perm on|off` is the global
+  mute; per-session mute lives on the dashboard.
 
 ### Security
 
-- **Inbound chat filter (fail-closed) — adapter layer.**
-  Both IM adapters now enforce that inbound text messages and button
-  callbacks must come from the configured chat. If no chat is configured
-  (`allowedChatIds` empty/absent for Telegram, `chatId` absent for Feishu),
-  all inbound is dropped. "Trust the configured chat" is enforced at the
-  adapter boundary.
+- **Inbound chat filter (fail-closed) at the adapter layer**: messages and
+  button callbacks are dropped unless they come from the configured chat;
+  `allowedSenders` adds per-user hardening.
+- Web: single token (0600) gates every HTTP/WS request; first `?token=`
+  sets an httpOnly cookie so the token leaves the URL.
 
 ---
 

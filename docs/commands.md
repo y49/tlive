@@ -1,7 +1,7 @@
 # tlive CLI Command Reference
 
-> **v2.0 CLI surface.** The shipped commands are exactly:
-> `setup`, `start`, `stop`, `status`, `logs`, `hook`.
+> **v2 CLI surface.** The shipped commands are exactly:
+> `setup`, `start`, `stop`, `status`, `logs`, `run`, `hook`.
 >
 > Removed in v2.0: `restart`, `doctor` (folded into `status`),
 > `daemon-logs` (renamed `logs`), `install-integrations` (folded into `setup`),
@@ -12,27 +12,43 @@
 
 ## Daemon lifecycle
 
-### `tlive start`
+### `tlive start [--foreground|-F]`
 
-Start the long-running daemon in the background. Writes a PID file and IPC
-socket to `~/.tlive/`. Idempotent — a second call exits cleanly if the daemon
-is already running.
+Start the long-running daemon in the background (IPC + IM adapters + web
+server). Prints the web URLs (local + LAN) and a QR code for your phone.
+Idempotent — a second call reports the running daemon and reprints the URLs.
 
 ### `tlive stop`
 
-Send a graceful shutdown request to the running daemon. Waits up to 2 s for the
-event loop to drain before forcing exit.
+Send a graceful shutdown request to the running daemon (idempotent — exits 0
+with "not running" when the daemon is already down, so `stop && start` chains
+work). Waits up to 2 s for the event loop to drain before forcing exit.
 
 ### `tlive status`
 
 Show whether the daemon is running, its uptime, PID, and the configured IM
-adapters. Also runs lightweight credential probes (replaces the removed
-`doctor` subcommand).
+adapters, plus the web URLs and QR code. Replaces the removed `doctor`
+subcommand.
 
 ### `tlive logs [N] [-f | --follow]`
 
 Print the last N lines (default 50) of `~/.tlive/daemon.log` and optionally
 tail new output. Replaces the removed `daemon-logs` subcommand.
+
+---
+
+## Wrapped sessions
+
+### `tlive run <cmd> [args…]`
+
+Wrap a process in a pty owned by THIS terminal: you use it locally as usual,
+and the same session is served as a live web terminal at `/s/<id>` (and as a
+preview card on the dashboard). Registers with the daemon (best-effort — the
+local terminal still works when the daemon is down) and unregisters on exit.
+Exit code is passed through.
+
+Wrapped sessions additionally accept IM quote-reply text/photo injection and
+web uploads. See README "The two integration levels".
 
 ---
 
@@ -80,6 +96,10 @@ subcommands.
 | Command | Description |
 |---|---|
 | `/perm on\|off` | Global mute toggle — `off` suppresses all outbound notifications. |
+| `/trust on\|off` | Pause approvals (auto-allow everything) until turned off. High-risk; prefer the per-tool "Always allow" button. |
+| `/help` | Show in-chat help. |
+| *quote-reply + text* | Typed into that session's terminal (wrapped sessions). |
+| *photo / file* | Downloaded to `~/.tlive/inbox`; path injected into the session. |
 
 ---
 

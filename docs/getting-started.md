@@ -65,9 +65,30 @@ tlive start
 tlive status
 ```
 
-`tlive status` shows daemon uptime, PID, configured adapters, and runs
-lightweight credential probes. Use it whenever something seems wrong; it
-replaces the removed `tlive doctor` subcommand.
+`tlive start` prints the web URLs (local + LAN) **and a QR code** — scan it
+once on your phone to open the dashboard. `tlive status` shows daemon uptime,
+PID, configured adapters, and the same URLs/QR; it replaces the removed
+`tlive doctor` subcommand.
+
+## Wrap a session (optional but recommended)
+
+```bash
+cd your-project
+tlive run claude
+```
+
+`tlive run` gives the SAME session three extra powers on top of hooks-only:
+
+- a **live web terminal** at `/s/<id>` (multi-device; whoever types owns the
+  layout) and a live preview card on the dashboard;
+- **IM quote-reply injection** — reply to any of this session's IM messages
+  and your text is typed into the terminal;
+- **photo/file feeding** — send an image in IM (or paste/drop on the web
+  page, or use the dashboard 📎): it lands in `~/.tlive/inbox` and its path
+  is typed into the session.
+
+Want the session to survive closing your terminal? Combine with tmux:
+`tmux new -s work tlive run claude`.
 
 ---
 
