@@ -80,6 +80,7 @@ if (existsSync(dashEntry)) {
     format: 'iife',
     target: ['es2020'],
     outfile: join(ROOT, 'dist', 'web', 'dashboard.js'),
+    loader: { '.css': 'css' },
     minify: true,
     logLevel: 'warning',
   });

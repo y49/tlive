@@ -3,6 +3,10 @@
 // one card per session (status / staleness / Claude's last line) and sends upstream
 // approve / reply / mute actions. Open-terminal is a plain link to /s/<id>.
 
+import { Terminal } from '@xterm/xterm';
+import '@xterm/xterm/css/xterm.css';
+import { FrameType, FrameDecoder, encodeAttach, parseDims } from './frame.js';
+
 const token = new URLSearchParams(location.search).get('token') ?? '';
 
 type Status = 'active' | 'waiting-approval' | 'waiting-input' | 'idle';
@@ -11,7 +15,7 @@ interface SessionView {
   id: string; label: string; cwd: string;
   kind: 'wrapped' | 'hook'; status: Status;
   lastActivityAt: number; lastMessage?: string; lastPrompt?: string;
-  pending?: Pending; continueId?: string; muted: boolean; sockPath?: string;
+  pending?: Pending; continueId?: string; muted: boolean; sockPath?: string; pid?: number;
 }
 type Frame =
   | { type: 'session-upsert'; session: SessionView }
@@ -82,6 +86,72 @@ function esc(t: string): string {
   const d = document.createElement('div'); d.textContent = t; return d.innerHTML;
 }
 
+// ---- live terminal previews (wrapped sessions) --------------------------------
+// One read-only mini xterm per wrapped session, fed by its own /ws/term socket.
+// Cached by session id so re-renders MOVE the element instead of reconnecting.
+// The preview never sends Data frames, so it never steals size authority.
+
+interface Preview { el: HTMLElement; term: Terminal; ws: WebSocket | null; dead: boolean }
+const previews = new Map<string, Preview>();
+
+function fitPreview(pv: Preview): void {
+  const inner = pv.el.firstElementChild as HTMLElement; // scaler
+  const t = inner.firstElementChild as HTMLElement;     // xterm root
+  if (!t || t.offsetWidth === 0) return;
+  const s = Math.min(pv.el.clientWidth / t.offsetWidth, pv.el.clientHeight / t.offsetHeight);
+  inner.style.transform = `scale(${s})`;
+}
+
+function createPreview(id: string): Preview {
+  const el = document.createElement('div');
+  el.className = 'preview';
+  const scaler = document.createElement('div');
+  scaler.className = 'pv-scaler';
+  el.appendChild(scaler);
+  const term = new Terminal({ disableStdin: true, fontSize: 12, fontFamily: 'ui-monospace, Menlo, monospace', theme: { background: '#0d1015' }, scrollback: 0 });
+  term.open(scaler);
+  const pv: Preview = { el, term, ws: null, dead: false };
+  el.addEventListener('click', () => { window.open(`/s/${encodeURIComponent(id)}?token=${encodeURIComponent(token)}`, '_blank'); });
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  let retry = 0;
+  const connect = (): void => {
+    if (pv.dead) return;
+    const dec = new FrameDecoder();
+    const sock = new WebSocket(`${proto}://${location.host}/ws/term/${encodeURIComponent(id)}?token=${encodeURIComponent(token)}`);
+    sock.binaryType = 'arraybuffer';
+    pv.ws = sock;
+    // Attach with 0×0: joins as a size-less client (never affects the grid),
+    // and the late-joiner rule immediately sends us the authoritative Size.
+    sock.onopen = () => { retry = 0; sock.send(encodeAttach(0, 0)); };
+    sock.onmessage = (ev) => {
+      for (const f of dec.push(new Uint8Array(ev.data as ArrayBuffer))) {
+        if (f.type === FrameType.Data) term.write(f.payload);
+        else if (f.type === FrameType.Size) {
+          const { cols, rows } = parseDims(f.payload);
+          term.resize(cols, rows);
+          requestAnimationFrame(() => fitPreview(pv));
+        }
+      }
+    };
+    sock.onclose = () => { if (!pv.dead) { retry = Math.min(retry + 1, 6); setTimeout(connect, 1000 * retry); } };
+    sock.onerror = () => sock.close();
+  };
+  connect();
+  previews.set(id, pv);
+  return pv;
+}
+
+function disposePreview(id: string): void {
+  const pv = previews.get(id);
+  if (!pv) return;
+  pv.dead = true;
+  try { pv.ws?.close(); } catch { /* ignore */ }
+  pv.term.dispose();
+  pv.el.remove();
+  previews.delete(id);
+}
+
 function card(s: SessionView): HTMLElement {
   const el = document.createElement('div');
   el.className = 'card';
@@ -96,8 +166,15 @@ function card(s: SessionView): HTMLElement {
   el.appendChild(top);
 
   const cwd = document.createElement('div');
-  cwd.className = 'cwd'; cwd.textContent = s.cwd;
+  cwd.className = 'cwd';
+  cwd.textContent = s.pid !== undefined ? `PID ${s.pid} · ${s.cwd}` : s.cwd;
   el.appendChild(cwd);
+
+  if (s.kind === 'wrapped' && s.sockPath) {
+    const pv = previews.get(s.id) ?? createPreview(s.id);
+    el.appendChild(pv.el);
+    requestAnimationFrame(() => fitPreview(pv));
+  }
 
   if (s.pending) {
     const m = document.createElement('div');
@@ -170,7 +247,13 @@ function render(): void {
     RANK[a.status] - RANK[b.status] || b.lastActivityAt - a.lastActivityAt);
   empty.style.display = list.length ? 'none' : 'block';
   grid.replaceChildren(...list.map(card));
+  // Reap previews for sessions that no longer exist (or lost their pty).
+  for (const id of [...previews.keys()]) {
+    const s = sessions.get(id);
+    if (!s || s.kind !== 'wrapped' || !s.sockPath) disposePreview(id);
+  }
 }
+window.addEventListener('resize', () => { for (const pv of previews.values()) fitPreview(pv); });
 
 snapshot();
 connect();
