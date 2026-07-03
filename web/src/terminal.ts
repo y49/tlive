@@ -48,14 +48,22 @@ function idealDims(): { cols: number; rows: number } {
   return { cols: Math.max(1, d?.cols ?? 80), rows: Math.max(1, d?.rows ?? 24) };
 }
 
+const DEBUG = new URLSearchParams(location.search).has('debug');
+
 /** Scale the fixed authoritative grid to fit the viewport; show a hint when not 1:1. */
 function applyScale(): void {
   const tw = termEl.offsetWidth, th = termEl.offsetHeight;
   if (tw === 0 || th === 0) return;
   const s = Math.min(viewport.clientWidth / tw, viewport.clientHeight / th);
   scaler.style.transform = `scale(${s})`;
+  if (DEBUG) {
+    hint.textContent = `grid ${term.cols}×${term.rows} · term ${tw}×${th} · vp ${viewport.clientWidth}×${viewport.clientHeight}`
+      + ` · vv ${Math.round(window.visualViewport?.height ?? -1)} · scale ${s.toFixed(3)} · font ${term.options.fontSize}`;
+    hint.style.display = 'block';
+    return;
+  }
   if (s < 0.995) {
-    hint.textContent = `viewing ${term.cols}×${term.rows} (scaled ${Math.round(s * 100)}%) — type to fit this device`;
+    hint.textContent = `${term.cols}×${term.rows}(缩放 ${Math.round(s * 100)}%)— 输入即适配本机`;
     hint.style.display = 'block';
   } else {
     hint.style.display = 'none';
@@ -79,10 +87,12 @@ if (vv) {
   sync();
 }
 
-// The grid element resizes asynchronously after term.resize()/font changes —
-// a single rAF can measure stale dimensions and leave the bottom row under the
-// key bar. Re-fit whenever the terminal's actual box changes.
-new ResizeObserver(() => applyScale()).observe(termEl);
+// The grid element resizes asynchronously after term.resize()/font changes,
+// and the viewport shrinks/grows with the key bar + soft keyboard. Re-fit
+// whenever EITHER box actually changes.
+const ro = new ResizeObserver(() => applyScale());
+ro.observe(termEl);
+ro.observe(viewport);
 
 function wsUrl(): string {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -176,6 +186,16 @@ const BAR: Array<[string, string]> = [
   ['PgUp', '\x1b[5~'], ['PgDn', '\x1b[6~'],
 ];
 const bar = document.getElementById('bar') as HTMLElement;
+{ // collapsible key bar: ⌨ floating button toggles it (persisted)
+  const fab = document.getElementById('fab') as HTMLElement;
+  const setOpen = (open: boolean): void => {
+    app.classList.toggle('bar-open', open);
+    fab.textContent = open ? '✕' : '⌨';
+    localStorage.setItem('tlive-bar', open ? 'open' : 'closed');
+  };
+  setOpen(localStorage.getItem('tlive-bar') === 'open'); // default: collapsed
+  fab.addEventListener('click', () => setOpen(!app.classList.contains('bar-open')));
+}
 { // back to the session list
   const b = document.createElement('button');
   b.textContent = '☰ 列表';

@@ -7,11 +7,17 @@
   <title>tlive terminal</title>
   <link rel="stylesheet" href="/terminal.css" />
   <style>
-    :root { --bar-h: calc(46px + env(safe-area-inset-bottom)); }
+    :root { --bar-h: 0px; }
+    #app.bar-open { --bar-h: calc(46px + env(safe-area-inset-bottom)); }
     html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
     /* #app tracks the VISUAL viewport (soft-keyboard aware) via JS; falls back to 100%. */
     #app { position: fixed; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; }
     #viewport { position: absolute; inset: 0 0 var(--bar-h) 0; overflow: hidden; }
+    #fab { position: absolute; right: 12px; bottom: calc(var(--bar-h) + 12px); z-index: 6;
+           width: 42px; height: 42px; border-radius: 50%; border: 1px solid #2a3038;
+           background: rgba(18,22,29,.92); color: #d5dae2; font-size: 18px; line-height: 1;
+           display: flex; align-items: center; justify-content: center; backdrop-filter: blur(6px); }
+    #fab:active { background: #2a3140; }
     #scaler { position: absolute; top: 0; left: 0; transform-origin: top left; }
     #term { display: inline-block; }
     #hint { position: absolute; top: calc(6px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
@@ -19,10 +25,12 @@
             border: 1px solid #2a3038; color: #9ca3af; font: 12px ui-monospace, Menlo, monospace;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: none;
             pointer-events: none; z-index: 5; backdrop-filter: blur(6px); }
-    #bar { position: absolute; left: 0; right: 0; bottom: 0; height: var(--bar-h); display: flex; gap: 6px;
-           align-items: flex-start; padding: 7px 10px calc(7px + env(safe-area-inset-bottom));
-           background: rgba(13,16,21,.96); border-top: 1px solid #1e232b; overflow-x: auto;
-           scrollbar-width: none; }
+    #bar { position: absolute; left: 0; right: 0; bottom: 0; height: 0; display: flex; gap: 6px;
+           align-items: flex-start; padding: 0 10px; overflow: hidden;
+           background: rgba(13,16,21,.96); border-top: 1px solid transparent;
+           overflow-x: auto; scrollbar-width: none; transition: height .15s, padding .15s; }
+    #app.bar-open #bar { height: var(--bar-h); padding: 7px 10px calc(7px + env(safe-area-inset-bottom));
+                         border-top-color: #1e232b; }
     #bar::-webkit-scrollbar { display: none; }
     #bar button { flex: 0 0 auto; height: 32px; min-width: 44px; padding: 0 12px;
                   border: 1px solid #2a3038; border-radius: 8px;
@@ -36,6 +44,7 @@
     <div id="viewport"><div id="scaler"><div id="term"></div></div></div>
     <div id="hint"></div>
     <div id="bar"></div>
+    <button id="fab" title="快捷键">⌨</button>
   </div>
   <script src="/terminal.js"></script>
 </body>
