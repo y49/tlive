@@ -121,4 +121,41 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
     a.end(); b.end();
     await host.stop();
   });
+
+  it('late joiner receives a snapshot of the screen printed BEFORE it attached', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tlive-host-'));
+    const sockPath = join(dir, 's.sock');
+    // prints once at startup, then stays alive silently
+    const host = new SessionHost({
+      id: 't3',
+      cmd: process.execPath,
+      args: ['-e', 'process.stdout.write("EARLY-SCREEN\\n"); setInterval(()=>{},1000);'],
+      cwd: dir,
+      sockPath,
+      attachLocal: false,
+    });
+    await host.start();
+    // let the output land in the shadow terminal before anyone attaches
+    await new Promise((r) => setTimeout(r, 400));
+
+    const dec = new FrameDecoder();
+    const got = await new Promise<string>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('no snapshot')), 8000);
+      const chunks: Buffer[] = [];
+      const sock = createConnection(sockPath, () => { sock.write(encodeAttach(80, 24)); });
+      sock.on('error', reject);
+      sock.on('data', (chunk: Buffer) => {
+        for (const f of dec.push(chunk)) {
+          if (f.type === FrameType.Data) {
+            chunks.push(f.payload);
+            const s = Buffer.concat(chunks).toString('utf8');
+            if (s.includes('EARLY-SCREEN')) { clearTimeout(t); sock.end(); resolve(s); }
+          }
+        }
+      });
+    });
+    expect(got).toContain('EARLY-SCREEN');
+    await host.stop();
+  });
+
 });

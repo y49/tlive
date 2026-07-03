@@ -45,6 +45,8 @@
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-serialize": "^0.14.0",
+    "@xterm/headless": "^6.0.0",
     "@xterm/xterm": "^6.0.0",
     "grammy": "^1.41.1",
     "https-proxy-agent": "^9.0.0",

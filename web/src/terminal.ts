@@ -145,6 +145,12 @@ const BAR: Array<[string, string]> = [
   ['Esc', '\x1b'], ['Tab', '\t'], ['Ctrl-C', '\x03'], ['↑', '\x1b[A'], ['↓', '\x1b[B'], ['←', '\x1b[D'], ['→', '\x1b[C'],
 ];
 const bar = document.getElementById('bar') as HTMLElement;
+{ // back to the session list
+  const b = document.createElement('button');
+  b.textContent = '☰ 列表';
+  b.addEventListener('click', () => { location.href = `/?token=${encodeURIComponent(token)}`; });
+  bar.appendChild(b);
+}
 for (const [label, seq] of BAR) {
   const b = document.createElement('button');
   b.textContent = label;

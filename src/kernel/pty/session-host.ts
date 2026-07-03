@@ -8,6 +8,8 @@
 import { spawn, type IPty } from 'node-pty';
 import { createServer, type Server, type Socket } from 'node:net';
 import { existsSync, unlinkSync, chmodSync } from 'node:fs';
+import { Terminal as HeadlessTerminal } from '@xterm/headless';
+import { SerializeAddon } from '@xterm/addon-serialize';
 import { FrameDecoder, FrameType, encodeData, encodeSize, parseDims } from '../web/stream-protocol.js';
 
 export interface SessionHostOpts {
@@ -37,7 +39,7 @@ export function authoritativeSize(sources: SizeSource[]): { cols: number; rows: 
   return { cols: clamp(best.cols), rows: clamp(best.rows) };
 }
 
-interface Client extends SizeSource { socket: Socket }
+interface Client extends SizeSource { socket: Socket; attached?: boolean }
 
 export class SessionHost {
   private pty: IPty | null = null;
@@ -49,6 +51,10 @@ export class SessionHost {
   private attachLocal: boolean;
   private onExitCb: ((code: number) => void) | null = null;
   private cleanedUp = false;
+  // Shadow screen: a headless xterm fed with every pty byte, serialized on
+  // Attach so late joiners get the CURRENT screen instead of a blank page.
+  private shadow: HeadlessTerminal | null = null;
+  private serializer: SerializeAddon | null = null;
 
   constructor(private opts: SessionHostOpts) {
     this.attachLocal = opts.attachLocal !== false;
@@ -67,13 +73,18 @@ export class SessionHost {
       env: { ...(this.opts.env ?? process.env) } as Record<string, string>,
     });
 
+    this.shadow = new HeadlessTerminal({ cols: size.cols, rows: size.rows, scrollback: 1000, allowProposedApi: true });
+    this.serializer = new SerializeAddon();
+    this.shadow.loadAddon(this.serializer);
+
     this.pty.onData((data: string) => {
       // node-pty onData yields a decoded string; utf8 round-trips terminal content.
       // For raw-binary passthrough we'd spawn with encoding:null (deferred).
       const buf = Buffer.from(data, 'utf8');
       if (this.attachLocal) process.stdout.write(buf);
+      this.shadow?.write(data);
       const frame = encodeData(buf);
-      for (const c of this.clients) { if (c.socket.writable) c.socket.write(frame); }
+      for (const c of this.clients) { if (c.attached && c.socket.writable) c.socket.write(frame); }
     });
 
     this.pty.onExit(({ exitCode }) => {
@@ -138,9 +149,18 @@ export class SessionHost {
         } else if (f.type === FrameType.Attach || f.type === FrameType.Resize) {
           const { cols, rows } = parseDims(f.payload);
           client.cols = cols; client.rows = rows;
+          const firstAttach = f.type === FrameType.Attach && !client.attached;
+          client.attached = true;
           const applied = this.applySize();
           // Late-joiner guarantee: if the broadcast didn't fire (size unchanged), tell this client directly.
           if (!applied.broadcast && socket.writable) socket.write(encodeSize(applied.cols, applied.rows));
+          // Screen rebuild: Size first (grid set), then the serialized current screen.
+          if (firstAttach && socket.writable && this.serializer) {
+            try {
+              const snap = this.serializer.serialize();
+              if (snap.length > 0) socket.write(encodeData(Buffer.from(snap, 'utf8')));
+            } catch { /* serialize is best-effort; live output follows anyway */ }
+          }
         } else if (f.type === FrameType.Detach) {
           this.removeClient(client);
         }
@@ -167,8 +187,9 @@ export class SessionHost {
     }
     this.appliedSize = next;
     try { this.pty?.resize(next.cols, next.rows); } catch { /* pty gone */ }
+    try { this.shadow?.resize(next.cols, next.rows); } catch { /* headless quirk */ }
     const frame = encodeSize(next.cols, next.rows);
-    for (const c of this.clients) { if (c.socket.writable) c.socket.write(frame); }
+    for (const c of this.clients) { if (c.attached && c.socket.writable) c.socket.write(frame); }
     return { cols: next.cols, rows: next.rows, broadcast: true };
   }
 
@@ -185,6 +206,8 @@ export class SessionHost {
     }
     for (const c of this.clients) { try { c.socket.destroy(); } catch { /* ignore */ } }
     this.clients.clear();
+    try { this.shadow?.dispose(); } catch { /* ignore */ }
+    this.shadow = null; this.serializer = null;
     if (this.server) { try { this.server.close(); } catch { /* ignore */ } this.server = null; }
     if (existsSync(this.opts.sockPath)) { try { unlinkSync(this.opts.sockPath); } catch { /* ignore */ } }
   }

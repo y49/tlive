@@ -66,6 +66,8 @@ function isMain(): boolean {
   }
 }
 if (isMain()) {
+  // `tlive status | head` closes the pipe early — exit quietly instead of crashing.
+  process.stdout.on('error', (e: NodeJS.ErrnoException) => { if (e.code === 'EPIPE') process.exit(0); });
   runCli(process.argv.slice(2)).catch((e) => {
     process.stderr.write(`tlive: ${(e as Error).stack ?? e}\n`);
     process.exit(1);
