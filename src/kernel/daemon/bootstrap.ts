@@ -36,15 +36,13 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const cfg = loadConfig(opts.home);
   const startedAt = Date.now();
 
-  // Reap IM inbox attachments older than 48h (downloaded photos/files for injection).
-  try {
-    const inbox = join(opts.home, 'inbox');
-    const { readdirSync, statSync, unlinkSync } = await import('node:fs');
-    for (const f of readdirSync(inbox)) {
-      const p = join(inbox, f);
-      if (Date.now() - statSync(p).mtimeMs > 48 * 3600_000) unlinkSync(p);
-    }
-  } catch { /* no inbox yet */ }
+  // Inbox housekeeping (uploaded attachments): sweep on startup AND hourly —
+  // age limit + total-size cap, so it can never grow unbounded.
+  const inboxDir = join(opts.home, 'inbox');
+  const { sweepInbox } = await import('./inbox.js');
+  sweepInbox(inboxDir);
+  const inboxSweeper = setInterval(() => { sweepInbox(inboxDir); }, 3600_000);
+  inboxSweeper.unref();
 
   let muted = false;
   const policyState: PolicyState = { trustUntilRevoked: false, allowTools: new Set<string>() };
@@ -312,6 +310,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     if (stopped) return;
     stopped = true;
     clearInterval(sweeper);
+    clearInterval(inboxSweeper);
     const forceExit = setTimeout(() => {
       // eslint-disable-next-line no-console
       console.error('tlive daemon: forced exit (event loop did not drain in 2s)');
