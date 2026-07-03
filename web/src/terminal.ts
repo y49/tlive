@@ -62,6 +62,23 @@ function applyScale(): void {
   }
 }
 
+// Soft keyboard (iOS/Android): the layout viewport does NOT shrink when the
+// keyboard opens — only the visual viewport does. Pin #app to the visual
+// viewport so the key bar sits right above the keyboard and the grid re-fits.
+const app = document.getElementById('app') as HTMLElement;
+const vv = window.visualViewport;
+if (vv) {
+  const sync = (): void => {
+    app.style.height = `${vv.height}px`;
+    app.style.transform = `translateY(${vv.offsetTop}px)`; // counter iOS auto-scroll
+    window.scrollTo(0, 0);
+    applyScale();
+  };
+  vv.addEventListener('resize', sync);
+  vv.addEventListener('scroll', sync);
+  sync();
+}
+
 // The grid element resizes asynchronously after term.resize()/font changes —
 // a single rAF can measure stale dimensions and leave the bottom row under the
 // key bar. Re-fit whenever the terminal's actual box changes.
