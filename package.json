@@ -49,6 +49,7 @@
     "grammy": "^1.41.1",
     "https-proxy-agent": "^9.0.0",
     "node-pty": "^1.1.0",
+    "qrcode-terminal": "^0.12.0",
     "socks-proxy-agent": "^10.0.0",
     "ws": "^8.20.0"
   },

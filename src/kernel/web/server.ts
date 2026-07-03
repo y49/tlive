@@ -71,8 +71,9 @@ export async function startWebServer(opts: WebServerOpts): Promise<WebServerHand
   });
   const addr = http.address();
   const port = typeof addr === 'object' && addr ? addr.port : opts.port;
+  const displayHost = opts.bind === '0.0.0.0' || opts.bind === '::' ? '127.0.0.1' : opts.bind;
   return {
-    url: `http://${opts.bind}:${port}/?token=${opts.token}`,
+    url: `http://${displayHost}:${port}/?token=${opts.token}`,
     port,
     async close() {
       wss.close();

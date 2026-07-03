@@ -132,7 +132,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   let web: WebServerHandle | null = null;
   let webUrl: string | undefined;
   if (cfg.web?.enabled !== false) {
-    const bind = cfg.web?.bind ?? '127.0.0.1';
+    // Default 0.0.0.0: phone access on the LAN is the core use case; the token gates every request.
+    const bind = cfg.web?.bind ?? '0.0.0.0';
     const port = cfg.web?.port ?? 7681;
     const token = loadOrCreateToken(opts.home);
     const here = dirname(fileURLToPath(import.meta.url)); // dist/src

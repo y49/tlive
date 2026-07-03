@@ -6,6 +6,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { SessionHost } from '../../kernel/pty/session-host.js';
 import { defaultSocketPath, request } from '../../kernel/ipc/client.js';
 import type { SessionMeta } from '../../kernel/ipc/protocol.js';
+import { resolveWebUrls } from '../web-url.js';
 
 export function gitBranch(cwd: string): string | null {
   try {
@@ -38,6 +39,23 @@ export async function runRun(argv: string[]): Promise<void> {
   const cwd = process.cwd();
   const label = deriveLabel(cmd, cwd);
   const sock = defaultSocketPath();
+
+  // Banner BEFORE the pty attaches (raw mode + program output start after host.start()).
+  const urls = resolveWebUrls(home);
+  if (urls.enabled && urls.token) {
+    const sess = (base: string): string => base.replace('/?', `/s/${encodeURIComponent(cwd)}?`);
+    process.stdout.write('\ntlive web UI:\n');
+    if (urls.local) process.stdout.write(`  Local:    ${sess(urls.local)}\n`);
+    if (urls.network) process.stdout.write(`  Network:  ${sess(urls.network)}\n`);
+    process.stdout.write(`  Session:  ${label} (id: ${id})\n`);
+    const qrTarget = urls.network ? sess(urls.network) : urls.local ? sess(urls.local) : null;
+    if (qrTarget) {
+      const { default: qr } = await import('qrcode-terminal');
+      qr.generate(qrTarget, { small: true }, (out) => process.stdout.write(out + '\n'));
+    }
+  } else if (urls.enabled) {
+    process.stdout.write('\ntlive web UI: token not created yet — run `tlive start` first for a link + QR.\n');
+  }
 
   const host = new SessionHost({ id, cmd, args, cwd, sockPath, attachLocal: true });
   await host.start();

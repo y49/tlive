@@ -1,9 +1,10 @@
 // src/cli/subcommands/status.ts
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { request } from '../../kernel/ipc/client.js';
 import { loadConfig } from '../../kernel/config/loader.js';
+import { resolveWebUrls } from '../web-url.js';
 
 export async function runStatus(_argv: string[]): Promise<void> {
   const home = process.env.TLIVE_HOME ?? join(homedir(), '.tlive');
@@ -23,16 +24,10 @@ export async function runStatus(_argv: string[]): Promise<void> {
   if (cfg.adapters.feishu?.chatId) dests.push('feishu');
   process.stdout.write(`channels: ${dests.length ? dests.join(', ') : '(none — run: tlive setup)'}\n`);
 
-  const webEnabled = cfg.web?.enabled !== false;
-  if (webEnabled) {
-    const bind = cfg.web?.bind ?? '127.0.0.1';
-    const port = cfg.web?.port ?? 7681;
-    let tokenHint = '';
-    try {
-      const tok = readFileSync(join(home, 'web-token'), 'utf8').trim();
-      if (tok) tokenHint = `?token=${tok}`;
-    } catch { /* token created on first daemon start */ }
-    process.stdout.write(`web:      http://${bind}:${port}/${tokenHint}\n`);
+  const urls = resolveWebUrls(home);
+  if (urls.enabled) {
+    process.stdout.write(`web:      ${urls.local ?? '(starting)'}\n`);
+    if (urls.network) process.stdout.write(`          ${urls.network}\n`);
   } else {
     process.stdout.write('web:      disabled\n');
   }
