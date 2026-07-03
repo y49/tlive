@@ -213,6 +213,16 @@ const bar = document.getElementById('bar') as HTMLElement;
   b.addEventListener('click', () => { location.href = `/?token=${encodeURIComponent(token)}`; });
   bar.appendChild(b);
 }
+{ // dismiss the soft keyboard (iOS keeps it up while xterm's hidden textarea has focus)
+  const b = document.createElement('button');
+  b.textContent = '⌄ 键盘';
+  b.addEventListener('click', (e) => {
+    e.preventDefault();
+    term.blur();
+    (document.activeElement as HTMLElement | null)?.blur?.();
+  });
+  bar.appendChild(b);
+}
 for (const [label, seq] of BAR) {
   const b = document.createElement('button');
   b.textContent = label;
