@@ -126,8 +126,14 @@ function fitPreview(pv: Preview): void {
   const inner = pv.el.firstElementChild as HTMLElement; // scaler
   const t = inner.firstElementChild as HTMLElement;     // xterm root
   if (!t || t.offsetWidth === 0) return;
-  const s = Math.min(pv.el.clientWidth / t.offsetWidth, pv.el.clientHeight / t.offsetHeight);
+  // Fit by WIDTH so the preview fills the card. Height adapts up to a cap;
+  // when clipped, pin the BOTTOM of the screen (TUI prompt/status live there).
+  const s = pv.el.clientWidth / t.offsetWidth;
+  const scaledH = Math.ceil(t.offsetHeight * s);
+  const h = Math.min(220, scaledH);
   inner.style.transform = `scale(${s})`;
+  pv.el.style.height = `${h}px`;
+  inner.style.top = `${Math.min(0, h - scaledH)}px`;
 }
 
 function createPreview(id: string): Preview {

@@ -62,6 +62,11 @@ function applyScale(): void {
   }
 }
 
+// The grid element resizes asynchronously after term.resize()/font changes —
+// a single rAF can measure stale dimensions and leave the bottom row under the
+// key bar. Re-fit whenever the terminal's actual box changes.
+new ResizeObserver(() => applyScale()).observe(termEl);
+
 function wsUrl(): string {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   return `${proto}://${location.host}/ws/term/${encodeURIComponent(id)}?token=${encodeURIComponent(token)}`;
@@ -146,9 +151,12 @@ window.addEventListener('resize', () => {
   applyScale();                       // re-fit the current grid to the new viewport immediately
 });
 
-// mobile key bar — keys phones lack
+// mobile key bar — keys phones lack (⇧Tab = Claude Code permission-mode cycle)
 const BAR: Array<[string, string]> = [
-  ['Esc', '\x1b'], ['Tab', '\t'], ['Ctrl-C', '\x03'], ['↑', '\x1b[A'], ['↓', '\x1b[B'], ['←', '\x1b[D'], ['→', '\x1b[C'],
+  ['Esc', '\x1b'], ['Tab', '\t'], ['⇧Tab', '\x1b[Z'], ['Ctrl-C', '\x03'],
+  ['↑', '\x1b[A'], ['↓', '\x1b[B'], ['←', '\x1b[D'], ['→', '\x1b[C'],
+  ['Ctrl-D', '\x04'], ['Ctrl-Z', '\x1a'], ['Ctrl-R', '\x12'], ['Ctrl-L', '\x0c'],
+  ['PgUp', '\x1b[5~'], ['PgDn', '\x1b[6~'],
 ];
 const bar = document.getElementById('bar') as HTMLElement;
 { // back to the session list

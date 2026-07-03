@@ -66,7 +66,7 @@
                  border-radius: 5px; padding: 1px 6px; }
     .meta .path { overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
 
-    .preview { height: 170px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px;
+    .preview { height: 170px; /* replaced by width-fit height in JS */ overflow: hidden; border: 1px solid var(--line); border-radius: 8px;
                background: var(--panel2); cursor: pointer; position: relative; }
     .preview:hover { border-color: var(--line2); }
     .preview::after { content: '⛶ 打开终端'; position: absolute; right: 8px; bottom: 6px; font-size: 11px;
