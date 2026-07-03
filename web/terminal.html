@@ -18,6 +18,18 @@
            background: rgba(18,22,29,.92); color: #d5dae2; font-size: 18px; line-height: 1;
            display: flex; align-items: center; justify-content: center; backdrop-filter: blur(6px); }
     #fab:active { background: #2a3140; }
+    /* view-mode shield: swallows touches so tapping the screen doesn't summon the keyboard */
+    #shield { position: absolute; inset: 0 0 var(--bar-h) 0; z-index: 4; }
+    /* copy-screen modal: native-selectable text (clipboard API needs HTTPS) */
+    #copym { position: fixed; inset: 0; z-index: 20; display: none; flex-direction: column;
+             background: rgba(0,0,0,.92); padding: 12px; gap: 10px; }
+    #copym.open { display: flex; }
+    #copym textarea { flex: 1; width: 100%; resize: none; font: 12px ui-monospace, Menlo, monospace;
+                      background: #0d1015; color: #d5dae2; border: 1px solid #2a3038; border-radius: 8px;
+                      padding: 10px; -webkit-user-select: text; user-select: text; }
+    #copym .row { display: flex; gap: 8px; justify-content: flex-end; }
+    #copym button { height: 36px; padding: 0 16px; border: 1px solid #2a3038; border-radius: 8px;
+                    background: #1a1f27; color: #d5dae2; font: 13px ui-monospace, Menlo, monospace; }
     #scaler { position: absolute; top: 0; left: 0; transform-origin: top left; }
     #term { display: inline-block; }
     #hint { position: absolute; top: calc(6px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
@@ -45,6 +57,10 @@
     <div id="hint"></div>
     <div id="bar"></div>
     <button id="fab" title="快捷键">⌨</button>
+  </div>
+  <div id="copym">
+    <textarea readonly></textarea>
+    <div class="row"><button id="copym-close">关闭</button></div>
   </div>
   <script src="/terminal.js"></script>
 </body>

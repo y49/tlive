@@ -213,22 +213,58 @@ const bar = document.getElementById('bar') as HTMLElement;
   b.addEventListener('click', () => { location.href = `/?token=${encodeURIComponent(token)}`; });
   bar.appendChild(b);
 }
-{ // dismiss the soft keyboard (iOS keeps it up while xterm's hidden textarea has focus)
-  const b = document.createElement('button');
-  b.textContent = '⌄ 键盘';
-  b.addEventListener('click', (e) => {
-    e.preventDefault();
+// ---- view/input modes -----------------------------------------------------
+// xterm swallows every touch (tap → focus → keyboard; long-press select dies).
+// View mode overlays a shield: taps do nothing, keyboard stays down, the key
+// bar still works (frames don't need focus). Touch devices default to VIEW.
+const modeBtn = document.createElement('button');
+let shield: HTMLElement | null = null;
+function setMode(input: boolean): void {
+  if (input) {
+    shield?.remove(); shield = null;
+    modeBtn.textContent = '👁 查看';
+    term.focus();
+  } else {
+    if (!shield) {
+      shield = document.createElement('div');
+      shield.id = 'shield';
+      app.appendChild(shield);
+    }
+    modeBtn.textContent = '⌨ 输入';
     term.blur();
     (document.activeElement as HTMLElement | null)?.blur?.();
+  }
+}
+{ // mode toggle — first key on the bar
+  modeBtn.addEventListener('click', (e) => { e.preventDefault(); setMode(!!shield); });
+  bar.appendChild(modeBtn);
+}
+{ // copy the current screen text (clipboard API needs HTTPS → selectable modal)
+  const b = document.createElement('button');
+  b.textContent = '⎘ 复制';
+  const modal = document.getElementById('copym') as HTMLElement;
+  const ta = modal.querySelector('textarea') as HTMLTextAreaElement;
+  (document.getElementById('copym-close') as HTMLElement).addEventListener('click', () => modal.classList.remove('open'));
+  b.addEventListener('click', (e) => {
+    e.preventDefault();
+    const buf = term.buffer.active;
+    const lines: string[] = [];
+    for (let i = 0; i < buf.length; i++) lines.push(buf.getLine(i)?.translateToString(true) ?? '');
+    ta.value = lines.join('\n').replace(/\n+$/, '');
+    modal.classList.add('open');
   });
   bar.appendChild(b);
 }
 for (const [label, seq] of BAR) {
   const b = document.createElement('button');
   b.textContent = label;
-  b.addEventListener('click', (e) => { e.preventDefault(); send(encodeData(enc.encode(seq))); term.focus(); });
+  // don't re-focus in view mode — that would summon the keyboard back
+  b.addEventListener('click', (e) => { e.preventDefault(); send(encodeData(enc.encode(seq))); if (!shield) term.focus(); });
   bar.appendChild(b);
 }
+// touch devices start in VIEW mode (no keyboard until you ask); desktops in INPUT
+setMode(!matchMedia('(pointer: coarse)').matches);
+
 { // font-size controls (persisted); resizing re-fits and re-requests our ideal grid
   const sp = document.createElement('div');
   sp.className = 'sp';
