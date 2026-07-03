@@ -10,7 +10,7 @@ import { FrameType, FrameDecoder, encodeAttach, parseDims } from './frame.js';
 const token = new URLSearchParams(location.search).get('token') ?? '';
 
 type Status = 'active' | 'waiting-approval' | 'waiting-input' | 'idle';
-interface Pending { requestId: string; title: string; body: string }
+interface Pending { requestId: string; title: string; body: string; toolName?: string }
 interface SessionView {
   id: string; label: string; cwd: string;
   kind: 'wrapped' | 'hook'; status: Status;
@@ -21,7 +21,7 @@ type Frame =
   | { type: 'session-upsert'; session: SessionView }
   | { type: 'session-remove'; id: string };
 type Action =
-  | { type: 'approve'; requestId: string; approved: boolean }
+  | { type: 'approve'; requestId: string; approved: boolean; alwaysAllowTool?: string }
   | { type: 'reply'; requestId: string; text: string }
   | { type: 'mute'; id: string; muted: boolean };
 
@@ -46,7 +46,12 @@ function send(action: Action): void {
 function connect(): void {
   const sock = new WebSocket(wsUrl());
   ws = sock;
-  sock.onopen = () => { retry = 0; conn.textContent = '已连接'; conn.className = 'up'; };
+  sock.onopen = () => {
+    retry = 0; conn.textContent = '已连接'; conn.className = 'up';
+    // Reconcile after (re)connect: frames missed while disconnected (e.g. a
+    // session-remove) would otherwise leave ghost cards forever.
+    void reconcile();
+  };
   sock.onmessage = (ev) => {
     let f: Frame;
     try { f = JSON.parse(String(ev.data)); } catch { return; }
@@ -63,12 +68,16 @@ function connect(): void {
   sock.onerror = () => sock.close();
 }
 
-// Initial snapshot: /ws/events sends no backlog, so seed from the REST list.
-async function snapshot(): Promise<void> {
+// Full reconcile from the REST list: seed on load AND correct drift after a
+// ws reconnect (adds missing sessions, drops ones that no longer exist).
+async function reconcile(): Promise<void> {
   try {
     const res = await fetch(`/api/sessions?token=${encodeURIComponent(token)}`);
     if (!res.ok) return;
-    for (const s of (await res.json()) as SessionView[]) if (!sessions.has(s.id)) sessions.set(s.id, s);
+    const list = (await res.json()) as SessionView[];
+    const ids = new Set(list.map((s) => s.id));
+    for (const s of list) sessions.set(s.id, s);
+    for (const id of [...sessions.keys()]) if (!ids.has(id)) sessions.delete(id);
     render();
   } catch { /* ws will populate */ }
 }
@@ -234,11 +243,19 @@ function card(s: SessionView): HTMLElement {
 
   if (s.pending) {
     const rid = s.pending.requestId;
+    const tool = s.pending.toolName;
     const ok = document.createElement('button'); ok.className = 'ok'; ok.textContent = '✅ 允许';
     ok.onclick = () => send({ type: 'approve', requestId: rid, approved: true });
     const no = document.createElement('button'); no.className = 'no'; no.textContent = '❌ 拒绝';
     no.onclick = () => send({ type: 'approve', requestId: rid, approved: false });
     actions.append(ok, no);
+    if (tool) {
+      const always = document.createElement('button'); always.className = 'ok';
+      always.textContent = `✅ 总是允许 ${tool}`;
+      always.title = '本次放行,且 daemon 重启前该工具自动允许';
+      always.onclick = () => send({ type: 'approve', requestId: rid, approved: true, alwaysAllowTool: tool });
+      actions.append(always);
+    }
   }
 
   const mute = document.createElement('button');
@@ -293,7 +310,7 @@ function render(): void {
 }
 window.addEventListener('resize', () => { for (const pv of previews.values()) fitPreview(pv); });
 
-snapshot();
+reconcile();
 connect();
 // Refresh staleness once a minute (lastActivityAt is server-stamped; the label drifts otherwise).
 setInterval(render, 60000);

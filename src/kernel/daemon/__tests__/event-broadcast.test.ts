@@ -207,4 +207,48 @@ describe('daemon → /ws/events downstream broadcast', () => {
     const muted = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/repo/m' && x.session.muted === true);
     expect(muted.session.muted).toBe(true);
   });
+
+
+  it('approval cards get a session tag and are edited to their outcome on resolve', async () => {
+    const sent: Array<{ kind: string; title?: string; body?: string }> = [];
+    const edits: Array<{ messageId: string; title?: string }> = [];
+    const adapter = makeFakeAdapter('telegram');
+    adapter.send = async (out: OutgoingMessage) => {
+      sent.push(out.kind === 'card' ? { kind: 'card', title: out.title, body: out.body } : { kind: 'text' });
+      return { messageId: `m${sent.length}` };
+    };
+    adapter.edit = async (messageId: string, out: OutgoingMessage) => {
+      edits.push({ messageId, ...(out.kind === 'card' ? { title: out.title } : {}) });
+    };
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    // seed the session so the card gets a label tag
+    await request({ kind: 'hook.event', event: { event: 'session-start', cwd: '/tag/repo', sessionId: 's', source: 'startup' } }, { socketPath: sock, timeoutMs: 2000 });
+    const p = request({ kind: 'hook.permission.request', cwd: '/tag/repo', sessionId: 's', toolName: 'Edit', input: { file_path: '/x', old_string: 'a', new_string: 'b' } }, { socketPath: sock, timeoutMs: 5000 });
+    await new Promise((r) => setTimeout(r, 150));
+    const card = sent.find((s) => s.kind === 'card');
+    expect(card?.title).toContain('[repo]'); // hook session tag
+    // answer → card edited to outcome
+    const reqId = h.sessions.get('/tag/repo')!.pending!.requestId;
+    await request({ kind: 'hook.permission.answer', requestId: reqId, approved: false }, { socketPath: sock, timeoutMs: 2000 });
+    await p;
+    await new Promise((r) => setTimeout(r, 100));
+    expect(edits.length).toBe(1);
+    expect(edits[0].title).toContain('已拒绝');
+  });
+
+  it('web approve with alwaysAllowTool auto-allows the next request for that tool', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [makeFakeAdapter('telegram')] });
+    const { frames, ws } = await openEventsWs();
+    const p = request({ kind: 'hook.permission.request', cwd: '/aa', sessionId: 's', toolName: 'Edit', input: {} }, { socketPath: sock, timeoutMs: 5000 });
+    const ask = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/aa' && x.session.status === 'waiting-approval');
+    expect(ask.session.pending.toolName).toBe('Edit');
+    ws.send(JSON.stringify({ type: 'approve', requestId: ask.session.pending.requestId, approved: true, alwaysAllowTool: 'Edit' }));
+    expect(((await p) as { decision: string }).decision).toBe('allow');
+    // next Edit request auto-allows without a card
+    const r2 = await request({ kind: 'hook.permission.request', cwd: '/aa', sessionId: 's', toolName: 'Edit', input: {} }, { socketPath: sock, timeoutMs: 3000 });
+    expect((r2 as { decision: string }).decision).toBe('allow');
+  });
+
 });

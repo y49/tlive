@@ -60,7 +60,7 @@ describe('PermissionRouter pending lifecycle callbacks', () => {
     }));
     const p = r.requestPermission({ cwd: '/p/foo', toolName: 'Bash', input: {} });
     await new Promise((res) => setTimeout(res, 0));
-    expect(pend).toEqual([{ cwd: '/p/foo', requestId: id, title: 'T', body: 'B' }]);
+    expect(pend).toEqual([{ cwd: '/p/foo', requestId: id, title: 'T', body: 'B', toolName: 'Bash' }]);
     r.answer(id, true);
     await p;
     expect(done).toEqual([{ cwd: '/p/foo', requestId: id, decision: 'allow' }]);

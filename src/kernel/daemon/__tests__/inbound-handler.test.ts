@@ -29,6 +29,11 @@ const baseDeps = (over: Partial<InboundHandlerDeps> = {}): InboundHandlerDeps =>
   takeLatestContinueId: () => null,
   setMuted: vi.fn(),
   setTrust: vi.fn(),
+  addAllowTool: vi.fn(),
+  resolveReply: () => undefined,
+  sessionInfo: () => undefined,
+  listSessions: () => [],
+  inject: vi.fn().mockResolvedValue(undefined),
   ...over,
 });
 
@@ -109,5 +114,88 @@ describe('InboundHandler', () => {
     await h.handle(envelope({ text: 'pause:REQ123' }));
     expect(setTrust).toHaveBeenCalledWith(true);
     expect(permAnswer).toHaveBeenCalledWith('REQ123', true);
+  });
+});
+
+describe('reply-to routing & injection', () => {
+  it('quoted reply to a wrapped session injects into its pty', async () => {
+    const inject = vi.fn().mockResolvedValue(undefined);
+    const msgs: Array<{ kind: string; text?: string }> = [];
+    const h = new InboundHandler(baseDeps({
+      imBy: () => makeAdapter(msgs),
+      resolveReply: (ch, id) => (ch === 'telegram' && id === 'q1' ? '/repo' : undefined),
+      sessionInfo: () => ({ kind: 'wrapped' as const, label: 'claude @ repo', sockPath: '/s.sock' }),
+      inject,
+    }));
+    await h.handle(envelope({ text: '继续修测试', replyToMessageId: 'q1' }));
+    expect(inject).toHaveBeenCalledWith('/s.sock', '继续修测试');
+    expect(msgs.some((m) => m.text?.includes('已发送到'))).toBe(true);
+  });
+
+  it('quoted reply prefers a live continue over injection', async () => {
+    const inject = vi.fn();
+    const answer = vi.fn().mockReturnValue(true);
+    const h = new InboundHandler(baseDeps({
+      resolveReply: () => '/repo',
+      sessionInfo: () => ({ kind: 'wrapped' as const, label: 'l', sockPath: '/s.sock', continueId: 'c9' }),
+      continueBroker: { answer, request: vi.fn(), onRequest: vi.fn() } as never,
+      inject,
+    }));
+    await h.handle(envelope({ text: 'go on', replyToMessageId: 'q1' }));
+    expect(answer).toHaveBeenCalledWith('c9', 'go on');
+    expect(inject).not.toHaveBeenCalled();
+  });
+
+  it('quoted reply to a hook-only session explains injection is unavailable', async () => {
+    const msgs: Array<{ kind: string; text?: string }> = [];
+    const h = new InboundHandler(baseDeps({
+      imBy: () => makeAdapter(msgs),
+      resolveReply: () => '/repo',
+      sessionInfo: () => ({ kind: 'hook' as const, label: 'proj' }),
+    }));
+    await h.handle(envelope({ text: 'hello', replyToMessageId: 'q1' }));
+    expect(msgs.some((m) => m.text?.includes('无法注入'))).toBe(true);
+  });
+
+  it('bare text with exactly one wrapped session injects directly', async () => {
+    const inject = vi.fn().mockResolvedValue(undefined);
+    const msgs: Array<{ kind: string; text?: string }> = [];
+    const h = new InboundHandler(baseDeps({
+      imBy: () => makeAdapter(msgs),
+      listSessions: () => [{ cwd: '/a', kind: 'wrapped' as const, label: 'only', sockPath: '/a.sock' }],
+      inject,
+    }));
+    await h.handle(envelope({ text: 'do it' }));
+    expect(inject).toHaveBeenCalledWith('/a.sock', 'do it');
+  });
+
+  it('bare text with multiple wrapped sessions asks to quote', async () => {
+    const inject = vi.fn();
+    const msgs: Array<{ kind: string; text?: string }> = [];
+    const h = new InboundHandler(baseDeps({
+      imBy: () => makeAdapter(msgs),
+      listSessions: () => [
+        { cwd: '/a', kind: 'wrapped' as const, label: 'a', sockPath: '/a.sock' },
+        { cwd: '/b', kind: 'wrapped' as const, label: 'b', sockPath: '/b.sock' },
+      ],
+      inject,
+    }));
+    await h.handle(envelope({ text: 'do it' }));
+    expect(inject).not.toHaveBeenCalled();
+    expect(msgs.some((m) => m.text?.includes('引用'))).toBe(true);
+  });
+
+  it('allowtool:<rid>:<tool> grants the tool and approves the request', async () => {
+    const addAllowTool = vi.fn();
+    const permAnswer = vi.fn();
+    const msgs: Array<{ kind: string; text?: string }> = [];
+    const h = new InboundHandler(baseDeps({
+      imBy: () => makeAdapter(msgs),
+      addAllowTool,
+      permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as never,
+    }));
+    await h.handle(envelope({ text: 'allowtool:rid-1:Edit' }));
+    expect(addAllowTool).toHaveBeenCalledWith('Edit');
+    expect(permAnswer).toHaveBeenCalledWith('rid-1', true);
   });
 });

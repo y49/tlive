@@ -16,6 +16,7 @@ export interface PendingApproval {
   requestId: string;
   title: string;
   body: string;
+  toolName?: string; // for "always allow <tool>" actions
 }
 
 export interface SessionView {

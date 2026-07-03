@@ -37,7 +37,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const startedAt = Date.now();
 
   let muted = false;
-  const policyState: PolicyState = { trustUntilRevoked: false };
+  const policyState: PolicyState = { trustUntilRevoked: false, allowTools: new Set<string>() };
 
   // IM → web deep link. Only meaningful when the user configured an externally
   // reachable base URL (tailscale / reverse proxy) — a 127.0.0.1 link is useless on a phone.
@@ -53,32 +53,65 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     return out;
   };
 
+  const sessions = new SessionRegistry();
+  const events = new EventHub();
+
+  // IM messageId → session cwd, for reply-to routing (bounded; daemon-lifetime only).
+  const msgToCwd = new Map<string, string>();
+  const rememberMsg = (channel: string, messageId: string, cwd: string): void => {
+    if (msgToCwd.size >= 500) {
+      const oldest = msgToCwd.keys().next().value;
+      if (oldest !== undefined) msgToCwd.delete(oldest);
+    }
+    msgToCwd.set(`${channel}:${messageId}`, cwd);
+  };
+
+  // Approval cards sent per requestId — edited to their outcome on resolve (no zombie buttons).
+  const sentCards = new Map<string, Array<{ channel: string; messageId: string; title: string; body: string }>>();
+
+  /** `[⌨ label]` for wrapped (injectable), `[label]` for hook-only sessions. */
+  const sessionTag = (cwd: string | undefined): string => {
+    if (!cwd) return '';
+    const s = sessions.get(cwd);
+    if (!s) return '';
+    return s.kind === 'wrapped' ? `[⌨ ${s.label}] ` : `[${s.label}] `;
+  };
+
   const sendToChat = async (
     target: PermChat,
-    msg: { title?: string; body?: string; text?: string; requestId?: string },
+    msg: { title?: string; body?: string; text?: string; requestId?: string; toolName?: string; cwd?: string },
   ): Promise<void> => {
     const adapter = (opts.imAdapters ?? []).find((a) => a.channel === target.channel);
     if (!adapter) return;
+    const tag = sessionTag(msg.cwd);
+    let sent: { messageId: string };
     if (msg.text !== undefined) {
-      await adapter.send({ kind: 'text', text: deepLink ? `${msg.text}\n🔗 ${deepLink}` : msg.text });
+      const text = `${tag}${msg.text}`;
+      sent = await adapter.send({ kind: 'text', text: deepLink ? `${text}\n🔗 ${deepLink}` : text });
     } else {
-      await adapter.send({
+      const title = msg.title ? `${tag}${msg.title}` : undefined;
+      const body = deepLink ? `${msg.body ?? ''}\n🔗 ${deepLink}` : (msg.body ?? '');
+      sent = await adapter.send({
         kind: 'card',
-        ...(msg.title ? { title: msg.title } : {}),
-        body: deepLink ? `${msg.body ?? ''}\n🔗 ${deepLink}` : (msg.body ?? ''),
+        ...(title ? { title } : {}),
+        body,
         ...(msg.requestId ? {
           buttons: [
             { id: `approve:${msg.requestId}`, label: '✅ 允许' },
             { id: `deny:${msg.requestId}`, label: '❌ 拒绝' },
+            ...(msg.toolName ? [{ id: `allowtool:${msg.requestId}:${msg.toolName}`, label: `✅ 总是允许 ${msg.toolName}` }] : []),
             { id: `pause:${msg.requestId}`, label: '⏸ 暂停审批' },
           ],
         } : {}),
       });
+      if (msg.requestId) {
+        const list = sentCards.get(msg.requestId) ?? [];
+        list.push({ channel: target.channel, messageId: sent.messageId, title: title ?? '', body });
+        sentCards.set(msg.requestId, list);
+      }
     }
+    if (msg.cwd) rememberMsg(target.channel, sent.messageId, msg.cwd);
   };
-
-  const sessions = new SessionRegistry();
-  const events = new EventHub();
 
   // Reap wrapped sessions whose `tlive run` process died without unregistering (kill -9 / crash).
   const sweeper = setInterval(() => {
@@ -86,9 +119,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   }, 30_000);
   sweeper.unref();
 
+  const OUTCOME: Record<string, string> = { allow: '✅ 已允许', deny: '❌ 已拒绝', defer: '⏳ 已超时(回落本地)' };
+
   const permissionRouter = new PermissionRouter({
     configuredChats,
-    sendToChat: (t, card) => sendToChat(t, { title: card.title, body: card.body, requestId: card.requestId }),
+    sendToChat: (t, card) => sendToChat(t, card),
     isMuted: (cwd) => muted || (sessions.get(cwd)?.muted ?? false),
     policyDecide: (req) => {
       const d = policyDecide({ toolName: req.toolName, permissionMode: req.permissionMode }, policyState);
@@ -96,12 +131,22 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       return d;
     },
     renderCard: (req) => renderApprovalCard({ toolName: req.toolName, input: req.input }),
-    onPending: ({ cwd, requestId, title, body }) => {
-      events.broadcast({ type: 'session-upsert', session: sessions.upsert({ cwd, status: 'waiting-approval', pending: { requestId, title, body } }) });
+    onPending: ({ cwd, requestId, title, body, toolName }) => {
+      events.broadcast({ type: 'session-upsert', session: sessions.upsert({ cwd, status: 'waiting-approval', pending: { requestId, title, body, toolName } }) });
     },
-    onResolved: ({ cwd, decision }) => {
+    onResolved: ({ cwd, requestId, decision }) => {
       // Non-approved outcomes (deny/defer) leave the session idle; only allow → active.
       events.broadcast({ type: 'session-upsert', session: sessions.upsert({ cwd, status: decision === 'allow' ? 'active' : 'idle', pending: null }) });
+      // Rewrite the IM cards to their outcome (buttons removed) — no zombie cards.
+      const cards = sentCards.get(requestId);
+      if (cards) {
+        sentCards.delete(requestId);
+        for (const c of cards) {
+          const adapter = (opts.imAdapters ?? []).find((a) => a.channel === c.channel);
+          if (!adapter) continue;
+          void adapter.edit(c.messageId, { kind: 'card', title: `${OUTCOME[decision] ?? decision} · ${c.title}`, body: c.body }).catch(() => undefined);
+        }
+      }
     },
   });
 
@@ -114,7 +159,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     events.broadcast({ type: 'session-upsert', session: sessions.upsert({ cwd: req.cwd, status: 'waiting-input', continueId: req.requestId }) });
     if (muted || sessions.get(req.cwd)?.muted) return;
     for (const t of configuredChats()) {
-      void sendToChat(t, { text: `⏸ ${req.context}\n回复本条以续跑 (id: ${req.requestId})` });
+      void sendToChat(t, { text: `⏸ ${req.context}\n回复本条以续跑 (id: ${req.requestId})`, cwd: req.cwd });
     }
   });
 
@@ -122,6 +167,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const onAction = (action: import('../web/event-hub.js').EventAction): void => {
     switch (action.type) {
       case 'approve':
+        if (action.approved && action.alwaysAllowTool) policyState.allowTools?.add(action.alwaysAllowTool);
         permissionRouter.answer(action.requestId, action.approved);
         return;
       case 'reply':
@@ -189,7 +235,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         }
         case 'hook.notify': {
           if (!muted) {
-            await Promise.all(configuredChats().map((t) => sendToChat(t, { text: `[${req.level}] ${req.message}` })));
+            await Promise.all(configuredChats().map((t) => sendToChat(t, { text: `[${req.level}] ${req.message}`, cwd: req.cwd })));
           }
           events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.message }));
           reply({ kind: 'ack' });
@@ -220,6 +266,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     },
   });
 
+  const { injectInput } = await import('./inject.js');
   const inbound = new (await import('./inbound-handler.js')).InboundHandler({
     senderGuard,
     imBy: (ch) => (opts.imAdapters ?? []).find((a) => a.channel === ch),
@@ -228,6 +275,15 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     takeLatestContinueId: () => { const id = latestContinueId; latestContinueId = null; return id; },
     setMuted: (m: boolean) => { muted = m; },
     setTrust: (t: boolean) => { policyState.trustUntilRevoked = t; },
+    addAllowTool: (tool: string) => { policyState.allowTools?.add(tool); },
+    resolveReply: (channel, messageId) => msgToCwd.get(`${channel}:${messageId}`),
+    sessionInfo: (cwd) => {
+      const s = sessions.get(cwd);
+      if (!s) return undefined;
+      return { kind: s.kind, label: s.label, ...(s.sockPath ? { sockPath: s.sockPath } : {}), ...(s.continueId ? { continueId: s.continueId } : {}) };
+    },
+    listSessions: () => sessions.list().map((s) => ({ cwd: s.cwd, kind: s.kind, label: s.label, ...(s.sockPath ? { sockPath: s.sockPath } : {}) })),
+    inject: (sockPath, text) => injectInput(sockPath, text),
   });
   for (const a of opts.imAdapters ?? []) {
     await a.start();

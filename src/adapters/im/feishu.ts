@@ -61,19 +61,22 @@ export class FeishuAdapter implements IMAdapter {
     dispatcher.register({
       'im.message.receive_v1': async (data: unknown) => {
         if (!this.inboundHandler) return;
-        const d = data as { event: { sender: { sender_id: { user_id: string } }; message: { message_id: string; chat_id: string; content: string; create_time: string } } };
+        const d = data as { event: { sender: { sender_id: { user_id: string } }; message: { message_id: string; chat_id: string; content: string; create_time: string; parent_id?: string; root_id?: string } } };
         const ev = d.event;
         // Fail-closed: only forward inbound from the configured chat.
         if (!this.opts.chatId || ev.message.chat_id !== this.opts.chatId) return;
         // content is JSON like {"text":"..."}
         let text = '';
         try { text = (JSON.parse(ev.message.content) as { text?: string }).text ?? ''; } catch {}
+        // parent_id = the message this one replies to (Feishu "回复"); root_id as fallback.
+        const replyTo = ev.message.parent_id ?? ev.message.root_id;
         this.inboundHandler({
           channel: 'feishu',
           chatId: ev.message.chat_id,
           userId: ev.sender.sender_id.user_id,
           messageId: ev.message.message_id,
           text,
+          ...(replyTo ? { replyToMessageId: replyTo } : {}),
           ts: Number(ev.message.create_time) || Date.now(),
         });
       },

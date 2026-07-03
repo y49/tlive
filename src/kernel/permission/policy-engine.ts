@@ -8,6 +8,9 @@
 export interface PolicyState {
   /** Manual "trust switch": while true, everything auto-allows until revoked. */
   trustUntilRevoked: boolean;
+  /** Per-tool "always allow" grants (e.g. 总是允许 Edit). In-memory, cleared on
+   *  restart — a finer notch than the trust switch. Never auto-denies. */
+  allowTools?: Set<string>;
 }
 
 export interface PolicyRequest {
@@ -26,6 +29,7 @@ export const READ_ONLY_TOOLS = new Set<string>(['Read', 'Glob', 'Grep']);
 
 export function decide(req: PolicyRequest, state: PolicyState): PolicyDecision {
   if (state.trustUntilRevoked) return { decision: 'allow', reason: 'trust-switch' };
+  if (state.allowTools?.has(req.toolName)) return { decision: 'allow', reason: 'always-tool' };
   if (READ_ONLY_TOOLS.has(req.toolName)) return { decision: 'allow', reason: 'read-only' };
   return { decision: 'ask' };
 }

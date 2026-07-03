@@ -19,7 +19,7 @@ export type EventFrame =
 
 /** Upstream actions a dashboard client sends over /ws/events. Vendor-neutral. */
 export type EventAction =
-  | { type: 'approve'; requestId: string; approved: boolean }
+  | { type: 'approve'; requestId: string; approved: boolean; alwaysAllowTool?: string }
   | { type: 'reply'; requestId: string; text: string }
   | { type: 'mute'; id: string; muted: boolean };
 
@@ -32,7 +32,10 @@ export function parseEventAction(raw: string): EventAction | null {
   switch (a.type) {
     case 'approve':
       return typeof a.requestId === 'string' && typeof a.approved === 'boolean'
-        ? { type: 'approve', requestId: a.requestId, approved: a.approved } : null;
+        ? {
+            type: 'approve', requestId: a.requestId, approved: a.approved,
+            ...(typeof a.alwaysAllowTool === 'string' && a.alwaysAllowTool ? { alwaysAllowTool: a.alwaysAllowTool } : {}),
+          } : null;
     case 'reply':
       return typeof a.requestId === 'string' && typeof a.text === 'string'
         ? { type: 'reply', requestId: a.requestId, text: a.text } : null;

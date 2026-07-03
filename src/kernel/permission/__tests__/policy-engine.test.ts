@@ -26,3 +26,11 @@ describe('PolicyEngine.decide', () => {
     expect([...READ_ONLY_TOOLS].sort()).toEqual(['Glob', 'Grep', 'Read']);
   });
 });
+
+describe('allowTools (always-allow per tool)', () => {
+  it('allows a granted tool and keeps asking for others', () => {
+    const state = { trustUntilRevoked: false, allowTools: new Set(['Edit']) };
+    expect(decide({ toolName: 'Edit' }, state)).toEqual({ decision: 'allow', reason: 'always-tool' });
+    expect(decide({ toolName: 'Bash' }, state).decision).toBe('ask');
+  });
+});
