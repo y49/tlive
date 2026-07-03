@@ -23,7 +23,8 @@ export async function runStart(argv: string[]): Promise<void> {
   }
 
   const __dirname = dirname(fileURLToPath(import.meta.url));
-  const daemonEntry = join(__dirname, '..', '..', 'tlive-daemon.mjs');
+  // Both bundles live side by side in dist/src/ (import.meta.url is symlink-resolved).
+  const daemonEntry = join(__dirname, 'tlive-daemon.mjs');
   if (!existsSync(daemonEntry)) {
     process.stderr.write(`tlive: ${daemonEntry} not found. Run: npm run build\n`);
     process.exit(1);
