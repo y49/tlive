@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { SessionRegistry } from '../session-registry';
-import { applyMonitorEvent } from '../session-events';
+import { applyMonitorEvent, sweepDeadSessions } from '../session-events';
 
 describe('applyMonitorEvent', () => {
   it('activity → active upsert frame', () => {
@@ -80,5 +80,19 @@ describe('applyMonitorEvent', () => {
     const f = applyMonitorEvent(r, { event: 'session-end', cwd: '/h', sessionId: 's', reason: 'exit' });
     expect(f).toEqual({ type: 'session-remove', id: '/h' });
     expect(r.get('/h')).toBeUndefined();
+  });
+});
+
+describe('sweepDeadSessions', () => {
+  it('removes wrapped sessions with a dead pid and returns remove-frames', () => {
+    const r = new SessionRegistry();
+    r.register({ id: 'u1', label: 'a', cmd: 'x', cwd: '/dead', pid: 111, sockPath: '/a.sock' });
+    r.register({ id: 'u2', label: 'b', cmd: 'x', cwd: '/live', pid: 222, sockPath: '/b.sock' });
+    r.upsert({ cwd: '/hook', kind: 'hook', status: 'active' }); // no pid — never swept
+    const frames = sweepDeadSessions(r, (pid) => pid === 222);
+    expect(frames).toEqual([{ type: 'session-remove', id: '/dead' }]);
+    expect(r.get('/dead')).toBeUndefined();
+    expect(r.get('/live')).toBeDefined();
+    expect(r.get('/hook')).toBeDefined();
   });
 });

@@ -25,6 +25,20 @@ export function lanIPv4(): string | null {
   return null;
 }
 
+/** Print the web endpoint block: Local/Network URLs + a QR code (network preferred).
+ *  QR only on a TTY — piped output stays clean. */
+export async function printWebBanner(home: string, indent = '  '): Promise<void> {
+  const urls = resolveWebUrls(home);
+  if (!urls.enabled || !urls.token) return;
+  if (urls.local) process.stdout.write(`${indent}Local:    ${urls.local}\n`);
+  if (urls.network) process.stdout.write(`${indent}Network:  ${urls.network}\n`);
+  const target = urls.network ?? urls.local;
+  if (target && process.stdout.isTTY) {
+    const { default: qr } = await import('qrcode-terminal');
+    qr.generate(target, { small: true }, (out) => process.stdout.write(out + '\n'));
+  }
+}
+
 export function resolveWebUrls(home: string): WebUrls {
   const cfg = loadConfig(home);
   if (cfg.web?.enabled === false) return { enabled: false };

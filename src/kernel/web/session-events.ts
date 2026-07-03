@@ -7,6 +7,27 @@ import type { SessionRegistry } from './session-registry.js';
 import type { EventFrame } from './event-hub.js';
 import type { MonitorEvent } from '../hook/normalizer.js';
 
+/** Remove wrapped sessions whose `tlive run` process died without unregistering
+ *  (kill -9 / crash). Returns the remove-frames to broadcast. */
+export function sweepDeadSessions(
+  sessions: SessionRegistry,
+  isAlive: (pid: number) => boolean,
+): EventFrame[] {
+  const frames: EventFrame[] = [];
+  for (const s of sessions.list()) {
+    if (s.kind !== 'wrapped' || s.pid === undefined) continue;
+    if (!isAlive(s.pid)) {
+      sessions.remove(s.id);
+      frames.push({ type: 'session-remove', id: s.id });
+    }
+  }
+  return frames;
+}
+
+export function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
 export function applyMonitorEvent(sessions: SessionRegistry, evt: MonitorEvent): EventFrame {
   switch (evt.event) {
     case 'activity':

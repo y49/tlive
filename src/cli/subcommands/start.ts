@@ -5,6 +5,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { defaultSocketPath, request } from '../../kernel/ipc/client.js';
+import { printWebBanner } from '../web-url.js';
 
 export async function runStart(argv: string[]): Promise<void> {
   const home = process.env.TLIVE_HOME ?? join(homedir(), '.tlive');
@@ -15,7 +16,8 @@ export async function runStart(argv: string[]): Promise<void> {
   try {
     const r = await request({ kind: 'daemon.status' }, { socketPath: sockPath, timeoutMs: 1000 });
     if (r.kind === 'daemon.status') {
-      process.stdout.write(`tlive daemon already running (pid ${r.pid})\n`);
+      process.stdout.write(`tlive daemon already running (pid ${r.pid})\n\ntlive web UI:\n`);
+      await printWebBanner(home);
       return;
     }
   } catch {
@@ -38,4 +40,14 @@ export async function runStart(argv: string[]): Promise<void> {
   const child = spawn(process.execPath, [daemonEntry], { detached: true, stdio: ['ignore', logFd, logFd], windowsHide: true });
   child.unref();
   process.stdout.write(`tlive daemon started (pid ${child.pid})\n`);
+
+  // Wait for the daemon to come up (token file is created on first start), then show the web entry.
+  for (let i = 0; i < 25; i++) {
+    try {
+      await request({ kind: 'daemon.status' }, { socketPath: sockPath, timeoutMs: 500 });
+      process.stdout.write('\ntlive web UI:\n');
+      await printWebBanner(home);
+      return;
+    } catch { await new Promise((r) => setTimeout(r, 200)); }
+  }
 }

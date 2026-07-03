@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { request } from '../../kernel/ipc/client.js';
 import { loadConfig } from '../../kernel/config/loader.js';
-import { resolveWebUrls } from '../web-url.js';
+import { resolveWebUrls, printWebBanner } from '../web-url.js';
 
 export async function runStatus(_argv: string[]): Promise<void> {
   const home = process.env.TLIVE_HOME ?? join(homedir(), '.tlive');
@@ -25,9 +25,11 @@ export async function runStatus(_argv: string[]): Promise<void> {
   process.stdout.write(`channels: ${dests.length ? dests.join(', ') : '(none — run: tlive setup)'}\n`);
 
   const urls = resolveWebUrls(home);
-  if (urls.enabled) {
-    process.stdout.write(`web:      ${urls.local ?? '(starting)'}\n`);
-    if (urls.network) process.stdout.write(`          ${urls.network}\n`);
+  if (urls.enabled && urls.token) {
+    process.stdout.write('web:\n');
+    await printWebBanner(home);
+  } else if (urls.enabled) {
+    process.stdout.write('web:      (token created on first `tlive start`)\n');
   } else {
     process.stdout.write('web:      disabled\n');
   }

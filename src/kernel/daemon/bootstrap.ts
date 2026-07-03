@@ -14,7 +14,7 @@ import { SessionRegistry } from '../web/session-registry.js';
 import { startWebServer, type WebServerHandle } from '../web/server.js';
 import { loadOrCreateToken } from '../web/token.js';
 import { EventHub } from '../web/event-hub.js';
-import { applyMonitorEvent } from '../web/session-events.js';
+import { applyMonitorEvent, sweepDeadSessions, pidAlive } from '../web/session-events.js';
 
 export interface DaemonHandle {
   shutdown(): Promise<void>;
@@ -79,6 +79,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
 
   const sessions = new SessionRegistry();
   const events = new EventHub();
+
+  // Reap wrapped sessions whose `tlive run` process died without unregistering (kill -9 / crash).
+  const sweeper = setInterval(() => {
+    for (const f of sweepDeadSessions(sessions, pidAlive)) events.broadcast(f);
+  }, 30_000);
+  sweeper.unref();
 
   const permissionRouter = new PermissionRouter({
     configuredChats,
@@ -232,6 +238,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   async function shutdown(): Promise<void> {
     if (stopped) return;
     stopped = true;
+    clearInterval(sweeper);
     const forceExit = setTimeout(() => {
       // eslint-disable-next-line no-console
       console.error('tlive daemon: forced exit (event loop did not drain in 2s)');
