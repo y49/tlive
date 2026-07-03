@@ -154,6 +154,48 @@ describe('daemon → /ws/events downstream broadcast', () => {
     expect(done.session.continueId).toBeUndefined();
   });
 
+  it('IM messages carry a web deep link when web.publicUrl is configured (and not otherwise)', async () => {
+    const sent: string[] = [];
+    const adapter = makeFakeAdapter('telegram');
+    adapter.send = async (out: OutgoingMessage) => {
+      sent.push(out.kind === 'text' ? out.text : `${out.title ?? ''}\n${out.body}`);
+      return { messageId: 'm1' };
+    };
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { port: 0, publicUrl: 'https://dev.example.ts.net/' },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    // continue (text path)
+    const p = request({ kind: 'hook.continue.request', cwd: '/dl', sessionId: 's', context: 'ctx' }, { socketPath: sock, timeoutMs: 8000 });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(sent.some((t) => t.includes('🔗 https://dev.example.ts.net/?token='))).toBe(true);
+    const id = sent.join('\n').match(/id: ([a-f0-9-]{36})/)![1];
+    h.continueBroker.answer(id, 'go');
+    await p;
+    // approval card (card path)
+    sent.length = 0;
+    const p2 = request({ kind: 'hook.permission.request', cwd: '/dl', sessionId: 's', toolName: 'Bash', input: { command: 'ls' } }, { socketPath: sock, timeoutMs: 5000 });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(sent.some((t) => t.includes('🔗 https://dev.example.ts.net/?token='))).toBe(true);
+    h.permissionRouter.answer(h.sessions.get('/dl')!.pending!.requestId, false);
+    await p2;
+  });
+
+  it('IM messages carry no deep link without web.publicUrl', async () => {
+    const sent: string[] = [];
+    const adapter = makeFakeAdapter('telegram');
+    adapter.send = async (out: OutgoingMessage) => { sent.push(out.kind === 'text' ? out.text : out.body); return { messageId: 'm1' }; };
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const p = request({ kind: 'hook.continue.request', cwd: '/dl2', sessionId: 's', context: 'ctx' }, { socketPath: sock, timeoutMs: 8000 });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(sent.join('\n')).not.toContain('🔗');
+    const id = sent.join('\n').match(/id: ([a-f0-9-]{36})/)![1];
+    h.continueBroker.answer(id, 'go');
+    await p;
+  });
+
   it('upstream mute action over /ws/events toggles per-session mute and re-broadcasts', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 } }));
     h = await bootstrapDaemon({ home: tmp });
