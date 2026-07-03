@@ -81,9 +81,53 @@ function connect(): void {
   sock.onclose = () => {
     if (ws === sock) ws = null;
     retry = Math.min(retry + 1, 6);
-    setTimeout(connect, 500 * retry); // linear backoff, capped at ~3s (retry maxes at 6)
+    // Session may be gone (process exited / reaped) — check before blindly reconnecting.
+    void checkAlive().then((alive) => {
+      if (!alive) { showEnded(); return; }
+      setTimeout(connect, 500 * retry); // linear backoff, capped at ~3s (retry maxes at 6)
+    });
   };
   sock.onerror = () => sock.close();
+}
+
+/** Is this session still listed (with a live pty)? Network errors (daemon
+ *  restarting) count as alive — keep retrying rather than declaring it dead. */
+async function checkAlive(): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/sessions?token=${encodeURIComponent(token)}`);
+    if (!res.ok) return true;
+    const list = (await res.json()) as Array<{ id: string; sockPath?: string }>;
+    return list.some((s) => s.id === id && !!s.sockPath);
+  } catch {
+    return true;
+  }
+}
+
+let ended = false;
+function showEnded(): void {
+  if (ended) return;
+  ended = true;
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;gap:14px;'
+    + 'align-items:center;justify-content:center;background:rgba(0,0,0,.82);color:#e6e6e6;'
+    + 'font:15px ui-monospace,Menlo,monospace;text-align:center;padding:24px;';
+  const msg = document.createElement('div');
+  msg.textContent = '⏹ 会话已结束';
+  const sub = document.createElement('div');
+  sub.style.cssText = 'color:#9ca3af;font-size:13px;';
+  const back = document.createElement('a');
+  back.href = `/?token=${encodeURIComponent(token)}`;
+  back.textContent = '返回会话列表';
+  back.style.cssText = 'color:#93c5fd;font-size:14px;';
+  overlay.append(msg, sub, back);
+  document.body.appendChild(overlay);
+  let left = 5;
+  const tick = (): void => {
+    sub.textContent = `${left} 秒后自动返回会话列表`;
+    if (left-- <= 0) { location.href = back.href; return; }
+    setTimeout(tick, 1000);
+  };
+  tick();
 }
 connect();
 
