@@ -188,6 +188,13 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         if (v) events.broadcast({ type: 'session-upsert', session: v });
         return;
       }
+      case 'inject': {
+        const s = sessions.get(action.id);
+        if (s?.sockPath) {
+          void import('./inject.js').then(({ injectInput }) => injectInput(s.sockPath!, action.text)).catch(() => undefined);
+        }
+        return;
+      }
     }
   };
 
@@ -201,7 +208,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     const here = dirname(fileURLToPath(import.meta.url)); // dist/src
     const webDir = join(here, '..', 'web'); // dist/web (Plan 5)
     try {
-      web = await startWebServer({ bind, port, token, sessions, events, onAction, webDir });
+      web = await startWebServer({ bind, port, token, sessions, events, onAction, inboxDir: join(opts.home, 'inbox'), webDir });
       webUrl = web.url;
       if (cfg.web?.publicUrl) deepLink = `${cfg.web.publicUrl.replace(/\/+$/, '')}/?token=${token}`;
     } catch (e) {

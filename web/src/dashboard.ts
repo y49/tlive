@@ -23,7 +23,8 @@ type Frame =
 type Action =
   | { type: 'approve'; requestId: string; approved: boolean; alwaysAllowTool?: string }
   | { type: 'reply'; requestId: string; text: string }
-  | { type: 'mute'; id: string; muted: boolean };
+  | { type: 'mute'; id: string; muted: boolean }
+  | { type: 'inject'; id: string; text: string };
 
 const sessions = new Map<string, SessionView>();
 const grid = document.getElementById('grid') as HTMLElement;
@@ -266,6 +267,27 @@ function card(s: SessionView): HTMLElement {
   actions.appendChild(mute);
 
   if (s.sockPath) {
+    // 📎 upload a file → inject its inbox path into the session's pty
+    const clip = document.createElement('button');
+    clip.textContent = '📎';
+    clip.title = '发送文件/图片到该会话(上传后注入路径)';
+    clip.onclick = () => {
+      const input = document.createElement('input');
+      input.type = 'file'; input.multiple = true;
+      input.onchange = async () => {
+        const paths: string[] = [];
+        for (const f of Array.from(input.files ?? [])) {
+          try {
+            const res = await fetch(`/api/upload?name=${encodeURIComponent(f.name)}&token=${encodeURIComponent(token)}`, { method: 'POST', body: f });
+            if (res.ok) paths.push(((await res.json()) as { path: string }).path);
+          } catch { /* skip */ }
+        }
+        if (paths.length) send({ type: 'inject', id: s.id, text: paths.join(' ') });
+      };
+      input.click();
+    };
+    actions.appendChild(clip);
+
     const link = document.createElement('a');
     link.className = 'term';
     link.href = `/s/${encodeURIComponent(s.id)}?token=${encodeURIComponent(token)}`;

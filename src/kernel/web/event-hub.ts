@@ -21,7 +21,8 @@ export type EventFrame =
 export type EventAction =
   | { type: 'approve'; requestId: string; approved: boolean; alwaysAllowTool?: string }
   | { type: 'reply'; requestId: string; text: string }
-  | { type: 'mute'; id: string; muted: boolean };
+  | { type: 'mute'; id: string; muted: boolean }
+  | { type: 'inject'; id: string; text: string };
 
 /** Parse an inbound /ws/events text frame into a validated EventAction, or null. */
 export function parseEventAction(raw: string): EventAction | null {
@@ -42,6 +43,9 @@ export function parseEventAction(raw: string): EventAction | null {
     case 'mute':
       return typeof a.id === 'string' && typeof a.muted === 'boolean'
         ? { type: 'mute', id: a.id, muted: a.muted } : null;
+    case 'inject':
+      return typeof a.id === 'string' && typeof a.text === 'string' && a.text.length > 0
+        ? { type: 'inject', id: a.id, text: a.text } : null;
     default:
       return null;
   }

@@ -189,6 +189,37 @@ window.addEventListener('resize', () => {
   applyScale(); // re-fit the current grid to the new viewport immediately
 });
 
+// ---- file upload: paste an image / drop files → upload → path typed into the pty
+async function uploadAndType(files: FileList | File[]): Promise<void> {
+  const paths: string[] = [];
+  for (const f of Array.from(files)) {
+    hint.textContent = `⬆ 上传 ${f.name}…`;
+    hint.style.display = 'block';
+    try {
+      const res = await fetch(`/api/upload?name=${encodeURIComponent(f.name || 'pasted.png')}&token=${encodeURIComponent(token)}`, {
+        method: 'POST',
+        body: f,
+      });
+      if (res.ok) paths.push(((await res.json()) as { path: string }).path);
+    } catch { /* ignore this file */ }
+  }
+  hint.style.display = 'none';
+  if (!paths.length) { hint.textContent = '上传失败'; hint.style.display = 'block'; setTimeout(() => { hint.style.display = 'none'; }, 2000); return; }
+  // bracketed paste (no trailing Enter — the user reviews before submitting)
+  send(encodeData(enc.encode(`\x1b[200~${paths.join(' ')}\x1b[201~`)));
+  term.focus();
+}
+document.addEventListener('paste', (e) => {
+  const files = e.clipboardData?.files;
+  if (files?.length) { e.preventDefault(); void uploadAndType(files); }
+});
+document.addEventListener('dragover', (e) => e.preventDefault());
+document.addEventListener('drop', (e) => {
+  e.preventDefault();
+  const files = e.dataTransfer?.files;
+  if (files?.length) void uploadAndType(files);
+});
+
 // mobile key bar — keys phones lack (⇧Tab = Claude Code permission-mode cycle)
 const BAR: Array<[string, string]> = [
   ['Esc', '\x1b'], ['Tab', '\t'], ['⇧Tab', '\x1b[Z'], ['Ctrl-C', '\x03'],

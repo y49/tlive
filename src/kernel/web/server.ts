@@ -5,7 +5,8 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { WebSocketServer } from 'ws';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join, extname, normalize, sep } from 'node:path';
 import type { SessionRegistry } from './session-registry.js';
 import { bridge } from './pty-bridge.js';
@@ -17,8 +18,10 @@ export interface WebServerOpts {
   token: string;
   sessions: SessionRegistry;
   events?: EventHub;
-  /** Handle an upstream action from a /ws/events client (approve/reply/mute). */
+  /** Handle an upstream action from a /ws/events client (approve/reply/mute/inject). */
   onAction?: (action: EventAction) => void;
+  /** Where POST /api/upload stores files (e.g. ~/.tlive/inbox). Upload 404s when unset. */
+  inboxDir?: string;
   webDir: string;
 }
 export interface WebServerHandle { url: string; port: number; close(): Promise<void> }
@@ -94,6 +97,34 @@ function handleHttp(req: IncomingMessage, res: ServerResponse, opts: WebServerOp
   if (url.pathname === '/api/sessions') {
     res.writeHead(200, { 'Content-Type': 'application/json', ...setCookie });
     res.end(JSON.stringify(opts.sessions.list()));
+    return;
+  }
+
+  // POST /api/upload?name=<filename> — raw body → inbox file → { path }.
+  // Used by paste/drag-drop on the terminal page and the dashboard 📎 button.
+  if (url.pathname === '/api/upload' && req.method === 'POST') {
+    if (!opts.inboxDir) { res.writeHead(404); res.end('upload disabled'); return; }
+    const name = (url.searchParams.get('name') || 'file').replace(/[/\\]/g, '_');
+    const MAX = 32 * 1024 * 1024;
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on('data', (c: Buffer) => {
+      size += c.length;
+      if (size > MAX) { res.writeHead(413); res.end('too large'); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      if (res.writableEnded) return;
+      try {
+        mkdirSync(opts.inboxDir!, { recursive: true });
+        const dest = join(opts.inboxDir!, `${randomUUID().slice(0, 8)}-${name}`);
+        writeFileSync(dest, Buffer.concat(chunks));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ path: dest }));
+      } catch (e) {
+        res.writeHead(500); res.end(String((e as Error).message));
+      }
+    });
     return;
   }
 

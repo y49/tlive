@@ -1,7 +1,7 @@
 // src/kernel/web/__tests__/server.test.ts
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { WebSocket } from 'ws';
 import { startWebServer, type WebServerHandle } from '../server.js';
@@ -145,5 +145,38 @@ describe('WebServer', () => {
     const r = await get(`http://127.0.0.1:${handle.port}/api/sessions?token=secret`);
     const arr = JSON.parse(r.body);
     expect(arr[0]).toMatchObject({ id: '/repo', cwd: '/repo', kind: 'hook', status: 'active', lastMessage: 'hi', muted: false });
+  });
+});
+
+describe('POST /api/upload', () => {
+  it('stores the body in inboxDir and returns the path (token-gated)', async () => {
+    const inbox = mkdtempSync(join(tmpdir(), 'tlive-inbox-'));
+    const sessions = new SessionRegistry();
+    handle = await startWebServer({ bind: '127.0.0.1', port: 0, token: 'secret', sessions, inboxDir: inbox, webDir: join(tmpdir(), 'nope') });
+    const noTok = await fetch(`http://127.0.0.1:${handle.port}/api/upload?name=a.png`, { method: 'POST', body: 'x' });
+    expect(noTok.status).toBe(401);
+    const ok = await fetch(`http://127.0.0.1:${handle.port}/api/upload?name=err.png&token=secret`, { method: 'POST', body: Buffer.from([1, 2, 3]) });
+    expect(ok.status).toBe(200);
+    const { path } = (await ok.json()) as { path: string };
+    expect(path.startsWith(inbox)).toBe(true);
+    expect(path.endsWith('-err.png')).toBe(true);
+    expect(readFileSync(path)).toEqual(Buffer.from([1, 2, 3]));
+  });
+
+  it('sanitizes path separators in the name', async () => {
+    const inbox = mkdtempSync(join(tmpdir(), 'tlive-inbox-'));
+    const sessions = new SessionRegistry();
+    handle = await startWebServer({ bind: '127.0.0.1', port: 0, token: 'secret', sessions, inboxDir: inbox, webDir: join(tmpdir(), 'nope') });
+    const ok = await fetch(`http://127.0.0.1:${handle.port}/api/upload?name=${encodeURIComponent('../../evil.sh')}&token=secret`, { method: 'POST', body: 'x' });
+    const { path } = (await ok.json()) as { path: string };
+    // separators are flattened -> the file stays DIRECTLY inside inbox (no traversal)
+    expect(dirname(path)).toBe(inbox);
+  });
+
+  it('404s when inboxDir is not configured', async () => {
+    const sessions = new SessionRegistry();
+    handle = await startWebServer({ bind: '127.0.0.1', port: 0, token: 'secret', sessions, webDir: join(tmpdir(), 'nope') });
+    const r = await fetch(`http://127.0.0.1:${handle.port}/api/upload?name=a&token=secret`, { method: 'POST', body: 'x' });
+    expect(r.status).toBe(404);
   });
 });
