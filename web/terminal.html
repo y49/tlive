@@ -49,12 +49,31 @@
                   background: #1a1f27; color: #d5dae2; font: 13px ui-monospace, Menlo, monospace; }
     #bar button:active { background: #2a3140; }
     #bar .sp { flex: 1 0 8px; }
+    #find { position: absolute; top: calc(8px + env(safe-area-inset-top)); right: 10px; z-index: 7;
+            display: none; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 10px;
+            background: rgba(18,22,29,.96); border: 1px solid #2a3038; backdrop-filter: blur(8px);
+            box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+    #find.open { display: flex; }
+    #find input { width: 160px; font: 13px ui-monospace, Menlo, monospace; padding: 5px 8px;
+                  border-radius: 7px; border: 1px solid #2a3038; background: #0d1015; color: #e6e6e6; }
+    #find input:focus { outline: none; border-color: #3b4a63; }
+    #find .count { font: 11px ui-monospace, Menlo, monospace; color: #8a94a6; min-width: 40px; text-align: center; }
+    #find button { height: 28px; min-width: 28px; padding: 0 6px; border: 1px solid #2a3038; border-radius: 6px;
+                   background: #1a1f27; color: #d5dae2; font: 13px ui-monospace, Menlo, monospace; }
+    #find button:active { background: #2a3140; }
   </style>
 </head>
 <body>
   <div id="app">
     <div id="viewport"><div id="scaler"><div id="term"></div></div></div>
     <div id="hint"></div>
+    <div id="find">
+      <input id="find-input" placeholder="Find on screen" autocapitalize="off" autocomplete="off" spellcheck="false" />
+      <span id="find-count" class="count"></span>
+      <button id="find-prev" title="Previous (⇧Enter)">↑</button>
+      <button id="find-next" title="Next (Enter)">↓</button>
+      <button id="find-close" title="Close (Esc)">✕</button>
+    </div>
     <div id="bar"></div>
     <button id="fab" title="Key bar">⌨</button>
   </div>

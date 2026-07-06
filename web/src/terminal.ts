@@ -1,6 +1,8 @@
 // web/src/terminal.ts — xterm.js front-end for a tlive wrapped session.
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon } from '@xterm/addon-search';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { FrameType, FrameDecoder, encodeData, encodeAttach, encodeResize, parseDims } from './frame.js';
 
@@ -20,7 +22,11 @@ const term = new Terminal({
   theme: { background: '#000000' },
 });
 const fit = new FitAddon();
+const search = new SearchAddon();
 term.loadAddon(fit);
+term.loadAddon(search);
+// URLs become clickable → open in a new tab (the pty screen often has links).
+term.loadAddon(new WebLinksAddon((_e, uri) => window.open(uri, '_blank', 'noopener')));
 term.open(termEl);
 
 const enc = new TextEncoder();
@@ -197,6 +203,67 @@ window.addEventListener('resize', () => {
   applyScale(); // re-fit the current grid to the new viewport immediately
 });
 
+// ---- screen search (addon-search) ------------------------------------------
+const findBox = document.getElementById('find') as HTMLElement;
+const findInput = document.getElementById('find-input') as HTMLInputElement;
+const findCount = document.getElementById('find-count') as HTMLElement;
+const SEARCH_OPTS = {
+  decorations: {
+    matchBackground: '#5b4400', matchOverviewRuler: '#fbbf24',
+    activeMatchBackground: '#c2410c', activeMatchColorOverviewRuler: '#f97316',
+  },
+} as const;
+search.onDidChangeResults((r) => {
+  findCount.textContent = r && r.resultCount > 0 ? `${r.resultIndex + 1}/${r.resultCount}` : (findInput.value ? '0/0' : '');
+});
+function runFind(dir: 1 | -1): void {
+  const q = findInput.value;
+  if (!q) { search.clearDecorations(); findCount.textContent = ''; return; }
+  if (dir === 1) search.findNext(q, SEARCH_OPTS); else search.findPrevious(q, SEARCH_OPTS);
+}
+function openFind(): void {
+  findBox.classList.add('open');
+  findInput.select(); findInput.focus();
+  if (findInput.value) runFind(1);
+}
+function closeFind(): void {
+  findBox.classList.remove('open');
+  search.clearDecorations();
+  if (!shield) term.focus(); // don't summon the mobile keyboard in view mode
+}
+findInput.addEventListener('input', () => runFind(1));
+findInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); runFind(e.shiftKey ? -1 : 1); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeFind(); }
+});
+(document.getElementById('find-next') as HTMLElement).onclick = () => runFind(1);
+(document.getElementById('find-prev') as HTMLElement).onclick = () => runFind(-1);
+(document.getElementById('find-close') as HTMLElement).onclick = closeFind;
+// Ctrl/Cmd-F opens search instead of reaching the pty.
+term.attachCustomKeyEventHandler((e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'f') {
+    if (e.type === 'keydown') openFind();
+    return false;
+  }
+  return true;
+});
+
+// ---- copy on select (tmux/iTerm style) — clipboard API needs HTTPS, so fall
+// back to a hidden-textarea execCommand over plain HTTP.
+function copyText(t: string): void {
+  if (navigator.clipboard?.writeText) { void navigator.clipboard.writeText(t).catch(() => fallbackCopy(t)); return; }
+  fallbackCopy(t);
+}
+function fallbackCopy(t: string): void {
+  const ta = document.createElement('textarea');
+  ta.value = t; ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+  document.body.appendChild(ta); ta.focus(); ta.select();
+  try { document.execCommand('copy'); } catch { /* best-effort */ }
+  ta.remove();
+  if (!shield) term.focus();
+}
+termEl.addEventListener('mouseup', () => { const s = term.getSelection(); if (s) copyText(s); });
+
 // ---- file upload: paste an image / drop files → upload → path typed into the pty
 async function uploadAndType(files: FileList | File[]): Promise<void> {
   const paths: string[] = [];
@@ -342,6 +409,13 @@ function attachTouchScroll(el: HTMLElement): void {
 { // mode toggle — first key on the bar
   modeBtn.addEventListener('click', (e) => { e.preventDefault(); setMode(!!shield); });
   bar.appendChild(modeBtn);
+}
+{ // 🔍 screen search (also Ctrl-F) — usable in view mode, no keyboard needed to read results
+  const b = document.createElement('button');
+  b.textContent = '🔍';
+  b.title = 'Find on screen (Ctrl-F)';
+  b.addEventListener('click', (e) => { e.preventDefault(); openFind(); });
+  bar.appendChild(b);
 }
 { // copy the current screen text (clipboard API needs HTTPS → selectable modal)
   const b = document.createElement('button');
