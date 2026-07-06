@@ -79,8 +79,23 @@ export async function runRun(argv: string[]): Promise<void> {
   await host.start();
 
   const meta: SessionMeta = { id, label, cmd, cwd, pid: process.pid, sockPath };
-  // best-effort register; degrades silently if the daemon is down (local terminal still works).
-  await request({ kind: 'session.register', session: meta }, { socketPath: sock, timeoutMs: 1500 }).catch(() => undefined);
+  // The pty lives in THIS process and outlives the daemon — so we can't just
+  // register once. Poll daemon.status; whenever its pid changes (a restart, or
+  // it coming up for the first time), re-register so the session reappears in
+  // the list. Registration is idempotent; the local terminal works regardless.
+  let daemonPid: number | null = null;
+  const syncRegister = async (): Promise<void> => {
+    try {
+      const r = await request({ kind: 'daemon.status' }, { socketPath: sock, timeoutMs: 800 });
+      if (r.kind === 'daemon.status' && r.pid !== daemonPid) {
+        await request({ kind: 'session.register', session: meta }, { socketPath: sock, timeoutMs: 1500 }).catch(() => undefined);
+        daemonPid = r.pid;
+      }
+    } catch { daemonPid = null; } // daemon down → re-register when it returns with a new pid
+  };
+  await syncRegister(); // register now (if the daemon is up)
+  const regTimer = setInterval(() => void syncRegister(), 5000);
+  regTimer.unref();
 
   // Guard against the double-finish under a signal: onSignal calls host.stop()
   // (→ finish(130)) AND pty.onExit fires (→ finish(exitCode)). First wins.
@@ -88,6 +103,7 @@ export async function runRun(argv: string[]): Promise<void> {
   const finish = (code: number): void => {
     if (finished) return;
     finished = true;
+    clearInterval(regTimer);
     void request({ kind: 'session.unregister', id }, { socketPath: sock, timeoutMs: 1500 })
       .catch(() => undefined)
       .finally(() => process.exit(code));
