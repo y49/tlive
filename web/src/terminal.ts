@@ -256,15 +256,24 @@ const BAR: Array<[string, string]> = [
   ['PgUp', '\x1b[5~'], ['PgDn', '\x1b[6~'],
 ];
 const bar = document.getElementById('bar') as HTMLElement;
-{ // collapsible key bar: ⌨ floating button toggles it (persisted); draggable
-  const fab = document.getElementById('fab') as HTMLElement;
-  const setOpen = (open: boolean): void => {
-    app.classList.toggle('bar-open', open);
-    fab.textContent = open ? '✕' : '⌨';
-    localStorage.setItem('tlive-bar', open ? 'open' : 'closed');
-  };
-  setOpen(localStorage.getItem('tlive-bar') === 'open'); // default: collapsed
-
+const fab = document.getElementById('fab') as HTMLElement;
+/** The FAB is the single input switch.
+ *  Touch: view (nothing) → tap ⌨ → input (keyboard + key bar) → tap ⌄ → view.
+ *  Desktop: the pty takes keys directly; the FAB just shows/hides the key bar. */
+function updateFab(): void {
+  if (COARSE) {
+    fab.textContent = shield ? '⌨' : '⌄';                   // view: offer typing; input: offer dismiss
+    fab.title = shield ? 'Tap to type' : 'Dismiss keyboard';
+  } else {
+    fab.textContent = app.classList.contains('bar-open') ? '✕' : '⌨';
+    fab.title = 'Toggle key bar';
+  }
+}
+function toggleFab(): void {
+  if (COARSE) setMode(!!shield);                            // shield present = view → go input
+  else { app.classList.toggle('bar-open'); localStorage.setItem('tlive-bar', app.classList.contains('bar-open') ? 'open' : 'closed'); updateFab(); }
+}
+{ // FAB: draggable, persisted position; tap toggles input (touch) / key bar (desktop)
   // drag to reposition (persisted); a real drag suppresses the toggle click
   try {
     const p = JSON.parse(localStorage.getItem('tlive-fab') ?? 'null') as { r: number; b: number } | null;
@@ -291,7 +300,7 @@ const bar = document.getElementById('bar') as HTMLElement;
   });
   fab.addEventListener('click', (e) => {
     if (moved) { e.preventDefault(); e.stopImmediatePropagation(); return; }
-    setOpen(!app.classList.contains('bar-open'));
+    toggleFab();
   });
 }
 { // back to the session list
@@ -306,13 +315,14 @@ const bar = document.getElementById('bar') as HTMLElement;
 // View mode overlays a shield: taps do nothing, keyboard stays down, the key
 // bar still works (frames don't need focus). Touch devices default to VIEW.
 const COARSE = matchMedia('(pointer: coarse)').matches;
-const modeBtn = document.createElement('button');
 let shield: HTMLElement | null = null;
+// Input mode: keyboard up + key bar shown; the pty takes focus.
+// View mode: a shield swallows taps (no accidental keyboard), single-finger
+// drag scrolls the screen; the key bar is hidden.
 function setMode(input: boolean): void {
   if (input) {
     shield?.remove(); shield = null;
-    modeBtn.textContent = '👁';
-    modeBtn.title = 'View mode (dismiss keyboard)';
+    if (COARSE) app.classList.add('bar-open'); // input ⟺ key bar visible
     term.focus();
   } else {
     if (!shield) {
@@ -320,21 +330,13 @@ function setMode(input: boolean): void {
       shield.id = 'shield';
       shield.style.touchAction = 'none';
       attachTouchScroll(shield);
-      // double-tap the screen to start typing (the visible affordance is the ⌨ key)
-      let lastTap = 0;
-      shield.addEventListener('touchend', (e) => {
-        const now = Date.now();
-        if (now - lastTap < 350 && e.changedTouches.length === 1) { e.preventDefault(); setMode(true); }
-        lastTap = now;
-      });
-      shield.addEventListener('dblclick', () => setMode(true));
       app.appendChild(shield);
     }
-    modeBtn.textContent = '⌨';
-    modeBtn.title = 'Input mode (double-tap the screen also works)';
+    if (COARSE) app.classList.remove('bar-open');
     term.blur();
     (document.activeElement as HTMLElement | null)?.blur?.();
   }
+  updateFab();
 }
 
 // Touch-drag on the shield → synthetic wheel events on the grid. This rides
@@ -357,10 +359,6 @@ function attachTouchScroll(el: HTMLElement): void {
       target().dispatchEvent(new WheelEvent('wheel', { deltaY: dir * 60, bubbles: true, cancelable: true }));
     }
   }, { passive: false });
-}
-{ // mode toggle — first key on the bar
-  modeBtn.addEventListener('click', (e) => { e.preventDefault(); setMode(!!shield); });
-  bar.appendChild(modeBtn);
 }
 { // 📎 upload a file/photo → path typed into the pty (mobile has no paste/drop)
   const b = document.createElement('button');
@@ -396,10 +394,10 @@ for (const [label, seq] of BAR) {
   b.addEventListener('click', (e) => { e.preventDefault(); send(encodeData(enc.encode(seq))); if (!shield) term.focus(); });
   bar.appendChild(b);
 }
-// touch devices start in VIEW mode (no keyboard until you ask); desktops in INPUT
+// touch devices start in VIEW mode (tap the ⌨ FAB to type); desktops take keys directly
 setMode(!COARSE);
-// Keyboard dismissed by the system (not via our toggle) → drop back to view
-// mode on touch devices so stray taps don't summon it again.
+// Keyboard dismissed by the system (swipe-down / dismiss key) → return to view
+// mode so stray taps don't summon it again, and the key bar collapses with it.
 onVvSettled = () => {
   if (COARSE && !shield && vv && vv.height >= window.innerHeight * 0.9) setMode(false);
 };
