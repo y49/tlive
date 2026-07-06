@@ -65,9 +65,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const events = new EventHub();
 
   /** Hook traffic → registry key: the wrapped session's uuid when the hook ran
-   *  inside `tlive run` (TLIVE_SESSION) and that session is registered; else cwd. */
-  const resolveKey = (cwd: string, wrappedId?: string): string =>
-    wrappedId && sessions.get(wrappedId) ? wrappedId : cwd;
+   *  inside `tlive run` (TLIVE_SESSION), else cwd. We trust wrappedId even before
+   *  session.register arrives — the shim only ever sets it inside `tlive run`, so
+   *  keying by it (rather than falling back to cwd) avoids a phantom cwd-keyed
+   *  card during the register race; register merges into the same uuid key. */
+  const resolveKey = (cwd: string, wrappedId?: string): string => wrappedId ?? cwd;
 
   // IM messageId → session cwd, for reply-to routing (bounded; daemon-lifetime only).
   const msgToCwd = new Map<string, string>();
@@ -149,8 +151,13 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key: cwd, cwd, status: 'waiting-approval', pending: { requestId, title, body, toolName } }) });
     },
     onResolved: ({ cwd, requestId, decision }) => {
-      // Non-approved outcomes (deny/defer) leave the session idle; only allow → active.
-      events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key: cwd, cwd, status: decision === 'allow' ? 'active' : 'idle', pending: null }) });
+      // Only touch the session view if THIS request still owns the pending slot —
+      // with two concurrent approvals on one key, resolving A must not wipe B's
+      // indicator (registry holds a single pending; B's card/router entry live on).
+      if (sessions.get(cwd)?.pending?.requestId === requestId) {
+        // Non-approved outcomes (deny/defer) leave the session idle; only allow → active.
+        events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key: cwd, cwd, status: decision === 'allow' ? 'active' : 'idle', pending: null }) });
+      }
       // Rewrite the IM cards to their outcome (buttons removed) — no zombie cards.
       const cards = sentCards.get(requestId);
       if (cards) {
@@ -259,10 +266,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           return;
         }
         case 'hook.notify': {
-          if (!muted) {
-            await Promise.all(configuredChats().map((t) => sendToChat(t, { text: `[${req.level}] ${req.message}`, cwd: req.cwd })));
+          const key = resolveKey(req.cwd, req.wrappedId);
+          if (!muted && !sessions.get(key)?.muted) {
+            // cwd carries the resolved KEY so the [⌨ label] tag + reply-routing map are consistent.
+            await Promise.all(configuredChats().map((t) => sendToChat(t, { text: `[${req.level}] ${req.message}`, cwd: key })));
           }
-          events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.message }, resolveKey(req.cwd, req.wrappedId)));
+          events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.message }, key));
           reply({ kind: 'ack' });
           return;
         }

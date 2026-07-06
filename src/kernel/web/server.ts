@@ -6,7 +6,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { join, extname, normalize, sep } from 'node:path';
 import type { SessionRegistry } from './session-registry.js';
 import { bridge } from './pty-bridge.js';
@@ -28,6 +28,13 @@ export interface WebServerHandle { url: string; port: number; close(): Promise<v
 
 const MIME: Record<string, string> = { '.html': 'text/html', '.css': 'text/css', '.js': 'application/javascript', '.map': 'application/json' };
 
+/** Constant-time token check — the token is the sole auth gate; avoid a timing oracle. */
+function tokenValid(got: string | null, want: string): boolean {
+  if (got == null) return false;
+  const a = Buffer.from(got), b = Buffer.from(want);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 function tokenFromReq(url: URL, req: IncomingMessage): string | null {
   const q = url.searchParams.get('token');
   if (q) return q;
@@ -42,7 +49,7 @@ export async function startWebServer(opts: WebServerOpts): Promise<WebServerHand
 
   http.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', `http://${opts.bind}`);
-    if (tokenFromReq(url, req) !== opts.token) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return; }
+    if (!tokenValid(tokenFromReq(url, req), opts.token)) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return; }
     if (url.pathname === '/ws/events') {
       if (!opts.events) { socket.write('HTTP/1.1 404 Not Found\r\n\r\n'); socket.destroy(); return; }
       const hub = opts.events;
@@ -88,9 +95,9 @@ export async function startWebServer(opts: WebServerOpts): Promise<WebServerHand
 function handleHttp(req: IncomingMessage, res: ServerResponse, opts: WebServerOpts): void {
   const url = new URL(req.url ?? '/', `http://${opts.bind}`);
   const tok = tokenFromReq(url, req);
-  if (tok !== opts.token) { res.writeHead(401, { 'Content-Type': 'text/plain' }); res.end('Unauthorized'); return; }
+  if (!tokenValid(tok, opts.token)) { res.writeHead(401, { 'Content-Type': 'text/plain' }); res.end('Unauthorized'); return; }
   // first ?token= match → set httpOnly cookie so the token leaves the URL
-  const setCookie = url.searchParams.get('token') === opts.token
+  const setCookie = tokenValid(url.searchParams.get('token'), opts.token)
     ? { 'Set-Cookie': `tlive_token=${encodeURIComponent(opts.token)}; HttpOnly; SameSite=Strict; Path=/` }
     : {};
 

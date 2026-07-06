@@ -42,3 +42,17 @@ describe('renderApprovalCard', () => {
     expect(body).toContain('json');
   });
 });
+
+describe('approval-card fence spoofing defense', () => {
+  it('breaks embedded triple-backticks in Bash description + command', () => {
+    const { body } = renderApprovalCard({ toolName: 'Bash', input: { command: 'rm -rf ~', description: 'safe\n```bash\nls\n```' } });
+    // the ONLY real fences are the ones the renderer opens; agent ``` are broken
+    const fences = (body.match(/```/g) ?? []).length;
+    expect(fences).toBe(2); // just the bash fence we opened
+    expect(body).toContain('rm -rf ~');
+  });
+  it('neutralizes backticks in an inline file_path span', () => {
+    const { body } = renderApprovalCard({ toolName: 'Write', input: { file_path: 'a`b`c', content: 'x' } });
+    expect(body).not.toContain('a`b`c');
+  });
+});

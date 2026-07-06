@@ -75,7 +75,12 @@ export async function runRun(argv: string[]): Promise<void> {
   // best-effort register; degrades silently if the daemon is down (local terminal still works).
   await request({ kind: 'session.register', session: meta }, { socketPath: sock, timeoutMs: 1500 }).catch(() => undefined);
 
+  // Guard against the double-finish under a signal: onSignal calls host.stop()
+  // (→ finish(130)) AND pty.onExit fires (→ finish(exitCode)). First wins.
+  let finished = false;
   const finish = (code: number): void => {
+    if (finished) return;
+    finished = true;
     void request({ kind: 'session.unregister', id }, { socketPath: sock, timeoutMs: 1500 })
       .catch(() => undefined)
       .finally(() => process.exit(code));

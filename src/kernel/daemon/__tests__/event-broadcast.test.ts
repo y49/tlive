@@ -271,4 +271,42 @@ describe('daemon → /ws/events downstream broadcast', () => {
     await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/same' && x.session.kind === 'hook');
   });
 
+
+  it('a wrappedId hook event BEFORE session.register keys by uuid (no phantom cwd card)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 } }));
+    h = await bootstrapDaemon({ home: tmp });
+    const frames = await openEvents();
+    // hook fires from inside the wrapper before register lands (the run.ts race)
+    await request({ kind: 'hook.event', event: { event: 'activity', cwd: '/race', sessionId: 's', toolName: 'Bash', result: {} }, wrappedId: 'w-race' }, { socketPath: sock, timeoutMs: 2000 });
+    const f = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 'w-race');
+    expect(f.session.id).toBe('w-race'); // keyed by uuid, NOT by cwd
+    // register now merges into the SAME uuid card and promotes it to wrapped
+    await request({ kind: 'session.register', session: { id: 'w-race', label: 'claude', cmd: 'claude', cwd: '/race', pid: 1, sockPath: '/r.sock' } }, { socketPath: sock, timeoutMs: 2000 });
+    await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 'w-race' && x.session.kind === 'wrapped');
+    const api = await fetch(`${new URL(h.webUrl!).origin}/api/sessions${new URL(h.webUrl!).search}`);
+    const arr = (await api.json()) as Array<Record<string, any>>;
+    expect(arr).toHaveLength(1); // exactly one card — no phantom '/race' hook card
+    expect(arr[0].id).toBe('w-race');
+  });
+
+  it('concurrent approvals on one key: resolving the first keeps the second pending', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [makeFakeAdapter('telegram')] });
+    const frames = await openEvents();
+    const pA = request({ kind: 'hook.permission.request', cwd: '/cc', sessionId: 's', toolName: 'Bash', input: { command: 'a' } }, { socketPath: sock, timeoutMs: 5000 });
+    const fa = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/cc' && x.session.pending);
+    const reqA = fa.session.pending.requestId as string;
+    const pB = request({ kind: 'hook.permission.request', cwd: '/cc', sessionId: 's', toolName: 'Write', input: {} }, { socketPath: sock, timeoutMs: 5000 });
+    const fb = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/cc' && x.session.pending && x.session.pending.requestId !== reqA);
+    const reqB = fb.session.pending.requestId as string;
+    // resolve A (deny) — must NOT wipe B's pending indicator
+    await request({ kind: 'hook.permission.answer', requestId: reqA, approved: false }, { socketPath: sock, timeoutMs: 2000 });
+    expect(((await pA) as { decision: string }).decision).toBe('deny');
+    await new Promise((r) => setTimeout(r, 80));
+    expect(h.sessions.get('/cc')?.pending?.requestId).toBe(reqB);
+    // cleanup
+    await request({ kind: 'hook.permission.answer', requestId: reqB, approved: false }, { socketPath: sock, timeoutMs: 2000 });
+    await pB;
+  });
+
 });

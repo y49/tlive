@@ -19,15 +19,32 @@ export interface RenderRequest {
 export function maskSecrets(s: string): string {
   return s
     .replace(/([?&][\w-]*(?:token|key|auth|password|secret)[\w-]*=)[^&\s]+/gi, '$1***')
-    .replace(/\b([A-Z_]*(?:TOKEN|KEY|SECRET|PASSWORD)[A-Z_]*=)\S+/g, '$1***')
+    // env/CLI assignment, case-insensitive; value stops at whitespace or & so it
+    // neither swallows a following URL param nor re-masks an already-masked value.
+    .replace(/\b([\w-]*(?:token|key|secret|password|passwd|apikey|auth)[\w-]*\s*=\s*)[^\s&]+/gi, '$1***')
     .replace(/\b(Bearer\s+)\S+/gi, '$1***')
     .replace(/("(?:\w*(?:token|key|secret|password|auth)\w*)"\s*:\s*")[^"]+/gi, '$1***');
 }
 
-const RISKY = [/\brm\s+-[rf]/, /\bsudo\b/, /\bcurl\b[^\n]*\|\s*(?:sh|bash)/, /:\(\)\s*\{/, /\bmkfs\b/, /\bdd\s+if=/];
+const RISKY = [
+  /\brm\s+-[rf]/, /\bsudo\b/, /\bcurl\b[^\n]*\|\s*(?:sh|bash)/, /\bwget\b[^\n]*\|\s*(?:sh|bash)/,
+  /:\(\)\s*\{/, /\bmkfs\b/, /\bdd\s+if=/, /\bchmod\s+(?:-R\s+)?[0-7]*7{2,}/, /authorized_keys/,
+  /\bgit\s+push\b[^\n]*(?:--force|-f)\b/, /\beval\b/, />\s*\/dev\/sd/,
+];
 
 function riskFlag(command: string): string {
   return RISKY.some((re) => re.test(command)) ? '\n⚠️ **高危命令**' : '';
+}
+
+/** Break triple-backtick runs so agent-controlled content can't close or forge
+ *  a Markdown code fence (approval-card spoofing: hide the real command behind
+ *  a fake fence). Zero-width joiner keeps it visually intact. */
+function fenceSafe(s: string): string {
+  return s.replace(/```/g, '`​``');
+}
+/** Neutralize backticks for an inline `code` span (a stray one breaks out). */
+function inlineSafe(s: string): string {
+  return s.replace(/`/g, "'");
 }
 
 function str(input: unknown, key: string): string | undefined {
@@ -40,32 +57,32 @@ export function renderApprovalCard(req: RenderRequest): { title: string; body: s
   const title = `权限请求: ${toolName}`;
   switch (toolName) {
     case 'Edit': {
-      const fp = str(input, 'file_path') ?? '(unknown)';
+      const fp = inlineSafe(str(input, 'file_path') ?? '(unknown)');
       const oldS = maskSecrets(str(input, 'old_string') ?? '');
       const newS = maskSecrets(str(input, 'new_string') ?? '');
-      const diff = [
+      const diff = fenceSafe([
         ...oldS.split('\n').map((l) => `- ${l}`),
         ...newS.split('\n').map((l) => `+ ${l}`),
-      ].join('\n').slice(0, 1500);
+      ].join('\n')).slice(0, 1500);
       return { title, body: `\`${fp}\`\n\`\`\`diff\n${diff}\n\`\`\`` };
     }
     case 'Write': {
-      const fp = str(input, 'file_path') ?? '(unknown)';
-      const content = maskSecrets(str(input, 'content') ?? '').slice(0, 800);
+      const fp = inlineSafe(str(input, 'file_path') ?? '(unknown)');
+      const content = fenceSafe(maskSecrets(str(input, 'content') ?? '')).slice(0, 800);
       return { title, body: `写入 \`${fp}\`\n\`\`\`\n${content}\n\`\`\`` };
     }
     case 'NotebookEdit': {
-      const fp = str(input, 'notebook_path') ?? '(unknown)';
-      const src = maskSecrets(str(input, 'new_source') ?? '').slice(0, 800);
+      const fp = inlineSafe(str(input, 'notebook_path') ?? '(unknown)');
+      const src = fenceSafe(maskSecrets(str(input, 'new_source') ?? '')).slice(0, 800);
       return { title, body: `Notebook \`${fp}\`\n\`\`\`\n${src}\n\`\`\`` };
     }
     case 'Bash': {
       const cmd = str(input, 'command') ?? '';
       const desc = str(input, 'description');
-      return { title, body: `${desc ? desc + '\n' : ''}\`\`\`bash\n${maskSecrets(cmd)}\n\`\`\`${riskFlag(cmd)}` };
+      return { title, body: `${desc ? fenceSafe(desc) + '\n' : ''}\`\`\`bash\n${fenceSafe(maskSecrets(cmd))}\n\`\`\`${riskFlag(cmd)}` };
     }
     default: {
-      const json = maskSecrets(JSON.stringify(input ?? {})).slice(0, 500);
+      const json = fenceSafe(maskSecrets(JSON.stringify(input ?? {}))).slice(0, 500);
       return { title, body: `\`\`\`json\n${json}\n\`\`\`` };
     }
   }

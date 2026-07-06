@@ -101,6 +101,15 @@ const STATUS_LABEL: Record<Status, string> = {
 function esc(t: string): string {
   const d = document.createElement('div'); d.textContent = t; return d.innerHTML;
 }
+/** Escape for an HTML ATTRIBUTE value (esc() alone leaves quotes intact → an
+ *  attribute-injection XSS when a cwd/path contains a `"`). */
+function escAttr(t: string): string {
+  return esc(t).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/** Reply drafts survive card rebuilds (render() replaces every card on each
+ *  frame, which would otherwise wipe an in-progress reply). Keyed by session id. */
+const replyDrafts = new Map<string, string>();
 
 /** Render the markdown-ish approval body (fences + diff lines) with colors. */
 function renderApprovalBody(body: string): string {
@@ -204,7 +213,7 @@ function card(s: SessionView): HTMLElement {
   top.className = 'top';
   const badge = staleness(s);
   top.innerHTML =
-    `<span class="label" title="${esc(s.cwd)}">${esc(s.label)}</span>` +
+    `<span class="label" title="${escAttr(s.cwd)}">${esc(s.label)}</span>` +
     `<span class="badge ${s.status}">${STATUS_LABEL[s.status]}</span>` +
     (badge ? `<span class="stale">${badge}</span>` : '');
   el.appendChild(top);
@@ -212,8 +221,8 @@ function card(s: SessionView): HTMLElement {
   const meta = document.createElement('div');
   meta.className = 'meta';
   meta.innerHTML =
-    (s.pid !== undefined ? `<span class="pid">PID ${s.pid}</span>` : '') +
-    `<span class="path" title="${esc(s.cwd)}">${esc(s.cwd)}</span>`;
+    (s.pid !== undefined ? `<span class="pid">PID ${Number(s.pid)}</span>` : '') +
+    `<span class="path" title="${escAttr(s.cwd)}">${esc(s.cwd)}</span>`;
   el.appendChild(meta);
 
   if (s.kind === 'wrapped' && s.sockPath) {
@@ -303,9 +312,13 @@ function card(s: SessionView): HTMLElement {
     const row = document.createElement('div');
     row.className = 'reply';
     const input = document.createElement('input');
+    input.className = 'reply-input';
+    input.dataset.sid = s.id;
     input.placeholder = 'reply to continue…';
+    input.value = replyDrafts.get(s.id) ?? ''; // survive card rebuilds
+    input.oninput = () => { replyDrafts.set(s.id, input.value); };
     const btn = document.createElement('button'); btn.className = 'ok'; btn.textContent = 'Send';
-    const fire = () => { const t = input.value.trim(); if (t) { send({ type: 'reply', requestId: cid, text: t }); input.value = ''; } };
+    const fire = () => { const t = input.value.trim(); if (t) { send({ type: 'reply', requestId: cid, text: t }); replyDrafts.delete(s.id); input.value = ''; } };
     btn.onclick = fire;
     input.onkeydown = (e) => { if (e.key === 'Enter') fire(); };
     row.append(input, btn);
@@ -323,7 +336,15 @@ function render(): void {
     RANK[a.status] - RANK[b.status] || b.lastActivityAt - a.lastActivityAt);
   empty.style.display = list.length ? 'none' : 'block';
   count.textContent = String(list.length);
+  // Preserve focus + caret across the rebuild (a reply input being typed into).
+  const active = document.activeElement as HTMLInputElement | null;
+  const focusSid = active?.classList.contains('reply-input') ? active.dataset.sid : undefined;
+  const caret = active?.selectionStart ?? null;
   grid.replaceChildren(...list.map(card));
+  if (focusSid) {
+    const next = grid.querySelector(`.reply-input[data-sid="${CSS.escape(focusSid)}"]`) as HTMLInputElement | null;
+    if (next) { next.focus(); if (caret != null) try { next.setSelectionRange(caret, caret); } catch { /* ignore */ } }
+  }
   // Reap previews for sessions that no longer exist (or lost their pty).
   for (const id of [...previews.keys()]) {
     const s = sessions.get(id);

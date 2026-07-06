@@ -27,7 +27,9 @@ export function encodeAttach(cols: number, rows: number): Uint8Array { return en
 export function encodeResize(cols: number, rows: number): Uint8Array { return encodeDims(FrameType.Resize, cols, rows); }
 export function parseDims(payload: Uint8Array): { cols: number; rows: number } {
   const o = JSON.parse(new TextDecoder().decode(payload)) as { cols: number; rows: number };
-  return { cols: Number(o.cols), rows: Number(o.rows) };
+  // Floor at 1 and reject NaN — a malformed frame must never reach term.resize(NaN).
+  const n = (v: unknown): number => { const x = Math.floor(Number(v)); return Number.isFinite(x) && x > 0 ? x : 1; };
+  return { cols: n(o.cols), rows: n(o.rows) };
 }
 
 export class FrameDecoder {
