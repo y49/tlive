@@ -97,6 +97,11 @@ export async function runRun(argv: string[]): Promise<void> {
   const regTimer = setInterval(() => void syncRegister(), 5000);
   regTimer.unref();
 
+  // Terminal-derived status: report running↔idle flips to the daemon.
+  host.onActivity((active) => {
+    void request({ kind: 'session.activity', id, active }, { socketPath: sock, timeoutMs: 800 }).catch(() => undefined);
+  });
+
   // Guard against the double-finish under a signal: onSignal calls host.stop()
   // (→ finish(130)) AND pty.onExit fires (→ finish(exitCode)). First wins.
   let finished = false;

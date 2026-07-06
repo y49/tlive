@@ -191,4 +191,24 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
     await host.stop();
   });
 
+
+  it('reports running on output then idle after silence', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tlive-host-'));
+    const sockPath = join(dir, 's.sock');
+    // print once at start, then go silent
+    const host = new SessionHost({
+      id: 'act-1', cmd: process.execPath,
+      args: ['-e', 'process.stdout.write("hi\\n"); setInterval(()=>{},1000);'],
+      cwd: dir, sockPath, attachLocal: false,
+    });
+    const flips: boolean[] = [];
+    host.onActivity((a) => flips.push(a));
+    await host.start();
+    // within ~1s: running (true); after IDLE_MS(1.5s)+poll: idle (false)
+    await new Promise((r) => setTimeout(r, 3200));
+    expect(flips[0]).toBe(true);        // saw output → running
+    expect(flips).toContain(false);     // then went idle
+    await host.stop();
+  });
+
 });

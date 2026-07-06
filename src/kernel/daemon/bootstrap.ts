@@ -291,6 +291,15 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           reply({ kind: 'ack' });
           return;
         }
+        case 'session.activity': {
+          // Terminal-derived running/idle — never overrides a hook-driven wait.
+          const s = sessions.get(req.id);
+          if (s && s.status !== 'waiting-approval' && s.status !== 'waiting-input') {
+            events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key: s.id, cwd: s.cwd, status: req.active ? 'active' : 'idle' }) });
+          }
+          reply({ kind: 'ack' });
+          return;
+        }
         case 'session.list':
           reply({ kind: 'session.list', sessions: sessions.list() });
           return;

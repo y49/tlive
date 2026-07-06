@@ -309,4 +309,25 @@ describe('daemon → /ws/events downstream broadcast', () => {
     await pB;
   });
 
+
+  it('session.activity flips running/idle but never overrides a hook wait', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [makeFakeAdapter('telegram')] });
+    const frames = await openEvents();
+    await request({ kind: 'session.register', session: { id: 'w1', label: 'bash', cmd: 'bash', cwd: '/act', pid: 1, sockPath: '/a.sock' } }, { socketPath: sock, timeoutMs: 2000 });
+    // idle → then active
+    await request({ kind: 'session.activity', id: 'w1', active: false }, { socketPath: sock, timeoutMs: 2000 });
+    await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 'w1' && x.session.status === 'idle');
+    await request({ kind: 'session.activity', id: 'w1', active: true }, { socketPath: sock, timeoutMs: 2000 });
+    await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 'w1' && x.session.status === 'active');
+    // now a hook approval → waiting-approval; activity(idle) must NOT clear it
+    const p = request({ kind: 'hook.permission.request', cwd: '/act', sessionId: 's', toolName: 'Bash', input: {}, wrappedId: 'w1' }, { socketPath: sock, timeoutMs: 5000 });
+    await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 'w1' && x.session.status === 'waiting-approval');
+    await request({ kind: 'session.activity', id: 'w1', active: false }, { socketPath: sock, timeoutMs: 2000 });
+    await new Promise((r) => setTimeout(r, 60));
+    expect(h.sessions.get('w1')?.status).toBe('waiting-approval'); // unchanged
+    await request({ kind: 'hook.permission.answer', requestId: h.sessions.get('w1')!.pending!.requestId, approved: false }, { socketPath: sock, timeoutMs: 2000 });
+    await p;
+  });
+
 });

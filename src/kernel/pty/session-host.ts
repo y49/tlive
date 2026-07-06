@@ -56,10 +56,19 @@ export class SessionHost {
   // Attach so late joiners get the CURRENT screen instead of a blank page.
   private shadow: HeadlessTerminal | null = null;
   private serializer: SerializeAddon | null = null;
+  // Vendor-neutral activity: recent pty output = running, silence = idle.
+  private lastOutputAt = Date.now();
+  private activeState: boolean | null = null;
+  private activityTimer: ReturnType<typeof setInterval> | null = null;
+  private onActivityCb: ((active: boolean) => void) | null = null;
 
   constructor(private opts: SessionHostOpts) {
     this.attachLocal = opts.attachLocal !== false;
   }
+
+  /** Fires when the session flips between running (recent output) and idle. */
+  onActivity(cb: (active: boolean) => void): void { this.onActivityCb = cb; }
+  private static IDLE_MS = 1500;
 
   async start(): Promise<void> {
     if (this.attachLocal && process.stdout.isTTY) {
@@ -84,6 +93,7 @@ export class SessionHost {
       // node-pty onData yields a decoded string; utf8 round-trips terminal content.
       // For raw-binary passthrough we'd spawn with encoding:null (deferred).
       const buf = Buffer.from(data, 'utf8');
+      this.lastOutputAt = Date.now();
       if (this.attachLocal) process.stdout.write(buf);
       this.shadow?.write(data);
       const frame = encodeData(buf);
@@ -94,6 +104,13 @@ export class SessionHost {
       this.cleanup();
       this.onExitCb?.(exitCode);
     });
+
+    // Poll output-activity; report only on a running↔idle flip.
+    this.activityTimer = setInterval(() => {
+      const active = Date.now() - this.lastOutputAt < SessionHost.IDLE_MS;
+      if (active !== this.activeState) { this.activeState = active; this.onActivityCb?.(active); }
+    }, 1000);
+    this.activityTimer.unref?.();
 
     if (this.attachLocal && process.stdin.isTTY) {
       process.stdin.setRawMode(true);
@@ -201,6 +218,7 @@ export class SessionHost {
   private cleanup(): void {
     if (this.cleanedUp) return;
     this.cleanedUp = true;
+    if (this.activityTimer) { clearInterval(this.activityTimer); this.activityTimer = null; }
     if (this.attachLocal && process.stdin.isTTY) {
       try { process.stdin.setRawMode(false); } catch { /* not a tty anymore */ }
       process.stdin.off('data', this.onLocalInput);

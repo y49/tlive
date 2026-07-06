@@ -25,6 +25,9 @@ export type IpcRequest =
   | { kind: 'hook.notify'; cwd: string; sessionId: string; level: 'info' | 'warn' | 'error'; message: string; wrappedId?: string }
   | { kind: 'session.register'; session: SessionMeta }
   | { kind: 'session.unregister'; id: string }
+  // Terminal-derived activity for a wrapped session (running vs idle) — updates
+  // active/idle without overriding a hook-driven waiting-* state.
+  | { kind: 'session.activity'; id: string; active: boolean }
   | { kind: 'session.list' };
 
 export type IpcResponse =
