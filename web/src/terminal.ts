@@ -127,7 +127,7 @@ function connect(): void {
   const sock = new WebSocket(wsUrl());
   sock.binaryType = 'arraybuffer';
   ws = sock;
-  sock.onopen = () => { retry = 0; const d = idealDims(); lastSent = d; sock.send(encodeAttach(d.cols, d.rows)); };
+  sock.onopen = () => { retry = 0; const d = idealDims(); lastSent = d; sock.send(encodeAttach(d.cols, d.rows)); void loadInfo(); };
   sock.onmessage = (ev) => {
     for (const f of dec.push(new Uint8Array(ev.data as ArrayBuffer))) {
       if (f.type === FrameType.Data) {
@@ -149,6 +149,24 @@ function connect(): void {
     });
   };
   sock.onerror = () => sock.close();
+}
+
+// ---- header: which session am I looking at ---------------------------------
+const theadLabel = document.getElementById('thead-label') as HTMLElement;
+const theadMeta = document.getElementById('thead-meta') as HTMLElement;
+const theadDot = document.getElementById('thead-dot') as HTMLElement;
+(document.getElementById('back') as HTMLElement).onclick = () => { location.href = `/?token=${encodeURIComponent(token)}`; };
+async function loadInfo(): Promise<void> {
+  try {
+    const res = await fetch(`/api/sessions?token=${encodeURIComponent(token)}`);
+    if (!res.ok) return;
+    const s = ((await res.json()) as Array<{ id: string; label?: string; pid?: number; status?: string }>).find((x) => x.id === id);
+    if (!s) return;
+    theadLabel.textContent = s.label ?? id;
+    document.title = `${s.label ?? 'tlive'} · tlive`;
+    theadMeta.textContent = s.pid != null ? `PID ${s.pid}` : '';
+    theadDot.className = `dot ${s.status ?? ''}`;
+  } catch { /* header stays as-is */ }
 }
 
 /** Is this session still listed (with a live pty)? Network errors (daemon
@@ -303,13 +321,7 @@ function toggleFab(): void {
     toggleFab();
   });
 }
-{ // back to the session list
-  const b = document.createElement('button');
-  b.textContent = '☰';
-  b.title = 'Session list';
-  b.addEventListener('click', () => { location.href = `/?token=${encodeURIComponent(token)}`; });
-  bar.appendChild(b);
-}
+// (back-to-list moved to the header bar)
 // ---- view/input modes -----------------------------------------------------
 // xterm swallows every touch (tap → focus → keyboard; long-press select dies).
 // View mode overlays a shield: taps do nothing, keyboard stays down, the key
