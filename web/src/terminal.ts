@@ -25,6 +25,18 @@ term.loadAddon(fit);
 // URLs become clickable → open in a new tab (the pty screen often has links).
 term.loadAddon(new WebLinksAddon((_e, uri) => window.open(uri, '_blank', 'noopener')));
 term.open(termEl);
+// xterm's hidden input drives the soft keyboard. iOS otherwise guesses the
+// return key label ("发送"/Send); a terminal's Enter is a newline/CR, so hint
+// "enter" (↵) and disable autocorrect/-capitalize which corrupt terminal input.
+{
+  const helper = termEl.querySelector('.xterm-helper-textarea');
+  if (helper) {
+    helper.setAttribute('enterkeyhint', 'enter');
+    helper.setAttribute('autocorrect', 'off');
+    helper.setAttribute('autocapitalize', 'off');
+    helper.setAttribute('spellcheck', 'false');
+  }
+}
 
 const enc = new TextEncoder();
 let ws: WebSocket | null = null;

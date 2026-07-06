@@ -44,8 +44,9 @@
     #empty code { color: var(--text-2); background: rgba(255,255,255,.05); border: 1px solid var(--line);
                   border-radius: 6px; padding: 2px 8px; }
 
-    #grid { display: grid; gap: 18px; padding: 22px;
-            grid-template-columns: repeat(auto-fill, minmax(min(520px, 100%), 1fr)); max-width: 1160px; margin: 0 auto; }
+    /* single wide column (design is a 1100px card) so the desktop preview pane
+       is wide enough to render the session grid legibly. 1–2 sessions is typical. */
+    #grid { display: grid; gap: 18px; padding: 22px; grid-template-columns: 1fr; max-width: 1160px; margin: 0 auto; }
 
     /* card */
     .card { position: relative; overflow: hidden; border-radius: 20px; border: 1px solid var(--line);
