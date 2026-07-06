@@ -141,12 +141,16 @@ const previews = new Map<string, Preview>();
 function fitPreview(pv: Preview): void {
   const t = pv.scaler.firstElementChild as HTMLElement;
   if (!t || t.offsetWidth === 0) return;
-  const s = pv.screen.clientWidth / t.offsetWidth;
-  const scaledH = Math.ceil(t.offsetHeight * s);
-  const h = Math.min(220, scaledH);          // width-fit; clip, pin the bottom
+  // Fit width but NEVER upscale (blurry): a narrow session grid (owned by a
+  // phone) stays 1:1 and centered; a wide grid shrinks to fit. Clip tall
+  // content, pinning the bottom (the live prompt / latest activity).
+  const s = Math.min(pv.screen.clientWidth / t.offsetWidth, 1);
+  const scaledW = t.offsetWidth * s, scaledH = Math.ceil(t.offsetHeight * s);
+  const h = Math.min(240, scaledH);
   pv.scaler.style.transform = `scale(${s})`;
   pv.screen.style.height = `${h}px`;
   pv.scaler.style.top = `${Math.min(0, h - scaledH)}px`;
+  pv.scaler.style.left = `${Math.max(0, (pv.screen.clientWidth - scaledW) / 2)}px`;
 }
 
 function createPreview(id: string, name: string): Preview {
