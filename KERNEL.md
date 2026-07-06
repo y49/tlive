@@ -99,12 +99,12 @@ File: `src/kernel/ipc/protocol.ts`
 端点均有平台分支,见 `src/kernel/ipc/client.ts` 的 `defaultSocketPath` /
 `sessionSocketPath`)。
 
-### 5. CLI subcommand surface (7)
+### 5. CLI subcommand surface (8)
 
 File: `src/kernel/contracts/cli-surface.ts`
 
 ```
-setup, start, stop, status, logs, run, hook
+setup, start, stop, status, logs, run, url, hook
 ```
 
 加 CLI 命令 = 先开 issue 讨论。

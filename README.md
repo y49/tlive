@@ -111,6 +111,7 @@ tlive start | stop     daemon lifecycle (stop is idempotent)
 tlive status           health, web URLs + QR, config paths
 tlive logs [-f]        tail the daemon log
 tlive run <cmd> …      wrap a process: local terminal + web terminal
+tlive url              print the dashboard URL + QR (when a full-screen app hid the run banner)
 tlive hook <event>     hook shim (called by Claude/Codex, not by you)
 ```
 

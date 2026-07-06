@@ -95,6 +95,7 @@ tlive start | stop     daemon 生命周期(stop 幂等)
 tlive status           健康态、web 地址 + 二维码、配置路径
 tlive logs [-f]        看 daemon 日志
 tlive run <cmd> …      包装进程:本地终端 + web 终端
+tlive url              打印 dashboard 地址 + 二维码(全屏应用盖住 run banner 时用)
 tlive hook <event>     hook shim(Claude/Codex 调用,不是给你用的)
 ```
 

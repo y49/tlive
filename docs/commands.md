@@ -1,7 +1,7 @@
 # tlive CLI Command Reference
 
 > **v2 CLI surface.** The shipped commands are exactly:
-> `setup`, `start`, `stop`, `status`, `logs`, `run`, `hook`.
+> `setup`, `start`, `stop`, `status`, `logs`, `run`, `url`, `hook`.
 >
 > Removed in v2.0: `restart`, `doctor` (folded into `status`),
 > `daemon-logs` (renamed `logs`), `install-integrations` (folded into `setup`),
@@ -76,6 +76,14 @@ useful after a `tlive` upgrade.
 Replaces the removed `install-integrations` subcommand. The workspace setup
 step has been removed; notifications are delivered to all configured chats,
 gated by `/perm on|off` (global mute).
+
+---
+
+### `tlive url`
+
+Print the web dashboard URL (local + LAN) and a QR code. Focused shortcut for
+when a full-screen TUI (claude) cleared the `tlive run` banner and you just
+want the address again — run it in another terminal.
 
 ---
 

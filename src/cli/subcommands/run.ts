@@ -64,6 +64,8 @@ export async function runRun(argv: string[]): Promise<void> {
       const { default: qr } = await import('qrcode-terminal');
       qr.generate(qrTarget, { small: true }, (out) => process.stdout.write(out + '\n'));
     }
+    // A full-screen TUI (claude) will clear this banner — remind how to get it back.
+    process.stdout.write('  (a full-screen app hides this — run `tlive url` in another terminal anytime)\n');
   } else if (urls.enabled) {
     process.stdout.write('\ntlive web UI: token not created yet — run `tlive start` first for a link + QR.\n');
   }
