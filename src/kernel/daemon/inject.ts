@@ -10,9 +10,13 @@ import { createConnection } from 'node:net';
 import { encodeData } from '../web/stream-protocol.js';
 
 export function bracketedPaste(text: string): Buffer {
+  // Strip embedded paste markers so injected content can't break OUT of paste
+  // mode and have its tail interpreted as keystrokes (a control-sequence
+  // injection). Also drop bare CR/LF-adjacent NULs that some pastes carry.
+  const clean = text.replace(/\x1b\[20[01]~/g, '');
   return Buffer.concat([
     Buffer.from('\x1b[200~', 'ascii'),
-    Buffer.from(text, 'utf8'),
+    Buffer.from(clean, 'utf8'),
     Buffer.from('\x1b[201~\r', 'ascii'),
   ]);
 }

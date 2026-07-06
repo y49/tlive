@@ -214,7 +214,8 @@ async function uploadAndType(files: FileList | File[]): Promise<void> {
   hint.style.display = 'none';
   if (!paths.length) { hint.textContent = 'upload failed'; hint.style.display = 'block'; setTimeout(() => { hint.style.display = 'none'; }, 2000); return; }
   // bracketed paste (no trailing Enter — the user reviews before submitting)
-  send(encodeData(enc.encode(`\x1b[200~${paths.join(' ')}\x1b[201~`)));
+  const payload = paths.join(' ').replace(/\x1b\[20[01]~/g, ''); // no paste-marker escape
+  send(encodeData(enc.encode(`\x1b[200~${payload}\x1b[201~`)));
   term.focus();
 }
 document.addEventListener('paste', (e) => {

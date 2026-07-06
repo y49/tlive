@@ -12,6 +12,15 @@ describe('bracketedPaste', () => {
     expect(b.endsWith('\x1b[201~\r')).toBe(true);
     expect(b).toContain('hi 你好');
   });
+
+  it('strips embedded paste markers (no break-out / control-sequence injection)', () => {
+    const evil = 'ok\x1b[201~rm -rf /\x1b[200~more';
+    const b = bracketedPaste(evil).toString('utf8');
+    // exactly one opening and one closing marker — the payload markers are gone
+    expect(b.match(/\x1b\[200~/g)).toHaveLength(1);
+    expect(b.match(/\x1b\[201~/g)).toHaveLength(1);
+    expect(b).toContain('okrm -rf /more');
+  });
 });
 
 describe('injectInput', () => {
