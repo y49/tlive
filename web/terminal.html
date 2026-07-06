@@ -13,19 +13,30 @@
     /* #app tracks the VISUAL viewport (soft-keyboard aware) via JS; falls back to 100%. */
     #app { position: fixed; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; }
     #viewport { position: absolute; inset: var(--thead-h) 0 var(--bar-h) 0; overflow: hidden; }
-    /* header: which session am I looking at + back to the list */
+    @keyframes tlPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(53,208,127,.5); } 70% { box-shadow: 0 0 0 5px rgba(53,208,127,0); } }
+    /* header: which session am I looking at + back to the list (design c73ecba6) */
     #thead { position: absolute; top: 0; left: 0; right: 0; height: var(--thead-h); z-index: 6;
-             display: flex; align-items: center; gap: 8px; padding: env(safe-area-inset-top) 12px 0;
-             background: rgba(13,16,21,.96); border-bottom: 1px solid #1e232b; backdrop-filter: blur(8px); }
-    #thead #back { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 8px; border: 1px solid #2a3038;
-                   background: #1a1f27; color: #d5dae2; font-size: 16px; line-height: 1; }
-    #thead #back:active { background: #2a3140; }
-    #thead .dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: #6b7280; }
-    #thead .dot.active { background: #4ade80; } #thead .dot.waiting-approval { background: #f87171; }
-    #thead .dot.waiting-input { background: #fcd34d; }
-    #thead .label { font: 600 13.5px ui-monospace, Menlo, monospace; color: #e6e6e6;
+             display: flex; align-items: center; gap: 9px; padding: env(safe-area-inset-top) 14px 0;
+             font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+             background: linear-gradient(180deg, rgba(17,21,29,.97), rgba(11,14,20,.94));
+             border-bottom: 1px solid rgba(255,255,255,.06); backdrop-filter: blur(10px); }
+    #thead .mac { display: flex; gap: 6px; flex: 0 0 auto; }
+    #thead .mac i { width: 9px; height: 9px; border-radius: 50%; }
+    #thead .sdot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: #6b7280; }
+    #thead .sdot.active { background: #35d07f; box-shadow: 0 0 9px #35d07f; animation: tlPulse 2.6s infinite; }
+    #thead .sdot.waiting-approval, #thead .sdot.waiting-input { background: #e6c169; box-shadow: 0 0 9px rgba(230,193,105,.7); }
+    #thead .sdot.idle { background: #5b9bff; }
+    #thead .label { font-weight: 700; font-size: 14px; color: #eef1f6;
                     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #thead .meta { flex: 0 0 auto; margin-left: auto; font: 11.5px ui-monospace, Menlo, monospace; color: #8a94a6; }
+    #thead .pill { flex: 0 0 auto; font-size: 10px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase;
+                   padding: 3px 9px; border-radius: 999px; color: #8b95a3; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08); }
+    #thead .pill.active { color: #8ee6b4; background: rgba(53,208,127,.10); border-color: rgba(53,208,127,.30); }
+    #thead .pill.waiting-approval, #thead .pill.waiting-input { color: #f0d492; background: rgba(230,193,105,.10); border-color: rgba(230,193,105,.32); }
+    #thead .pill.idle { color: #a9c7ff; background: rgba(91,155,255,.10); border-color: rgba(91,155,255,.30); }
+    #thead .meta { flex: 0 0 auto; margin-left: auto; font-size: 11.5px; color: #7a828e; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    #thead #back { flex: 0 0 auto; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
+                   border-radius: 9px; border: 1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.03); color: #9aa4b2; font-size: 15px; }
+    #thead #back:active { background: rgba(255,255,255,.08); }
     #fab { position: absolute; right: 12px; bottom: calc(var(--bar-h) + 12px); z-index: 6;
            width: 42px; height: 42px; border-radius: 50%; border: 1px solid #2a3038;
            background: rgba(18,22,29,.92); color: #d5dae2; font-size: 18px; line-height: 1;
@@ -67,10 +78,12 @@
 <body>
   <div id="app">
     <div id="thead">
-      <button id="back" title="Session list">☰</button>
-      <span class="dot" id="thead-dot"></span>
+      <span class="mac"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span>
+      <span class="sdot" id="thead-dot"></span>
       <span class="label" id="thead-label">…</span>
+      <span class="pill" id="thead-pill"></span>
       <span class="meta" id="thead-meta"></span>
+      <button id="back" title="Session list">☰</button>
     </div>
     <div id="viewport"><div id="scaler"><div id="term"></div></div></div>
     <div id="hint"></div>

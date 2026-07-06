@@ -78,7 +78,7 @@ export async function runRun(argv: string[]): Promise<void> {
   const host = new SessionHost({ id, cmd, args, cwd, sockPath, attachLocal: true });
   await host.start();
 
-  const meta: SessionMeta = { id, label, cmd, cwd, pid: process.pid, sockPath };
+  const meta: SessionMeta = { id, label, cmd, cwd, pid: process.pid, sockPath, startedAt: Date.now() };
   // The pty lives in THIS process and outlives the daemon — so we can't just
   // register once. Poll daemon.status; whenever its pid changes (a restart, or
   // it coming up for the first time), re-register so the session reappears in

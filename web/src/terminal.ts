@@ -155,19 +155,40 @@ function connect(): void {
 const theadLabel = document.getElementById('thead-label') as HTMLElement;
 const theadMeta = document.getElementById('thead-meta') as HTMLElement;
 const theadDot = document.getElementById('thead-dot') as HTMLElement;
+const theadPill = document.getElementById('thead-pill') as HTMLElement;
 (document.getElementById('back') as HTMLElement).onclick = () => { location.href = `/?token=${encodeURIComponent(token)}`; };
+const PILL: Record<string, string> = { active: 'running', 'waiting-approval': 'approve', 'waiting-input': 'reply', idle: 'idle' };
+let headPid: number | null = null;
+let headStartedAt = 0;
+function fmtUptime(ms: number): string {
+  const sec = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  const p = (n: number): string => String(n).padStart(2, '0');
+  return h > 0 ? `${h}h ${p(m)}m` : `${m}m ${p(s)}s`;
+}
+function updateHeadMeta(): void {
+  const parts: string[] = [];
+  if (headPid != null) parts.push(`PID ${headPid}`);
+  if (headStartedAt) parts.push(fmtUptime(Date.now() - headStartedAt));
+  theadMeta.textContent = parts.join(' · ');
+}
 async function loadInfo(): Promise<void> {
   try {
     const res = await fetch(`/api/sessions?token=${encodeURIComponent(token)}`);
     if (!res.ok) return;
-    const s = ((await res.json()) as Array<{ id: string; label?: string; pid?: number; status?: string }>).find((x) => x.id === id);
+    const s = ((await res.json()) as Array<{ id: string; label?: string; pid?: number; status?: string; startedAt?: number }>).find((x) => x.id === id);
     if (!s) return;
     theadLabel.textContent = s.label ?? id;
     document.title = `${s.label ?? 'tlive'} · tlive`;
-    theadMeta.textContent = s.pid != null ? `PID ${s.pid}` : '';
-    theadDot.className = `dot ${s.status ?? ''}`;
+    theadDot.className = `sdot ${s.status ?? ''}`;
+    theadPill.textContent = PILL[s.status ?? ''] ?? '';
+    theadPill.className = `pill ${s.status ?? ''}`;
+    headPid = s.pid ?? null;
+    headStartedAt = s.startedAt ?? 0;
+    updateHeadMeta();
   } catch { /* header stays as-is */ }
 }
+setInterval(updateHeadMeta, 1000);
 
 /** Is this session still listed (with a live pty)? Network errors (daemon
  *  restarting) count as alive — keep retrying rather than declaring it dead. */

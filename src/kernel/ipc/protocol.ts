@@ -10,6 +10,7 @@ export interface SessionMeta {
   cwd: string;
   pid: number;
   sockPath: string;
+  startedAt?: number; // ms epoch when `tlive run` launched — for uptime display
 }
 
 export type IpcRequest =

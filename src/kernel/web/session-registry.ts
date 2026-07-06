@@ -35,6 +35,7 @@ export interface SessionView {
   muted: boolean;
   sockPath?: string; // wrapped sessions only
   pid?: number; // wrapped sessions only (`tlive run` process — liveness sweep)
+  startedAt?: number; // wrapped sessions only — ms epoch, for uptime
 }
 
 export interface UpsertPatch {
@@ -53,6 +54,7 @@ export interface UpsertPatch {
   continueId?: string | null;
   sockPath?: string;
   pid?: number;
+  startedAt?: number;
 }
 
 export class SessionRegistry {
@@ -80,6 +82,8 @@ export class SessionRegistry {
     if (sockPath !== undefined) next.sockPath = sockPath;
     const pid = patch.pid ?? prev?.pid;
     if (pid !== undefined) next.pid = pid;
+    const startedAt = patch.startedAt ?? prev?.startedAt;
+    if (startedAt !== undefined) next.startedAt = startedAt;
     if (patch.pending === null) {
       // cleared: leave next.pending undefined
     } else if (patch.pending !== undefined) {
@@ -118,7 +122,7 @@ export class SessionRegistry {
   /** Wrapped session (`tlive run`): keyed by its run uuid — several wrapped
    *  sessions may share one cwd. */
   register(meta: SessionMeta): SessionView {
-    return this.upsert({ key: meta.id, cwd: meta.cwd, label: meta.label, kind: 'wrapped', sockPath: meta.sockPath, pid: meta.pid, status: 'active' });
+    return this.upsert({ key: meta.id, cwd: meta.cwd, label: meta.label, kind: 'wrapped', sockPath: meta.sockPath, pid: meta.pid, ...(meta.startedAt !== undefined ? { startedAt: meta.startedAt } : {}), status: 'active' });
   }
 
   /** `tlive run` exit: remove the wrapped session by its (uuid) meta id. */
