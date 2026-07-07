@@ -138,21 +138,39 @@ function palette(s: SessionView): Palette {
 interface Preview { el: HTMLElement; term: Terminal; ws: WebSocket | null; dead: boolean; screen: HTMLElement; scaler: HTMLElement }
 const previews = new Map<string, Preview>();
 
+const COARSE = matchMedia('(pointer: coarse)').matches;
 function fitPreview(pv: Preview): void {
   const t = pv.scaler.firstElementChild as HTMLElement;
   if (!t || t.offsetWidth === 0) return;
-  // Fit to width. By last-input authority the session grid belongs to whichever
-  // device you're on, so the preview pane (same device) matches it — scale ≈ 1.
-  // Clip tall content, pinning the bottom (the live prompt / latest activity).
-  const s = pv.screen.clientWidth / t.offsetWidth;
-  const scaledH = Math.ceil(t.offsetHeight * s);
-  // Height tracks width so a wide desktop pane isn't a thin 3:1 strip — cap at
-  // ~2:1 (min 240 keeps the mobile pane at its previous good height).
-  const h = Math.min(Math.max(240, pv.screen.clientWidth * 0.5), scaledH);
+  const widthFit = pv.screen.clientWidth / t.offsetWidth;
+  const scaledH = Math.ceil(t.offsetHeight * widthFit);
+
+  if (COARSE) {
+    // Mobile: the narrow grid packs content near the prompt — fill width (scale
+    // ≈ 1, crisp) and pin the bottom (latest conversation + prompt).
+    const h = Math.min(240, scaledH);
+    pv.scaler.style.transform = `scale(${widthFit})`;
+    pv.screen.style.height = `${h}px`;
+    pv.scaler.style.top = `${Math.min(0, h - scaledH)}px`;
+    pv.scaler.style.left = '0px';
+    return;
+  }
+  // Desktop: a wide claude leaves big blank space between the conversation (top)
+  // and the prompt (bottom); clipping either loses content. Show the WHOLE
+  // screen — width-fit if it fits the cap, else contain by height (centered).
+  const maxH = 460;
+  if (scaledH <= maxH) {
+    pv.scaler.style.transform = `scale(${widthFit})`;
+    pv.screen.style.height = `${scaledH}px`;
+    pv.scaler.style.top = '0px'; pv.scaler.style.left = '0px';
+    return;
+  }
+  const s = maxH / t.offsetHeight;
+  const w = t.offsetWidth * s;
   pv.scaler.style.transform = `scale(${s})`;
-  pv.screen.style.height = `${h}px`;
-  pv.scaler.style.top = `${Math.min(0, h - scaledH)}px`;
-  pv.scaler.style.left = '0px';
+  pv.screen.style.height = `${maxH}px`;
+  pv.scaler.style.top = '0px';
+  pv.scaler.style.left = `${Math.max(0, (pv.screen.clientWidth - w) / 2)}px`;
 }
 
 function createPreview(id: string, name: string): Preview {
