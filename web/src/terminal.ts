@@ -301,6 +301,10 @@ document.addEventListener('drop', (e) => {
 
 // mobile key bar — keys phones lack (⇧Tab = Claude Code permission-mode cycle)
 const BAR: Array<[string, string]> = [
+  // ⇧⏎ = newline WITHOUT submitting (Enter submits). Option/Shift-Enter in
+  // claude Code → terminal ESC+CR. If your agent needs a different sequence,
+  // this is the one to change.
+  ['⇧⏎', '\x1b\r'],
   ['Esc', '\x1b'], ['Tab', '\t'], ['⇧Tab', '\x1b[Z'], ['Ctrl-C', '\x03'],
   ['↑', '\x1b[A'], ['↓', '\x1b[B'], ['←', '\x1b[D'], ['→', '\x1b[C'],
   ['Ctrl-D', '\x04'], ['Ctrl-Z', '\x1a'], ['Ctrl-R', '\x12'], ['Ctrl-L', '\x0c'],
