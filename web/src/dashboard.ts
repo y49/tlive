@@ -146,7 +146,9 @@ function fitPreview(pv: Preview): void {
   // Clip tall content, pinning the bottom (the live prompt / latest activity).
   const s = pv.screen.clientWidth / t.offsetWidth;
   const scaledH = Math.ceil(t.offsetHeight * s);
-  const h = Math.min(240, scaledH);
+  // Height tracks width so a wide desktop pane isn't a thin 3:1 strip — cap at
+  // ~2:1 (min 240 keeps the mobile pane at its previous good height).
+  const h = Math.min(Math.max(240, pv.screen.clientWidth * 0.5), scaledH);
   pv.scaler.style.transform = `scale(${s})`;
   pv.screen.style.height = `${h}px`;
   pv.scaler.style.top = `${Math.min(0, h - scaledH)}px`;

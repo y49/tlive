@@ -31,7 +31,7 @@ term.open(termEl);
 {
   const helper = termEl.querySelector('.xterm-helper-textarea');
   if (helper) {
-    helper.setAttribute('enterkeyhint', 'enter');
+    helper.setAttribute('enterkeyhint', 'send'); // Enter submits the line → 键盘显示"发送"
     helper.setAttribute('autocorrect', 'off');
     helper.setAttribute('autocapitalize', 'off');
     helper.setAttribute('spellcheck', 'false');
