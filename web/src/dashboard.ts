@@ -139,36 +139,31 @@ interface Preview { el: HTMLElement; term: Terminal; ws: WebSocket | null; dead:
 const previews = new Map<string, Preview>();
 
 const COARSE = matchMedia('(pointer: coarse)').matches;
+// Preview layout is chosen by the SESSION GRID, not the viewing device: a wide
+// grid (PC-owned) is claude's blank-heavy layout (conversation top, prompt
+// bottom, big gap) — show the whole screen; a narrow grid (phone-owned) packs
+// content near the prompt — fill width and pin the bottom.
 function fitPreview(pv: Preview): void {
   const t = pv.scaler.firstElementChild as HTMLElement;
   if (!t || t.offsetWidth === 0) return;
-  const widthFit = pv.screen.clientWidth / t.offsetWidth;
-  const scaledH = Math.ceil(t.offsetHeight * widthFit);
 
-  if (COARSE) {
-    // Mobile: the narrow grid packs content near the prompt — fill width (scale
-    // ≈ 1, crisp) and pin the bottom (latest conversation + prompt).
-    const h = Math.min(240, scaledH);
-    pv.scaler.style.transform = `scale(${widthFit})`;
+  if (pv.term.cols <= 70) {
+    // narrow grid: fill width (never upscale), pin bottom, center if narrower
+    const s = Math.min(pv.screen.clientWidth / t.offsetWidth, 1);
+    const sh = Math.ceil(t.offsetHeight * s), sw = t.offsetWidth * s;
+    const h = Math.min(COARSE ? 240 : 340, sh);
+    pv.scaler.style.transform = `scale(${s})`;
     pv.screen.style.height = `${h}px`;
-    pv.scaler.style.top = `${Math.min(0, h - scaledH)}px`;
-    pv.scaler.style.left = '0px';
+    pv.scaler.style.top = `${Math.min(0, h - sh)}px`;
+    pv.scaler.style.left = `${Math.max(0, (pv.screen.clientWidth - sw) / 2)}px`;
     return;
   }
-  // Desktop: a wide claude leaves big blank space between the conversation (top)
-  // and the prompt (bottom); clipping either loses content. Show the WHOLE
-  // screen — width-fit if it fits the cap, else contain by height (centered).
-  const maxH = 460;
-  if (scaledH <= maxH) {
-    pv.scaler.style.transform = `scale(${widthFit})`;
-    pv.screen.style.height = `${scaledH}px`;
-    pv.scaler.style.top = '0px'; pv.scaler.style.left = '0px';
-    return;
-  }
-  const s = maxH / t.offsetHeight;
+  // wide grid: show the WHOLE screen — contain (min of width-fit / height-fit), centered
+  const maxH = COARSE ? 300 : 460;
+  const s = Math.min(pv.screen.clientWidth / t.offsetWidth, maxH / t.offsetHeight);
   const w = t.offsetWidth * s;
   pv.scaler.style.transform = `scale(${s})`;
-  pv.screen.style.height = `${maxH}px`;
+  pv.screen.style.height = `${Math.ceil(t.offsetHeight * s)}px`;
   pv.scaler.style.top = '0px';
   pv.scaler.style.left = `${Math.max(0, (pv.screen.clientWidth - w) / 2)}px`;
 }
