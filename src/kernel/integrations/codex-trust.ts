@@ -16,9 +16,13 @@ export function codexHookState(opts: {
   const lines = t.split('\n');
   let inRefState = false;
   for (const line of lines) {
-    const sect = line.match(/^\s*\[hooks\.state\.(".*?"|[^\]]+)\]\s*$/);
-    if (sect) { inRefState = line.includes(opts.hooksJsonPath); continue; }
-    if (inRefState && /^\s*trusted_hash\s*=/.test(line) && !/=\s*("")\s*$/.test(line)) {
+    // 任何 section header(以 [ 开头、] 结尾)都重置作用域;仅当它是引用本
+    // hooks.json 路径的 [hooks.state."…"] 段时才进入"本路径受信段"。
+    if (/^\s*\[/.test(line) && /\]\s*$/.test(line)) {
+      inRefState = line.includes('[hooks.state.') && line.includes(opts.hooksJsonPath);
+      continue;
+    }
+    if (inRefState && /^\s*trusted_hash\s*=/.test(line) && !/=\s*""\s*$/.test(line)) {
       return 'installed-trusted';
     }
   }

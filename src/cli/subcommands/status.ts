@@ -21,9 +21,15 @@ export async function runStatus(_argv: string[]): Promise<void> {
 
   const codexHooks = join(homedir(), '.codex', 'hooks.json');
   const codexCfg = join(homedir(), '.codex', 'config.toml');
+  let configTomlText: string | null = null;
+  try {
+    if (existsSync(codexCfg)) configTomlText = readFileSync(codexCfg, 'utf-8');
+  } catch {
+    configTomlText = null;
+  }
   const codexState = codexHookState({
     hooksJsonExists: existsSync(codexHooks),
-    configTomlText: existsSync(codexCfg) ? readFileSync(codexCfg, 'utf-8') : null,
+    configTomlText,
     hooksJsonPath: codexHooks,
   });
   if (codexState === 'installed-untrusted') {

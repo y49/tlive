@@ -18,4 +18,14 @@ describe('codexHookState', () => {
     const toml = `[hooks.state."/other/hooks.json:pre_tool_use:0:0"]\ntrusted_hash = "z"\n`;
     expect(codexHookState({ hooksJsonExists: true, configTomlText: toml, hooksJsonPath: P })).toBe('installed-untrusted');
   });
+  it('本路径 hooks.state 段无 trusted_hash,后续无关段有 trusted_hash → 仍 untrusted', () => {
+    const toml = [
+      `[hooks.state."${P}:pre_tool_use:0:0"]`,
+      `some_unrelated_field = "x"`,
+      ``,
+      `[some_other_tool_config]`,
+      `trusted_hash = "belongs-to-something-else"`,
+    ].join('\n');
+    expect(codexHookState({ hooksJsonExists: true, configTomlText: toml, hooksJsonPath: P })).toBe('installed-untrusted');
+  });
 });
