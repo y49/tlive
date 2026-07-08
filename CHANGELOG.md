@@ -76,7 +76,7 @@ All notable changes to this project will be documented in this file.
   `permissionDecisionReason` (Codex treats an empty reason as allow) —
   tlive auto-fills one when the operator didn't provide it.
 - `apply_patch` (Codex's edit tool) gets diff-fenced rendering in approval
-  cards, matching the treatment Claude's `Edit`/`Write` already got.
+  cards, same as Claude's `Edit` (diff treatment).
 - **Trust onboarding**: Codex silently no-ops hooks it doesn't trust.
   `tlive setup`/`--hooks-only` print a reminder to run `codex` interactively
   and approve the hook once; `tlive status` reads `~/.codex/config.toml`

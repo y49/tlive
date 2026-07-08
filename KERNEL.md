@@ -87,8 +87,9 @@ Claude / Codex 的原始 hook JSON 在这里归一。加一个新 AI runtime = �
 **Codex 是这套模式的实例**(`src/kernel/integrations/install-hooks.ts` 的
 `installCodexHooks()` 写 `~/.codex/hooks.json`,schema 与 Claude
 `settings.json` 的 `hooks` 块同构;shim 靠 `tlive hook --codex <event>` 的
-`--codex` flag 选 vendor)。与 Claude 的差异全收在 `permissionDecisionOut`
-一处:
+`--codex` flag 选 vendor)。主要输出差异体现在 `permissionDecisionOut`(deny 带
+reason、defer→ask);另有装机层(`install-hooks.ts` 的事件集,无 Notification
+/SessionEnd)与超时层(`hook.ts` shim 死线兜 Codex fail-open)的差异:
 
 - `defer`:Claude 序列化为 `{}`(空输出 → 回落本地 TUI);Codex 序列化为
   `{hookSpecificOutput:{hookEventName:'PreToolUse',permissionDecision:'ask'}}`
