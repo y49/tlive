@@ -18,7 +18,8 @@
 ```bash
 npm install -g tlive
 
-tlive setup        # 向导:IM 凭据 + 把 hooks 写进 ~/.claude/settings.json
+tlive setup        # 向导:IM 凭据 + 装 hooks(Claude Code 总装;PATH 里有
+                    # codex 就一并装,见下方「Codex」一节)
 tlive start        # 起 daemon —— 打印 web 地址 + 手机扫码二维码
 
 tlive run claude   # (可选)包装会话 → 实时 web 终端 + 预览卡
@@ -29,7 +30,7 @@ tlive run claude   # (可选)包装会话 → 实时 web 终端 + 预览卡
 
 ## 两档集成
 
-| | 只装 hooks(照常跑 `claude`) | 包装(`tlive run claude`) |
+| | 只装 hooks(照常跑 `claude`/`codex`) | 包装(`tlive run claude`/`codex`) |
 |---|---|---|
 | 审批卡(IM + web) | ✅ | ✅ |
 | IM 回复续跑 | ✅(续跑窗口内) | ✅ |
@@ -47,7 +48,8 @@ vs `[label]`(仅 hooks)。
 - **审批** —— `PreToolUse` hook 阻塞等你在 IM 按钮或 web 卡上回答。diff/命令
   渲染、高危模式标记、secret 打码。策略引擎自动放行只读工具;**"总是允许
   \<工具\>"** 按工具放行(内存态,重启清零);`/trust on|off` 整体暂停审批。
-  **绝不自动拒绝**;超时回落到本地终端提示。
+  **绝不自动拒绝**;超时回落到本地终端提示(Claude Code)或原生审批提示
+  (Codex——fail-open 行为不同,见安全模型)。
 - **续跑** —— `Stop` 时回复 IM 消息(或 web 回复框),会话继续。
 - **web 终端** —— `tlive run <cmd>` 在 `/s/<id>` 提供 pty:xterm.js、多设备
   **last-input 布局权**(谁打字网格归谁,其他端等比缩放)、晚到客户端全屏重建、
@@ -58,6 +60,29 @@ vs `[label]`(仅 hooks)。
 - **给 agent 喂任何东西** —— IM 引用回复文本、IM 图片/文件、终端页粘贴/拖拽、
   dashboard 📎。统一落 `~/.tlive/inbox`(自动清理:48 小时 / 256MB 总量),
   以 bracketed paste 打进 pty。
+
+## Codex:hooks 需要一次性信任
+
+`PATH` 里有 `codex` 时,`tlive setup`(以及 `tlive setup --hooks-only`)会
+自动写 `~/.codex/hooks.json`——schema 与 Claude Code `settings.json` 的
+hooks 块同构,装的命令是 `tlive hook --codex <event>`。接的事件:
+`PreToolUse`(审批)、`Stop`(续跑)、`PostToolUse`、`UserPromptSubmit`、
+`SessionStart`。Codex 没有 `Notification` 和 `SessionEnd` 这两个 hook,
+故不给它装。
+
+坑在这:**Codex 对不信任的 hook 一律静默跳过**——不报错、不提示,就是不生效。
+装完之后需要信任一次:
+
+1. 交互式运行一次 `codex`。
+2. 在它的 hooks review 里 approve tlive 的 hook——信任记录写进
+   `~/.codex/config.toml` 的 `[hooks.state]` 下。
+3. `tlive status` 会读这个文件,告诉你现在是 `hooks installed but NOT
+   trusted` 还是已经 `hooks installed and trusted`。
+
+想跳过交互式 review(需要 root):把 tlive 的 hook 条目写进
+`/etc/codex/requirements.toml` 的 `[hooks]` 下,Codex 会把这里列出的 hook
+当作预先信任的"managed hooks"——具体格式看 Codex 自己的文档,tlive 不会
+替你写这个文件。
 
 ## 为什么不用官方远程?
 
@@ -86,6 +111,15 @@ tlive 刻意**不做**"手机从零 vibe coding"——官方远程做得更好�
   `permissions.deny` 永远赢——hook 无法越过它。
 - **兜底是静默**:没配 chat、超时、daemon 没起 → hook 输出 `{}`,Claude 在
   本地终端照常提示,就像 tlive 不存在。
+- **Codex 的 hook 超时是 fail-open,不是静默**——这是 Codex 与 Claude Code
+  真正分叉的地方。Claude Code 的 `PreToolUse` hook 超时会回落到本地提示
+  (安全,无默认动作)。Codex 的 hook 超时则默认让工具调用**照跑**。tlive
+  的缓解:`~/.codex/hooks.json` 给 `PreToolUse` 配了 `timeout: 600`,shim
+  自我限时约 590 秒——舒服地卡在这个窗口内——所以 tlive 总能在 Codex 自己
+  的 fail-open 触发前给出 `allow`/`deny`/`ask` 三选一。没人应答时输出
+  `ask`(Codex 原生审批提示),绝不自动放行。残余风险:如果 shim **进程本身
+  崩溃**(而不只是超时),就没有谁能应答了,Codex 600 秒后依然会 fail-open——
+  这个口子没法从 hook 这一层堵上。
 
 ## CLI
 
@@ -96,7 +130,8 @@ tlive status           健康态、web 地址 + 二维码、配置路径
 tlive logs [-f]        看 daemon 日志
 tlive run <cmd> …      包装进程:本地终端 + web 终端
 tlive url              打印 dashboard 地址 + 二维码(全屏应用盖住 run banner 时用)
-tlive hook <event>     hook shim(Claude/Codex 调用,不是给你用的)
+tlive hook <event>     hook shim(Claude/Codex 调用,不是给你用的;
+                        Codex 侧带 --codex)
 ```
 
 IM 命令:`/perm on|off`(静音)、`/trust on|off`、`/help`。

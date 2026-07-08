@@ -59,6 +59,30 @@ All notable changes to this project will be documented in this file.
   PostToolUse is gone — activity lives on the dashboard).
 - `web.publicUrl` (optional): IM messages carry a deep link to the web UI.
 
+### Added — Codex hook adapter
+
+- **Codex is now a first-class hook vendor, not just Claude Code.**
+  `tlive setup` (and `--hooks-only`) auto-detects `codex` on `PATH` and
+  writes `~/.codex/hooks.json` (isomorphic to Claude Code's
+  `settings.json` hooks block) alongside the existing Claude install; the
+  shim vendor-switches on `tlive hook --codex <event>`.
+- Wired events: `PreToolUse` (approval, 600s timeout), `Stop` (resume,
+  180s), `PostToolUse`, `UserPromptSubmit`, `SessionStart`. Codex has no
+  `Notification` / `SessionEnd` hooks, so those two aren't installed for it.
+- Vendor-aware decision encoding: Codex `defer` serializes to
+  `{hookSpecificOutput:{permissionDecision:'ask'}}` instead of Claude's `{}`
+  (Codex treats empty hook output as fail-open, so the `{}` defer can't be
+  reused); Codex `deny` always carries a non-empty
+  `permissionDecisionReason` (Codex treats an empty reason as allow) —
+  tlive auto-fills one when the operator didn't provide it.
+- `apply_patch` (Codex's edit tool) gets diff-fenced rendering in approval
+  cards, matching the treatment Claude's `Edit`/`Write` already got.
+- **Trust onboarding**: Codex silently no-ops hooks it doesn't trust.
+  `tlive setup`/`--hooks-only` print a reminder to run `codex` interactively
+  and approve the hook once; `tlive status` reads `~/.codex/config.toml`
+  for a `trusted_hash` under `[hooks.state]` and reports
+  `hooks installed but NOT trusted` vs `hooks installed and trusted`.
+
 ### Fixed
 
 - Windows: daemon listened on a filesystem path while clients dialed the
@@ -90,6 +114,14 @@ All notable changes to this project will be documented in this file.
   `allowedSenders` adds per-user hardening.
 - Web: single token (0600) gates every HTTP/WS request; first `?token=`
   sets an httpOnly cookie so the token leaves the URL.
+- **Codex's hook timeout fails open** (the tool call runs) rather than
+  falling back to a local prompt like Claude Code's does. Mitigation: the
+  `PreToolUse` shim self-deadlines at ~590s, inside the 600s Codex is
+  configured to wait, so tlive always answers before Codex's own fail-open
+  can trigger; an unanswered request comes back as `ask` (Codex's native
+  prompt), never an auto-allow. If the shim process crashes outright rather
+  than timing out, Codex still fails open after 600s — that residual gap
+  isn't closable from a hook.
 
 ---
 

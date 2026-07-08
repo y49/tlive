@@ -20,7 +20,8 @@
 ```bash
 npm install -g tlive
 
-tlive setup        # wizard: IM credentials + installs hooks into ~/.claude/settings.json
+tlive setup        # wizard: IM credentials + installs hooks (Claude Code always,
+                    # Codex too if `codex` is on PATH — see "Codex" below)
 tlive start        # daemon up — prints web URLs + a QR code for your phone
 
 tlive run claude   # (optional) wrap the session → live web terminal + preview card
@@ -32,7 +33,7 @@ the web card lights up red.
 
 ## The two integration levels
 
-| | hooks only (`claude` as usual) | wrapped (`tlive run claude`) |
+| | hooks only (`claude`/`codex` as usual) | wrapped (`tlive run claude`/`codex`) |
 |---|---|---|
 | Approval cards (IM + web) | ✅ | ✅ |
 | Stop-resume by IM reply | ✅ (reply window) | ✅ |
@@ -53,7 +54,8 @@ which powers a session has.
   Policy engine auto-allows read-only tools; **"Always allow \<tool\>"** grants
   a per-tool pass (in-memory, cleared on restart); `/trust on|off` pauses
   approvals entirely. **Nothing is ever auto-denied**; timeout falls back to
-  your local terminal prompt.
+  your local terminal prompt (Claude Code) or a native approval prompt
+  (Codex — see Security model, its fail-open behavior differs).
 - **Resume** — on `Stop`, reply to the IM message (or the web reply box) and
   the session keeps going.
 - **Web terminal** — `tlive run <cmd>` serves the pty at `/s/<id>`:
@@ -68,6 +70,31 @@ which powers a session has.
   terminal-page paste/drag-drop, dashboard 📎. All land as local paths in
   `~/.tlive/inbox` (auto-swept: 48 h age / 256 MB total) and are typed into
   the pty via bracketed paste.
+
+## Codex: hooks need a one-time trust
+
+`tlive setup` (and `tlive setup --hooks-only`) writes `~/.codex/hooks.json`
+automatically when `codex` is found on your `PATH` — the schema is
+isomorphic to Claude Code's `settings.json` hooks block, and the installed
+command is `tlive hook --codex <event>`. Wired events: `PreToolUse`
+(approval), `Stop` (resume), `PostToolUse`, `UserPromptSubmit`,
+`SessionStart`. Codex doesn't have `Notification` or `SessionEnd` hooks, so
+those two aren't installed for it.
+
+The catch: **Codex silently skips hooks it doesn't trust** — no error, no
+prompt, they just never fire. After installing, trust them once:
+
+1. Run `codex` interactively.
+2. In its hooks review, approve tlive's hook — the trust record lands in
+   `~/.codex/config.toml` under `[hooks.state]`.
+3. `tlive status` checks that file and tells you whether you're still on
+   `hooks installed but NOT trusted` or already `hooks installed and
+   trusted`.
+
+If you'd rather skip the interactive review (needs root): add tlive's hook
+entries to `/etc/codex/requirements.toml` under `[hooks]`. Codex treats
+hooks listed there as pre-trusted "managed hooks" — see Codex's own docs
+for that file's format; tlive doesn't write it for you.
 
 ## Why not the official remotes?
 
@@ -102,6 +129,18 @@ layer for sessions you already run.
 - **Fallback is silence**: no configured chat, timeout, or a daemon that's
   down → the hook emits `{}` and Claude prompts in your local terminal as if
   tlive weren't there.
+- **Codex's hook timeout fails open, not silent** — this is the one place
+  Codex and Claude Code genuinely diverge. Claude Code's `PreToolUse` hook
+  timing out falls back to its local prompt (safe, no default action).
+  Codex's hook timing out lets the tool call **run** by default. tlive's
+  mitigation: `~/.codex/hooks.json` sets `timeout: 600` on `PreToolUse`, and
+  the shim self-deadlines at ~590s — comfortably inside that window — so
+  tlive always answers `allow`/`deny`/`ask` before Codex's own fail-open can
+  trigger. With nobody around to answer, it answers `ask` (Codex's native
+  approval prompt), never an auto-allow. Residual risk: if the shim
+  **process itself crashes** (not just times out), there's nothing left to
+  answer, and Codex will fail open after 600s regardless — that gap can't be
+  closed from a hook.
 
 ## CLI
 
@@ -112,7 +151,8 @@ tlive status           health, web URLs + QR, config paths
 tlive logs [-f]        tail the daemon log
 tlive run <cmd> …      wrap a process: local terminal + web terminal
 tlive url              print the dashboard URL + QR (when a full-screen app hid the run banner)
-tlive hook <event>     hook shim (called by Claude/Codex, not by you)
+tlive hook <event>     hook shim (called by Claude/Codex, not by you;
+                        Codex passes --codex)
 ```
 
 IM commands: `/perm on|off` (mute), `/trust on|off`, `/help`.

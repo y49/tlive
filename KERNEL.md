@@ -74,13 +74,35 @@ type NormalizedHook =
 // 监看子集(经 IPC `hook.event` 传输):
 type MonitorEvent = activity | attention | prompt | session-start | session-end
 
-// decision 序列化回 Claude hook 格式:
-permissionDecisionOut(decision: 'allow' | 'deny' | 'defer'): object  // defer = {} = 回落本地 TUI
-continueDecisionOut(reply: string | null): object                    // reply → {decision:'block',reason}
+type HookVendor = 'claude' | 'codex';
+
+// decision 序列化回各 vendor 的 hook 格式(vendor 差异只在这一层收口,kernel 不感知):
+permissionDecisionOut(decision: 'allow'|'deny'|'defer', vendor?: HookVendor, reason?: string): object
+continueDecisionOut(reply: string | null): object   // reply → {decision:'block',reason}
 ```
 
 Claude / Codex 的原始 hook JSON 在这里归一。加一个新 AI runtime = 把它的 hook
 事件映射进这套归一模型,kernel 不变。
+
+**Codex 是这套模式的实例**(`src/kernel/integrations/install-hooks.ts` 的
+`installCodexHooks()` 写 `~/.codex/hooks.json`,schema 与 Claude
+`settings.json` 的 `hooks` 块同构;shim 靠 `tlive hook --codex <event>` 的
+`--codex` flag 选 vendor)。与 Claude 的差异全收在 `permissionDecisionOut`
+一处:
+
+- `defer`:Claude 序列化为 `{}`(空输出 → 回落本地 TUI);Codex 序列化为
+  `{hookSpecificOutput:{hookEventName:'PreToolUse',permissionDecision:'ask'}}`
+  ——Codex 对空输出的处理是 fail-open(工具自动跑),不能复用 `{}`。
+- `deny`:Codex 必须带非空 `permissionDecisionReason`(空 reason 会被 Codex
+  当放行处理),tlive 未提供时自动补一个;Claude 不需要。
+- Codex 没有 `Notification` / `SessionEnd` 这两个 hook 事件,
+  `installCodexHooks()` 只装 `PreToolUse`(600s)/`Stop`(180s)/
+  `PostToolUse`/`UserPromptSubmit`/`SessionStart`。
+- Codex hook 超时默认 fail-open(命令照跑),不像 Claude 超时回落本地提示;
+  shim 对审批请求自我限时 ~590s(< hooks.json 里配的 600s),抢在 Codex 的
+  fail-open 前给出 allow/deny/ask 三态之一。shim 进程本身崩溃是唯一没堵上
+  的口子——那种情况下 Codex 600s 后依然会 fail-open,详见 `README.md` 安全
+  模型段。
 
 ### 4. IPC 协议
 
@@ -119,7 +141,10 @@ setup, start, stop, status, logs, run, url, hook
 ## Contributing
 
 - 加 IM 平台 → 写新 `IMAdapter` plugin,别动 kernel。
-- 加 AI runtime → 写「该 runtime 的 hook 事件 → 归一模型」的映射。
+- 加 AI runtime → 写「该 runtime 的 hook 事件 → 归一模型」的映射;Codex
+  adapter(`src/kernel/hook/normalizer.ts` 的 `HookVendor`/
+  `src/kernel/integrations/install-hooks.ts` 的 `installCodexHooks()`)是
+  现成范例。
 - 改任一契约 → breaking change,bump major + 更新 `tests/contract/`。
 - 重构 kernel 内部 → 随意,只要 `tests/contract/` 保持绿。
 
