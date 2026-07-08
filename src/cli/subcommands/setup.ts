@@ -7,12 +7,20 @@ import { stdin as input, stdout as output } from 'node:process';
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { installClaudeHooks } from '../../kernel/integrations/install-hooks.js';
+import { installClaudeHooks, installCodexHooks, commandOnPath } from '../../kernel/integrations/install-hooks.js';
 
 export async function runSetup(argv: string[]): Promise<void> {
   if (argv.includes('--hooks-only')) {
     const p = installClaudeHooks();
-    process.stdout.write(`✓ tlive hooks written to ${p}\nRestart claude for changes to take effect.\n`);
+    process.stdout.write(`✓ Claude hooks written to ${p}\n`);
+    if (commandOnPath('codex')) {
+      const cp = installCodexHooks();
+      process.stdout.write(
+        `✓ Codex hooks written to ${cp}\n` +
+        `  ⚠ Codex 需信任一次才生效:运行 \`codex\`(交互),在 hooks review 里 approve tlive 的 hook。\n`,
+      );
+    }
+    process.stdout.write('Restart claude/codex for changes to take effect.\n');
     return;
   }
 
@@ -46,5 +54,10 @@ export async function runSetup(argv: string[]): Promise<void> {
   rl.close();
   writeFileSync(configPath, JSON.stringify(cfg, null, 2));
   const hooksPath = installClaudeHooks();
-  process.stdout.write(`\nWritten ${configPath}\n✓ hooks installed at ${hooksPath}\nNext: tlive start\n`);
+  let codexNote = '';
+  if (commandOnPath('codex')) {
+    const cp = installCodexHooks();
+    codexNote = `✓ Codex hooks installed at ${cp}\n  ⚠ Codex 需信任一次:运行 \`codex\` 在 hooks review 里 approve tlive 的 hook。\n`;
+  }
+  process.stdout.write(`\nWritten ${configPath}\n✓ Claude hooks installed at ${hooksPath}\n${codexNote}Next: tlive start\n`);
 }
