@@ -1,10 +1,11 @@
 // src/cli/subcommands/status.ts
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { request } from '../../kernel/ipc/client.js';
 import { loadConfig } from '../../kernel/config/loader.js';
 import { resolveWebUrls, printWebBanner } from '../web-url.js';
+import { codexHookState } from '../../kernel/integrations/codex-trust.js';
 
 export async function runStatus(_argv: string[]): Promise<void> {
   const home = process.env.TLIVE_HOME ?? join(homedir(), '.tlive');
@@ -17,6 +18,19 @@ export async function runStatus(_argv: string[]): Promise<void> {
     }
   } catch { /* not running */ }
   if (!daemonOk) process.stdout.write('daemon:   not running (run: tlive start)\n');
+
+  const codexHooks = join(homedir(), '.codex', 'hooks.json');
+  const codexCfg = join(homedir(), '.codex', 'config.toml');
+  const codexState = codexHookState({
+    hooksJsonExists: existsSync(codexHooks),
+    configTomlText: existsSync(codexCfg) ? readFileSync(codexCfg, 'utf-8') : null,
+    hooksJsonPath: codexHooks,
+  });
+  if (codexState === 'installed-untrusted') {
+    process.stdout.write('codex:    hooks installed but NOT trusted — run `codex` and approve tlive in the hooks review.\n');
+  } else if (codexState === 'installed-trusted') {
+    process.stdout.write('codex:    hooks installed and trusted\n');
+  }
 
   const cfg = loadConfig(home);
   const dests: string[] = [];
