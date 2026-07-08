@@ -12,6 +12,7 @@ import {
   permissionDecisionOut,
   continueDecisionOut,
   type HookEventName,
+  type HookVendor,
   type MonitorEvent,
 } from '../../kernel/hook/normalizer.js';
 
@@ -24,8 +25,14 @@ async function readStdin(): Promise<unknown> {
 
 const USAGE = 'Usage: tlive hook <pre-tool-use|post-tool-use|stop|notification|user-prompt-submit|session-start|session-end>\n';
 
+export function parseHookArgs(argv: string[]): { event?: HookEventName; vendor: HookVendor } {
+  const vendor: HookVendor = argv.includes('--codex') ? 'codex' : 'claude';
+  const event = argv.find((a) => !a.startsWith('--')) as HookEventName | undefined;
+  return { event, vendor };
+}
+
 export async function runHook(argv: string[]): Promise<void> {
-  const event = argv[0] as HookEventName | undefined;
+  const { event, vendor } = parseHookArgs(argv);
   if (!event) {
     process.stderr.write(USAGE);
     process.exit(1);
@@ -52,7 +59,7 @@ export async function runHook(argv: string[]): Promise<void> {
         { timeoutMs: 590_000 },
       );
       const decision = r.kind === 'hook.permission.result' ? r.decision : 'defer';
-      process.stdout.write(JSON.stringify(permissionDecisionOut(decision)));
+      process.stdout.write(JSON.stringify(permissionDecisionOut(decision, vendor)));
       return;
     }
 
@@ -91,7 +98,7 @@ export async function runHook(argv: string[]): Promise<void> {
     ).catch(() => undefined);
     process.stdout.write('{}');
   } catch {
-    // Daemon not running or error → safe default: empty output, Claude uses local TUI.
-    process.stdout.write('{}');
+    // daemon 不可达/出错 → 安全默认。审批路径按 vendor 让原生工具本地问;其余空输出。
+    process.stdout.write(event === 'pre-tool-use' ? JSON.stringify(permissionDecisionOut('defer', vendor)) : '{}');
   }
 }
