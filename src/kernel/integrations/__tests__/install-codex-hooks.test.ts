@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -51,5 +51,28 @@ describe('installCodexHooks', () => {
       const cfg = JSON.parse(readFileSync(installCodexHooks(), 'utf-8'));
       expect(cfg.hooks.PreToolUse.length).toBe(1);
     } finally { process.env.HOME = prev; }
+  });
+  it('Stop timeout ≥ 175 (shim 续跑死线之上)', async () => {
+    const { cfg } = await run();
+    expect(cfg.hooks.Stop[0].hooks[0].timeout).toBeGreaterThanOrEqual(175);
+  });
+});
+
+describe('commandOnPath', () => {
+  it('finds an executable placed on PATH, misses a bogus name', async () => {
+    const { commandOnPath } = await import('../install-hooks');
+    const dir = mkdtempSync(join(tmpdir(), 'tlive-path-'));
+    const exe = join(dir, 'tlivefakebin');
+    writeFileSync(exe, '#!/bin/sh\n');
+    chmodSync(exe, 0o755);
+    const prevPath = process.env.PATH;
+    process.env.PATH = dir + (process.platform === 'win32' ? ';' : ':') + (prevPath ?? '');
+    try {
+      expect(commandOnPath('tlivefakebin')).toBe(true);
+      expect(commandOnPath('tlive-definitely-not-a-real-binary-xyz')).toBe(false);
+    } finally {
+      process.env.PATH = prevPath;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

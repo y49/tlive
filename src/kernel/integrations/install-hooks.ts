@@ -1,6 +1,8 @@
 // src/kernel/integrations/install-hooks.ts
 //
-// Write tlive's Claude hook entries into ~/.claude/settings.json (idempotent).
+// Write tlive's hook entries into per-vendor config (idempotent):
+//  - Claude Code → ~/.claude/settings.json  (installClaudeHooks)
+//  - Codex       → ~/.codex/hooks.json       (installCodexHooks)
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { join, delimiter } from 'node:path';
 import { homedir } from 'node:os';
@@ -76,7 +78,8 @@ export function installCodexHooks(): string {
     hooks[event].push(group);
   };
   put('PreToolUse', { matcher: '*', hooks: [cmd('pre-tool-use', 600)] });
-  put('Stop', { hooks: [cmd('stop', 170)] });
+  // Stop timeout ≥ shim 续跑 IPC 死线(175s,见 hook.ts stop 路径),让 shim 先应答而非被 Codex 提前杀。
+  put('Stop', { hooks: [cmd('stop', 180)] });
   put('PostToolUse', { matcher: '*', hooks: [cmd('post-tool-use')] });
   put('UserPromptSubmit', { hooks: [cmd('user-prompt-submit')] });
   put('SessionStart', { matcher: 'startup|resume|clear|compact', hooks: [cmd('session-start')] });
