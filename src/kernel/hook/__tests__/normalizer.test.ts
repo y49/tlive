@@ -48,3 +48,27 @@ describe('hook normalizer', () => {
     expect(n).toEqual({ event: 'session-end', cwd: '/r', sessionId: 's', reason: 'clear' });
   });
 });
+
+describe('permissionDecisionOut vendor', () => {
+  it('claude allow/deny/defer 保持原样(向后兼容)', () => {
+    expect(permissionDecisionOut('allow')).toEqual({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } });
+    expect(permissionDecisionOut('deny')).toEqual({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny' } });
+    expect(permissionDecisionOut('defer')).toEqual({});
+  });
+  it('codex deny 必带非空 permissionDecisionReason', () => {
+    const out = permissionDecisionOut('deny', 'codex') as any;
+    expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(typeof out.hookSpecificOutput.permissionDecisionReason).toBe('string');
+    expect(out.hookSpecificOutput.permissionDecisionReason.length).toBeGreaterThan(0);
+  });
+  it('codex deny 用传入 reason', () => {
+    const out = permissionDecisionOut('deny', 'codex', '用户拒绝') as any;
+    expect(out.hookSpecificOutput.permissionDecisionReason).toBe('用户拒绝');
+  });
+  it('codex defer → ask(绝不 auto-allow)', () => {
+    expect(permissionDecisionOut('defer', 'codex')).toEqual({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask' } });
+  });
+  it('codex allow 与 claude 同', () => {
+    expect(permissionDecisionOut('allow', 'codex')).toEqual({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } });
+  });
+});
