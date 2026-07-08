@@ -81,6 +81,10 @@ export function renderApprovalCard(req: RenderRequest): { title: string; body: s
       const desc = str(input, 'description');
       return { title, body: `${desc ? fenceSafe(desc) + '\n' : ''}\`\`\`bash\n${fenceSafe(maskSecrets(cmd))}\n\`\`\`${riskFlag(cmd)}` };
     }
+    case 'apply_patch': {
+      const patch = fenceSafe(maskSecrets(str(input, 'command') ?? '')).slice(0, 1500);
+      return { title, body: `\`\`\`diff\n${patch}\n\`\`\`` };
+    }
     default: {
       const json = fenceSafe(maskSecrets(JSON.stringify(input ?? {}))).slice(0, 500);
       return { title, body: `\`\`\`json\n${json}\n\`\`\`` };

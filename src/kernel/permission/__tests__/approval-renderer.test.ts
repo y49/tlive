@@ -41,6 +41,12 @@ describe('renderApprovalCard', () => {
     const { body } = renderApprovalCard({ toolName: 'mcp__s__t', input: { password: 'p', q: 1 } });
     expect(body).toContain('json');
   });
+  it('apply_patch(Codex 编辑)渲染成 diff', () => {
+    const { body } = renderApprovalCard({ toolName: 'apply_patch', input: { command: '*** Begin Patch\n*** Update File: a.ts\n-old\n+new\n*** End Patch' } });
+    expect(body).toContain('```diff');
+    expect(body).toContain('+new');
+    expect(body).toContain('-old');
+  });
 });
 
 describe('approval-card fence spoofing defense', () => {
