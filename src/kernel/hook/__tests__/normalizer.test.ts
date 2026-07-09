@@ -12,7 +12,7 @@ describe('hook normalizer', () => {
   });
   it('parses Stop as attention', () => {
     const n = parseHookInput('stop', { cwd: '/r', session_id: 's' });
-    expect(n).toEqual({ event: 'attention', cwd: '/r', sessionId: 's', message: 'Claude 已完成,回复以续跑' });
+    expect(n).toEqual({ event: 'attention', cwd: '/r', sessionId: 's', message: '已完成,回复以续跑' });
   });
   it('parses Notification with message', () => {
     const n = parseHookInput('notification', { cwd: '/r', session_id: 's', message: '需要权限' });
@@ -33,7 +33,7 @@ describe('hook normalizer', () => {
   });
   it('parses Stop with last_assistant_message into attention.lastMessage', () => {
     const n = parseHookInput('stop', { cwd: '/r', session_id: 's', last_assistant_message: 'all done' });
-    expect(n).toEqual({ event: 'attention', cwd: '/r', sessionId: 's', message: 'Claude 已完成,回复以续跑', lastMessage: 'all done' });
+    expect(n).toEqual({ event: 'attention', cwd: '/r', sessionId: 's', message: '已完成,回复以续跑', lastMessage: 'all done' });
   });
   it('parses UserPromptSubmit as prompt', () => {
     const n = parseHookInput('user-prompt-submit', { cwd: '/r', session_id: 's', prompt: 'fix the bug' });
@@ -70,5 +70,11 @@ describe('permissionDecisionOut vendor', () => {
   });
   it('codex allow 与 claude 同', () => {
     expect(permissionDecisionOut('allow', 'codex')).toEqual({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } });
+  });
+  it('未预期 decision 值 → 视作 defer(clamp;绝不 auto-allow)', () => {
+    // @ts-expect-error 故意传非法值,验证运行时兜底
+    expect(permissionDecisionOut('bogus', 'codex')).toEqual({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask' } });
+    // @ts-expect-error
+    expect(permissionDecisionOut('bogus', 'claude')).toEqual({});
   });
 });

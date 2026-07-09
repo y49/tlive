@@ -38,13 +38,13 @@ export async function runHook(argv: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const raw = await readStdin();
-  const n = parseHookInput(event, raw);
-  // Inherited from a `tlive run` pty (like $TMUX): routes this hook's traffic
-  // to that exact session card, so several wrapped sessions can share one cwd.
-  const wrappedId = process.env.TLIVE_SESSION;
-
   try {
+    const raw = await readStdin();
+    const n = parseHookInput(event, raw);
+    // Inherited from a `tlive run` pty (like $TMUX): routes this hook's traffic
+    // to that exact session card, so several wrapped sessions can share one cwd.
+    const wrappedId = process.env.TLIVE_SESSION;
+
     if (n.event === 'approval-request') {
       const r = await request(
         {

@@ -36,9 +36,9 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
     case 'post-tool-use':
       return { event: 'activity', cwd, sessionId, toolName: r.tool_name ?? '(unknown)', result: r.tool_response ?? {} };
     case 'stop':
-      return { event: 'attention', cwd, sessionId, message: 'Claude 已完成,回复以续跑', ...(r.last_assistant_message ? { lastMessage: r.last_assistant_message } : {}) };
+      return { event: 'attention', cwd, sessionId, message: '已完成,回复以续跑', ...(r.last_assistant_message ? { lastMessage: r.last_assistant_message } : {}) };
     case 'notification':
-      return { event: 'attention', cwd, sessionId, message: r.message ?? 'Claude 需要你' };
+      return { event: 'attention', cwd, sessionId, message: r.message ?? '需要你处理' };
     case 'user-prompt-submit':
       return { event: 'prompt', cwd, sessionId, prompt: r.prompt ?? '' };
     case 'session-start':
@@ -53,19 +53,19 @@ export function permissionDecisionOut(
   vendor: HookVendor = 'claude',
   reason?: string,
 ): object {
-  if (decision === 'defer') {
-    // CC: 空输出 → 回落本地 TUI。Codex: 空输出=fail-open(命令自动跑),
-    // 故输出 'ask' → Codex 原生审批提示,保持"绝不 auto-allow"。
-    return vendor === 'codex'
-      ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask' } }
-      : {};
+  if (decision === 'allow' || decision === 'deny') {
+    const out: Record<string, unknown> = { hookEventName: 'PreToolUse', permissionDecision: decision };
+    // Codex 对空 reason 的 deny 回落放行 → 一律附非空 reason(CC 不需要,保持原输出)。
+    if (decision === 'deny' && vendor === 'codex') {
+      out.permissionDecisionReason = reason && reason.trim() ? reason : '已被 tlive 拒绝';
+    }
+    return { hookSpecificOutput: out };
   }
-  const out: Record<string, unknown> = { hookEventName: 'PreToolUse', permissionDecision: decision };
-  // Codex 对空 reason 的 deny 回落为放行 → 一律附非空 reason(CC 不需要,保持原输出)。
-  if (decision === 'deny' && vendor === 'codex') {
-    out.permissionDecisionReason = reason && reason.trim() ? reason : '已被 tlive 拒绝';
-  }
-  return { hookSpecificOutput: out };
+  // defer 或任何非预期值 → 绝不 auto-allow:CC 空输出(回落本地 TUI),
+  // Codex 输出 'ask'(原生审批提示,因 Codex 空输出=fail-open 自动跑)。
+  return vendor === 'codex'
+    ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask' } }
+    : {};
 }
 
 export function continueDecisionOut(reply: string | null): object {
