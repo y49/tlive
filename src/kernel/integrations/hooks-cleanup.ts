@@ -6,7 +6,7 @@
 // itself wrote (CC: `_tlive` marker; Codex: `tlive hook` command prefix) —
 // user-owned hooks are never touched. Direct-write installers are retired;
 // manual setup for old vendors lives in the docs.
-import { existsSync, readFileSync, writeFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, statSync, readdirSync } from 'node:fs';
 import { join, delimiter } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -50,7 +50,16 @@ export function stripLegacyCodexHooks(): boolean {
     (h) => typeof h.command === 'string' && (h.command as string).startsWith('tlive hook'));
 }
 
-/** Codex 插件 cache 内 tlive hooks.json 的路径(codex 0.142 实测布局:<mk>/<plugin>/local/)。 */
-export function codexPluginHooksPath(codexHome: string): string {
-  return join(codexHome, 'plugins', 'cache', 'tlive', 'tlive', 'local', 'hooks', 'hooks.json');
+/** Codex 插件 cache 内 tlive hooks.json 的实际路径,未安装则 null。
+ *  实测布局(codex 0.142):<cache>/tlive/tlive/<版本目录>/hooks/hooks.json —— 版本目录
+ *  是 plugin.json 的 version(如 "2.0.0"),无 version 时曾见 "local",故扫描解析而非猜。 */
+export function codexPluginHooksPath(codexHome: string): string | null {
+  const base = join(codexHome, 'plugins', 'cache', 'tlive', 'tlive');
+  try {
+    for (const entry of readdirSync(base)) {
+      const p = join(base, entry, 'hooks', 'hooks.json');
+      if (existsSync(p)) return p;
+    }
+  } catch { /* cache 不存在 = 未安装 */ }
+  return null;
 }

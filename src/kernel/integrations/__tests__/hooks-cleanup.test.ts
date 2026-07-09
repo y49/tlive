@@ -57,8 +57,16 @@ describe('strip legacy hooks', () => {
       expect(cfg.hooks.PreToolUse[0].hooks[0].command).toBe('other-tool hook');
     } finally { process.env.HOME = prev; }
   });
-  it('codexPluginHooksPath 布局', async () => {
+  it('codexPluginHooksPath: 扫描版本目录解析实际路径(2.0.0 布局,E2E 实测)', async () => {
     const { codexPluginHooksPath } = await import('../hooks-cleanup');
-    expect(codexPluginHooksPath('/home/u/.codex')).toBe('/home/u/.codex/plugins/cache/tlive/tlive/local/hooks/hooks.json');
+    const h = home();
+    const hooksDir = join(h, 'plugins', 'cache', 'tlive', 'tlive', '2.0.0', 'hooks');
+    mkdirSync(hooksDir, { recursive: true });
+    writeFileSync(join(hooksDir, 'hooks.json'), '{}');
+    expect(codexPluginHooksPath(h)).toBe(join(hooksDir, 'hooks.json'));
+  });
+  it('codexPluginHooksPath: cache 不存在 → null', async () => {
+    const { codexPluginHooksPath } = await import('../hooks-cleanup');
+    expect(codexPluginHooksPath(home())).toBeNull();
   });
 });

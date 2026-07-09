@@ -28,11 +28,9 @@ export async function runStatus(_argv: string[]): Promise<void> {
   } catch {
     configTomlText = null;
   }
-  const codexState = codexHookState({
-    hooksJsonExists: existsSync(codexHooks),
-    configTomlText,
-    hooksJsonPath: codexHooks,
-  });
+  const codexState = codexHooks === null
+    ? 'not-installed'
+    : codexHookState({ hooksJsonExists: true, configTomlText, hooksJsonPath: codexHooks });
   if (codexState === 'installed-untrusted') {
     process.stdout.write('codex:    hooks installed but NOT trusted — run `codex` and approve tlive in the hooks review.\n');
   } else if (codexState === 'installed-trusted') {
