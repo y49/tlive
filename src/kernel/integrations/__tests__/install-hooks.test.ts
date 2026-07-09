@@ -40,4 +40,16 @@ describe('installClaudeHooks timeout', () => {
       process.env.HOME = prev;
     }
   });
+  it('registers PostToolUseFailure / StopFailure hooks', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'tlive-hooks3-'));
+    dirs.push(home);
+    const prev = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const { installClaudeHooks } = await import('../install-hooks');
+      const cfg = JSON.parse(readFileSync(installClaudeHooks(), 'utf-8'));
+      expect(cfg.hooks.PostToolUseFailure[0].hooks[0].command).toBe('tlive hook post-tool-use-failure');
+      expect(cfg.hooks.StopFailure[0].hooks[0].command).toBe('tlive hook stop-failure');
+    } finally { process.env.HOME = prev; }
+  });
 });

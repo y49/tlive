@@ -56,6 +56,11 @@ describe('installCodexHooks', () => {
     const { cfg } = await run();
     expect(cfg.hooks.Stop[0].hooks[0].timeout).toBeGreaterThanOrEqual(175);
   });
+  it('Codex 不装 failure 事件(Codex 无此事件)', async () => {
+    const { cfg } = await run();
+    expect(cfg.hooks.PostToolUseFailure).toBeUndefined();
+    expect(cfg.hooks.StopFailure).toBeUndefined();
+  });
 });
 
 describe('commandOnPath', () => {

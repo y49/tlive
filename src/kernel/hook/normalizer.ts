@@ -5,7 +5,9 @@ export type HookEventName =
   | 'notification'
   | 'user-prompt-submit'
   | 'session-start'
-  | 'session-end';
+  | 'session-end'
+  | 'post-tool-use-failure'
+  | 'stop-failure';
 
 export type HookVendor = 'claude' | 'codex';
 
@@ -25,6 +27,8 @@ interface RawHook {
   tool_name?: string; tool_input?: unknown; tool_response?: unknown; message?: string;
   prompt?: string; source?: string; reason?: string; last_assistant_message?: string;
   notification_type?: string;
+  tool_error?: unknown;
+  error_type?: string;
 }
 
 export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHook {
@@ -53,6 +57,12 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
       return { event: 'session-start', cwd, sessionId, ...(r.source ? { source: r.source } : {}) };
     case 'session-end':
       return { event: 'session-end', cwd, sessionId, ...(r.reason ? { reason: r.reason } : {}) };
+    case 'post-tool-use-failure': {
+      const err = typeof r.tool_error === 'string' ? r.tool_error : JSON.stringify(r.tool_error ?? '');
+      return { event: 'attention', cwd, sessionId, message: `❌ ${r.tool_name ?? '(unknown)'} 失败: ${err.slice(0, 200)}` };
+    }
+    case 'stop-failure':
+      return { event: 'attention', cwd, sessionId, message: `❌ 会话出错: ${r.error_type ?? 'unknown'}` };
   }
 }
 

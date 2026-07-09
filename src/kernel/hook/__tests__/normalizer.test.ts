@@ -65,6 +65,21 @@ describe('notification notification_type', () => {
   });
 });
 
+describe('failure events', () => {
+  it('post-tool-use-failure → attention ❌ 工具名+错误截断', () => {
+    const n = parseHookInput('post-tool-use-failure', { cwd: '/x', session_id: 's', tool_name: 'Bash', tool_error: 'E'.repeat(500) });
+    expect(n.event).toBe('attention');
+    expect((n as any).message).toContain('❌');
+    expect((n as any).message).toContain('Bash');
+    expect((n as any).message.length).toBeLessThan(300);
+  });
+  it('stop-failure → attention ❌ error_type', () => {
+    const n = parseHookInput('stop-failure', { cwd: '/x', session_id: 's', error_type: 'rate_limit' });
+    expect((n as any).message).toContain('❌');
+    expect((n as any).message).toContain('rate_limit');
+  });
+});
+
 describe('permissionDecisionOut vendor', () => {
   it('claude allow/deny/defer 保持原样(向后兼容)', () => {
     expect(permissionDecisionOut('allow')).toEqual({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } });

@@ -101,10 +101,11 @@ export async function runHook(argv: string[]): Promise<void> {
       return;
     }
 
-    if (event === 'notification') {
+    if (event === 'notification' || event === 'post-tool-use-failure' || event === 'stop-failure') {
       const att = n as { cwd: string; sessionId: string; message: string };
+      const level = event === 'notification' ? 'info' : 'error';
       await request(
-        { kind: 'hook.notify', cwd: att.cwd, sessionId: att.sessionId, level: 'info', message: att.message, ...(wrappedId ? { wrappedId } : {}) },
+        { kind: 'hook.notify', cwd: att.cwd, sessionId: att.sessionId, level, message: att.message, ...(wrappedId ? { wrappedId } : {}) },
         { timeoutMs: 4_000 },
       ).catch(() => undefined);
       process.stdout.write('{}');
