@@ -91,7 +91,7 @@ which powers a session has.
 vendor's **own plugin manager**:
 
 - Claude Code: `claude plugin marketplace add <bundled dir>` then
-  `claude plugin install tlive@tlive --scope user -y`.
+  `claude plugin install tlive@tlive --scope user`.
 - Codex (if `codex` is on `PATH`): `codex plugin marketplace add <bundled
   dir>` then `codex plugin add tlive@tlive`.
 

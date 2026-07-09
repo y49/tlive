@@ -133,7 +133,7 @@ All notable changes to this project will be documented in this file.
   `tlive setup` / `--hooks-only` no longer hand-edit
   `~/.claude/settings.json` or `~/.codex/hooks.json`. They instead
   orchestrate each vendor's own plugin manager: `claude plugin marketplace
-  add <bundled dir>` + `claude plugin install tlive@tlive --scope user -y`
+  add <bundled dir>` + `claude plugin install tlive@tlive --scope user`
   for Claude Code, `codex plugin marketplace add <bundled dir>` + `codex
   plugin add tlive@tlive` for Codex. The plugin bundles the same hook event
   set as before (CC 9 events / Codex 5 events), plus a `tlive` skill and

@@ -79,7 +79,7 @@ vs `[label]`(仅 hooks)。
 插件管理器**:
 
 - Claude Code:`claude plugin marketplace add <内置目录>` 再
-  `claude plugin install tlive@tlive --scope user -y`。
+  `claude plugin install tlive@tlive --scope user`。
 - Codex(`codex` 在 `PATH` 上时):`codex plugin marketplace add <内置目录>`
   再 `codex plugin add tlive@tlive`。
 

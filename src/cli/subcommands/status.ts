@@ -20,8 +20,10 @@ export async function runStatus(_argv: string[]): Promise<void> {
   } catch { /* not running */ }
   if (!daemonOk) process.stdout.write('daemon:   not running (run: tlive start)\n');
 
-  const codexHooks = codexPluginHooksPath(join(homedir(), '.codex'));
-  const codexCfg = join(homedir(), '.codex', 'config.toml');
+  // codex 本体尊重 $CODEX_HOME(插件 cache/config 都在其下),status 检测同源。
+  const codexHome = process.env.CODEX_HOME ?? join(homedir(), '.codex');
+  const codexHooks = codexPluginHooksPath(codexHome);
+  const codexCfg = join(codexHome, 'config.toml');
   let configTomlText: string | null = null;
   try {
     if (existsSync(codexCfg)) configTomlText = readFileSync(codexCfg, 'utf-8');
