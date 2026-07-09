@@ -6,6 +6,7 @@ import { bootstrapDaemon } from './bootstrap.js';
 import { TelegramAdapter } from '../../adapters/im/telegram.js';
 import { FeishuAdapter } from '../../adapters/im/feishu.js';
 import { loadConfig } from '../config/loader.js';
+import { AlreadyRunningError } from '../ipc/server.js';
 
 export async function runDaemonMain(): Promise<void> {
   const home = process.env.TLIVE_HOME ?? join(homedir(), '.tlive');
@@ -26,6 +27,10 @@ export async function runDaemonMain(): Promise<void> {
 
 if (process.argv[1]?.endsWith('tlive-daemon.mjs')) {
   runDaemonMain().catch((e) => {
+    if (e instanceof AlreadyRunningError) {
+      process.stderr.write('tlive daemon: already running, exiting.\n');
+      process.exit(0); // 懒启动竞态的输家:干净退出,不是错误
+    }
     process.stderr.write(`tlive daemon: ${(e as Error).stack ?? e}\n`);
     process.exit(1);
   });
