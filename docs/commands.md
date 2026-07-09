@@ -54,11 +54,12 @@ web uploads. See README "The two integration levels".
 
 ## Hook integration
 
-### `tlive hook <event>`
+### `tlive hook [--codex] <event>`
 
-Low-level shim that `~/.claude/settings.json` hooks call. Reads the hook
-payload from stdin, contacts the daemon over IPC, and writes the decision to
-stdout. Not intended for direct user invocation.
+Low-level shim invoked by the Claude Code / Codex hooks that ship inside the
+tlive plugins. Reads the hook payload from stdin, contacts the daemon over
+IPC, and writes the decision to stdout (`--codex` selects the Codex decision
+wire). Not intended for direct user invocation.
 
 ---
 
@@ -67,11 +68,14 @@ stdout. Not intended for direct user invocation.
 ### `tlive setup [--hooks-only]`
 
 Interactive wizard that configures IM credentials (Telegram / Feishu) and
-writes (or updates) `~/.tlive/config.json`. After configuration it also
-installs the Claude Code hooks into `~/.claude/settings.json` (idempotent).
+writes (or updates) `~/.tlive/config.json`. After configuration it registers
+the bundled Claude Code / Codex plugins via each vendor's own plugin manager
+(hooks + skill + `/tlive:*` commands ride along; no user config files are
+hand-edited). Legacy direct-written hook entries are stripped once. Old
+vendor versions without a plugin CLI: see `docs/manual-hooks.md`.
 
-`--hooks-only` skips the credential wizard and only reinstalls the hooks —
-useful after a `tlive` upgrade.
+`--hooks-only` skips the credential wizard and only re-registers the plugins —
+run it after a `tlive` upgrade to refresh the vendors' plugin caches.
 
 Replaces the removed `install-integrations` subcommand. The workspace setup
 step has been removed; notifications are delivered to all configured chats,
