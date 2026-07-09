@@ -8,13 +8,13 @@ const HELP = `tlive — vendor-neutral hook approval + web terminal for Claude C
 
 Usage: tlive <subcommand> [args]   |   tlive --version
 
-  setup              configure IM + install Claude hooks (--hooks-only to reinstall hooks only)
+  setup              configure IM + install Claude/Codex hooks (--hooks-only to reinstall hooks only)
   start | stop       daemon lifecycle (IPC + IM + web)
   status             health, configured destinations, paths
   logs [-f]          tail the daemon log
   run <cmd> [args]   wrap a process: local terminal + web terminal
   url                print the web dashboard URL + a QR code (for scanning)
-  hook <event>       hook shim (invoked by Claude/Codex)
+  hook [--codex] <event>  hook shim (invoked by Claude/Codex hooks; --codex = Codex decision wire)
 `;
 
 function printVersion(): void {
