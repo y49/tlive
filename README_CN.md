@@ -18,8 +18,9 @@
 ```bash
 npm install -g tlive
 
-tlive setup        # 向导:IM 凭据 + 装 hooks(Claude Code 总装;PATH 里有
-                    # codex 就一并装,见下方「Codex」一节)
+tlive setup        # 向导:IM 凭据 + 用 Claude Code/Codex 自己的插件管理器注册
+                    # tlive 插件(hooks/skill//tlive:* 命令;PATH 里有 codex
+                    # 就一并装,见下方「Codex」一节)
 tlive start        # 起 daemon —— 打印 web 地址 + 手机扫码二维码
 
 tlive run claude   # (可选)包装会话 → 实时 web 终端 + 预览卡
@@ -71,14 +72,40 @@ vs `[label]`(仅 hooks)。
   dashboard 📎。统一落 `~/.tlive/inbox`(自动清理:48 小时 / 256MB 总量),
   以 bracketed paste 打进 pty。
 
+## 安装:走插件,不再手写配置
+
+`tlive setup`(以及 `tlive setup --hooks-only`)不再手改
+`~/.claude/settings.json` / `~/.codex/hooks.json`,而是调用**各家自己的
+插件管理器**:
+
+- Claude Code:`claude plugin marketplace add <内置目录>` 再
+  `claude plugin install tlive@tlive --scope user -y`。
+- Codex(`codex` 在 `PATH` 上时):`codex plugin marketplace add <内置目录>`
+  再 `codex plugin add tlive@tlive`。
+
+插件里打包了 hooks(CC 9 个事件 / Codex 5 个事件,与之前直写的集合完全一样)、
+一个 `tlive` skill(用法/诊断/安全模型,挂在 `/tlive:*` 命名空间下)、以及
+Claude Code 的 `/tlive:url`、`/tlive:status` 两个 slash 命令。厂商会把插件
+**复制**进自己的 cache(Claude Code 是 `~/.claude/plugins/cache`,Codex 是
+`$CODEX_HOME/plugins/cache/tlive/tlive/local/`)——升级 `tlive` 本体之后,
+重跑一次 `tlive setup --hooks-only` 刷新这份拷贝。
+
+首次插件安装成功还会**剥离**旧版本(直写年代)留下的 hooks,防止双发;
+你自己无关的 hooks 不受影响。
+
+**老版本厂商没有插件 CLI**:`tlive setup` 会检测到(`claude plugin list` /
+`codex plugin marketplace add` 失败)并打印指向手动配置附录的提示:
+[docs/manual-hooks.md](docs/manual-hooks.md)——完整的 `settings.json`
+hooks 块和 `hooks.json`,可以直接拷进去。
+
+卸载(`npm uninstall -g tlive`)会尽力用各家 CLI 卸掉插件,并清理残留的旧
+直写 hooks;`~/.tlive` 下的配置和日志保留。
+
 ## Codex:hooks 需要一次性信任
 
-`PATH` 里有 `codex` 时,`tlive setup`(以及 `tlive setup --hooks-only`)会
-自动写 `~/.codex/hooks.json`——schema 与 Claude Code `settings.json` 的
-hooks 块同构,装的命令是 `tlive hook --codex <event>`。接的事件:
-`PreToolUse`(审批)、`Stop`(续跑)、`PostToolUse`、`UserPromptSubmit`、
-`SessionStart`。Codex 没有 `Notification` 和 `SessionEnd` 这两个 hook,
-故不给它装。
+装的事件(经插件,命令是 `tlive hook --codex <event>`):`PreToolUse`
+(审批)、`Stop`(续跑)、`PostToolUse`、`UserPromptSubmit`、`SessionStart`。
+Codex 没有 `Notification` 和 `SessionEnd` 这两个 hook,故不给它装。
 
 坑在这:**Codex 对不信任的 hook 一律静默跳过**——不报错、不提示,就是不生效。
 装完之后需要信任一次:
@@ -134,7 +161,7 @@ tlive 刻意**不做**"手机从零 vibe coding"——官方远程做得更好�
 ## CLI
 
 ```
-tlive setup            向导 + 装 hooks(幂等);--hooks-only 只重装 hooks
+tlive setup            向导 + 注册厂商插件(幂等);--hooks-only 只重装插件
 tlive start | stop     daemon 生命周期(stop 幂等)
 tlive status           健康态、web 地址 + 二维码、配置路径
 tlive logs [-f]        看 daemon 日志

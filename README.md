@@ -20,8 +20,9 @@
 ```bash
 npm install -g tlive
 
-tlive setup        # wizard: IM credentials + installs hooks (Claude Code always,
-                    # Codex too if `codex` is on PATH — see "Codex" below)
+tlive setup        # wizard: IM credentials + registers the tlive plugin with
+                    # Claude Code's/Codex's own plugin manager (hooks, skill,
+                    # /tlive:* commands — Codex too if `codex` is on PATH)
 tlive start        # daemon up — prints web URLs + a QR code for your phone
 
 tlive run claude   # (optional) wrap the session → live web terminal + preview card
@@ -83,15 +84,45 @@ which powers a session has.
   `~/.tlive/inbox` (auto-swept: 48 h age / 256 MB total) and are typed into
   the pty via bracketed paste.
 
+## Install: plugins, not config writes
+
+`tlive setup` (and `tlive setup --hooks-only`) no longer hand-edits
+`~/.claude/settings.json` or `~/.codex/hooks.json` — it orchestrates each
+vendor's **own plugin manager**:
+
+- Claude Code: `claude plugin marketplace add <bundled dir>` then
+  `claude plugin install tlive@tlive --scope user -y`.
+- Codex (if `codex` is on `PATH`): `codex plugin marketplace add <bundled
+  dir>` then `codex plugin add tlive@tlive`.
+
+The plugin bundles the hooks (same 9 Claude Code events / 5 Codex events as
+before), a `tlive` skill (usage, diagnostics, security model, under the
+`/tlive:*` namespace), and Claude Code slash commands `/tlive:url` and
+`/tlive:status`. The vendor **copies** the plugin into its own cache
+(`~/.claude/plugins/cache` for Claude Code,
+`$CODEX_HOME/plugins/cache/tlive/tlive/local/` for Codex) — after upgrading
+`tlive` itself, re-run `tlive setup --hooks-only` to refresh that copy.
+
+The first successful plugin install also **strips** any hooks tlive wrote
+directly in an older version (the pre-plugin install path) so they can't
+double-fire; your own unrelated hooks are left untouched.
+
+**Old vendor versions without a plugin CLI**: `tlive setup` detects this
+(`claude plugin list` / `codex plugin marketplace add` failing) and prints a
+pointer to the manual config appendix: [docs/manual-hooks.md](docs/manual-hooks.md)
+— full `settings.json` hooks block and `hooks.json` you can paste in by
+hand.
+
+Uninstalling (`npm uninstall -g tlive`) best-effort removes the plugin via
+each vendor's CLI and cleans up any leftover direct-write hooks; your
+`~/.tlive` config and logs are preserved.
+
 ## Codex: hooks need a one-time trust
 
-`tlive setup` (and `tlive setup --hooks-only`) writes `~/.codex/hooks.json`
-automatically when `codex` is found on your `PATH` — the schema is
-isomorphic to Claude Code's `settings.json` hooks block, and the installed
-command is `tlive hook --codex <event>`. Wired events: `PreToolUse`
-(approval), `Stop` (resume), `PostToolUse`, `UserPromptSubmit`,
-`SessionStart`. Codex doesn't have `Notification` or `SessionEnd` hooks, so
-those two aren't installed for it.
+Installed events (via the plugin, `tlive hook --codex <event>`):
+`PreToolUse` (approval), `Stop` (resume), `PostToolUse`,
+`UserPromptSubmit`, `SessionStart`. Codex doesn't have `Notification` or
+`SessionEnd` hooks, so those two aren't installed for it.
 
 The catch: **Codex silently skips hooks it doesn't trust** — no error, no
 prompt, they just never fire. After installing, trust them once:
@@ -157,7 +188,7 @@ layer for sessions you already run.
 ## CLI
 
 ```
-tlive setup            wizard + installs hooks (idempotent); --hooks-only
+tlive setup            wizard + registers the vendor plugin(s) (idempotent); --hooks-only
 tlive start | stop     daemon lifecycle (stop is idempotent)
 tlive status           health, web URLs + QR, config paths
 tlive logs [-f]        tail the daemon log

@@ -129,6 +129,26 @@ All notable changes to this project will be documented in this file.
 - **Workspace subsystem removed.** No `/use`, no chat binding.
   Notifications go to all configured chats; `/perm on|off` is the global
   mute; per-session mute lives on the dashboard.
+- **Direct-write hook install retired — plugin orchestration takes over.**
+  `tlive setup` / `--hooks-only` no longer hand-edit
+  `~/.claude/settings.json` or `~/.codex/hooks.json`. They instead
+  orchestrate each vendor's own plugin manager: `claude plugin marketplace
+  add <bundled dir>` + `claude plugin install tlive@tlive --scope user -y`
+  for Claude Code, `codex plugin marketplace add <bundled dir>` + `codex
+  plugin add tlive@tlive` for Codex. The plugin bundles the same hook event
+  set as before (CC 9 events / Codex 5 events), plus a `tlive` skill and
+  Claude Code slash commands `/tlive:url` / `/tlive:status`. First
+  successful install strips any hooks a prior tlive version wrote directly,
+  so nothing double-fires. `installClaudeHooks()` / `installCodexHooks()`
+  are removed — no consumers outside this package, so this is a behavior
+  change, not an API break. Vendors **copy** the plugin into their own
+  cache; after a `tlive` upgrade, re-run `tlive setup --hooks-only` to
+  refresh it. Old vendor versions without a plugin CLI: `tlive setup`
+  detects this and points at the new manual-config appendix,
+  [docs/manual-hooks.md](docs/manual-hooks.md). `npm uninstall -g tlive`'s
+  `preuninstall` now best-effort uninstalls the plugin (`claude plugin
+  uninstall tlive@tlive`, `codex plugin remove tlive@tlive`) in addition to
+  its existing direct-write hook cleanup.
 
 ### Security
 

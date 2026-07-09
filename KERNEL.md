@@ -90,12 +90,12 @@ Claude / Codex 的原始 hook JSON 在这里归一。加一个新 AI runtime = �
 defer/超时)会给 attention 消息加 `⏳` 前缀提醒离屏用户回终端,其余类型原样
 透传。
 
-**Codex 是这套模式的实例**(`src/kernel/integrations/install-hooks.ts` 的
-`installCodexHooks()` 写 `~/.codex/hooks.json`,schema 与 Claude
-`settings.json` 的 `hooks` 块同构;shim 靠 `tlive hook --codex <event>` 的
-`--codex` flag 选 vendor)。主要输出差异体现在 `permissionDecisionOut`(deny 带
-reason、defer→ask);另有装机层(`install-hooks.ts` 的事件集,无 Notification
-/SessionEnd)与超时层(`hook.ts` shim 死线兜 Codex fail-open)的差异:
+**Codex 是这套模式的实例**(打包进 `plugins/codex/plugins/tlive/hooks/hooks.json`
+的 hooks 块,schema 与 Claude `settings.json` 的 `hooks` 块同构;shim 靠
+`tlive hook --codex <event>` 的 `--codex` flag 选 vendor)。主要输出差异体现在
+`permissionDecisionOut`(deny 带 reason、defer→ask);另有装机层(hooks.json
+的事件集,无 Notification/SessionEnd)与超时层(`hook.ts` shim 死线兜 Codex
+fail-open)的差异:
 
 - `defer`:Claude 序列化为 `{}`(空输出 → 回落本地 TUI);Codex 序列化为
   `{hookSpecificOutput:{hookEventName:'PreToolUse',permissionDecision:'ask'}}`
@@ -110,6 +110,18 @@ reason、defer→ask);另有装机层(`install-hooks.ts` 的事件集,无 Notifi
   fail-open 前给出 allow/deny/ask 三态之一。shim 进程本身崩溃是唯一没堵上
   的口子——那种情况下 Codex 600s 后依然会 fail-open,详见 `README.md` 安全
   模型段。
+
+**装机层已从直写 vendor 配置改为插件分发**:`tlive setup` /
+`--hooks-only` 不再手改 `~/.claude/settings.json` / `~/.codex/hooks.json`,
+而是调用各家自己的插件管理器(`claude plugin marketplace add` +
+`claude plugin install tlive@tlive`;`codex plugin marketplace add` +
+`codex plugin add tlive@tlive`,见 `src/kernel/integrations/plugin-install.ts`)。
+插件(`plugins/claude/plugins/tlive/`、`plugins/codex/plugins/tlive/`)里打包
+的 hooks.json 事件集与之前直写的完全一致——本节的归一/超时/vendor 差异描述
+不受影响,只是 hooks 现在随插件挂载,而不是 tlive 进程直接写文件。老 vendor
+无插件 CLI 时退回 `docs/manual-hooks.md` 里的手动配置。旧版本直写在磁盘上
+留下的条目由插件首次安装成功时剥离(`src/kernel/integrations/hooks-cleanup.ts`),
+防止双发。
 
 ### 4. IPC 协议
 
@@ -155,8 +167,8 @@ setup, start, stop, status, logs, run, url, hook
 - 加 IM 平台 → 写新 `IMAdapter` plugin,别动 kernel。
 - 加 AI runtime → 写「该 runtime 的 hook 事件 → 归一模型」的映射;Codex
   adapter(`src/kernel/hook/normalizer.ts` 的 `HookVendor`/
-  `src/kernel/integrations/install-hooks.ts` 的 `installCodexHooks()`)是
-  现成范例。
+  `src/kernel/integrations/plugin-install.ts` 的 `installCodexPlugin()`/
+  `plugins/codex/plugins/tlive/hooks/hooks.json`)是现成范例。
 - 改任一契约 → breaking change,bump major + 更新 `tests/contract/`。
 - 重构 kernel 内部 → 随意,只要 `tests/contract/` 保持绿。
 
