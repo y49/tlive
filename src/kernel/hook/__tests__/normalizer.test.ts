@@ -49,6 +49,22 @@ describe('hook normalizer', () => {
   });
 });
 
+describe('notification notification_type', () => {
+  it('permission_prompt → 盲区提示前缀 + 原文', () => {
+    const n = parseHookInput('notification', { cwd: '/x', session_id: 's', notification_type: 'permission_prompt', message: 'Claude needs your permission to use Bash' });
+    expect(n).toMatchObject({ event: 'attention' });
+    expect((n as any).message).toContain('⏳');
+    expect((n as any).message).toContain('终端');
+    expect((n as any).message).toContain('Claude needs your permission to use Bash');
+  });
+  it('idle_prompt / 无 type → 原样 message(现行为不变)', () => {
+    const a = parseHookInput('notification', { cwd: '/x', session_id: 's', notification_type: 'idle_prompt', message: 'waiting' });
+    expect((a as any).message).toBe('waiting');
+    const b = parseHookInput('notification', { cwd: '/x', session_id: 's', message: 'hi' });
+    expect((b as any).message).toBe('hi');
+  });
+});
+
 describe('permissionDecisionOut vendor', () => {
   it('claude allow/deny/defer 保持原样(向后兼容)', () => {
     expect(permissionDecisionOut('allow')).toEqual({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } });

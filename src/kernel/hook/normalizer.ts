@@ -24,6 +24,7 @@ interface RawHook {
   cwd?: string; session_id?: string; permission_mode?: string;
   tool_name?: string; tool_input?: unknown; tool_response?: unknown; message?: string;
   prompt?: string; source?: string; reason?: string; last_assistant_message?: string;
+  notification_type?: string;
 }
 
 export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHook {
@@ -37,8 +38,15 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
       return { event: 'activity', cwd, sessionId, toolName: r.tool_name ?? '(unknown)', result: r.tool_response ?? {} };
     case 'stop':
       return { event: 'attention', cwd, sessionId, message: '已完成,回复以续跑', ...(r.last_assistant_message ? { lastMessage: r.last_assistant_message } : {}) };
-    case 'notification':
-      return { event: 'attention', cwd, sessionId, message: r.message ?? '需要你处理' };
+    case 'notification': {
+      const base = r.message ?? '需要你处理';
+      // permission_prompt = 本地权限对话已弹出(tlive 已 defer / 未接管)——
+      // 这是离屏用户的盲区时刻,IM 提示"去终端"。其余类型原样透传。
+      const message = r.notification_type === 'permission_prompt'
+        ? `⏳ 终端正在等待你的审批:${base}`
+        : base;
+      return { event: 'attention', cwd, sessionId, message };
+    }
     case 'user-prompt-submit':
       return { event: 'prompt', cwd, sessionId, prompt: r.prompt ?? '' };
     case 'session-start':
