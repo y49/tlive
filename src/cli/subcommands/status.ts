@@ -6,6 +6,7 @@ import { request } from '../../kernel/ipc/client.js';
 import { loadConfig } from '../../kernel/config/loader.js';
 import { resolveWebUrls, printWebBanner } from '../web-url.js';
 import { codexHookState } from '../../kernel/integrations/codex-trust.js';
+import { codexPluginHooksPath } from '../../kernel/integrations/hooks-cleanup.js';
 
 export async function runStatus(_argv: string[]): Promise<void> {
   const home = process.env.TLIVE_HOME ?? join(homedir(), '.tlive');
@@ -19,7 +20,7 @@ export async function runStatus(_argv: string[]): Promise<void> {
   } catch { /* not running */ }
   if (!daemonOk) process.stdout.write('daemon:   not running (run: tlive start)\n');
 
-  const codexHooks = join(homedir(), '.codex', 'hooks.json');
+  const codexHooks = codexPluginHooksPath(join(homedir(), '.codex'));
   const codexCfg = join(homedir(), '.codex', 'config.toml');
   let configTomlText: string | null = null;
   try {
