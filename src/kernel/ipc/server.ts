@@ -22,10 +22,15 @@ export class AlreadyRunningError extends Error {
 function isSocketAlive(path: string): Promise<boolean> {
   return new Promise((resolve) => {
     const c = connect(path);
-    const done = (alive: boolean): void => { c.destroy(); resolve(alive); };
+    const timer = setTimeout(() => done(false), 500);
+    timer.unref();
+    const done = (alive: boolean): void => {
+      clearTimeout(timer);
+      c.destroy();
+      resolve(alive);
+    };
     c.once('connect', () => done(true));
     c.once('error', () => done(false));
-    setTimeout(() => done(false), 500).unref();
   });
 }
 
@@ -68,10 +73,16 @@ export async function startIpcServer(opts: {
     });
   });
   await new Promise<void>((resolve, reject) => {
-    server.once('error', (e: NodeJS.ErrnoException) => {
+    const onError = (e: NodeJS.ErrnoException): void => {
       reject(e.code === 'EADDRINUSE' ? new AlreadyRunningError() : e);
+    };
+    server.once('error', onError);
+    server.listen(opts.path, () => {
+      // once() only detaches when the event fires — remove it on success so a
+      // later runtime 'error' isn't silently swallowed by this stale listener.
+      server.removeListener('error', onError);
+      resolve();
     });
-    server.listen(opts.path, () => resolve());
   });
   return {
     async close() {
