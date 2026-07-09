@@ -6,6 +6,8 @@
 // Security default: if daemon is unreachable or no binding exists (defer),
 // output {} and exit 0 → Claude falls back to local TUI permission prompt.
 
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { request } from '../../kernel/ipc/client.js';
 import {
   parseHookInput,
@@ -15,6 +17,24 @@ import {
   type HookVendor,
   type MonitorEvent,
 } from '../../kernel/hook/normalizer.js';
+import { loadConfig } from '../../kernel/config/loader.js';
+import { spawnDaemonDetached } from '../../kernel/daemon/spawn.js';
+
+/** session-start 时 daemon 不在 → 自动拉起(fire-and-forget,绝不阻塞 shim)。
+ *  config daemon.autoStart !== false 才启用(默认开:装了 hooks 即想让 tlive 活着)。 */
+export function maybeAutoStartDaemon(
+  home: string,
+  spawnFn: (home: string) => number | null = spawnDaemonDetached,
+): boolean {
+  try {
+    const cfg = loadConfig(home);
+    if (cfg.daemon?.autoStart === false) return false;
+    spawnFn(home);
+    return true;
+  } catch {
+    return false; // 任何失败都静默:本次事件丢了没关系,下次 daemon 已在
+  }
+}
 
 async function readStdin(): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -95,7 +115,12 @@ export async function runHook(argv: string[]): Promise<void> {
     await request(
       { kind: 'hook.event', event: n as MonitorEvent, ...(wrappedId ? { wrappedId } : {}) },
       { timeoutMs: 4_000 },
-    ).catch(() => undefined);
+    ).catch(() => {
+      if (event === 'session-start') {
+        const home = process.env.TLIVE_HOME ?? join(homedir(), '.tlive');
+        maybeAutoStartDaemon(home);
+      }
+    });
     process.stdout.write('{}');
   } catch {
     // daemon 不可达/出错 → 安全默认。审批路径按 vendor 让原生工具本地问;其余空输出。

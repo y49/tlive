@@ -21,7 +21,7 @@ export interface KernelConfig {
   adapters: AdapterCreds;
   web?: WebConfig;
   policy?: PolicyConfig;
-  daemon?: { socketPath?: string; healthPort?: number };
+  daemon?: { socketPath?: string; healthPort?: number; autoStart?: boolean };
 }
 
 const DEFAULT: KernelConfig = { allowedSenders: [], adapters: {} };
