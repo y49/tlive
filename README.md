@@ -58,6 +58,18 @@ which powers a session has.
   (Codex — see Security model, its fail-open behavior differs).
 - **Resume** — on `Stop`, reply to the IM message (or the web reply box) and
   the session keeps going.
+- **Daemon lazy-start** — hooks-only sessions no longer need a manual
+  `tlive start` first: on `SessionStart`, the shim launches the daemon
+  detached (non-blocking) if it isn't already up. Disable with
+  `daemon.autoStart: false`; `tlive start` still works and is unaffected.
+- **Failure alerts (Claude Code only)** — `PostToolUseFailure` (a tool call
+  errored) and `StopFailure` (session-level error, e.g. rate-limit/billing)
+  push a ❌ IM message. Pure side-channel, never affects approval decisions;
+  Codex has no equivalent hooks so these aren't installed for it.
+- **Local-approval defer hint** — when Claude Code's own permission prompt
+  pops up in your terminal (tlive already deferred / timed out), the IM
+  attention message is prefixed `⏳ 终端正在等待你的审批` so an off-screen
+  user knows to go look at the terminal.
 - **Web terminal** — `tlive run <cmd>` serves the pty at `/s/<id>`:
   xterm.js, multi-device with **last-input sizing** (whoever types owns the
   grid; everyone else sees a scaled view), screen rebuild for late joiners,
@@ -171,6 +183,9 @@ Quote-reply any session message to type into that session.
     "bind": "0.0.0.0",        // default; use 127.0.0.1 for loopback-only
     "port": 7681,
     "publicUrl": "https://dev.example.ts.net"  // optional: IM deep links
+  },
+  "daemon": {
+    "autoStart": true         // default true; false disables session-start lazy-start
   },
   "allowedSenders": [{ "channel": "telegram", "userId": "42" }]  // optional
 }

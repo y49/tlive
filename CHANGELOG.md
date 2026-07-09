@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Added — daemon lazy-start + reliability
+
+- **Session-start lazy-start**: hooks-only sessions no longer need a manual
+  `tlive start` — the `SessionStart` shim launches the daemon detached
+  (non-blocking) if it isn't already running. `daemon.autoStart: false`
+  disables it; manual `tlive start`/`stop` semantics unchanged.
+- **Single-instance guard**: daemon start probes the main socket before
+  unlinking it (probe-before-unlink) — a concurrently-starting instance
+  that loses the race prints one line and exits 0, never stealing a live
+  socket (`AlreadyRunningError`). This is what makes concurrent lazy-start
+  from multiple sessions race-safe.
+- **Local-approval defer hint**: Claude Code `Notification` hooks with
+  `notification_type: 'permission_prompt'` (the local terminal prompt just
+  appeared — tlive already deferred/timed out) prefix the IM attention
+  message with `⏳ 终端正在等待你的审批` so an off-screen user knows to go
+  check the terminal.
+- **Failure alerts (Claude Code only)**: new `PostToolUseFailure` and
+  `StopFailure` hooks feed ❌ attention messages to IM (tool error / session-
+  level error such as rate-limit or billing). Pure side-channel — never
+  affects approval decisions. Codex has no equivalent hooks, so these two
+  aren't installed for it. Shim usage is now `tlive hook [--codex] <9
+  events>`.
+
 ### Added — web terminal (`tlive run`)
 
 - **`tlive run <cmd>`** wraps a process: your local terminal as usual PLUS a

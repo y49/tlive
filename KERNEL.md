@@ -61,7 +61,8 @@ File: `src/kernel/hook/normalizer.ts`
 
 ```typescript
 type HookEventName = 'pre-tool-use' | 'post-tool-use' | 'stop' | 'notification'
-                   | 'user-prompt-submit' | 'session-start' | 'session-end';
+                   | 'user-prompt-submit' | 'session-start' | 'session-end'
+                   | 'post-tool-use-failure' | 'stop-failure';
 
 type NormalizedHook =
   | { event: 'approval-request'; cwd; sessionId; toolName; input; permissionMode? } // PreToolUse
@@ -70,6 +71,8 @@ type NormalizedHook =
   | { event: 'prompt';           cwd; sessionId; prompt }                          // UserPromptSubmit
   | { event: 'session-start';    cwd; sessionId; source? }
   | { event: 'session-end';      cwd; sessionId; reason? };
+  // post-tool-use-failure / stop-failure 归一为 attention(❌ 前缀消息),
+  // 与 Stop/Notification 共用同一 MonitorEvent 变体,kernel 不额外建模。
 
 // 监看子集(经 IPC `hook.event` 传输):
 type MonitorEvent = activity | attention | prompt | session-start | session-end
@@ -82,7 +85,10 @@ continueDecisionOut(reply: string | null): object   // reply → {decision:'bloc
 ```
 
 Claude / Codex 的原始 hook JSON 在这里归一。加一个新 AI runtime = 把它的 hook
-事件映射进这套归一模型,kernel 不变。
+事件映射进这套归一模型,kernel 不变。`notification` 事件感知
+`notification_type`:`permission_prompt`(本地权限对话已弹出,tlive 已
+defer/超时)会给 attention 消息加 `⏳` 前缀提醒离屏用户回终端,其余类型原样
+透传。
 
 **Codex 是这套模式的实例**(`src/kernel/integrations/install-hooks.ts` 的
 `installCodexHooks()` 写 `~/.codex/hooks.json`,schema 与 Claude
@@ -121,6 +127,11 @@ File: `src/kernel/ipc/protocol.ts`
 传输跨平台:POSIX unix socket / **Windows 命名管道**(daemon 与 per-session
 端点均有平台分支,见 `src/kernel/ipc/client.ts` 的 `defaultSocketPath` /
 `sessionSocketPath`)。
+
+**单例语义**:daemon 启动前先探活主 socket(probe-before-unlink)——已有活
+daemon 时新实例打印一行提示并 `exit 0`,绝不 unlink/抢占活 socket(`src/kernel/ipc/server.ts`
+的 `AlreadyRunningError`)。这是 `SessionStart` 懒启动(见 `README.md`)并发
+安全的基础:多个会话同时触发懒启动时,只有一个真正落地。
 
 ### 5. CLI subcommand surface (8)
 

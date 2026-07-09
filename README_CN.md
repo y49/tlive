@@ -51,6 +51,15 @@ vs `[label]`(仅 hooks)。
   **绝不自动拒绝**;超时回落到本地终端提示(Claude Code)或原生审批提示
   (Codex——fail-open 行为不同,见安全模型)。
 - **续跑** —— `Stop` 时回复 IM 消息(或 web 回复框),会话继续。
+- **daemon 懒启动** —— 仅装 hooks 的会话不再需要先手动 `tlive start`:
+  `SessionStart` 时 shim 检测到 daemon 未运行,会自动 detached 拉起(不阻塞
+  会话)。`daemon.autoStart: false` 可关闭;`tlive start` 手动启动语义不变。
+- **失败告警(仅 Claude Code)** —— `PostToolUseFailure`(工具调用失败)与
+  `StopFailure`(会话级错误,如 rate-limit/billing)会推一条 ❌ IM 消息。纯
+  旁路,不影响任何审批决策;Codex 没有对应 hook,故不给它装。
+- **本地审批等待提醒** —— Claude Code 自己的权限对话在终端弹出时(tlive 已
+  回落/超时),IM 里的提醒消息会带 `⏳ 终端正在等待你的审批` 前缀,提示离屏
+  用户回终端处理。
 - **web 终端** —— `tlive run <cmd>` 在 `/s/<id>` 提供 pty:xterm.js、多设备
   **last-input 布局权**(谁打字网格归谁,其他端等比缩放)、晚到客户端全屏重建、
   软键盘感知布局、触屏查看/输入双模式、可拖动可收起的快捷键条
@@ -150,6 +159,9 @@ IM 命令:`/perm on|off`(静音)、`/trust on|off`、`/help`。
     "bind": "0.0.0.0",        // 默认;只留本机用 127.0.0.1
     "port": 7681,
     "publicUrl": "https://dev.example.ts.net"  // 可选:IM 深链
+  },
+  "daemon": {
+    "autoStart": true         // 默认 true;设 false 关闭 session-start 懒启动
   },
   "allowedSenders": [{ "channel": "telegram", "userId": "42" }]  // 可选
 }
