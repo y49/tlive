@@ -59,8 +59,8 @@ which powers a session has.
 - **Resume** — on `Stop`, reply to the IM message (or the web reply box) and
   the session keeps going.
 - **Daemon lazy-start** — hooks-only sessions no longer need a manual
-  `tlive start` first: on `SessionStart`, the shim launches the daemon
-  detached (non-blocking) if it isn't already up. Disable with
+  `tlive start` first: on `SessionStart` (and when `tlive run` launches), the daemon is
+  started detached (non-blocking) if it isn't already up. Disable with
   `daemon.autoStart: false`; `tlive start` still works and is unaffected.
 - **Failure alerts (Claude Code only)** — `PostToolUseFailure` (a tool call
   errored) and `StopFailure` (session-level error, e.g. rate-limit/billing)

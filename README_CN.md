@@ -52,8 +52,9 @@ vs `[label]`(仅 hooks)。
   (Codex——fail-open 行为不同,见安全模型)。
 - **续跑** —— `Stop` 时回复 IM 消息(或 web 回复框),会话继续。
 - **daemon 懒启动** —— 仅装 hooks 的会话不再需要先手动 `tlive start`:
-  `SessionStart` 时 shim 检测到 daemon 未运行,会自动 detached 拉起(不阻塞
-  会话)。`daemon.autoStart: false` 可关闭;`tlive start` 手动启动语义不变。
+  `SessionStart` 时 shim(以及 `tlive run` 启动时)检测到 daemon 未运行,会
+  自动 detached 拉起(不阻塞会话)。`daemon.autoStart: false` 可关闭;
+  `tlive start` 手动启动语义不变。
 - **失败告警(仅 Claude Code)** —— `PostToolUseFailure`(工具调用失败)与
   `StopFailure`(会话级错误,如 rate-limit/billing)会推一条 ❌ IM 消息。纯
   旁路,不影响任何审批决策;Codex 没有对应 hook,故不给它装。

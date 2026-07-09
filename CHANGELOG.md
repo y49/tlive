@@ -7,8 +7,8 @@ All notable changes to this project will be documented in this file.
 ### Added — daemon lazy-start + reliability
 
 - **Session-start lazy-start**: hooks-only sessions no longer need a manual
-  `tlive start` — the `SessionStart` shim launches the daemon detached
-  (non-blocking) if it isn't already running. `daemon.autoStart: false`
+  `tlive start` — the `SessionStart` shim (and `tlive run` at launch)
+  starts the daemon detached (non-blocking) if it isn't already running. `daemon.autoStart: false`
   disables it; manual `tlive start`/`stop` semantics unchanged.
 - **Single-instance guard**: daemon start probes the main socket before
   unlinking it (probe-before-unlink) — a concurrently-starting instance

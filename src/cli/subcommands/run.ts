@@ -7,6 +7,26 @@ import { SessionHost } from '../../kernel/pty/session-host.js';
 import { defaultSocketPath, sessionSocketPath, request } from '../../kernel/ipc/client.js';
 import type { SessionMeta } from '../../kernel/ipc/protocol.js';
 import { resolveWebUrls } from '../web-url.js';
+import { maybeAutoStartDaemon } from './hook.js';
+
+/** Probe the daemon; if down, lazy-start it (same autoStart gate as the hook
+ *  shim) and poll briefly so the banner below can show live web URLs.
+ *  Returns whether the daemon is up. `autoStart` is injectable for tests. */
+export async function ensureDaemonUp(
+  home: string,
+  sockPath: string,
+  autoStart: (home: string) => boolean = maybeAutoStartDaemon,
+): Promise<boolean> {
+  const probe = (): Promise<boolean> =>
+    request({ kind: 'daemon.status' }, { socketPath: sockPath, timeoutMs: 800 }).then(() => true).catch(() => false);
+  if (await probe()) return true;
+  if (!autoStart(home)) return false; // autoStart:false or spawn failed → old warning path
+  for (let i = 0; i < 15; i++) {
+    await new Promise((r) => setTimeout(r, 200));
+    if (await probe()) return true;
+  }
+  return false;
+}
 
 export function gitBranch(cwd: string): string | null {
   try {
@@ -54,10 +74,10 @@ export async function runRun(argv: string[]): Promise<void> {
   // Banner BEFORE the pty attaches (raw mode + program output start after host.start()).
   // The web terminal is served by the daemon — probe it so a stopped daemon
   // shows a hint instead of an unreachable URL. The LOCAL terminal works regardless.
-  const daemonUp = await request({ kind: 'daemon.status' }, { socketPath: sock, timeoutMs: 800 }).then(() => true).catch(() => false);
+  const daemonUp = await ensureDaemonUp(home, sock);
   const urls = resolveWebUrls(home);
   if (!daemonUp) {
-    process.stdout.write('\n⚠ tlive daemon not running — web terminal/dashboard unavailable.\n  Start it in another terminal: tlive start   (this local session still works)\n');
+    process.stdout.write('\n⚠ tlive daemon not running (auto-start off or failed) — web terminal/dashboard unavailable.\n  Start it manually: tlive start   (this local session still works)\n');
   } else if (urls.enabled && urls.token) {
     const sess = (base: string): string => base.replace('/?', `/s/${encodeURIComponent(id)}?`);
     process.stdout.write('\ntlive web UI:\n');
