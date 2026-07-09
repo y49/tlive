@@ -1,0 +1,6 @@
+{
+  "name": "tlive",
+  "plugins": [
+    { "name": "tlive", "source": { "source": "local", "path": "./plugins/tlive" } }
+  ]
+}
