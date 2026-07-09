@@ -9,7 +9,8 @@ const HELP = `tlive — vendor-neutral hook approval + web terminal for Claude C
 Usage: tlive <subcommand> [args]   |   tlive --version
 
   setup              configure IM + install Claude/Codex hooks (--hooks-only to reinstall hooks only)
-  start | stop       daemon lifecycle (IPC + IM + web)
+  start | stop       daemon lifecycle (IPC + IM + web; auto-starts with new agent
+                     sessions — set daemon.autoStart:false to disable)
   status             health, configured destinations, paths
   logs [-f]          tail the daemon log
   run <cmd> [args]   wrap a process: local terminal + web terminal
