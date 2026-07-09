@@ -32,7 +32,7 @@ export function installClaudePlugin(run: Runner): { ok: boolean; detail: string 
   }
   const mk = run('claude', ['plugin', 'marketplace', 'add', claudePluginDir()]);
   if (!alreadyOk(mk)) return { ok: false, detail: `marketplace add failed: ${mk.output.slice(0, 200)}` };
-  const inst = run('claude', ['plugin', 'install', 'tlive@tlive', '--scope', 'user', '-y']);
+  const inst = run('claude', ['plugin', 'install', 'tlive@tlive', '--scope', 'user']);
   if (!alreadyOk(inst)) return { ok: false, detail: `plugin install failed: ${inst.output.slice(0, 200)}` };
   return { ok: true, detail: 'tlive@tlive installed (user scope)' };
 }

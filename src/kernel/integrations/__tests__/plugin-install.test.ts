@@ -17,12 +17,12 @@ describe('installClaudePlugin', () => {
     const { run, calls } = scripted([
       { match: /^claude plugin list$/, ok: true },
       { match: /^claude plugin marketplace add /, ok: true },
-      { match: /^claude plugin install tlive@tlive --scope user -y$/, ok: true },
+      { match: /^claude plugin install tlive@tlive --scope user$/, ok: true },
     ]);
     expect(installClaudePlugin(run).ok).toBe(true);
     expect(calls[0]).toBe('claude plugin list');
     expect(calls[1]).toContain(claudePluginDir());
-    expect(calls[2]).toBe('claude plugin install tlive@tlive --scope user -y');
+    expect(calls[2]).toBe('claude plugin install tlive@tlive --scope user');
   });
   it('探测失败(老版本)→ ok:false,不再跑后续', () => {
     const { run, calls } = scripted([{ match: /list/, ok: false }]);
