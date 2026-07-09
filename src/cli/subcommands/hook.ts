@@ -43,7 +43,7 @@ async function readStdin(): Promise<unknown> {
   try { return s ? JSON.parse(s) : {}; } catch { return {}; }
 }
 
-const USAGE = 'Usage: tlive hook <pre-tool-use|post-tool-use|stop|notification|user-prompt-submit|session-start|session-end>\n';
+const USAGE = 'Usage: tlive hook [--codex] <pre-tool-use|post-tool-use|stop|notification|user-prompt-submit|session-start|session-end|post-tool-use-failure|stop-failure>\n';
 
 export function parseHookArgs(argv: string[]): { event?: HookEventName; vendor: HookVendor } {
   const vendor: HookVendor = argv.includes('--codex') ? 'codex' : 'claude';
