@@ -13,7 +13,8 @@
     "dist/src/",
     "src/",
     "references/",
-    "config.env.example"
+    "config.env.example",
+    "plugins/"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",

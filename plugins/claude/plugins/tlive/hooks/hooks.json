@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "PreToolUse":        [{ "matcher": "*", "hooks": [{ "type": "command", "command": "tlive hook pre-tool-use", "timeout": 600 }] }],
+    "Stop":              [{ "hooks": [{ "type": "command", "command": "tlive hook stop", "timeout": 180 }] }],
+    "PostToolUse":       [{ "matcher": "*", "hooks": [{ "type": "command", "command": "tlive hook post-tool-use" }] }],
+    "Notification":      [{ "hooks": [{ "type": "command", "command": "tlive hook notification" }] }],
+    "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "tlive hook user-prompt-submit" }] }],
+    "SessionStart":      [{ "hooks": [{ "type": "command", "command": "tlive hook session-start" }] }],
+    "SessionEnd":        [{ "hooks": [{ "type": "command", "command": "tlive hook session-end" }] }],
+    "PostToolUseFailure":[{ "matcher": "*", "hooks": [{ "type": "command", "command": "tlive hook post-tool-use-failure" }] }],
+    "StopFailure":       [{ "hooks": [{ "type": "command", "command": "tlive hook stop-failure" }] }]
+  }
+}
