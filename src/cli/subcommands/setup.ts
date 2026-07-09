@@ -7,20 +7,35 @@ import { stdin as input, stdout as output } from 'node:process';
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { installClaudeHooks, installCodexHooks, commandOnPath } from '../../kernel/integrations/install-hooks.js';
+import { installClaudePlugin, installCodexPlugin, defaultRunner } from '../../kernel/integrations/plugin-install.js';
+import { stripLegacyClaudeHooks, stripLegacyCodexHooks } from '../../kernel/integrations/hooks-cleanup.js';
+
+function registerPlugins(): string {
+  const run = defaultRunner();
+  const lines: string[] = [];
+  const cc = installClaudePlugin(run);
+  if (cc.ok) {
+    const stripped = stripLegacyClaudeHooks();
+    lines.push(`✓ Claude plugin registered — ${cc.detail}${stripped ? '(已清理旧直写 hooks)' : ''}`);
+  } else {
+    lines.push(`⚠ Claude plugin not registered: ${cc.detail}`);
+  }
+  const cx = installCodexPlugin(run);
+  if (cx.ok) {
+    const stripped = stripLegacyCodexHooks();
+    lines.push(
+      `✓ Codex plugin registered — ${cx.detail}${stripped ? '(已清理旧直写 hooks)' : ''}\n` +
+      '  ⚠ Codex 需信任一次才生效:运行 `codex`(交互),在 hooks review 里 approve tlive 的 hook。',
+    );
+  } else if (cx.detail !== 'codex not on PATH') {
+    lines.push(`⚠ Codex plugin not registered: ${cx.detail}`);
+  }
+  return lines.join('\n') + '\n';
+}
 
 export async function runSetup(argv: string[]): Promise<void> {
   if (argv.includes('--hooks-only')) {
-    const p = installClaudeHooks();
-    process.stdout.write(`✓ Claude hooks written to ${p}\n`);
-    if (commandOnPath('codex')) {
-      const cp = installCodexHooks();
-      process.stdout.write(
-        `✓ Codex hooks written to ${cp}\n` +
-        `  ⚠ Codex 需信任一次才生效:运行 \`codex\`(交互),在 hooks review 里 approve tlive 的 hook。\n`,
-      );
-    }
-    process.stdout.write('Restart claude/codex for changes to take effect.\n');
+    process.stdout.write(registerPlugins() + 'Restart claude/codex for changes to take effect.\n');
     return;
   }
 
@@ -53,11 +68,6 @@ export async function runSetup(argv: string[]): Promise<void> {
 
   rl.close();
   writeFileSync(configPath, JSON.stringify(cfg, null, 2));
-  const hooksPath = installClaudeHooks();
-  let codexNote = '';
-  if (commandOnPath('codex')) {
-    const cp = installCodexHooks();
-    codexNote = `✓ Codex hooks installed at ${cp}\n  ⚠ Codex 需信任一次:运行 \`codex\` 在 hooks review 里 approve tlive 的 hook。\n`;
-  }
-  process.stdout.write(`\nWritten ${configPath}\n✓ Claude hooks installed at ${hooksPath}\n${codexNote}Next: tlive start\n`);
+  const pluginLines = registerPlugins();
+  process.stdout.write(`\nWritten ${configPath}\n${pluginLines}Next: tlive start\n`);
 }

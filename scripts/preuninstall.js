@@ -9,8 +9,16 @@ import { homedir } from 'node:os';
 // 1. Best-effort stop the daemon (ignore if not running).
 try { execSync('tlive stop', { stdio: 'ignore', timeout: 5000 }); } catch {}
 
+// 1b. Best-effort uninstall the vendor plugins registered by `tlive setup`
+//     (plugin-install.ts). Failures (vendor CLI missing / plugin not
+//     installed / old vendor version) are ignored — this is cleanup, not
+//     a hard requirement. Syntax confirmed via `codex plugin remove --help`:
+//     `codex plugin remove <PLUGIN[@MARKETPLACE]>`.
+try { execSync('claude plugin uninstall tlive@tlive -y', { stdio: 'ignore', timeout: 5000 }); } catch {}
+try { execSync('codex plugin remove tlive@tlive', { stdio: 'ignore', timeout: 5000 }); } catch {}
+
 // 2. Remove tlive's Claude hooks (tagged _tlive:true) from ~/.claude/settings.json.
-//    The _tlive tag is the contract shared with install-hooks.ts (installClaudeHooks).
+//    The _tlive tag is the contract shared with plugin-install.ts's legacy strip.
 function removeTliveHooks() {
   const p = join(homedir(), '.claude', 'settings.json');
   if (!existsSync(p)) return;
