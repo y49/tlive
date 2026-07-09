@@ -29,3 +29,14 @@ describe('codexHookState', () => {
     expect(codexHookState({ hooksJsonExists: true, configTomlText: toml, hooksJsonPath: P })).toBe('installed-untrusted');
   });
 });
+
+describe('codexHookState — 插件模式 trust key(tlive@tlive:…,不含绝对路径)', () => {
+  it('插件 key 段带 trusted_hash → trusted(即使不含 cache 路径)', () => {
+    const toml = `[hooks.state."tlive@tlive:hooks/hooks.json:pre_tool_use:0:0"]\ntrusted_hash = "sha256:abc"\n`;
+    expect(codexHookState({ hooksJsonExists: true, configTomlText: toml, hooksJsonPath: P })).toBe('installed-trusted');
+  });
+  it('别的插件的 key → 仍 untrusted', () => {
+    const toml = `[hooks.state."other@mk:hooks/hooks.json:pre_tool_use:0:0"]\ntrusted_hash = "sha256:z"\n`;
+    expect(codexHookState({ hooksJsonExists: true, configTomlText: toml, hooksJsonPath: P })).toBe('installed-untrusted');
+  });
+});
