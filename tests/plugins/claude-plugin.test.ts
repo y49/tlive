@@ -33,6 +33,10 @@ describe('plugins/claude marketplace', () => {
       expect(s).toContain('tlive');
     }
   });
+  it('commands/setup.md 存在且含引导要素', () => {
+    const s = readFileSync(join(P, 'commands', 'setup.md'), 'utf-8');
+    for (const kw of ['tlive status', 'config.json', 'tlive start', 'npm i -g tlive', '/hooks']) expect(s).toContain(kw);
+  });
   it('package.json files 含 plugins/', () => {
     expect(read(join(ROOT, 'package.json')).files).toContain('plugins/');
   });

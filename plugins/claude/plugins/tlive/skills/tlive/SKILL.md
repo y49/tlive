@@ -27,3 +27,12 @@ tlive 是自托管的 hook 审批/监看层:你的 claude/codex 会话经全局 
 - 绝不自动放行:无人应答 → Claude 回落本地 TUI / Codex 弹原生提示。
 - 只读工具(Read/Glob/Grep)默认放行;`/trust on` 临时全放(高危,建议配 allowedSenders)。
 - deny 恒赢:用户在 vendor 侧配置的 permissions.deny tlive 不会越过。
+
+## 首次上手(onboarding)
+
+用户说"帮我配置 tlive"或调 /tlive:setup 时,按此引导(也可直接照做):
+1. `tlive status` 检查引擎;缺 → `npm i -g tlive`。
+2. 无通道 → 收集 Telegram(token+chatId)或飞书(appId+appSecret)凭据,合并写 `~/.tlive/config.json`:
+   `{ "allowedSenders": [], "adapters": { "telegram": { "token": "…", "chatIdAllowList": ["…"] }, "feishu": { "appId": "…", "appSecret": "…" } } }`
+3. `tlive start` → `tlive status` 验证 channels;`tlive url` 给 dashboard 地址。
+4. Codex 信任:`tlive setup --hooks-only` 会自动信任(hooks/list 自检);失败则在 codex 里输入 `/hooks` approve。

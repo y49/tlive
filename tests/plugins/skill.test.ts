@@ -16,4 +16,8 @@ describe('tlive skill', () => {
     const s = readFileSync(A, 'utf-8');
     for (const kw of ['tlive setup', 'tlive status', 'tlive run', 'tlive url', 'autoStart', 'trust', '审批']) expect(s).toContain(kw);
   });
+  it('skill 含 onboarding 段(config schema + 引导流程)', () => {
+    const s = readFileSync(A, 'utf-8');
+    for (const kw of ['首次上手', 'adapters', 'chatIdAllowList', 'appSecret']) expect(s).toContain(kw);
+  });
 });
