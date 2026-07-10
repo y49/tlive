@@ -28,17 +28,22 @@ tlive --version
 tlive setup
 ```
 
-向导会依次提示填写 IM 凭证（Telegram bot token + chat ID，或飞书 App 凭证），
-并把配置写入：
+向导会先用检测到的各家自己的插件管理器注册 tlive 插件（hooks/skill/
+`/tlive:*` 命令）——如果 `claude` 和 `codex` 同时在 `PATH` 上，会先问装到哪
+（`[1] Claude Code [2] Codex [3] 都装`，默认都装）。之后才提示填写 IM 凭证
+（Telegram bot token + chat ID，或飞书 App 凭证）；这一步完全可跳过——直接
+回车过掉，之后在 Claude Code 或 Codex 里说"帮我配置 tlive"（或跑
+`/tlive:setup`），AI 会交互式带你配完。你填的内容会写入（或合并进）：
 
 ```text
 ~/.tlive/config.json
 ```
 
-保存凭证后，向导还会**自动把 hook 条目写入** `~/.claude/settings.json`（幂等）。
-这取代了已删除的 `tlive install-integrations` 子命令。
+装了 Codex 插件时，setup 还会**自动信任 tlive 的 hooks**（经
+`codex app-server` 的 `hooks/list` RPC 完成,失败会自检回滚)——具体机制见
+README 的 Codex 一节，没成功时的手动 `/hooks` 兜底也在那里。
 
-仅重新安装 hooks（例如升级 tlive 后）：
+仅重新注册插件（例如升级 tlive 后）：
 
 ```bash
 tlive setup --hooks-only

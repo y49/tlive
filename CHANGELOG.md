@@ -4,6 +4,39 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Added — onboarding
+
+- **Codex hooks trusted automatically**: `tlive setup` (and `--hooks-only`)
+  now grants Codex hook trust itself after installing the Codex plugin —
+  it reads each tlive hook's `currentHash` via `codex app-server`'s
+  official read-only `hooks/list` RPC, writes matching `[hooks.state]`
+  entries into `~/.codex/config.toml` (the same artifact an interactive
+  hooks-review `approve` produces), then re-calls `hooks/list` as a
+  self-check. Any failure rolls the file back and falls back to the manual
+  `/hooks` approval flow; only tlive's own `tlive@tlive:`-prefixed hook
+  keys are ever touched. Previously this required a manual interactive
+  `codex` trust step every time.
+- **Vendor choice in the setup wizard**: when both `claude` and `codex`
+  are detected on `PATH`, `tlive setup` now asks which to install the
+  plugin into (`[1] Claude Code [2] Codex [3] both`, default both) instead
+  of silently installing to whichever vendor happened to be found first.
+- **IM setup is fully skippable, with an AI-guided fallback**: the wizard
+  now registers vendor plugins *before* prompting for IM credentials, and
+  the IM prompt can be skipped outright — the wizard prints a pointer to
+  say "help me configure tlive" (or run `/tlive:setup`) inside Claude Code
+  or Codex, which now walks through detecting the engine, collecting IM
+  credentials, merging them into `~/.tlive/config.json`, starting the
+  daemon, verifying it, and granting Codex trust.
+- **Root-level plugin marketplace**: a `marketplace.json` at the repo root
+  lets users try the plugin straight from GitHub —
+  `claude plugin marketplace add y49/tlive` +
+  `claude plugin install tlive@tlive` — without waiting on an npm
+  publish; the engine (`npm i -g tlive`) is still required separately.
+- **In-session welcome hint (Claude Code only)**: when IM isn't configured
+  yet, `SessionStart` injects a one-line `additionalContext` nudge
+  ("say 'help me configure tlive'"); it stops appearing once IM is
+  configured. Not injected for Codex.
+
 ### Added — daemon lazy-start + reliability
 
 - **Session-start lazy-start**: hooks-only sessions no longer need a manual

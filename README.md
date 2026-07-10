@@ -20,9 +20,10 @@
 ```bash
 npm install -g tlive
 
-tlive setup        # wizard: IM credentials + registers the tlive plugin with
-                    # Claude Code's/Codex's own plugin manager (hooks, skill,
-                    # /tlive:* commands — Codex too if `codex` is on PATH)
+tlive setup        # wizard: registers the tlive plugin with Claude Code's/
+                    # Codex's own plugin manager (hooks, skill, /tlive:*
+                    # commands), then IM credentials — or skip IM entirely
+                    # and say "help me configure tlive" inside Claude/Codex
 tlive start        # daemon up — prints web URLs + a QR code for your phone
 
 tlive run claude   # (optional) wrap the session → live web terminal + preview card
@@ -71,6 +72,10 @@ which powers a session has.
   pops up in your terminal (tlive already deferred / timed out), the IM
   attention message is prefixed `⏳ 终端正在等待你的审批` so an off-screen
   user knows to go look at the terminal.
+- **In-session welcome hint (Claude Code only)** — if IM isn't configured
+  yet, `SessionStart` injects a one-line prompt into the session context
+  nudging you to say "help me configure tlive"; it stops appearing once IM
+  is set up. Not injected for Codex.
 - **Web terminal** — `tlive run <cmd>` serves the pty at `/s/<id>`:
   xterm.js, multi-device with **last-input sizing** (whoever types owns the
   grid; everyone else sees a scaled view), screen rebuild for late joiners,
@@ -117,7 +122,21 @@ Uninstalling (`npm uninstall -g tlive`) best-effort removes the plugin via
 each vendor's CLI and cleans up any leftover direct-write hooks; your
 `~/.tlive` config and logs are preserved.
 
-## Codex: hooks need a one-time trust
+**Try it from GitHub first** (no npm publish needed): `claude plugin
+marketplace add y49/tlive` then `claude plugin install tlive@tlive` pulls
+the plugin (hooks/skill/commands) straight from the repo's root
+`marketplace.json`. You still need the engine itself — `npm i -g tlive` —
+for the daemon/CLI the hooks call into.
+
+`tlive setup` asks **which vendor(s)** to install the plugin into when it
+detects both `claude` and `codex` on `PATH`: `[1] Claude Code [2] Codex
+[3] both (default)`. Plugin registration always runs before the IM
+credential prompts, and the IM step is fully skippable — press Enter
+through it and later say "help me configure tlive" inside Claude Code or
+Codex (or run `/tlive:setup`) to have the AI walk you through it
+interactively.
+
+## Codex: hooks are trusted automatically
 
 Installed events (via the plugin, `tlive hook --codex <event>`):
 `PreToolUse` (approval), `Stop` (resume), `PostToolUse`,
@@ -125,19 +144,27 @@ Installed events (via the plugin, `tlive hook --codex <event>`):
 `SessionEnd` hooks, so those two aren't installed for it.
 
 The catch: **Codex silently skips hooks it doesn't trust** — no error, no
-prompt, they just never fire. After installing, trust them once:
+prompt, they just never fire. `tlive setup` (and `--hooks-only`) handles
+this for you right after installing the Codex plugin: it calls `codex
+app-server`'s official read-only `hooks/list` RPC to read each tlive
+hook's `currentHash`, writes the matching `[hooks.state]` entries into
+`~/.codex/config.toml` (the same artifact an interactive `approve` in
+Codex's own hooks review would produce), then calls `hooks/list` again to
+self-check that every tlive hook now reports `trusted`. If that check
+fails for any reason, it rolls the file back and falls back to the manual
+path — it never touches hook entries other than tlive's own. `tlive
+status` reports whether you're on `hooks installed but NOT trusted` or
+`hooks installed and trusted`.
 
-1. Run `codex` interactively.
-2. In its hooks review, approve tlive's hook — the trust record lands in
-   `~/.codex/config.toml` under `[hooks.state]`.
-3. `tlive status` checks that file and tells you whether you're still on
-   `hooks installed but NOT trusted` or already `hooks installed and
-   trusted`.
+If auto-trust didn't go through (printed as a `⚠` line during setup), do
+it once by hand: run `codex`, type `/hooks`, and approve tlive's hook —
+the trust record lands in the same `~/.codex/config.toml`
+`[hooks.state]` section.
 
-If you'd rather skip the interactive review (needs root): add tlive's hook
-entries to `/etc/codex/requirements.toml` under `[hooks]`. Codex treats
-hooks listed there as pre-trusted "managed hooks" — see Codex's own docs
-for that file's format; tlive doesn't write it for you.
+If you'd rather skip both paths (needs root): add tlive's hook entries to
+`/etc/codex/requirements.toml` under `[hooks]`. Codex treats hooks listed
+there as pre-trusted "managed hooks" — see Codex's own docs for that
+file's format; tlive doesn't write it for you.
 
 ## Why not the official remotes?
 

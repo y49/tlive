@@ -18,9 +18,9 @@
 ```bash
 npm install -g tlive
 
-tlive setup        # 向导:IM 凭据 + 用 Claude Code/Codex 自己的插件管理器注册
-                    # tlive 插件(hooks/skill//tlive:* 命令;PATH 里有 codex
-                    # 就一并装,见下方「Codex」一节)
+tlive setup        # 向导:先用 Claude Code/Codex 自己的插件管理器注册 tlive
+                    # 插件(hooks/skill//tlive:* 命令),再问 IM 凭据——也可以
+                    # 整个跳过,进 Claude/Codex 里说"帮我配置 tlive"
 tlive start        # 起 daemon —— 打印 web 地址 + 手机扫码二维码
 
 tlive run claude   # (可选)包装会话 → 实时 web 终端 + 预览卡
@@ -62,6 +62,9 @@ vs `[label]`(仅 hooks)。
 - **本地审批等待提醒** —— Claude Code 自己的权限对话在终端弹出时(tlive 已
   回落/超时),IM 里的提醒消息会带 `⏳ 终端正在等待你的审批` 前缀,提示离屏
   用户回终端处理。
+- **会话内欢迎提示(仅 Claude Code)** —— IM 还没配置时,`SessionStart` 会往
+  会话上下文里注入一句提示,引导你说"帮我配置 tlive";配置好之后就不再出现。
+  Codex 不注入。
 - **web 终端** —— `tlive run <cmd>` 在 `/s/<id>` 提供 pty:xterm.js、多设备
   **last-input 布局权**(谁打字网格归谁,其他端等比缩放)、晚到客户端全屏重建、
   软键盘感知布局、触屏查看/输入双模式、可拖动可收起的快捷键条
@@ -101,22 +104,37 @@ hooks 块和 `hooks.json`,可以直接拷进去。
 卸载(`npm uninstall -g tlive`)会尽力用各家 CLI 卸掉插件,并清理残留的旧
 直写 hooks;`~/.tlive` 下的配置和日志保留。
 
-## Codex:hooks 需要一次性信任
+**先从 GitHub 直接尝鲜**(不用等 npm 发布插件):`claude plugin marketplace
+add y49/tlive` 再 `claude plugin install tlive@tlive`,直接从仓库根的
+`marketplace.json` 拉插件(hooks/skill/命令)。引擎本体还是要装:
+`npm i -g tlive`——daemon/CLI 靠它,hooks 调它。
+
+`tlive setup` 在同时检测到 `claude` 和 `codex` 都在 `PATH` 上时会问**装到
+哪**:`[1] Claude Code [2] Codex [3] 都装(默认)`。插件注册永远先于 IM 凭据
+询问,IM 这步可以整段跳过——直接回车过掉,之后在 Claude Code 或 Codex 里说
+"帮我配置 tlive"(或跑 `/tlive:setup`),AI 会交互式带你配完。
+
+## Codex:hooks 自动信任
 
 装的事件(经插件,命令是 `tlive hook --codex <event>`):`PreToolUse`
 (审批)、`Stop`(续跑)、`PostToolUse`、`UserPromptSubmit`、`SessionStart`。
 Codex 没有 `Notification` 和 `SessionEnd` 这两个 hook,故不给它装。
 
 坑在这:**Codex 对不信任的 hook 一律静默跳过**——不报错、不提示,就是不生效。
-装完之后需要信任一次:
+`tlive setup`(以及 `--hooks-only`)装完 Codex 插件后会自动处理:调用
+`codex app-server` 官方只读 RPC `hooks/list` 读出每个 tlive hook 的
+`currentHash`,把对应的 `[hooks.state]` 段写进 `~/.codex/config.toml`
+(与交互式在 Codex hooks review 里 approve 落盘的产物等价),再调一次
+`hooks/list` 自检每个 tlive hook 是否都变成 `trusted`。任何一步不对就回滚
+文件、退回手动引导——只碰 tlive 自己的 hook 条目,绝不触碰别的。`tlive
+status` 会告诉你现在是 `hooks installed but NOT trusted` 还是已经
+`hooks installed and trusted`。
 
-1. 交互式运行一次 `codex`。
-2. 在它的 hooks review 里 approve tlive 的 hook——信任记录写进
-   `~/.codex/config.toml` 的 `[hooks.state]` 下。
-3. `tlive status` 会读这个文件,告诉你现在是 `hooks installed but NOT
-   trusted` 还是已经 `hooks installed and trusted`。
+如果自动信任没成功(setup 过程里会打一行 `⚠`),手动补一次:跑 `codex`,输入
+`/hooks`,approve tlive 的 hook——信任记录落进同一个
+`~/.codex/config.toml` 的 `[hooks.state]` 段。
 
-想跳过交互式 review(需要 root):把 tlive 的 hook 条目写进
+想跳过以上两条路径(需要 root):把 tlive 的 hook 条目写进
 `/etc/codex/requirements.toml` 的 `[hooks]` 下,Codex 会把这里列出的 hook
 当作预先信任的"managed hooks"——具体格式看 Codex 自己的文档,tlive 不会
 替你写这个文件。

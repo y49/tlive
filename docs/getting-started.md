@@ -28,18 +28,26 @@ tlive --version
 tlive setup
 ```
 
-The wizard prompts for IM credentials (Telegram bot token + chat ID, or Feishu
-app credentials). It writes (or updates) the config at:
+The wizard first registers the tlive plugin (hooks, skill, `/tlive:*`
+commands) with each detected vendor's own plugin manager — if both `claude`
+and `codex` are on `PATH` it asks which to install into (`[1] Claude Code
+[2] Codex [3] both`, default both). Only after that does it prompt for IM
+credentials (Telegram bot token + chat ID, or Feishu app credentials); this
+step is fully optional — press Enter through it to skip, then later say
+"help me configure tlive" inside Claude Code or Codex (or run
+`/tlive:setup`) and the AI will walk you through it interactively. Whatever
+you do enter is written (or merged) into:
 
 ```text
 ~/.tlive/config.json
 ```
 
-After saving credentials the wizard **also installs the hook entries** into
-`~/.claude/settings.json` (idempotent). This replaces the removed
-`tlive install-integrations` subcommand.
+When the Codex plugin is installed, setup also **automatically trusts the
+tlive hooks** with Codex (via `codex app-server`'s `hooks/list` RPC,
+self-checked and rolled back on failure) — see the README's Codex section
+for how, and the manual `/hooks` fallback if it doesn't go through.
 
-To reinstall hooks only (e.g. after a tlive upgrade):
+To re-register plugins only (e.g. after a tlive upgrade):
 
 ```bash
 tlive setup --hooks-only
