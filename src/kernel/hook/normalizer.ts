@@ -96,12 +96,26 @@ export function permissionDecisionOut(
     : {};
 }
 
-/** CC PermissionRequest decision wire. Runs PARALLEL to the native dialog:
- *  allow/deny settles the dialog; {} (defer/timeout/error) leaves it to the
- *  user — never auto-allow, never auto-deny. CC-only (Codex stays PreToolUse). */
-export function permissionRequestDecisionOut(decision: 'allow' | 'deny' | 'defer'): object {
-  if (decision === 'allow' || decision === 'deny') {
-    return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: decision } } };
+/** PermissionRequest decision wire — identical for BOTH vendors (CC 2.1.206
+ *  真机验证 allow/deny±message;Codex 0.144 源码 schema.rs
+ *  PermissionRequestDecisionWire 同形,deny 缺 message 时 Codex 自动补默认
+ *  理由,不像 PreToolUse 那样回落放行)。
+ *  CC: 与本地对话并行,先答先得;{} = 留给用户。
+ *  Codex: 串行(hook 返回 None 后才弹原生提示);{} / 超时 / 报错 → 原生
+ *  审批流,结构性 fail-safe —— 不再有 PreToolUse 的 fail-open 问题。
+ *  绝不 auto-allow / auto-deny。别发 updatedInput/updatedPermissions/
+ *  interrupt(Codex 对这些 fail-closed)。 */
+export function permissionRequestDecisionOut(decision: 'allow' | 'deny' | 'defer', reason?: string): object {
+  if (decision === 'allow') {
+    return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } };
+  }
+  if (decision === 'deny') {
+    return {
+      hookSpecificOutput: {
+        hookEventName: 'PermissionRequest',
+        decision: { behavior: 'deny', message: reason && reason.trim() ? reason : 'Denied via tlive' },
+      },
+    };
   }
   return {};
 }

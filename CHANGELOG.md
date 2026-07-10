@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Fixed — Codex fail-open on current Codex versions (P0)
+
+- **Codex gating migrated from `PreToolUse` to `PermissionRequest`.** On
+  codex ≥0.143, `PreToolUse` rejects `permissionDecision: ask` and bare
+  `allow` as unsupported hook output and then **fails open** (the tool
+  runs) — which made tlive's previous timeout fallback (`ask`) and even
+  its allow path silently ineffective. `PermissionRequest` is fail-safe
+  by construction: timeout/error/empty output = no decision = Codex's
+  native approval flow. The 590s-deadline race is retired. Window: 660s
+  hook / 650s-590s shim-daemon (Codex's permission hook is serial — it
+  blocks the native prompt, so no 24h window here).
+- **Both vendors now share one decision wire** (`decision: {behavior,
+  message?}` — verified on claude 2.1.206 live and codex 0.144 source);
+  deny always carries a message.
+- **Re-trust required**: the Codex plugin's hook set changed, so trust
+  keys change — re-run `tlive setup --hooks-only --codex` (trust is
+  granted automatically via `hooks/list`).
+
 ### Changed — dual-channel approvals (Claude Code)
 
 - **Gating moved from `PreToolUse` to `PermissionRequest`** (breaking for

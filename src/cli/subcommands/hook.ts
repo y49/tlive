@@ -68,10 +68,13 @@ export async function runHook(argv: string[]): Promise<void> {
     const wrappedId = process.env.TLIVE_SESSION;
 
     if (event === 'permission-request') {
-      // CC dual-channel gating: this hook fires WHILE the native dialog is
-      // interactive — remote card and local prompt race, first answer wins.
-      // Very long window; a local answer releases us via the daemon's cancel
-      // triggers (PostToolUse / PermissionDenied / UserPromptSubmit / Stop).
+      // 双通道 gating。CC:hook 与本地对话并行(先答先得),窗口拉满 24h,
+      // 本地答掉由 daemon 的 cancel 触发器(PostToolUse/UserPromptSubmit/Stop)
+      // 释放本进程。Codex:hook 串行阻塞原生提示(orchestrator.rs 实证),
+      // 只给中等窗;超时输出 {} → Codex 落回原生审批流(fail-safe)。
+      const win = vendor === 'codex'
+        ? { timeoutSec: 590, ipcMs: 600_000 }   // < hooks.json 660s
+        : { timeoutSec: 86_000, ipcMs: 86_100_000 }; // < hooks.json 86400s
       const a = n as Extract<typeof n, { event: 'approval-request' }>;
       const r = await request(
         {
@@ -81,10 +84,10 @@ export async function runHook(argv: string[]): Promise<void> {
           toolName: a.toolName,
           input: a.input,
           permissionMode: a.permissionMode,
-          timeoutSec: 86_000,
+          timeoutSec: win.timeoutSec,
           ...(wrappedId ? { wrappedId } : {}),
         },
-        { timeoutMs: 86_100_000 },
+        { timeoutMs: win.ipcMs },
       );
       const decision = r.kind === 'hook.permission.result' ? r.decision : 'defer';
       process.stdout.write(JSON.stringify(permissionRequestDecisionOut(decision)));

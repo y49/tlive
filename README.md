@@ -55,8 +55,8 @@ which powers a session has.
   fires **in parallel with the local permission dialog** — both are live,
   first answer wins. Answer from IM buttons or the web card any time within
   24 hours; answer at the keyboard and the remote card resolves itself
-  ("answered in terminal") within seconds. On Codex the `PreToolUse` hook
-  gates serially with a 600s window (see Security model). Diff/command
+  ("answered in terminal") within seconds. On Codex the `PermissionRequest`
+  hook gates serially with a ~10 min window (see Security model). Diff/command
   rendering, risky-pattern flags, secret masking. **"Always allow \<tool\>"**
   grants a per-tool pass (in-memory, cleared on restart) — on Claude Code it
   now answers the native dialog for you remotely; `/trust on|off` pauses
@@ -140,7 +140,7 @@ through it interactively (Codex has no slash commands; use the phrase).
 ## Codex: hooks are trusted automatically
 
 Installed events (via the plugin, `tlive hook --codex <event>`):
-`PreToolUse` (approval), `Stop` (resume), `PostToolUse`,
+`PermissionRequest` (approval), `Stop` (resume), `PostToolUse`,
 `UserPromptSubmit`, `SessionStart`. Codex doesn't have `Notification` or
 `SessionEnd` hooks, so those two aren't installed for it.
 
@@ -202,22 +202,21 @@ layer for sessions you already run.
   tlive weren't there. On Claude Code the local dialog is live the whole
   time anyway (parallel channels), so "fallback" just means the remote card
   goes quiet.
-- **Codex's hook timeout fails open, not silent** — this is the one place
-  Codex and Claude Code genuinely diverge. Claude Code's permission hook
-  timing out leaves its local prompt in charge (safe, no default action).
-  Codex's hook timing out lets the tool call **run** by default. tlive's
-  mitigation: `~/.codex/hooks.json` sets `timeout: 600` on `PreToolUse`, and
-  the shim self-deadlines at ~590s — comfortably inside that window — so
-  tlive always answers `allow`/`deny`/`ask` before Codex's own fail-open can
-  trigger. With nobody around to answer, it answers `ask` (Codex's native
-  approval prompt), never an auto-allow. Residual risk: if the shim
-  **process itself crashes** (not just times out), there's nothing left to
-  answer, and Codex will fail open after 600s regardless — that gap can't be
-  closed from a hook. (Why Codex can't get the parallel 24h channel: its
-  permission hook blocks the native prompt — confirmed in Codex's source —
-  so a long window would freeze the terminal. Want unlimited remote
-  interaction with Codex? Wrap it: `tlive run codex` has no hook and no
-  timeout — the web terminal and IM injection drive the session directly.)
+- **Codex gating rides `PermissionRequest` and is fail-safe by design** —
+  a timeout, an error, or empty hook output means "no decision", and Codex
+  falls back to its own native approval flow (verified in Codex source:
+  decisions fold conservatively, any deny wins, `None` → normal approval).
+  There is no fail-open window to race against. Codex's permission hook
+  blocks the native prompt while it runs (serial — also source-verified),
+  so the remote window is kept moderate (~10 min) instead of Claude Code's
+  parallel 24h. Want unlimited remote interaction with Codex? Wrap it:
+  `tlive run codex` has no hook and no timeout — the web terminal and IM
+  injection drive the session directly.
+- **Do not gate Codex through `PreToolUse`** (as tlive versions before this
+  one did): on codex ≥0.143 `PreToolUse` rejects `permissionDecision: ask`
+  and bare `allow` as unsupported output and then **fails open** — the tool
+  runs. If you ever hand-wrote such a config, replace it with the
+  `PermissionRequest` block from `docs/manual-hooks.md`.
 
 ## CLI
 

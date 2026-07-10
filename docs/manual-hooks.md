@@ -61,7 +61,7 @@ Write (or merge into) `~/.codex/hooks.json`:
 ```json
 {
   "hooks": {
-    "PreToolUse":       [{ "matcher": "*", "hooks": [{ "type": "command", "command": "tlive hook --codex pre-tool-use", "timeout": 600, "async": false }] }],
+    "PermissionRequest": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "tlive hook --codex permission-request", "timeout": 660, "async": false }] }],
     "Stop":             [{ "hooks": [{ "type": "command", "command": "tlive hook --codex stop", "timeout": 180, "async": false }] }],
     "PostToolUse":      [{ "matcher": "*", "hooks": [{ "type": "command", "command": "tlive hook --codex post-tool-use", "async": false }] }],
     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "tlive hook --codex user-prompt-submit", "async": false }] }],

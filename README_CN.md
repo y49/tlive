@@ -48,8 +48,8 @@ vs `[label]`(仅 hooks)。
 
 - **审批** —— Claude Code 上是双通道:`PermissionRequest` hook 与本地权限
   对话**并行**——两边同时可答,先到先得。IM 按钮 / web 卡 24 小时内随时可答;
-  在键盘上答了,远程卡几秒内自动收尾("已在终端处理")。Codex 上仍是
-  `PreToolUse` 串行拦截(600s 窗,见安全模型)。diff/命令渲染、高危模式标记、
+  在键盘上答了,远程卡几秒内自动收尾("已在终端处理")。Codex 上是
+  `PermissionRequest` 串行拦截(约 10 分钟窗,见安全模型)。diff/命令渲染、高危模式标记、
   secret 打码。**"总是允许 \<工具\>"** 按工具放行(内存态,重启清零)——在
   Claude Code 上现在等于远程替你点掉原生对话;`/trust on|off` 整体暂停审批。
   **绝不自动拒绝**;没人答时本地提示一直有效。
@@ -117,7 +117,7 @@ add y49/tlive` 再 `claude plugin install tlive@tlive`,直接从仓库根的
 
 ## Codex:hooks 自动信任
 
-装的事件(经插件,命令是 `tlive hook --codex <event>`):`PreToolUse`
+装的事件(经插件,命令是 `tlive hook --codex <event>`):`PermissionRequest`
 (审批)、`Stop`(续跑)、`PostToolUse`、`UserPromptSubmit`、`SessionStart`。
 Codex 没有 `Notification` 和 `SessionEnd` 这两个 hook,故不给它装。
 
@@ -167,15 +167,16 @@ tlive 刻意**不做**"手机从零 vibe coding"——官方远程做得更好�
   `permissions.deny` 永远赢——hook 无法越过它。
 - **兜底是静默**:没配 chat、超时、daemon 没起 → hook 输出 `{}`,Claude 在
   本地终端照常提示,就像 tlive 不存在。
-- **Codex 的 hook 超时是 fail-open,不是静默**——这是 Codex 与 Claude Code
-  真正分叉的地方。Claude Code 的 `PreToolUse` hook 超时会回落到本地提示
-  (安全,无默认动作)。Codex 的 hook 超时则默认让工具调用**照跑**。tlive
-  的缓解:`~/.codex/hooks.json` 给 `PreToolUse` 配了 `timeout: 600`,shim
-  自我限时约 590 秒——舒服地卡在这个窗口内——所以 tlive 总能在 Codex 自己
-  的 fail-open 触发前给出 `allow`/`deny`/`ask` 三选一。没人应答时输出
-  `ask`(Codex 原生审批提示),绝不自动放行。残余风险:如果 shim **进程本身
-  崩溃**(而不只是超时),就没有谁能应答了,Codex 600 秒后依然会 fail-open——
-  这个口子没法从 hook 这一层堵上。
+- **Codex 审批走 `PermissionRequest`,天然 fail-safe**——超时、报错、空输出
+  都等于"无决策",Codex 落回自己的原生审批流(源码验证:决策保守折叠,任一
+  deny 即胜,无决策 → 正常审批)。不存在需要抢跑的 fail-open 窗口。Codex 的
+  权限 hook 运行期间会阻塞原生提示(串行,同为源码验证),所以远程窗口保持
+  中等(约 10 分钟),不像 Claude Code 的并行 24 小时。想对 Codex 无限远程?
+  包装跑:`tlive run codex` 无 hook 无超时,web 终端 + IM 注入直接驱动会话。
+- **不要用 `PreToolUse` 给 Codex 做审批**(本版本之前的 tlive 曾这样做):
+  codex ≥0.143 的 `PreToolUse` 把 `permissionDecision: ask` 和裸 `allow`
+  当非法输出拒收,然后 **fail-open**——工具照跑。若你手写过这种配置,请换成
+  `docs/manual-hooks.md` 里的 `PermissionRequest` 块。
 
 ## CLI
 

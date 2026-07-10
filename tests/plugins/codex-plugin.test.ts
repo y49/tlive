@@ -15,10 +15,12 @@ describe('plugins/codex marketplace', () => {
   it('plugin.json 存在', () => {
     expect(read(join(P, '.codex-plugin', 'plugin.json')).name).toBe('tlive');
   });
-  it('hooks.json: Codex 5 事件,--codex 命令,async:false,无 Notification/SessionEnd/Failure', () => {
+  it('hooks.json: Codex 5 events, PermissionRequest gating (PreToolUse retired), async:false', () => {
     const h = read(join(P, 'hooks', 'hooks.json')).hooks;
-    expect(Object.keys(h).sort()).toEqual(['PostToolUse','PreToolUse','SessionStart','Stop','UserPromptSubmit'].sort());
-    expect(h.PreToolUse[0].hooks[0]).toMatchObject({ command: 'tlive hook --codex pre-tool-use', timeout: 600, async: false });
+    expect(Object.keys(h).sort()).toEqual(['PermissionRequest','PostToolUse','SessionStart','Stop','UserPromptSubmit'].sort());
+    // codex ≥0.143 的 PreToolUse 拒绝 ask/裸 allow 且 fail-open —— gating 必须走 PermissionRequest
+    expect(h.PreToolUse).toBeUndefined();
+    expect(h.PermissionRequest[0].hooks[0]).toMatchObject({ command: 'tlive hook --codex permission-request', timeout: 660, async: false });
     expect(h.Stop[0].hooks[0].timeout).toBeGreaterThanOrEqual(175);
     expect(h.SessionStart[0].matcher).toBe('startup|resume|clear|compact');
     for (const ev of Object.keys(h)) for (const g of h[ev]) for (const k of g.hooks) expect(k.async).toBe(false);

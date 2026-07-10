@@ -114,19 +114,24 @@ PermissionDenied(同 key+tool)只覆盖规则型拒绝——真机实测:用户�
 的事件集,无 Notification/SessionEnd)与超时层(`hook.ts` shim 死线兜 Codex
 fail-open)的差异:
 
-- `defer`:Claude 序列化为 `{}`(空输出 → 回落本地 TUI);Codex 序列化为
-  `{hookSpecificOutput:{hookEventName:'PreToolUse',permissionDecision:'ask'}}`
-  ——Codex 对空输出的处理是 fail-open(工具自动跑),不能复用 `{}`。
-- `deny`:Codex 必须带非空 `permissionDecisionReason`(空 reason 会被 Codex
-  当放行处理),tlive 未提供时自动补一个;Claude 不需要。
-- Codex 没有 `Notification` / `SessionEnd` 这两个 hook 事件,
-  `installCodexHooks()` 只装 `PreToolUse`(600s)/`Stop`(180s)/
-  `PostToolUse`/`UserPromptSubmit`/`SessionStart`。
-- Codex hook 超时默认 fail-open(命令照跑),不像 Claude 超时回落本地提示;
-  shim 对审批请求自我限时 ~590s(< hooks.json 里配的 600s),抢在 Codex 的
-  fail-open 前给出 allow/deny/ask 三态之一。shim 进程本身崩溃是唯一没堵上
-  的口子——那种情况下 Codex 600s 后依然会 fail-open,详见 `README.md` 安全
-  模型段。
+- **两家 gating 都走 PermissionRequest,输出 wire 同形**
+  (`permissionRequestDecisionOut` 共用,无 vendor 分支;CC 2.1.206 真机 +
+  Codex 0.144 源码 schema.rs `PermissionRequestDecisionWire` 双验证):
+  allow/deny(带 message)/`{}`。差异只剩窗口:CC 并行 24h,Codex 串行
+  ~600s(shim 内 vendor 分支选 timeoutSec)。
+- Codex PermissionRequest 超时/报错/空输出 = 无决策 → 落回原生审批流,
+  **结构性 fail-safe**(events/permission_request.rs:任一 deny 即胜,None
+  → normal approval)。旧的 590s 死线抢跑机制已退役。
+- ⚠ **历史教训(2026-07-10)**:codex 0.142→0.144 把 gating 从 PreToolUse
+  挪到 PermissionRequest,`PreToolUse` 开始拒收 `ask`/裸 `allow` 且对非法
+  输出 **fail-open**(output_parser.rs 有测试名就叫
+  `unsupported_permission_decision_fails_open`)。凡 vendor hook 语义,版本
+  升级时必须回源码复核,不能假设两家或两版同构。
+- `permissionDecisionOut`(PreToolUse wire)仅保留给老版本 codex(≤0.142)
+  的手写配置兼容,插件路径不再使用。
+- Codex 没有 `Notification` / `SessionEnd` 这两个 hook 事件,插件只装
+  `PermissionRequest`(660s)/`Stop`(180s)/`PostToolUse`/
+  `UserPromptSubmit`/`SessionStart`。
 
 **装机层已从直写 vendor 配置改为插件分发**:`tlive setup` /
 `--hooks-only` 不再手改 `~/.claude/settings.json` / `~/.codex/hooks.json`,

@@ -77,10 +77,21 @@ describe('permission-request / permission-denied (CC dual-channel)', () => {
     expect(permissionRequestDecisionOut('allow')).toEqual({
       hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } },
     });
+    // deny 恒带 message:Codex 缺省会自动补理由(源码验证不 fail-open),
+    // 但显式给一条对两家都更友好;CC 2.1.206 真机验证接受 message 字段。
     expect(permissionRequestDecisionOut('deny')).toEqual({
-      hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny' } },
+      hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: 'Denied via tlive' } },
+    });
+    expect(permissionRequestDecisionOut('deny', 'user rejected')).toEqual({
+      hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: 'user rejected' } },
     });
     expect(permissionRequestDecisionOut('defer')).toEqual({});
+  });
+  it('same wire serves both vendors — no vendor branch in the function signature', () => {
+    // Codex 0.144 schema.rs PermissionRequestDecisionWire 与 CC 同形;
+    // 该测试锁死"不发 updatedInput/updatedPermissions/interrupt"(Codex fail-closed 字段)。
+    const out = permissionRequestDecisionOut('allow') as { hookSpecificOutput: { decision: Record<string, unknown> } };
+    expect(Object.keys(out.hookSpecificOutput.decision)).toEqual(['behavior']);
   });
 });
 
