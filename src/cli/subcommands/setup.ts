@@ -8,34 +8,49 @@ import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { installClaudePlugin, installCodexPlugin, defaultRunner } from '../../kernel/integrations/plugin-install.js';
-import { stripLegacyClaudeHooks, stripLegacyCodexHooks } from '../../kernel/integrations/hooks-cleanup.js';
+import { stripLegacyClaudeHooks, stripLegacyCodexHooks, commandOnPath } from '../../kernel/integrations/hooks-cleanup.js';
+import { grantCodexTrust } from '../../kernel/integrations/codex-trust-grant.js';
 
-function registerPlugins(): string {
+export type VendorSelection = { claude: boolean; codex: boolean };
+
+export function resolveVendorSelection(detected: VendorSelection, answer: string): VendorSelection {
+  const a = answer.trim();
+  if (a === '1') return { claude: detected.claude, codex: false };
+  if (a === '2') return { claude: false, codex: detected.codex };
+  return detected;
+}
+
+async function registerPlugins(sel: VendorSelection): Promise<string> {
   const run = defaultRunner();
   const lines: string[] = [];
-  const cc = installClaudePlugin(run);
-  if (cc.ok) {
-    const stripped = stripLegacyClaudeHooks();
-    lines.push(`✓ Claude plugin registered — ${cc.detail}${stripped ? '(已清理旧直写 hooks)' : ''}`);
-  } else {
-    lines.push(`⚠ Claude plugin not registered: ${cc.detail}`);
+  if (sel.claude) {
+    const cc = installClaudePlugin(run);
+    if (cc.ok) {
+      const stripped = stripLegacyClaudeHooks();
+      lines.push(`✓ Claude plugin registered — ${cc.detail}${stripped ? '(已清理旧直写 hooks)' : ''}`);
+    } else {
+      lines.push(`⚠ Claude plugin not registered: ${cc.detail}`);
+    }
   }
-  const cx = installCodexPlugin(run);
-  if (cx.ok) {
-    const stripped = stripLegacyCodexHooks();
-    lines.push(
-      `✓ Codex plugin registered — ${cx.detail}${stripped ? '(已清理旧直写 hooks)' : ''}\n` +
-      '  ⚠ Codex 需信任一次才生效:运行 `codex`(交互),在 hooks review 里 approve tlive 的 hook。',
-    );
-  } else if (cx.detail !== 'codex not on PATH') {
-    lines.push(`⚠ Codex plugin not registered: ${cx.detail}`);
+  if (sel.codex) {
+    const cx = installCodexPlugin(run);
+    if (cx.ok) {
+      const stripped = stripLegacyCodexHooks();
+      lines.push(`✓ Codex plugin registered — ${cx.detail}${stripped ? '(已清理旧直写 hooks)' : ''}`);
+      const trust = await grantCodexTrust();
+      lines.push(trust.verified
+        ? `✓ Codex hooks 已自动信任(hooks/list 自检通过${trust.granted ? `,写入 ${trust.granted} 条` : ''})`
+        : `⚠ Codex 自动信任未成(${trust.detail})— 在 codex 里输入 /hooks 并 approve tlive 即可`);
+    } else if (cx.detail !== 'codex not on PATH') {
+      lines.push(`⚠ Codex plugin not registered: ${cx.detail}`);
+    }
   }
   return lines.join('\n') + '\n';
 }
 
 export async function runSetup(argv: string[]): Promise<void> {
   if (argv.includes('--hooks-only')) {
-    process.stdout.write(registerPlugins() + 'Restart claude/codex for changes to take effect.\n');
+    process.stdout.write((await registerPlugins({ claude: true, codex: true })) + 'Restart claude/codex for changes to take effect.\n');
     return;
   }
 
@@ -54,6 +69,21 @@ export async function runSetup(argv: string[]): Promise<void> {
     return ans || current || '';
   };
 
+  const detected: VendorSelection = { claude: commandOnPath('claude'), codex: commandOnPath('codex') };
+  let sel: VendorSelection = detected;
+  if (detected.claude && detected.codex) {
+    const ans = await rl.question('装到哪 [1]Claude [2]Codex [3]都装(默认): ');
+    sel = resolveVendorSelection(detected, ans);
+  } else if (detected.claude || detected.codex) {
+    process.stdout.write(`检测到 ${detected.claude ? 'Claude' : 'Codex'},直接安装插件。\n`);
+  }
+  const pluginLines = await registerPlugins(sel);
+  process.stdout.write(`\n${pluginLines}`);
+
+  process.stdout.write(
+    '\nIM 现在配或直接回车全跳过 — 稍后在 Claude/Codex 里说“帮我配置 tlive”(或 /tlive:setup),AI 会引导你完成。\n\n',
+  );
+
   const cfg = { ...existing };
   cfg.allowedSenders ??= [];
   cfg.adapters ??= {};
@@ -68,6 +98,5 @@ export async function runSetup(argv: string[]): Promise<void> {
 
   rl.close();
   writeFileSync(configPath, JSON.stringify(cfg, null, 2));
-  const pluginLines = registerPlugins();
-  process.stdout.write(`\nWritten ${configPath}\n${pluginLines}Next: tlive start\n`);
+  process.stdout.write(`\nWritten ${configPath}\nNext: tlive start\n`);
 }
