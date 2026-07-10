@@ -47,7 +47,8 @@ vs `[label]`(仅 hooks)。
 ## 功能一览
 
 - **审批** —— Claude Code 上是双通道:`PermissionRequest` hook 与本地权限
-  对话**并行**——两边同时可答,先到先得。IM 按钮 / web 卡 24 小时内随时可答;
+  对话**并行**——两边同时可答,先到先得。IM 按钮 / web 卡默认 30 分钟内可答
+  (`approvals.claudeWindowSec` 可配至约 24 小时);
   在键盘上答了,远程卡几秒内自动收尾("已在终端处理")。Codex 上是
   `PermissionRequest` 串行拦截(约 10 分钟窗,见安全模型)。diff/命令渲染、高危模式标记、
   secret 打码。**"总是允许 \<工具\>"** 按工具放行(内存态,重启清零)——在
@@ -171,7 +172,8 @@ tlive 刻意**不做**"手机从零 vibe coding"——官方远程做得更好�
   都等于"无决策",Codex 落回自己的原生审批流(源码验证:决策保守折叠,任一
   deny 即胜,无决策 → 正常审批)。不存在需要抢跑的 fail-open 窗口。Codex 的
   权限 hook 运行期间会阻塞原生提示(串行,同为源码验证),所以远程窗口保持
-  中等(约 10 分钟),不像 Claude Code 的并行 24 小时。想对 Codex 无限远程?
+  中等(默认约 10 分钟,上限 2 小时,`approvals.codexWindowSec`),Claude Code
+  则是并行通道(默认 30 分钟,可配至约 24 小时)。想对 Codex 无限远程?
   包装跑:`tlive run codex` 无 hook 无超时,web 终端 + IM 注入直接驱动会话。
 - **不要用 `PreToolUse` 给 Codex 做审批**(本版本之前的 tlive 曾这样做):
   codex ≥0.143 的 `PreToolUse` 把 `permissionDecision: ask` 和裸 `allow`

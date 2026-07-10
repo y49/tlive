@@ -2,11 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { parseHookArgs, approvalWindow } from '../hook';
 
 describe('parseHookArgs', () => {
-  it('无 flag → claude', () => {
-    expect(parseHookArgs(['pre-tool-use'])).toEqual({ event: 'pre-tool-use', vendor: 'claude' });
+  it('no flag → claude', () => {
+    expect(parseHookArgs(['permission-request'])).toEqual({ event: 'permission-request', vendor: 'claude' });
   });
-  it('--codex 在前', () => {
-    expect(parseHookArgs(['--codex', 'pre-tool-use'])).toEqual({ event: 'pre-tool-use', vendor: 'codex' });
+  it('--codex before event', () => {
+    expect(parseHookArgs(['--codex', 'permission-request'])).toEqual({ event: 'permission-request', vendor: 'codex' });
   });
   it('--codex 在后', () => {
     expect(parseHookArgs(['stop', '--codex'])).toEqual({ event: 'stop', vendor: 'codex' });
@@ -17,8 +17,8 @@ describe('parseHookArgs', () => {
 });
 
 describe('approvalWindow (per-vendor remote-approval window)', () => {
-  it('defaults: claude ~24h parallel, codex ~10min serial', () => {
-    expect(approvalWindow('claude')).toEqual({ timeoutSec: 86_000, ipcMs: 86_100_000 });
+  it('defaults: claude 30min parallel, codex ~10min serial', () => {
+    expect(approvalWindow('claude')).toEqual({ timeoutSec: 1800, ipcMs: 1_900_000 });
     expect(approvalWindow('codex')).toEqual({ timeoutSec: 590, ipcMs: 690_000 });
   });
   it('config overrides are honored', () => {

@@ -1,5 +1,4 @@
 export type HookEventName =
-  | 'pre-tool-use'
   | 'post-tool-use'
   | 'stop'
   | 'notification'
@@ -46,7 +45,6 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
   const cwd = r.cwd ?? process.cwd();
   const sessionId = r.session_id ?? '';
   switch (event) {
-    case 'pre-tool-use':
     case 'permission-request':
       return { event: 'approval-request', cwd, sessionId, toolName: r.tool_name ?? '(unknown)', input: r.tool_input ?? {}, permissionMode: r.permission_mode, ...(r.agent_id ? { agentId: r.agent_id } : {}) };
     case 'permission-denied':
@@ -77,26 +75,6 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
     case 'subagent-stop':
       return { event: 'subagent', cwd, sessionId, delta: -1, ...(r.agent_type ? { agentType: r.agent_type } : {}) };
   }
-}
-
-export function permissionDecisionOut(
-  decision: 'allow' | 'deny' | 'defer',
-  vendor: HookVendor = 'claude',
-  reason?: string,
-): object {
-  if (decision === 'allow' || decision === 'deny') {
-    const out: Record<string, unknown> = { hookEventName: 'PreToolUse', permissionDecision: decision };
-    // Codex 对空 reason 的 deny 回落放行 → 一律附非空 reason(CC 不需要,保持原输出)。
-    if (decision === 'deny' && vendor === 'codex') {
-      out.permissionDecisionReason = reason && reason.trim() ? reason : '已被 tlive 拒绝';
-    }
-    return { hookSpecificOutput: out };
-  }
-  // defer 或任何非预期值 → 绝不 auto-allow:CC 空输出(回落本地 TUI),
-  // Codex 输出 'ask'(原生审批提示,因 Codex 空输出=fail-open 自动跑)。
-  return vendor === 'codex'
-    ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask' } }
-    : {};
 }
 
 /** PermissionRequest decision wire — identical for BOTH vendors (CC 2.1.206

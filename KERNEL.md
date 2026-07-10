@@ -61,13 +61,13 @@ File: `src/kernel/hook/normalizer.ts`
 
 ```typescript
 type HookEventName = 'permission-request' | 'permission-denied'
-                   | 'pre-tool-use' | 'post-tool-use' | 'stop' | 'notification'
+                   | 'post-tool-use' | 'stop' | 'notification'
                    | 'user-prompt-submit' | 'session-start' | 'session-end'
                    | 'post-tool-use-failure' | 'stop-failure'
                    | 'subagent-start' | 'subagent-stop';
 
 type NormalizedHook =
-  | { event: 'approval-request'; cwd; sessionId; toolName; input; permissionMode? } // PermissionRequest(两家;pre-tool-use 仅老配置兼容)
+  | { event: 'approval-request'; cwd; sessionId; toolName; input; permissionMode?; agentId? } // PermissionRequest(两家)
   | { event: 'activity';         cwd; sessionId; toolName; result }                // PostToolUse
   | { event: 'attention';        cwd; sessionId; message; lastMessage? }           // Stop / Notification
   | { event: 'prompt';           cwd; sessionId; prompt }                          // UserPromptSubmit
@@ -85,8 +85,7 @@ type MonitorEvent = activity | attention | prompt | subagent | permission-denied
 type HookVendor = 'claude' | 'codex';
 
 // decision 序列化回各 vendor 的 hook 格式(vendor 差异只在这一层收口,kernel 不感知):
-permissionDecisionOut(decision: 'allow'|'deny'|'defer', vendor?: HookVendor, reason?: string): object  // PreToolUse wire (Codex gating)
-permissionRequestDecisionOut(decision: 'allow'|'deny'|'defer'): object  // CC PermissionRequest wire; defer → {}
+permissionRequestDecisionOut(decision: 'allow'|'deny'|'defer', reason?: string): object  // PermissionRequest wire(两家同形);deny 恒带 message,defer → {}
 continueDecisionOut(reply: string | null): object   // reply → {decision:'block',reason}
 ```
 
@@ -94,9 +93,10 @@ Claude / Codex 的原始 hook JSON 在这里归一。加一个新 AI runtime = �
 事件映射进这套归一模型,kernel 不变。
 
 **审批双通道(CC vs Codex)**:Claude Code 的 gating 走 `PermissionRequest`
-hook——它与本地权限对话**并行**(先答先得),所以窗口可以拉到 24h
-(hooks.json `timeout: 86400`,shim IPC 86100s,daemon pending 86000s,daemon
-侧 clamp 24h);本地答掉后 daemon 靠 PostToolUse(同 key+tool,本地点了允许)/
+hook——它与本地权限对话**并行**(先答先得),窗口可长(默认 30min,
+`approvals.claudeWindowSec` 可配至 86200s≈24h;hooks.json `timeout: 86400`,
+shim IPC=窗+100s,daemon clamp 24h);本地答掉后 daemon 靠 PostToolUse(同
+key+tool,本地点了允许)/
 UserPromptSubmit(同 key)/ Stop(同 key)cancel 挂起请求(resolve 为
 'local',wire 上映射回 'defer' → shim 输出 `{}` pass-through)。
 PermissionDenied(同 key+tool)只覆盖规则型拒绝——真机实测:用户在对话框点
@@ -111,15 +111,16 @@ PermissionDenied(同 key+tool)只覆盖规则型拒绝——真机实测:用户�
 **Codex 是这套模式的实例**(打包进 `plugins/codex/plugins/tlive/hooks/hooks.json`
 的 hooks 块,schema 与 Claude `settings.json` 的 `hooks` 块同构;shim 靠
 `tlive hook --codex <event>` 的 `--codex` flag 选 vendor)。gating 输出两家共用
-`permissionRequestDecisionOut`;`permissionDecisionOut`(PreToolUse wire,deny
-带 reason、defer→ask)仅剩老配置兼容用途。另有装机层(hooks.json
+`permissionRequestDecisionOut`;PreToolUse gating 路径已整体删除(no-compat:
+早期直写配置的用户按 docs/manual-hooks.md 换 PermissionRequest 块)。另有装机层(hooks.json
 的事件集,无 Notification/SessionEnd)与超时层(`hook.ts` shim 死线兜 Codex
 fail-open)的差异:
 
 - **两家 gating 都走 PermissionRequest,输出 wire 同形**
   (`permissionRequestDecisionOut` 共用,无 vendor 分支;CC 2.1.206 真机 +
   Codex 0.144 源码 schema.rs `PermissionRequestDecisionWire` 双验证):
-  allow/deny(带 message)/`{}`。差异只剩窗口:CC 并行 24h,Codex 串行
+  allow/deny(带 message)/`{}`。差异只剩窗口:CC 并行(默认 30min 可配至
+  24h),Codex 串行
   ~600s(shim 内 vendor 分支选 timeoutSec)。
 - Codex PermissionRequest 超时/报错/空输出 = 无决策 → 落回原生审批流,
   **结构性 fail-safe**(events/permission_request.rs:任一 deny 即胜,None
@@ -129,8 +130,8 @@ fail-open)的差异:
   输出 **fail-open**(output_parser.rs 有测试名就叫
   `unsupported_permission_decision_fails_open`)。凡 vendor hook 语义,版本
   升级时必须回源码复核,不能假设两家或两版同构。
-- `permissionDecisionOut`(PreToolUse wire)仅保留给老版本 codex(≤0.142)
-  的手写配置兼容,插件路径不再使用。
+- PreToolUse gating(`permissionDecisionOut` / `pre-tool-use` 事件)已整体
+  删除(no-compat);shim 收到未知事件一律优雅输出 `{}`。
 - Codex 没有 `Notification` / `SessionEnd` 这两个 hook 事件,插件只装
   `PermissionRequest`(660s)/`Stop`(180s)/`PostToolUse`/
   `UserPromptSubmit`/`SessionStart`。

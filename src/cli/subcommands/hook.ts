@@ -11,7 +11,6 @@ import { join } from 'node:path';
 import { request } from '../../kernel/ipc/client.js';
 import {
   parseHookInput,
-  permissionDecisionOut,
   permissionRequestDecisionOut,
   continueDecisionOut,
   sessionStartOut,
@@ -45,7 +44,7 @@ async function readStdin(): Promise<unknown> {
   try { return s ? JSON.parse(s) : {}; } catch { return {}; }
 }
 
-const USAGE = 'Usage: tlive hook [--codex] <permission-request|permission-denied|pre-tool-use|post-tool-use|stop|notification|user-prompt-submit|session-start|session-end|post-tool-use-failure|stop-failure>\n';
+const USAGE = 'Usage: tlive hook [--codex] <permission-request|permission-denied|post-tool-use|stop|notification|user-prompt-submit|session-start|session-end|post-tool-use-failure|stop-failure>\n';
 
 /** 远程审批窗口(秒)+ 对应 shim IPC 死线(毫秒)。clamp 上限对齐插件
  *  hooks.json 的 vendor timeout(claude 86400 / codex 7320),保证
@@ -56,8 +55,8 @@ export function approvalWindow(
 ): { timeoutSec: number; ipcMs: number } {
   const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi);
   const timeoutSec = vendor === 'codex'
-    ? clamp(approvals?.codexWindowSec ?? 590, 60, 7200)      // 串行:默认 ~10min,上限 2h
-    : clamp(approvals?.claudeWindowSec ?? 86_000, 60, 86_200); // 并行:默认 ~24h
+    ? clamp(approvals?.codexWindowSec ?? 590, 60, 7200)       // 串行:默认 ~10min,上限 2h
+    : clamp(approvals?.claudeWindowSec ?? 1800, 60, 86_200);  // 并行:默认 30min,可配到 ~24h
   return { timeoutSec, ipcMs: (timeoutSec + 100) * 1000 };
 }
 
@@ -118,24 +117,6 @@ export async function runHook(argv: string[]): Promise<void> {
       return;
     }
 
-    if (n.event === 'approval-request') {
-      const r = await request(
-        {
-          kind: 'hook.permission.request',
-          cwd: n.cwd,
-          sessionId: n.sessionId,
-          toolName: n.toolName,
-          input: n.input,
-          permissionMode: n.permissionMode,
-          ...(wrappedId ? { wrappedId } : {}),
-        },
-        { timeoutMs: 590_000 },
-      );
-      const decision = r.kind === 'hook.permission.result' ? r.decision : 'defer';
-      process.stdout.write(JSON.stringify(permissionDecisionOut(decision, vendor)));
-      return;
-    }
-
     if (event === 'stop') {
       const att = n as { cwd: string; sessionId: string; message: string; lastMessage?: string };
       const r = await request(
@@ -186,7 +167,8 @@ export async function runHook(argv: string[]): Promise<void> {
       process.stdout.write('{}');
     }
   } catch {
-    // daemon 不可达/出错 → 安全默认。审批路径按 vendor 让原生工具本地问;其余空输出。
-    process.stdout.write(event === 'pre-tool-use' ? JSON.stringify(permissionDecisionOut('defer', vendor)) : '{}');
+    // daemon 不可达/出错 → 安全默认 {}:CC pass-through(本地对话在),
+    // Codex 无决策 → 原生审批流。绝不 auto-allow。
+    process.stdout.write('{}');
   }
 }

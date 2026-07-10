@@ -208,8 +208,9 @@ layer for sessions you already run.
   decisions fold conservatively, any deny wins, `None` → normal approval).
   There is no fail-open window to race against. Codex's permission hook
   blocks the native prompt while it runs (serial — also source-verified),
-  so the remote window is kept moderate (~10 min) instead of Claude Code's
-  parallel 24h. Want unlimited remote interaction with Codex? Wrap it:
+  so the remote window is kept moderate (~10 min, max 2h) versus Claude
+  Code's parallel channel (default 30min, configurable up to ~24h).
+  Want unlimited remote interaction with Codex? Wrap it:
   `tlive run codex` has no hook and no timeout — the web terminal and IM
   injection drive the session directly.
 - **Do not gate Codex through `PreToolUse`** (as tlive versions before this
@@ -256,7 +257,7 @@ Quote-reply any session message to type into that session.
     // Claude Code's permission hook runs parallel to the local dialog (a long
     // window costs nothing); Codex's blocks the native prompt (serial), so
     // its window is capped at 2h — longer belongs to wrapped mode.
-    "claudeWindowSec": 86000, // default ~24h, max 86200
+    "claudeWindowSec": 1800,  // default 30min, max 86200 (~24h)
     "codexWindowSec": 590     // default ~10min, max 7200 (2h)
   },
   "allowedSenders": [{ "channel": "telegram", "userId": "42" }]  // optional

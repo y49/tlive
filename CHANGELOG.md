@@ -33,6 +33,14 @@ All notable changes to this project will be documented in this file.
 - **Plugin versions bumped to 2.1.0** (both vendors): plugin managers
   may skip cache refresh on an unchanged version. Running Claude Code
   sessions keep the old plugin until `/reload-plugins` or a new session.
+- **PreToolUse gating removed entirely** (no-compat): the `pre-tool-use`
+  shim event and `permissionDecisionOut` (PreToolUse decision wire) are
+  deleted rather than kept for old hand-written configs — replace any
+  such config with the `PermissionRequest` blocks in
+  `docs/manual-hooks.md`. Unknown shim events degrade to `{}`.
+- **Claude default window is now 30min** (user decision; was ~24h):
+  `approvals.claudeWindowSec` still configures up to 86200s (~24h) for
+  away-overnight use.
 
 ### Changed — dual-channel approvals (Claude Code)
 
