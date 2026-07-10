@@ -1,0 +1,7 @@
+{
+  "name": "tlive",
+  "owner": { "name": "tlive" },
+  "plugins": [
+    { "name": "tlive", "source": "./plugins/claude/plugins/tlive", "description": "IM approvals + web terminal for Claude Code / Codex (hooks, skill, /tlive commands)" }
+  ]
+}
