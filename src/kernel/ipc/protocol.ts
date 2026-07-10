@@ -19,7 +19,9 @@ export type IpcRequest =
   // wrappedId: TLIVE_SESSION inherited by the hook process when the agent runs
   // inside `tlive run` — routes hook traffic to that EXACT session card (so
   // several wrapped sessions can share one cwd).
-  | { kind: 'hook.permission.request'; cwd: string; sessionId: string; toolName: string; input: unknown; permissionMode?: string; wrappedId?: string }
+  // timeoutSec: requested pending window (CC permission-request sends ~86000s;
+  // absent = 580s legacy default). The daemon clamps it to 24h.
+  | { kind: 'hook.permission.request'; cwd: string; sessionId: string; toolName: string; input: unknown; permissionMode?: string; wrappedId?: string; timeoutSec?: number }
   | { kind: 'hook.permission.answer'; requestId: string; approved: boolean }
   | { kind: 'hook.continue.request'; cwd: string; sessionId: string; context: string; lastMessage?: string; wrappedId?: string }
   | { kind: 'hook.event'; event: MonitorEvent; wrappedId?: string }

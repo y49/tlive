@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseHookInput, permissionDecisionOut, continueDecisionOut, sessionStartOut } from '../normalizer.js';
+import { parseHookInput, permissionDecisionOut, permissionRequestDecisionOut, continueDecisionOut, sessionStartOut } from '../normalizer.js';
 
 describe('hook normalizer', () => {
   it('parses PreToolUse', () => {
@@ -50,18 +50,37 @@ describe('hook normalizer', () => {
 });
 
 describe('notification notification_type', () => {
-  it('permission_prompt → 盲区提示前缀 + 原文', () => {
-    const n = parseHookInput('notification', { cwd: '/x', session_id: 's', notification_type: 'permission_prompt', message: 'Claude needs your permission to use Bash' });
-    expect(n).toMatchObject({ event: 'attention' });
-    expect((n as any).message).toContain('⏳');
-    expect((n as any).message).toContain('终端');
-    expect((n as any).message).toContain('Claude needs your permission to use Bash');
-  });
   it('idle_prompt / 无 type → 原样 message(现行为不变)', () => {
     const a = parseHookInput('notification', { cwd: '/x', session_id: 's', notification_type: 'idle_prompt', message: 'waiting' });
     expect((a as any).message).toBe('waiting');
     const b = parseHookInput('notification', { cwd: '/x', session_id: 's', message: 'hi' });
     expect((b as any).message).toBe('hi');
+  });
+});
+
+describe('permission-request / permission-denied (CC dual-channel)', () => {
+  it('normalizes permission-request to approval-request', () => {
+    const n = parseHookInput('permission-request', {
+      cwd: '/w', session_id: 's1', tool_name: 'Bash',
+      tool_input: { command: 'rm -rf /' }, permission_mode: 'default',
+    });
+    expect(n).toEqual({
+      event: 'approval-request', cwd: '/w', sessionId: 's1',
+      toolName: 'Bash', input: { command: 'rm -rf /' }, permissionMode: 'default',
+    });
+  });
+  it('normalizes permission-denied to a monitor event carrying toolName', () => {
+    const n = parseHookInput('permission-denied', { cwd: '/w', session_id: 's1', tool_name: 'Bash' });
+    expect(n).toEqual({ event: 'permission-denied', cwd: '/w', sessionId: 's1', toolName: 'Bash' });
+  });
+  it('permissionRequestDecisionOut wire shapes (never auto-allow/deny on defer)', () => {
+    expect(permissionRequestDecisionOut('allow')).toEqual({
+      hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } },
+    });
+    expect(permissionRequestDecisionOut('deny')).toEqual({
+      hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny' } },
+    });
+    expect(permissionRequestDecisionOut('defer')).toEqual({});
   });
 });
 

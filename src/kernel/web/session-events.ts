@@ -45,6 +45,10 @@ export function applyMonitorEvent(sessions: SessionRegistry, evt: MonitorEvent, 
       const count = Math.max(0, (sessions.get(key)?.activeSubagents ?? 0) + evt.delta);
       return { type: 'session-upsert', session: sessions.upsert({ key, cwd: evt.cwd, status: 'active', activeSubagents: count }) };
     }
+    case 'permission-denied':
+      // The user denied in the local terminal; the agent turn continues.
+      // The pending-approval cancel happens in bootstrap — here just reflect activity.
+      return { type: 'session-upsert', session: sessions.upsert({ key, cwd: evt.cwd, status: 'active' }) };
     case 'session-start':
       return { type: 'session-upsert', session: sessions.upsert({ key, cwd: evt.cwd, kind: 'hook', status: 'idle' }) };
     case 'session-end': {

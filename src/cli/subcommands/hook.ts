@@ -12,6 +12,7 @@ import { request } from '../../kernel/ipc/client.js';
 import {
   parseHookInput,
   permissionDecisionOut,
+  permissionRequestDecisionOut,
   continueDecisionOut,
   sessionStartOut,
   type HookEventName,
@@ -44,7 +45,7 @@ async function readStdin(): Promise<unknown> {
   try { return s ? JSON.parse(s) : {}; } catch { return {}; }
 }
 
-const USAGE = 'Usage: tlive hook [--codex] <pre-tool-use|post-tool-use|stop|notification|user-prompt-submit|session-start|session-end|post-tool-use-failure|stop-failure>\n';
+const USAGE = 'Usage: tlive hook [--codex] <permission-request|permission-denied|pre-tool-use|post-tool-use|stop|notification|user-prompt-submit|session-start|session-end|post-tool-use-failure|stop-failure>\n';
 
 export function parseHookArgs(argv: string[]): { event?: HookEventName; vendor: HookVendor } {
   const vendor: HookVendor = argv.includes('--codex') ? 'codex' : 'claude';
@@ -65,6 +66,38 @@ export async function runHook(argv: string[]): Promise<void> {
     // Inherited from a `tlive run` pty (like $TMUX): routes this hook's traffic
     // to that exact session card, so several wrapped sessions can share one cwd.
     const wrappedId = process.env.TLIVE_SESSION;
+
+    if (event === 'permission-request') {
+      // CC dual-channel gating: this hook fires WHILE the native dialog is
+      // interactive — remote card and local prompt race, first answer wins.
+      // Very long window; a local answer releases us via the daemon's cancel
+      // triggers (PostToolUse / PermissionDenied / UserPromptSubmit / Stop).
+      const a = n as Extract<typeof n, { event: 'approval-request' }>;
+      const r = await request(
+        {
+          kind: 'hook.permission.request',
+          cwd: a.cwd,
+          sessionId: a.sessionId,
+          toolName: a.toolName,
+          input: a.input,
+          permissionMode: a.permissionMode,
+          timeoutSec: 86_000,
+          ...(wrappedId ? { wrappedId } : {}),
+        },
+        { timeoutMs: 86_100_000 },
+      );
+      const decision = r.kind === 'hook.permission.result' ? r.decision : 'defer';
+      process.stdout.write(JSON.stringify(permissionRequestDecisionOut(decision)));
+      return;
+    }
+
+    if (event === 'notification' && vendor === 'claude'
+        && (raw as { notification_type?: string }).notification_type === 'permission_prompt') {
+      // The parallel PermissionRequest card is already live when the local
+      // dialog pops — this notification would duplicate every approval card.
+      process.stdout.write('{}');
+      return;
+    }
 
     if (n.event === 'approval-request') {
       const r = await request(

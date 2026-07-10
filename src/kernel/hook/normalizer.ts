@@ -9,7 +9,9 @@ export type HookEventName =
   | 'post-tool-use-failure'
   | 'stop-failure'
   | 'subagent-start'
-  | 'subagent-stop';
+  | 'subagent-stop'
+  | 'permission-request'
+  | 'permission-denied';
 
 export type HookVendor = 'claude' | 'codex';
 
@@ -20,10 +22,11 @@ export type NormalizedHook =
   | { event: 'prompt'; cwd: string; sessionId: string; prompt: string }
   | { event: 'subagent'; cwd: string; sessionId: string; delta: 1 | -1; agentType?: string }
   | { event: 'session-start'; cwd: string; sessionId: string; source?: string }
-  | { event: 'session-end'; cwd: string; sessionId: string; reason?: string };
+  | { event: 'session-end'; cwd: string; sessionId: string; reason?: string }
+  | { event: 'permission-denied'; cwd: string; sessionId: string; toolName: string };
 
 /** Vendor-neutral monitoring subset carried over IPC `hook.event`. */
-export type MonitorEvent = Extract<NormalizedHook, { event: 'activity' | 'attention' | 'prompt' | 'subagent' | 'session-start' | 'session-end' }>;
+export type MonitorEvent = Extract<NormalizedHook, { event: 'activity' | 'attention' | 'prompt' | 'subagent' | 'session-start' | 'session-end' | 'permission-denied' }>;
 
 interface RawHook {
   cwd?: string; session_id?: string; permission_mode?: string;
@@ -41,20 +44,19 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
   const sessionId = r.session_id ?? '';
   switch (event) {
     case 'pre-tool-use':
+    case 'permission-request':
       return { event: 'approval-request', cwd, sessionId, toolName: r.tool_name ?? '(unknown)', input: r.tool_input ?? {}, permissionMode: r.permission_mode };
+    case 'permission-denied':
+      return { event: 'permission-denied', cwd, sessionId, toolName: r.tool_name ?? '(unknown)' };
     case 'post-tool-use':
       return { event: 'activity', cwd, sessionId, toolName: r.tool_name ?? '(unknown)', result: r.tool_response ?? {} };
     case 'stop':
       return { event: 'attention', cwd, sessionId, message: '已完成,回复以续跑', ...(r.last_assistant_message ? { lastMessage: r.last_assistant_message } : {}) };
-    case 'notification': {
-      const base = r.message ?? '需要你处理';
-      // permission_prompt = 本地权限对话已弹出(tlive 已 defer / 未接管)——
-      // 这是离屏用户的盲区时刻,IM 提示"去终端"。其余类型原样透传。
-      const message = r.notification_type === 'permission_prompt'
-        ? `⏳ 终端正在等待你的审批:${base}`
-        : base;
-      return { event: 'attention', cwd, sessionId, message };
-    }
+    case 'notification':
+      // permission_prompt notifications are dropped in the shim (the parallel
+      // PermissionRequest card already covers that moment); everything else
+      // passes through verbatim.
+      return { event: 'attention', cwd, sessionId, message: r.message ?? '需要你处理' };
     case 'user-prompt-submit':
       return { event: 'prompt', cwd, sessionId, prompt: r.prompt ?? '' };
     case 'session-start':
@@ -92,6 +94,16 @@ export function permissionDecisionOut(
   return vendor === 'codex'
     ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask' } }
     : {};
+}
+
+/** CC PermissionRequest decision wire. Runs PARALLEL to the native dialog:
+ *  allow/deny settles the dialog; {} (defer/timeout/error) leaves it to the
+ *  user — never auto-allow, never auto-deny. CC-only (Codex stays PreToolUse). */
+export function permissionRequestDecisionOut(decision: 'allow' | 'deny' | 'defer'): object {
+  if (decision === 'allow' || decision === 'deny') {
+    return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: decision } } };
+  }
+  return {};
 }
 
 export function continueDecisionOut(reply: string | null): object {
