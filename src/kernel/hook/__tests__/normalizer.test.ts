@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseHookInput, permissionDecisionOut, continueDecisionOut } from '../normalizer.js';
+import { parseHookInput, permissionDecisionOut, continueDecisionOut, sessionStartOut } from '../normalizer.js';
 
 describe('hook normalizer', () => {
   it('parses PreToolUse', () => {
@@ -107,5 +107,18 @@ describe('permissionDecisionOut vendor', () => {
     expect(permissionDecisionOut('bogus', 'codex')).toEqual({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask' } });
     // @ts-expect-error
     expect(permissionDecisionOut('bogus', 'claude')).toEqual({});
+  });
+});
+
+describe('sessionStartOut(欢迎提示)', () => {
+  it('claude + IM 未配置 → additionalContext', () => {
+    const o = JSON.parse(sessionStartOut('claude', false));
+    expect(o.hookSpecificOutput.hookEventName).toBe('SessionStart');
+    expect(o.hookSpecificOutput.additionalContext).toContain('帮我配置 tlive');
+  });
+  it('claude + 已配置 → {}', () => expect(sessionStartOut('claude', true)).toBe('{}'));
+  it('codex → 恒 {}(输出 schema deny_unknown_fields)', () => {
+    expect(sessionStartOut('codex', false)).toBe('{}');
+    expect(sessionStartOut('codex', true)).toBe('{}');
   });
 });

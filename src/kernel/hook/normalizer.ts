@@ -89,3 +89,15 @@ export function permissionDecisionOut(
 export function continueDecisionOut(reply: string | null): object {
   return reply ? { decision: 'block', reason: reply } : {};
 }
+
+/** session-start 欢迎提示:CC-only(Codex 输出 schema deny_unknown_fields,恒 '{}'),
+ *  仅在 IM 未配置时通过 additionalContext 引导 agent 主动提示用户配置。 */
+export function sessionStartOut(vendor: HookVendor, imConfigured: boolean): string {
+  if (vendor !== 'claude' || imConfigured) return '{}';
+  return JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'SessionStart',
+      additionalContext: 'tlive 已就绪(hook 审批/监看已挂载),但 IM 通知还没配置 — 用户说"帮我配置 tlive"或运行 /tlive:setup 即可由你引导完成。',
+    },
+  });
+}

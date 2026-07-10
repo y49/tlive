@@ -13,6 +13,7 @@ import {
   parseHookInput,
   permissionDecisionOut,
   continueDecisionOut,
+  sessionStartOut,
   type HookEventName,
   type HookVendor,
   type MonitorEvent,
@@ -122,7 +123,16 @@ export async function runHook(argv: string[]): Promise<void> {
         maybeAutoStartDaemon(home);
       }
     });
-    process.stdout.write('{}');
+    if (event === 'session-start') {
+      let configured = true;
+      try {
+        const cfg = loadConfig(process.env.TLIVE_HOME ?? join(homedir(), '.tlive'));
+        configured = Boolean(cfg.adapters.telegram?.token || cfg.adapters.feishu?.appId);
+      } catch { /* 读不了按已配置,不打扰 */ }
+      process.stdout.write(sessionStartOut(vendor, configured));
+    } else {
+      process.stdout.write('{}');
+    }
   } catch {
     // daemon 不可达/出错 → 安全默认。审批路径按 vendor 让原生工具本地问;其余空输出。
     process.stdout.write(event === 'pre-tool-use' ? JSON.stringify(permissionDecisionOut('defer', vendor)) : '{}');
