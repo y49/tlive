@@ -47,6 +47,20 @@ async function readStdin(): Promise<unknown> {
 
 const USAGE = 'Usage: tlive hook [--codex] <permission-request|permission-denied|pre-tool-use|post-tool-use|stop|notification|user-prompt-submit|session-start|session-end|post-tool-use-failure|stop-failure>\n';
 
+/** 远程审批窗口(秒)+ 对应 shim IPC 死线(毫秒)。clamp 上限对齐插件
+ *  hooks.json 的 vendor timeout(claude 86400 / codex 7320),保证
+ *  vendor 超时永远在 shim IPC 之后才触发:窗口 < ipc(+100s)< vendor。 */
+export function approvalWindow(
+  vendor: HookVendor,
+  approvals?: { claudeWindowSec?: number; codexWindowSec?: number },
+): { timeoutSec: number; ipcMs: number } {
+  const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi);
+  const timeoutSec = vendor === 'codex'
+    ? clamp(approvals?.codexWindowSec ?? 590, 60, 7200)      // 串行:默认 ~10min,上限 2h
+    : clamp(approvals?.claudeWindowSec ?? 86_000, 60, 86_200); // 并行:默认 ~24h
+  return { timeoutSec, ipcMs: (timeoutSec + 100) * 1000 };
+}
+
 export function parseHookArgs(argv: string[]): { event?: HookEventName; vendor: HookVendor } {
   const vendor: HookVendor = argv.includes('--codex') ? 'codex' : 'claude';
   const event = argv.find((a) => !a.startsWith('--')) as HookEventName | undefined;
@@ -72,9 +86,10 @@ export async function runHook(argv: string[]): Promise<void> {
       // 本地答掉由 daemon 的 cancel 触发器(PostToolUse/UserPromptSubmit/Stop)
       // 释放本进程。Codex:hook 串行阻塞原生提示(orchestrator.rs 实证),
       // 只给中等窗;超时输出 {} → Codex 落回原生审批流(fail-safe)。
-      const win = vendor === 'codex'
-        ? { timeoutSec: 590, ipcMs: 600_000 }   // < hooks.json 660s
-        : { timeoutSec: 86_000, ipcMs: 86_100_000 }; // < hooks.json 86400s
+      const approvals = (() => {
+        try { return loadConfig(process.env.TLIVE_HOME ?? join(homedir(), '.tlive')).approvals; } catch { return undefined; }
+      })();
+      const win = approvalWindow(vendor, approvals);
       const a = n as Extract<typeof n, { event: 'approval-request' }>;
       const r = await request(
         {
@@ -85,6 +100,7 @@ export async function runHook(argv: string[]): Promise<void> {
           input: a.input,
           permissionMode: a.permissionMode,
           timeoutSec: win.timeoutSec,
+          ...(a.agentId ? { agentId: a.agentId } : {}),
           ...(wrappedId ? { wrappedId } : {}),
         },
         { timeoutMs: win.ipcMs },

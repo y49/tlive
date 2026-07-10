@@ -16,11 +16,21 @@ export interface WebConfig {
 }
 export interface PolicyConfig { autoAllow?: string[]; autoDeny?: string[]; ask?: string[] }
 
+/** Remote-approval windows (seconds). The two vendors have different hook
+ *  timing semantics, so the windows are configured separately:
+ *  - claude: the PermissionRequest hook runs PARALLEL to the local dialog —
+ *    a long window costs nothing. Default 86000 (~24h), clamped to 86200.
+ *  - codex: the PermissionRequest hook BLOCKS the native prompt (serial) —
+ *    the window freezes the local terminal. Default 590 (~10min), clamped
+ *    to 7200 (2h); anything longer belongs to wrapped mode (`tlive run`). */
+export interface ApprovalsConfig { claudeWindowSec?: number; codexWindowSec?: number }
+
 export interface KernelConfig {
   allowedSenders: Array<{ channel: 'telegram' | 'feishu'; userId: string }>;
   adapters: AdapterCreds;
   web?: WebConfig;
   policy?: PolicyConfig;
+  approvals?: ApprovalsConfig;
   daemon?: { socketPath?: string; healthPort?: number; autoStart?: boolean };
 }
 

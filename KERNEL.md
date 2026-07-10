@@ -67,7 +67,7 @@ type HookEventName = 'permission-request' | 'permission-denied'
                    | 'subagent-start' | 'subagent-stop';
 
 type NormalizedHook =
-  | { event: 'approval-request'; cwd; sessionId; toolName; input; permissionMode? } // PermissionRequest (CC) / PreToolUse (Codex)
+  | { event: 'approval-request'; cwd; sessionId; toolName; input; permissionMode? } // PermissionRequest(两家;pre-tool-use 仅老配置兼容)
   | { event: 'activity';         cwd; sessionId; toolName; result }                // PostToolUse
   | { event: 'attention';        cwd; sessionId; message; lastMessage? }           // Stop / Notification
   | { event: 'prompt';           cwd; sessionId; prompt }                          // UserPromptSubmit
@@ -103,14 +103,16 @@ PermissionDenied(同 key+tool)只覆盖规则型拒绝——真机实测:用户�
 "No" **不会** fire 它,本地拒绝靠 UserPromptSubmit/Stop 扫尾(最晚 turn 结束
 时释放)。Codex 的 `run_permission_request_hooks` 在源码里与原生
 提示严格串行(先 hook 后提示,同函数内 `.await`),长窗会冻结终端,故 Codex
-保持 `PreToolUse` 600s 中等窗;无限远程用 wrapped(`tlive run codex`)。
+的 PermissionRequest 用中等窗(默认 ~600s,详见下方 vendor 差异节);无限
+远程用 wrapped(`tlive run codex`)。
 `notification` 的 `permission_prompt` 类型在 CC shim 直接丢弃(并行卡已覆盖那
 个时刻,再发提醒就是每张卡都重复一条)。
 
 **Codex 是这套模式的实例**(打包进 `plugins/codex/plugins/tlive/hooks/hooks.json`
 的 hooks 块,schema 与 Claude `settings.json` 的 `hooks` 块同构;shim 靠
-`tlive hook --codex <event>` 的 `--codex` flag 选 vendor)。主要输出差异体现在
-`permissionDecisionOut`(deny 带 reason、defer→ask);另有装机层(hooks.json
+`tlive hook --codex <event>` 的 `--codex` flag 选 vendor)。gating 输出两家共用
+`permissionRequestDecisionOut`;`permissionDecisionOut`(PreToolUse wire,deny
+带 reason、defer→ask)仅剩老配置兼容用途。另有装机层(hooks.json
 的事件集,无 Notification/SessionEnd)与超时层(`hook.ts` shim 死线兜 Codex
 fail-open)的差异:
 

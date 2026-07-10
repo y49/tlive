@@ -16,8 +16,10 @@ export type HookEventName =
 export type HookVendor = 'claude' | 'codex';
 
 export type NormalizedHook =
-  | { event: 'approval-request'; cwd: string; sessionId: string; toolName: string; input: unknown; permissionMode?: string }
-  | { event: 'activity'; cwd: string; sessionId: string; toolName: string; result: unknown }
+  // agentId:子 agent 的 hook 带 agent_id(两家都有)——用于把"本地答掉"精确
+  // 关联回同一个 agent 的挂起审批,同 key 同 tool 的其他 agent 的卡不受影响。
+  | { event: 'approval-request'; cwd: string; sessionId: string; toolName: string; input: unknown; permissionMode?: string; agentId?: string }
+  | { event: 'activity'; cwd: string; sessionId: string; toolName: string; result: unknown; agentId?: string }
   | { event: 'attention'; cwd: string; sessionId: string; message: string; lastMessage?: string }
   | { event: 'prompt'; cwd: string; sessionId: string; prompt: string }
   | { event: 'subagent'; cwd: string; sessionId: string; delta: 1 | -1; agentType?: string }
@@ -36,6 +38,7 @@ interface RawHook {
   tool_error?: unknown;
   error_type?: string;
   agent_type?: string;
+  agent_id?: string;
 }
 
 export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHook {
@@ -45,11 +48,11 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
   switch (event) {
     case 'pre-tool-use':
     case 'permission-request':
-      return { event: 'approval-request', cwd, sessionId, toolName: r.tool_name ?? '(unknown)', input: r.tool_input ?? {}, permissionMode: r.permission_mode };
+      return { event: 'approval-request', cwd, sessionId, toolName: r.tool_name ?? '(unknown)', input: r.tool_input ?? {}, permissionMode: r.permission_mode, ...(r.agent_id ? { agentId: r.agent_id } : {}) };
     case 'permission-denied':
       return { event: 'permission-denied', cwd, sessionId, toolName: r.tool_name ?? '(unknown)' };
     case 'post-tool-use':
-      return { event: 'activity', cwd, sessionId, toolName: r.tool_name ?? '(unknown)', result: r.tool_response ?? {} };
+      return { event: 'activity', cwd, sessionId, toolName: r.tool_name ?? '(unknown)', result: r.tool_response ?? {}, ...(r.agent_id ? { agentId: r.agent_id } : {}) };
     case 'stop':
       return { event: 'attention', cwd, sessionId, message: '已完成,回复以续跑', ...(r.last_assistant_message ? { lastMessage: r.last_assistant_message } : {}) };
     case 'notification':

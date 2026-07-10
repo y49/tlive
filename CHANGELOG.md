@@ -21,6 +21,18 @@ All notable changes to this project will be documented in this file.
 - **Re-trust required**: the Codex plugin's hook set changed, so trust
   keys change — re-run `tlive setup --hooks-only --codex` (trust is
   granted automatically via `hooks/list`).
+- **Configurable approval windows** (`approvals.claudeWindowSec` /
+  `codexWindowSec`): defaults 86000s (~24h, parallel) / 590s (~10min,
+  serial), clamped at 86200s / 7200s (2h). The Codex plugin's vendor hook
+  timeout is 7320s so a configured 2h window still resolves inside it.
+- **Precise local-answer cancellation**: pending approvals now carry
+  sessionId/agentId; a local answer only releases the answering agent's
+  own card (matchAgent tri-state: main-session / specific agent /
+  sweep-all for prompt/stop) — sibling sub-agents requesting the same
+  tool keep their pending cards.
+- **Plugin versions bumped to 2.1.0** (both vendors): plugin managers
+  may skip cache refresh on an unchanged version. Running Claude Code
+  sessions keep the old plugin until `/reload-plugins` or a new session.
 
 ### Changed — dual-channel approvals (Claude Code)
 
@@ -41,11 +53,12 @@ All notable changes to this project will be documented in this file.
 - **`permission_prompt` notifications dropped** (and their `⏳` IM hint
   removed): with parallel gating the card is already live when the local
   dialog pops, so the hint would duplicate every approval.
-- **Codex intentionally stays on `PreToolUse` (600s)**: Codex's
-  permission hook blocks its native prompt (confirmed in Codex source —
-  `start_approval_async` runs strictly after the hook `.await`), so a
-  long window would freeze the terminal. Unlimited remote interaction
-  with Codex = wrapped mode (`tlive run codex`).
+- **Codex also gates via `PermissionRequest`, but with a moderate window**
+  (see the P0 entry above): Codex's permission hook blocks its native
+  prompt (confirmed in Codex source — `start_approval_async` runs
+  strictly after the hook `.await`), so a 24h window would freeze the
+  terminal. Unlimited remote interaction with Codex = wrapped mode
+  (`tlive run codex`).
 
 ### Fixed — approval/continue reachability
 
@@ -151,7 +164,8 @@ All notable changes to this project will be documented in this file.
   button (IM + web; in-memory, cleared on restart); `/trust on|off` pause
   switch. **Never auto-denies**; timeout → defer → local terminal prompt.
 - Approval cards render diffs/commands with risky-pattern flags and secret
-  masking; PreToolUse hook timeout raised to 600s (async-approval window).
+  masking. (Gating hooks and their windows later moved to
+  `PermissionRequest` — see the dual-channel entries above.)
 - Cards are **edited to their outcome** (✅/❌/⏳) once resolved — no zombie
   buttons. All IM messages carry a session tag: `[⌨ label]` wrapped /
   `[label]` hooks-only.
@@ -178,8 +192,9 @@ All notable changes to this project will be documented in this file.
   writes `~/.codex/hooks.json` (isomorphic to Claude Code's
   `settings.json` hooks block) alongside the existing Claude install; the
   shim vendor-switches on `tlive hook --codex <event>`.
-- Wired events: `PreToolUse` (approval, 600s timeout), `Stop` (resume,
-  180s), `PostToolUse`, `UserPromptSubmit`, `SessionStart`. Codex has no
+- Wired events: `PermissionRequest` (approval; originally `PreToolUse`,
+  migrated — see the P0 entry above), `Stop` (resume, 180s),
+  `PostToolUse`, `UserPromptSubmit`, `SessionStart`. Codex has no
   `Notification` / `SessionEnd` hooks, so those two aren't installed for it.
 - Vendor-aware decision encoding: Codex `defer` serializes to
   `{hookSpecificOutput:{permissionDecision:'ask'}}` instead of Claude's `{}`
@@ -246,14 +261,11 @@ All notable changes to this project will be documented in this file.
   `allowedSenders` adds per-user hardening.
 - Web: single token (0600) gates every HTTP/WS request; first `?token=`
   sets an httpOnly cookie so the token leaves the URL.
-- **Codex's hook timeout fails open** (the tool call runs) rather than
-  falling back to a local prompt like Claude Code's does. Mitigation: the
-  `PreToolUse` shim self-deadlines at ~590s, inside the 600s Codex is
-  configured to wait, so tlive always answers before Codex's own fail-open
-  can trigger; an unanswered request comes back as `ask` (Codex's native
-  prompt), never an auto-allow. If the shim process crashes outright rather
-  than timing out, Codex still fails open after 600s — that residual gap
-  isn't closable from a hook.
+- ~~Codex's `PreToolUse` timeout fails open; mitigated by a ~590s shim
+  self-deadline~~ — superseded: Codex gating moved to `PermissionRequest`,
+  which is fail-safe on timeout/error/empty output (falls back to the
+  native approval flow). See the P0 entry above; the deadline race no
+  longer exists.
 
 ---
 

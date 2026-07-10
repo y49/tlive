@@ -20,7 +20,8 @@ describe('plugins/codex marketplace', () => {
     expect(Object.keys(h).sort()).toEqual(['PermissionRequest','PostToolUse','SessionStart','Stop','UserPromptSubmit'].sort());
     // codex ≥0.143 的 PreToolUse 拒绝 ask/裸 allow 且 fail-open —— gating 必须走 PermissionRequest
     expect(h.PreToolUse).toBeUndefined();
-    expect(h.PermissionRequest[0].hooks[0]).toMatchObject({ command: 'tlive hook --codex permission-request', timeout: 660, async: false });
+    // vendor timeout 7320 > shim ipc max 7300 > window clamp max 7200(2h)
+    expect(h.PermissionRequest[0].hooks[0]).toMatchObject({ command: 'tlive hook --codex permission-request', timeout: 7320, async: false });
     expect(h.Stop[0].hooks[0].timeout).toBeGreaterThanOrEqual(175);
     expect(h.SessionStart[0].matcher).toBe('startup|resume|clear|compact');
     for (const ev of Object.keys(h)) for (const g of h[ev]) for (const k of g.hooks) expect(k.async).toBe(false);

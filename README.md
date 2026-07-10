@@ -251,6 +251,14 @@ Quote-reply any session message to type into that session.
   "daemon": {
     "autoStart": true         // default true; false disables session-start lazy-start
   },
+  "approvals": {
+    // remote-approval windows in seconds; the vendors differ on purpose:
+    // Claude Code's permission hook runs parallel to the local dialog (a long
+    // window costs nothing); Codex's blocks the native prompt (serial), so
+    // its window is capped at 2h — longer belongs to wrapped mode.
+    "claudeWindowSec": 86000, // default ~24h, max 86200
+    "codexWindowSec": 590     // default ~10min, max 7200 (2h)
+  },
   "allowedSenders": [{ "channel": "telegram", "userId": "42" }]  // optional
 }
 ```

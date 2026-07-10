@@ -26,13 +26,26 @@ export interface PermissionRouterDeps {
 /** Unanswered request auto-defers after this (s). Must be < shim IPC (590s) < hook timeout (600s). */
 const PERMISSION_TIMEOUT_SEC = 580;
 
-interface PendingEntry { resolve: (d: Decision) => void; key: string; toolName: string }
+interface PendingEntry {
+  resolve: (d: Decision) => void;
+  key: string;
+  toolName: string;
+  sessionId?: string;
+  agentId?: string;
+}
+
+/** 关联字段匹配:双方都带且非空才比较;任一侧缺失 = 通配(保守,宁可多释放
+ *  一张卡——释放只是 {} pass-through,绝不 auto-allow)。 */
+function fieldMatches(a: string | undefined, b: string | undefined): boolean {
+  if (!a || !b) return true;
+  return a === b;
+}
 
 export class PermissionRouter {
   private pending = new Map<string, PendingEntry>();
   constructor(private deps: PermissionRouterDeps) {}
 
-  async requestPermission(opts: { cwd: string; toolName: string; input: unknown; permissionMode?: string; timeoutSec?: number }): Promise<{ decision: Decision }> {
+  async requestPermission(opts: { cwd: string; toolName: string; input: unknown; permissionMode?: string; timeoutSec?: number; sessionId?: string; agentId?: string }): Promise<{ decision: Decision }> {
     // Policy first: an auto-allow (read-only / trust switch) skips the card even when muted.
     const pd = this.deps.policyDecide({ toolName: opts.toolName, input: opts.input, permissionMode: opts.permissionMode });
     if (pd.decision === 'allow') return { decision: 'allow' };
@@ -45,7 +58,13 @@ export class PermissionRouter {
     const requestId = randomUUID();
     const { title, body } = this.deps.renderCard({ toolName: opts.toolName, input: opts.input });
     const decision = await new Promise<Decision>((resolve) => {
-      this.pending.set(requestId, { resolve, key: opts.cwd, toolName: opts.toolName });
+      this.pending.set(requestId, {
+        resolve,
+        key: opts.cwd,
+        toolName: opts.toolName,
+        ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+        ...(opts.agentId ? { agentId: opts.agentId } : {}),
+      });
       setTimeout(() => {
         if (this.pending.has(requestId)) { this.pending.delete(requestId); resolve('defer'); }
       }, (opts.timeoutSec ?? PERMISSION_TIMEOUT_SEC) * 1000).unref();
@@ -68,12 +87,18 @@ export class PermissionRouter {
 
   /** The user answered in the local terminal (PostToolUse / PermissionDenied /
    *  UserPromptSubmit / Stop observed) — release matching pending shims.
-   *  `toolName` omitted = every pending request for the key. Never auto-allows. */
-  cancel(opts: { key: string; toolName?: string }): number {
+   *  `toolName` omitted = every pending request for the key.
+   *  sessionId:双方都带才比较,缺失 = 通配。
+   *  matchAgent 三态:undefined = 任意 agent(prompt/stop 清场);null = 仅主
+   *  会话的卡(回答者是主会话,不得误放子 agent 的同 tool 卡);字符串 = 仅该
+   *  agent 的卡。Never auto-allows —— 释放只是 {} pass-through。 */
+  cancel(opts: { key: string; toolName?: string; sessionId?: string; matchAgent?: string | null }): number {
     let n = 0;
     for (const [rid, e] of [...this.pending]) {
       if (e.key !== opts.key) continue;
       if (opts.toolName !== undefined && e.toolName !== opts.toolName) continue;
+      if (!fieldMatches(e.sessionId, opts.sessionId)) continue;
+      if (opts.matchAgent !== undefined && e.agentId !== (opts.matchAgent ?? undefined)) continue;
       this.pending.delete(rid);
       e.resolve('local'); // onResolved fires from requestPermission's own path
       n++;

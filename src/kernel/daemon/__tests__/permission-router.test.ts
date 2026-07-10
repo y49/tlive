@@ -142,6 +142,43 @@ describe('PermissionRouter web-only gate + cancel + per-request timeout', () => 
     expect((await p2).decision).toBe('local');
   });
 
+  it('cancel does not cross sessions or sub-agents sharing key+tool', async () => {
+    // 两个子 agent(同 key 同 tool 不同 agentId)各有一张 pending 卡:
+    // 本地答掉 agent A 的对话框,不得误伤 agent B 的卡。
+    const r = new PermissionRouter(base({ configuredChats: () => [], hasWebClients: () => true }));
+    const pA = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, sessionId: 's1', agentId: 'agentA' });
+    const pB = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, sessionId: 's1', agentId: 'agentB' });
+    await new Promise((res) => setImmediate(res));
+    expect(r.cancel({ key: '/w', toolName: 'Bash', sessionId: 's1', matchAgent: 'agentA' })).toBe(1);
+    expect((await pA).decision).toBe('local');
+    // agent B 的仍 pending —— 用无过滤 cancel 清场收尾
+    expect(r.cancel({ key: '/w' })).toBe(1);
+    expect((await pB).decision).toBe('local');
+  });
+
+  it('matchAgent tri-state: null = main-session only, undefined = any, string = that agent', async () => {
+    const r = new PermissionRouter(base({ configuredChats: () => [], hasWebClients: () => true }));
+    const pMain = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {} }); // 主会话卡
+    const pSub = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, agentId: 'agentA' }); // 子 agent 卡
+    await new Promise((res) => setImmediate(res));
+    // 子 agent 的本地回答不得释放主会话卡;主会话回答不得释放子 agent 卡
+    expect(r.cancel({ key: '/w', toolName: 'Bash', matchAgent: 'agentB' })).toBe(0);
+    expect(r.cancel({ key: '/w', toolName: 'Bash', matchAgent: null })).toBe(1); // 只放主卡
+    expect((await pMain).decision).toBe('local');
+    // 清场(matchAgent 缺省)扫掉剩下的子 agent 卡
+    expect(r.cancel({ key: '/w' })).toBe(1);
+    expect((await pSub).decision).toBe('local');
+  });
+
+  it('different sessionId on the same cwd does not cancel', async () => {
+    const r = new PermissionRouter(base({ configuredChats: () => [], hasWebClients: () => true }));
+    const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, sessionId: 's1' });
+    await new Promise((res) => setImmediate(res));
+    expect(r.cancel({ key: '/w', toolName: 'Bash', sessionId: 's2' })).toBe(0);
+    r.cancel({ key: '/w' });
+    await p;
+  });
+
   it('honors per-request timeoutSec', async () => {
     vi.useFakeTimers();
     try {

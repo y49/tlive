@@ -261,7 +261,13 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           return;
         case 'hook.permission.request': {
           const key = resolveKey(req.cwd, req.wrappedId);
-          const r = await permissionRouter.requestPermission({ cwd: key, toolName: req.toolName, input: req.input, permissionMode: req.permissionMode, timeoutSec: clampPermissionTimeout(req.timeoutSec) });
+          const r = await permissionRouter.requestPermission({
+            cwd: key, toolName: req.toolName, input: req.input,
+            permissionMode: req.permissionMode,
+            timeoutSec: clampPermissionTimeout(req.timeoutSec),
+            ...(req.sessionId ? { sessionId: req.sessionId } : {}),
+            ...(req.agentId ? { agentId: req.agentId } : {}),
+          });
           // 'local' (answered in the terminal) maps to 'defer' on the wire: the shim
           // outputs pass-through {} — a no-op for a dialog that is already gone.
           reply({ kind: 'hook.permission.result', decision: r.decision === 'local' ? 'defer' : r.decision });
@@ -305,8 +311,17 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // Local terminal answered a permission dialog → release the parallel
           // remote card (CC dual-channel: PostToolUse = approved locally,
           // PermissionDenied = denied locally, a new prompt = dialog long gone).
-          if (ev.event === 'activity' || ev.event === 'permission-denied') permissionRouter.cancel({ key, toolName: ev.toolName });
-          else if (ev.event === 'prompt') permissionRouter.cancel({ key });
+          // sessionId/agentId narrow the match so sibling sub-agents sharing
+          // key+tool keep their own pending cards.
+          if (ev.event === 'activity') {
+            // 精确关联:回答者身份(agent_id 缺失 = 主会话)必须与 pending 一致
+            permissionRouter.cancel({ key, toolName: ev.toolName, sessionId: ev.sessionId, matchAgent: ev.agentId ?? null });
+          } else if (ev.event === 'permission-denied') {
+            permissionRouter.cancel({ key, toolName: ev.toolName, sessionId: ev.sessionId, matchAgent: null });
+          } else if (ev.event === 'prompt') {
+            // 清场:用户新输入意味着上一轮对话框(含子 agent 的)都没了
+            permissionRouter.cancel({ key, sessionId: ev.sessionId });
+          }
           events.broadcast(applyMonitorEvent(sessions, ev, key));
           reply({ kind: 'ack' });
           return;
