@@ -7,7 +7,9 @@ export type HookEventName =
   | 'session-start'
   | 'session-end'
   | 'post-tool-use-failure'
-  | 'stop-failure';
+  | 'stop-failure'
+  | 'subagent-start'
+  | 'subagent-stop';
 
 export type HookVendor = 'claude' | 'codex';
 
@@ -16,11 +18,12 @@ export type NormalizedHook =
   | { event: 'activity'; cwd: string; sessionId: string; toolName: string; result: unknown }
   | { event: 'attention'; cwd: string; sessionId: string; message: string; lastMessage?: string }
   | { event: 'prompt'; cwd: string; sessionId: string; prompt: string }
+  | { event: 'subagent'; cwd: string; sessionId: string; delta: 1 | -1; agentType?: string }
   | { event: 'session-start'; cwd: string; sessionId: string; source?: string }
   | { event: 'session-end'; cwd: string; sessionId: string; reason?: string };
 
 /** Vendor-neutral monitoring subset carried over IPC `hook.event`. */
-export type MonitorEvent = Extract<NormalizedHook, { event: 'activity' | 'attention' | 'prompt' | 'session-start' | 'session-end' }>;
+export type MonitorEvent = Extract<NormalizedHook, { event: 'activity' | 'attention' | 'prompt' | 'subagent' | 'session-start' | 'session-end' }>;
 
 interface RawHook {
   cwd?: string; session_id?: string; permission_mode?: string;
@@ -29,6 +32,7 @@ interface RawHook {
   notification_type?: string;
   tool_error?: unknown;
   error_type?: string;
+  agent_type?: string;
 }
 
 export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHook {
@@ -63,6 +67,10 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
     }
     case 'stop-failure':
       return { event: 'attention', cwd, sessionId, message: `❌ 会话出错: ${r.error_type ?? 'unknown'}` };
+    case 'subagent-start':
+      return { event: 'subagent', cwd, sessionId, delta: 1, ...(r.agent_type ? { agentType: r.agent_type } : {}) };
+    case 'subagent-stop':
+      return { event: 'subagent', cwd, sessionId, delta: -1, ...(r.agent_type ? { agentType: r.agent_type } : {}) };
   }
 }
 

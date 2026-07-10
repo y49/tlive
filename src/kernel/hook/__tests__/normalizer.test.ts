@@ -122,3 +122,19 @@ describe('sessionStartOut(欢迎提示)', () => {
     expect(sessionStartOut('codex', true)).toBe('{}');
   });
 });
+
+describe('subagent 监看事件', () => {
+  it('subagent-start → delta 1 + agentType', () => {
+    const n = parseHookInput('subagent-start', { cwd: '/x', session_id: 's', agent_type: 'Explore' });
+    expect(n).toEqual({ event: 'subagent', cwd: '/x', sessionId: 's', delta: 1, agentType: 'Explore' });
+  });
+  it('subagent-stop → delta -1', () => {
+    const n = parseHookInput('subagent-stop', { cwd: '/x', session_id: 's', agent_type: 'general-purpose' });
+    expect(n).toMatchObject({ event: 'subagent', delta: -1, agentType: 'general-purpose' });
+  });
+  it('无 agent_type → 不带 agentType 字段', () => {
+    const n = parseHookInput('subagent-start', { cwd: '/x', session_id: 's' }) as any;
+    expect(n.agentType).toBeUndefined();
+    expect(n.delta).toBe(1);
+  });
+});

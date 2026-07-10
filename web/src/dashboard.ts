@@ -15,6 +15,7 @@ interface SessionView {
   id: string; label: string; cwd: string;
   kind: 'wrapped' | 'hook'; status: Status;
   lastActivityAt: number; startedAt?: number; lastMessage?: string; lastPrompt?: string;
+  activeSubagents?: number;
   pending?: Pending; continueId?: string; muted: boolean; sockPath?: string; pid?: number;
 }
 type Frame =
@@ -264,6 +265,13 @@ function card(s: SessionView): HTMLElement {
     const m = document.createElement('div'); m.className = 'msg';
     m.innerHTML = s.lastMessage ? `<span class="k">last:</span> ${esc(s.lastMessage)}` : `<span class="k">prompt:</span> ${esc(s.lastPrompt!)}`;
     foot.appendChild(m);
+  }
+
+  // subagent 计数(极简功能性徽章;视觉打磨留样式阶段)
+  if (s.activeSubagents && s.activeSubagents > 0) {
+    const sub = document.createElement('div'); sub.className = 'msg';
+    sub.textContent = `🤖 ${s.activeSubagents} subagent${s.activeSubagents > 1 ? 's' : ''} running`;
+    foot.appendChild(sub);
   }
 
   const actions = document.createElement('div'); actions.className = 'actions';

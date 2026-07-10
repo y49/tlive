@@ -40,6 +40,11 @@ export function applyMonitorEvent(sessions: SessionRegistry, evt: MonitorEvent, 
       return { type: 'session-upsert', session: sessions.upsert({ key, cwd: evt.cwd, status: 'waiting-input', lastMessage: evt.lastMessage ?? evt.message }) };
     case 'prompt':
       return { type: 'session-upsert', session: sessions.upsert({ key, cwd: evt.cwd, status: 'active', lastPrompt: evt.prompt }) };
+    case 'subagent': {
+      // 计数型:prev + delta,clamp ≥0(SubagentStart/Stop 若不成对也不会变负)。
+      const count = Math.max(0, (sessions.get(key)?.activeSubagents ?? 0) + evt.delta);
+      return { type: 'session-upsert', session: sessions.upsert({ key, cwd: evt.cwd, status: 'active', activeSubagents: count }) };
+    }
     case 'session-start':
       return { type: 'session-upsert', session: sessions.upsert({ key, cwd: evt.cwd, kind: 'hook', status: 'idle' }) };
     case 'session-end': {

@@ -19,13 +19,15 @@ describe('plugins/claude marketplace', () => {
     expect(p.name).toBe('tlive');
     expect(typeof p.version).toBe('string');
   });
-  it('hooks.json: 与直写同集的 9 事件 + 关键 timeout', () => {
+  it('hooks.json: 11 事件(含 Subagent 监看)+ 关键 timeout', () => {
     const h = read(join(P, 'hooks', 'hooks.json')).hooks;
-    expect(Object.keys(h).sort()).toEqual(['Notification','PostToolUse','PostToolUseFailure','PreToolUse','SessionEnd','SessionStart','Stop','StopFailure','UserPromptSubmit'].sort());
+    expect(Object.keys(h).sort()).toEqual(['Notification','PostToolUse','PostToolUseFailure','PreToolUse','SessionEnd','SessionStart','Stop','StopFailure','SubagentStart','SubagentStop','UserPromptSubmit'].sort());
     expect(h.PreToolUse[0].matcher).toBe('*');
     expect(h.PreToolUse[0].hooks[0]).toMatchObject({ type: 'command', command: 'tlive hook pre-tool-use', timeout: 600 });
     expect(h.Stop[0].hooks[0].timeout).toBe(180);
     expect(h.StopFailure[0].hooks[0].command).toBe('tlive hook stop-failure');
+    expect(h.SubagentStart[0].hooks[0].command).toBe('tlive hook subagent-start');
+    expect(h.SubagentStop[0].hooks[0].command).toBe('tlive hook subagent-stop');
   });
   it('commands: url.md / status.md 存在且是 md 带 bash 调用', () => {
     for (const f of ['url.md', 'status.md']) {

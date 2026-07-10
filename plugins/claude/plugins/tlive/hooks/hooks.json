@@ -8,6 +8,8 @@
     "SessionStart":      [{ "hooks": [{ "type": "command", "command": "tlive hook session-start" }] }],
     "SessionEnd":        [{ "hooks": [{ "type": "command", "command": "tlive hook session-end" }] }],
     "PostToolUseFailure":[{ "matcher": "*", "hooks": [{ "type": "command", "command": "tlive hook post-tool-use-failure" }] }],
-    "StopFailure":       [{ "hooks": [{ "type": "command", "command": "tlive hook stop-failure" }] }]
+    "StopFailure":       [{ "hooks": [{ "type": "command", "command": "tlive hook stop-failure" }] }],
+    "SubagentStart":     [{ "hooks": [{ "type": "command", "command": "tlive hook subagent-start" }] }],
+    "SubagentStop":      [{ "hooks": [{ "type": "command", "command": "tlive hook subagent-stop" }] }]
   }
 }

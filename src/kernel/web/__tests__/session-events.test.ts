@@ -96,3 +96,22 @@ describe('sweepDeadSessions', () => {
     expect(r.get('/hook')).toBeDefined();
   });
 });
+
+describe('applyMonitorEvent subagent 计数', () => {
+  it('start 累加、stop 递减、clamp ≥0', () => {
+    const reg = new SessionRegistry();
+    const key = '/proj';
+    const sub = (delta: 1 | -1) => applyMonitorEvent(reg, { event: 'subagent', cwd: key, sessionId: 's', delta } as any, key);
+    expect((sub(1).session as any).activeSubagents).toBe(1);
+    expect((sub(1).session as any).activeSubagents).toBe(2);
+    expect((sub(-1).session as any).activeSubagents).toBe(1);
+    expect((sub(-1).session as any).activeSubagents).toBe(0);
+    expect((sub(-1).session as any).activeSubagents).toBe(0); // 不成对也不变负
+  });
+  it('subagent 事件把会话标 active', () => {
+    const reg = new SessionRegistry();
+    const f = applyMonitorEvent(reg, { event: 'subagent', cwd: '/p', sessionId: 's', delta: 1 } as any, '/p');
+    expect(f.type).toBe('session-upsert');
+    if (f.type === 'session-upsert') expect(f.session.status).toBe('active');
+  });
+});

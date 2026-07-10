@@ -29,6 +29,8 @@ export interface SessionView {
   lastActivityAt: number;
   lastMessage?: string;
   lastPrompt?: string;
+  /** Count of currently-running subagents (SubagentStart/Stop) — "is it actually working". */
+  activeSubagents?: number;
   pending?: PendingApproval;
   /** Live Stop-hook continue requestId while status is waiting-input (reply target). */
   continueId?: string;
@@ -48,6 +50,8 @@ export interface UpsertPatch {
   lastActivityAt?: number;
   lastMessage?: string;
   lastPrompt?: string;
+  /** Absolute count (applyMonitorEvent computes prev+delta). undefined → leave unchanged. */
+  activeSubagents?: number;
   /** object → set; null → clear; undefined → leave unchanged. */
   pending?: PendingApproval | null;
   /** string → set; null → clear; undefined → leave unchanged. */
@@ -78,6 +82,8 @@ export class SessionRegistry {
     if (lastMessage !== undefined) next.lastMessage = lastMessage;
     const lastPrompt = patch.lastPrompt ?? prev?.lastPrompt;
     if (lastPrompt !== undefined) next.lastPrompt = lastPrompt;
+    const activeSubagents = patch.activeSubagents ?? prev?.activeSubagents;
+    if (activeSubagents !== undefined) next.activeSubagents = activeSubagents;
     const sockPath = patch.sockPath ?? prev?.sockPath;
     if (sockPath !== undefined) next.sockPath = sockPath;
     const pid = patch.pid ?? prev?.pid;
