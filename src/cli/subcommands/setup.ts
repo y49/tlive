@@ -63,16 +63,21 @@ export async function runSetup(argv: string[]): Promise<void> {
   process.stdout.write('tlive setup — interactive wizard\n');
   process.stdout.write('(press Enter to keep existing values; Ctrl-C to abort)\n\n');
 
+  // 管道/脚本喂入时 stdin EOF 会自动关闭 readline,之后的 question 抛
+  // ERR_USE_AFTER_CLOSE —— 视作"回车跳过",让非交互跑法也能走完并写出 config。
+  const question = async (prompt: string): Promise<string> => {
+    try { return (await rl.question(prompt)).trim(); } catch { return ''; }
+  };
   const ask = async (q: string, current?: string): Promise<string> => {
     const display = current ? `${q} [${current.slice(0, 8)}...]: ` : `${q}: `;
-    const ans = (await rl.question(display)).trim();
+    const ans = await question(display);
     return ans || current || '';
   };
 
   const detected: VendorSelection = { claude: commandOnPath('claude'), codex: commandOnPath('codex') };
   let sel: VendorSelection = detected;
   if (detected.claude && detected.codex) {
-    const ans = await rl.question('装到哪 [1]Claude [2]Codex [3]都装(默认): ');
+    const ans = await question('装到哪 [1]Claude [2]Codex [3]都装(默认): ');
     sel = resolveVendorSelection(detected, ans);
   } else if (detected.claude || detected.codex) {
     process.stdout.write(`检测到 ${detected.claude ? 'Claude' : 'Codex'},直接安装插件。\n`);
@@ -96,7 +101,7 @@ export async function runSetup(argv: string[]): Promise<void> {
   const fsSecret = fsAppId ? await ask('Feishu appSecret', cfg.adapters.feishu?.appSecret) : '';
   if (fsAppId && fsSecret) cfg.adapters.feishu = { appId: fsAppId, appSecret: fsSecret };
 
-  rl.close();
+  try { rl.close(); } catch { /* already closed by piped-EOF */ }
   writeFileSync(configPath, JSON.stringify(cfg, null, 2));
   process.stdout.write(`\nWritten ${configPath}\nNext: tlive start\n`);
 }
