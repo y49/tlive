@@ -1,13 +1,18 @@
 // src/kernel/daemon/permission-router.ts
 import { randomUUID } from 'node:crypto';
 
-export type Decision = 'allow' | 'deny' | 'defer';
+/** 'local' = the user answered in the local terminal; the IPC layer maps it to
+ *  'defer' on the wire (shim outputs pass-through {}) — never an auto-allow. */
+export type Decision = 'allow' | 'deny' | 'defer' | 'local';
 export interface PermChat { channel: string; chatId: string }
 
 export interface PermissionRouterDeps {
   configuredChats: () => PermChat[];
   sendToChat: (target: PermChat, card: { title: string; body: string; requestId: string; toolName: string; cwd: string }) => Promise<void>;
   isMuted: (cwd: string) => boolean;
+  /** True when at least one dashboard client is connected on /ws/events —
+   *  a card can be answered from the web even with zero IM chats. */
+  hasWebClients: () => boolean;
   /** Vendor-neutral policy: allow (auto) vs ask (send card). Never auto-denies. */
   policyDecide: (req: { toolName: string; input: unknown; permissionMode?: string }) => { decision: 'allow' | 'ask'; reason?: string };
   /** Render the approval card body from the normalized request. */
@@ -21,27 +26,31 @@ export interface PermissionRouterDeps {
 /** Unanswered request auto-defers after this (s). Must be < shim IPC (590s) < hook timeout (600s). */
 const PERMISSION_TIMEOUT_SEC = 580;
 
+interface PendingEntry { resolve: (d: Decision) => void; key: string; toolName: string }
+
 export class PermissionRouter {
-  private pending = new Map<string, (d: Decision) => void>();
+  private pending = new Map<string, PendingEntry>();
   constructor(private deps: PermissionRouterDeps) {}
 
-  async requestPermission(opts: { cwd: string; toolName: string; input: unknown; permissionMode?: string }): Promise<{ decision: Decision }> {
+  async requestPermission(opts: { cwd: string; toolName: string; input: unknown; permissionMode?: string; timeoutSec?: number }): Promise<{ decision: Decision }> {
     // Policy first: an auto-allow (read-only / trust switch) skips the card even when muted.
     const pd = this.deps.policyDecide({ toolName: opts.toolName, input: opts.input, permissionMode: opts.permissionMode });
     if (pd.decision === 'allow') return { decision: 'allow' };
 
     if (this.deps.isMuted(opts.cwd)) return { decision: 'defer' };
     const targets = this.deps.configuredChats();
-    if (targets.length === 0) return { decision: 'defer' };
+    // Web-only users still get the card via onPending → /ws/events broadcast.
+    if (targets.length === 0 && !this.deps.hasWebClients()) return { decision: 'defer' };
 
     const requestId = randomUUID();
     const { title, body } = this.deps.renderCard({ toolName: opts.toolName, input: opts.input });
-    this.deps.onPending?.({ cwd: opts.cwd, requestId, title, body, toolName: opts.toolName });
     const decision = await new Promise<Decision>((resolve) => {
-      this.pending.set(requestId, resolve);
+      this.pending.set(requestId, { resolve, key: opts.cwd, toolName: opts.toolName });
       setTimeout(() => {
         if (this.pending.has(requestId)) { this.pending.delete(requestId); resolve('defer'); }
-      }, PERMISSION_TIMEOUT_SEC * 1000).unref();
+      }, (opts.timeoutSec ?? PERMISSION_TIMEOUT_SEC) * 1000).unref();
+      // After pending registration: an answer() from the broadcast path resolves.
+      this.deps.onPending?.({ cwd: opts.cwd, requestId, title, body, toolName: opts.toolName });
       for (const t of targets) {
         void this.deps.sendToChat(t, { title, body, requestId, toolName: opts.toolName, cwd: opts.cwd }).catch(() => undefined);
       }
@@ -51,9 +60,24 @@ export class PermissionRouter {
   }
 
   answer(requestId: string, approved: boolean): void {
-    const r = this.pending.get(requestId);
-    if (!r) return;
+    const e = this.pending.get(requestId);
+    if (!e) return;
     this.pending.delete(requestId);
-    r(approved ? 'allow' : 'deny');
+    e.resolve(approved ? 'allow' : 'deny');
+  }
+
+  /** The user answered in the local terminal (PostToolUse / PermissionDenied /
+   *  UserPromptSubmit / Stop observed) — release matching pending shims.
+   *  `toolName` omitted = every pending request for the key. Never auto-allows. */
+  cancel(opts: { key: string; toolName?: string }): number {
+    let n = 0;
+    for (const [rid, e] of [...this.pending]) {
+      if (e.key !== opts.key) continue;
+      if (opts.toolName !== undefined && e.toolName !== opts.toolName) continue;
+      this.pending.delete(rid);
+      e.resolve('local'); // onResolved fires from requestPermission's own path
+      n++;
+    }
+    return n;
   }
 }

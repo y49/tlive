@@ -140,6 +140,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     configuredChats,
     sendToChat: (t, card) => sendToChat(t, card),
     isMuted: (cwd) => muted || (sessions.get(cwd)?.muted ?? false),
+    hasWebClients: () => events.size() > 0,
     policyDecide: (req) => {
       const d = policyDecide({ toolName: req.toolName, permissionMode: req.permissionMode }, policyState);
       if (d.decision === 'allow') console.log(`[policy] auto-allow ${req.toolName} (${d.reason})`); // 审计
@@ -249,7 +250,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         case 'hook.permission.request': {
           const key = resolveKey(req.cwd, req.wrappedId);
           const r = await permissionRouter.requestPermission({ cwd: key, toolName: req.toolName, input: req.input, permissionMode: req.permissionMode });
-          reply({ kind: 'hook.permission.result', decision: r.decision });
+          // 'local' (answered in the terminal) maps to 'defer' on the wire: the shim
+          // outputs pass-through {} — a no-op for a dialog that is already gone.
+          reply({ kind: 'hook.permission.result', decision: r.decision === 'local' ? 'defer' : r.decision });
           return;
         }
         case 'hook.permission.answer':

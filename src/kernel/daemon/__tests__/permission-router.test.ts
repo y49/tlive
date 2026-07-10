@@ -7,6 +7,7 @@ const card = () => ({ title: 't', body: 'b' });
 const base = (over = {}) => ({
   configuredChats: chats, isMuted: () => false,
   sendToChat: vi.fn().mockResolvedValue(undefined),
+  hasWebClients: () => false,
   policyDecide: askAll, renderCard: card, ...over,
 });
 
@@ -92,5 +93,66 @@ describe('PermissionRouter policy short-circuit', () => {
     expect(sent?.body).toBe('B');
     r.answer([...(r as unknown as { pending: Map<string, unknown> }).pending.keys()][0], false);
     await p;
+  });
+});
+
+describe('PermissionRouter web-only gate + cancel + per-request timeout', () => {
+  it('defers immediately when no IM chats AND no web clients', async () => {
+    const r = new PermissionRouter(base({ configuredChats: () => [] }));
+    expect((await r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {} })).decision).toBe('defer');
+  });
+
+  it('sends the card to web (onPending) when no IM chats but a web client is connected', async () => {
+    const pend: Array<{ requestId: string }> = [];
+    const r = new PermissionRouter(base({
+      configuredChats: () => [],
+      hasWebClients: () => true,
+      onPending: (p: { requestId: string }) => { pend.push(p); r.answer(p.requestId, true); },
+    }));
+    const res = await r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {} });
+    expect(pend).toHaveLength(1);
+    expect(res.decision).toBe('allow');
+  });
+
+  it('cancel({key, toolName}) resolves only the matching pending request as local', async () => {
+    let rid = '';
+    const resolved: Array<{ requestId: string; decision: string }> = [];
+    const r = new PermissionRouter(base({
+      configuredChats: () => [],
+      hasWebClients: () => true,
+      onPending: (p: { requestId: string }) => { rid = p.requestId; },
+      onResolved: (p: { requestId: string; decision: string }) => resolved.push({ requestId: p.requestId, decision: p.decision }),
+    }));
+    const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {} });
+    await new Promise((res) => setImmediate(res));
+    expect(r.cancel({ key: '/other', toolName: 'Bash' })).toBe(0); // wrong key: no-op
+    expect(r.cancel({ key: '/w', toolName: 'Edit' })).toBe(0);     // wrong tool: no-op
+    expect(r.cancel({ key: '/w', toolName: 'Bash' })).toBe(1);
+    expect((await p).decision).toBe('local');
+    expect(resolved).toEqual([{ requestId: rid, decision: 'local' }]);
+  });
+
+  it('cancel({key}) without toolName sweeps all pending for the key', async () => {
+    const r = new PermissionRouter(base({ configuredChats: () => [], hasWebClients: () => true }));
+    const p1 = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {} });
+    const p2 = r.requestPermission({ cwd: '/w', toolName: 'Edit', input: {} });
+    await new Promise((res) => setImmediate(res));
+    expect(r.cancel({ key: '/w' })).toBe(2);
+    expect((await p1).decision).toBe('local');
+    expect((await p2).decision).toBe('local');
+  });
+
+  it('honors per-request timeoutSec', async () => {
+    vi.useFakeTimers();
+    try {
+      const r = new PermissionRouter(base({ configuredChats: () => [], hasWebClients: () => true }));
+      const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 5 });
+      let settled = false;
+      void p.then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(settled).toBe(false); // still pending at 4s
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect((await p).decision).toBe('defer');
+    } finally { vi.useRealTimers(); }
   });
 });
