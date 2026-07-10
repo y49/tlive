@@ -114,4 +114,27 @@ describe('grantCodexTrust', () => {
     expect(r.verified).toBe(false);
     expect(rf(join(home, 'config.toml'), 'utf-8')).toBe('x = 1\n');
   });
+  it('替换段时保留下一段前的空行与用户注释', async () => {
+    const key = 'tlive@tlive:hooks/hooks.json:pre_tool_use:0:0';
+    const home = homeWith([
+      `[hooks.state."${key}"]`,
+      'trusted_hash = "sha256:OLD"',
+      'enabled = true',
+      '',
+      '# 用户给 other hook 的备注',
+      '[hooks.state."other@x:hooks.json:stop:0:0"]',
+      'trusted_hash = "sha256:theirs"',
+      '',
+    ].join('\n'));
+    const r = await grantCodexTrust({ codexHome: home, list: seq(
+      [HOOK('pre_tool_use')],
+      [HOOK('pre_tool_use', 'trusted')],
+    ) });
+    expect(r.verified).toBe(true);
+    const toml = rf(join(home, 'config.toml'), 'utf-8');
+    expect(toml).toContain('# 用户给 other hook 的备注');
+    expect(toml).toContain('sha256:theirs');           // 别人的段原样
+    expect(toml).toContain('sha256:hash-pre_tool_use'); // 我们的段已更新
+    expect(toml).not.toContain('sha256:OLD');
+  });
 });

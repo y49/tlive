@@ -77,6 +77,8 @@ function upsertStateSection(toml: string, key: string, hash: string): string {
   }
   let end = start + 1;
   while (end < lines.length && !/^\s*\[/.test(lines[end])) end++;
+  // 段尾的空行/纯注释行属于下一个 section(用户给它的注释),回退保留。
+  while (end > start + 1 && /^\s*(#.*)?$/.test(lines[end - 1])) end--;
   return [...lines.slice(0, start), ...body.trimEnd().split('\n'), ...lines.slice(end)].join('\n');
 }
 
