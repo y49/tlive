@@ -84,8 +84,9 @@ format; tlive doesn't write it for you.
 
 If you ever get a newer `claude`/`codex` with a plugin CLI, prefer
 switching to the plugin path: run `tlive setup --hooks-only` — it detects
-the vendor plugin CLI and installs the plugin instead (the plugin also
-strips these hand-written entries so they don't double-fire). Until then,
+the vendor plugin CLI and installs the plugin instead. Then remove the
+hand-written blocks above yourself (tlive never edits vendor config, so
+they would double-fire alongside the plugin's hooks). Until then,
 re-copy the blocks above whenever a tlive release changes the hook set (see
 the note at the top of this file).
 
@@ -99,3 +100,7 @@ fires twice):
 - `~/.claude/settings.json` — delete the hook groups tagged `"_tlive": true`.
 - `~/.codex/hooks.json` — delete the groups whose command starts with
   `tlive hook`; delete the file if that leaves it empty.
+- `~/.claude/commands/tlive.md` and `~/.claude/skills/tlive/` — the old
+  standalone slash command / skill (`tlive install skills` era; that CLI
+  command no longer exists). If present alongside the plugin you'll see two
+  `/tlive` entries in the `/` menu — delete the standalone copies.

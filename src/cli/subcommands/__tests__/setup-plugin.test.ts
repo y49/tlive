@@ -14,3 +14,22 @@ describe('setup --hooks-only (plugin orchestration)', () => {
     } finally { process.env.PATH = prevPath; w.mockRestore(); }
   });
 });
+
+describe('hooksOnlySelection (--hooks-only vendor flags)', () => {
+  it('no flag → install both (unchanged default)', async () => {
+    const { hooksOnlySelection } = await import('../setup');
+    expect(hooksOnlySelection(['--hooks-only'])).toEqual({ claude: true, codex: true });
+  });
+  it('--claude → Claude only', async () => {
+    const { hooksOnlySelection } = await import('../setup');
+    expect(hooksOnlySelection(['--hooks-only', '--claude'])).toEqual({ claude: true, codex: false });
+  });
+  it('--codex → Codex only', async () => {
+    const { hooksOnlySelection } = await import('../setup');
+    expect(hooksOnlySelection(['--hooks-only', '--codex'])).toEqual({ claude: false, codex: true });
+  });
+  it('both flags → both', async () => {
+    const { hooksOnlySelection } = await import('../setup');
+    expect(hooksOnlySelection(['--hooks-only', '--claude', '--codex'])).toEqual({ claude: true, codex: true });
+  });
+});

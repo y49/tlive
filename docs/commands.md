@@ -65,17 +65,20 @@ wire). Not intended for direct user invocation.
 
 ## Wizard / setup
 
-### `tlive setup [--hooks-only]`
+### `tlive setup [--hooks-only [--claude|--codex]]`
 
 Interactive wizard that configures IM credentials (Telegram / Feishu) and
 writes (or updates) `~/.tlive/config.json`. After configuration it registers
 the bundled Claude Code / Codex plugins via each vendor's own plugin manager
 (hooks + skill + `/tlive:*` commands ride along; no user config files are
-hand-edited). Legacy direct-written hook entries are stripped once. Old
-vendor versions without a plugin CLI: see `docs/manual-hooks.md`.
+hand-edited — see `docs/manual-hooks.md` for one-time cleanup of entries
+written by pre-plugin dev builds, and for old vendor versions without a
+plugin CLI).
 
 `--hooks-only` skips the credential wizard and only re-registers the plugins —
-run it after a `tlive` upgrade to refresh the vendors' plugin caches.
+run it after a `tlive` upgrade to refresh the vendors' plugin caches. By
+default it installs for both vendors; pass `--claude` or `--codex` to limit
+it to one.
 
 Replaces the removed `install-integrations` subcommand. The workspace setup
 step has been removed; notifications are delivered to all configured chats,

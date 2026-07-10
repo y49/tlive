@@ -13,6 +13,13 @@ import { grantCodexTrust } from '../../kernel/integrations/codex-trust-grant.js'
 
 export type VendorSelection = { claude: boolean; codex: boolean };
 
+export function hooksOnlySelection(argv: string[]): VendorSelection {
+  const claude = argv.includes('--claude');
+  const codex = argv.includes('--codex');
+  if (!claude && !codex) return { claude: true, codex: true };
+  return { claude, codex };
+}
+
 export function resolveVendorSelection(detected: VendorSelection, answer: string): VendorSelection {
   const a = answer.trim();
   if (a === '1') return { claude: detected.claude, codex: false };
@@ -48,7 +55,7 @@ async function registerPlugins(sel: VendorSelection): Promise<string> {
 
 export async function runSetup(argv: string[]): Promise<void> {
   if (argv.includes('--hooks-only')) {
-    process.stdout.write((await registerPlugins({ claude: true, codex: true })) + 'Restart claude/codex for changes to take effect.\n');
+    process.stdout.write((await registerPlugins(hooksOnlySelection(argv))) + 'Restart claude/codex for changes to take effect.\n');
     return;
   }
 
