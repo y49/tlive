@@ -133,8 +133,8 @@ detects both `claude` and `codex` on `PATH`: `[1] Claude Code [2] Codex
 [3] both (default)`. Plugin registration always runs before the IM
 credential prompts, and the IM step is fully skippable — press Enter
 through it and later say "help me configure tlive" inside Claude Code or
-Codex (or run `/tlive:setup`) to have the AI walk you through it
-interactively.
+Codex — or, in Claude Code, run `/tlive:setup` — to have the AI walk you
+through it interactively (Codex has no slash commands; use the phrase).
 
 ## Codex: hooks are trusted automatically
 

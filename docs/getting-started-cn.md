@@ -32,8 +32,8 @@ tlive setup
 `/tlive:*` 命令）——如果 `claude` 和 `codex` 同时在 `PATH` 上，会先问装到哪
 （`[1] Claude Code [2] Codex [3] 都装`，默认都装）。之后才提示填写 IM 凭证
 （Telegram bot token + chat ID，或飞书 App 凭证）；这一步完全可跳过——直接
-回车过掉，之后在 Claude Code 或 Codex 里说"帮我配置 tlive"（或跑
-`/tlive:setup`），AI 会交互式带你配完。你填的内容会写入（或合并进）：
+回车过掉，之后在 Claude Code 或 Codex 里说"帮我配置 tlive"（Claude Code 里也可直接
+跑 `/tlive:setup`；Codex 无斜杠命令，说那句话即可），AI 会交互式带你配完。你填的内容会写入（或合并进）：
 
 ```text
 ~/.tlive/config.json

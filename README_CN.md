@@ -112,7 +112,8 @@ add y49/tlive` 再 `claude plugin install tlive@tlive`,直接从仓库根的
 `tlive setup` 在同时检测到 `claude` 和 `codex` 都在 `PATH` 上时会问**装到
 哪**:`[1] Claude Code [2] Codex [3] 都装(默认)`。插件注册永远先于 IM 凭据
 询问,IM 这步可以整段跳过——直接回车过掉,之后在 Claude Code 或 Codex 里说
-"帮我配置 tlive"(或跑 `/tlive:setup`),AI 会交互式带你配完。
+"帮我配置 tlive"(Claude Code 里也可直接跑 `/tlive:setup`;Codex 无斜杠命令,
+说那句话即可),AI 会交互式带你配完。
 
 ## Codex:hooks 自动信任
 

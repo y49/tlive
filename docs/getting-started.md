@@ -34,8 +34,9 @@ and `codex` are on `PATH` it asks which to install into (`[1] Claude Code
 [2] Codex [3] both`, default both). Only after that does it prompt for IM
 credentials (Telegram bot token + chat ID, or Feishu app credentials); this
 step is fully optional — press Enter through it to skip, then later say
-"help me configure tlive" inside Claude Code or Codex (or run
-`/tlive:setup`) and the AI will walk you through it interactively. Whatever
+"help me configure tlive" inside Claude Code or Codex — or, in Claude
+Code, run `/tlive:setup` — and the AI will walk you through it
+interactively (Codex has no slash commands; the phrase works there). Whatever
 you do enter is written (or merged) into:
 
 ```text

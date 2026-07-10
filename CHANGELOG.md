@@ -23,8 +23,8 @@ All notable changes to this project will be documented in this file.
 - **IM setup is fully skippable, with an AI-guided fallback**: the wizard
   now registers vendor plugins *before* prompting for IM credentials, and
   the IM prompt can be skipped outright — the wizard prints a pointer to
-  say "help me configure tlive" (or run `/tlive:setup`) inside Claude Code
-  or Codex, which now walks through detecting the engine, collecting IM
+  say "help me configure tlive" inside Claude Code or Codex (Claude Code
+  additionally has `/tlive:setup`; Codex has no slash commands), which now walks through detecting the engine, collecting IM
   credentials, merging them into `~/.tlive/config.json`, starting the
   daemon, verifying it, and granting Codex trust.
 - **Root-level plugin marketplace**: a `marketplace.json` at the repo root
