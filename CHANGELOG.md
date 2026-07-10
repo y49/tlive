@@ -14,8 +14,10 @@ All notable changes to this project will be documented in this file.
   pending 86000s, clamped server-side at 24h) instead of ~10 minutes.
 - **Local answers release the remote card**: the daemon cancels pending
   approval requests on `PostToolUse` (same session+tool, i.e. approved
-  locally), the new `PermissionDenied` hook (denied locally),
-  `UserPromptSubmit`, and `Stop`; the IM card is rewritten to
+  locally), `UserPromptSubmit`, and `Stop` (a user-clicked "No" releases
+  via these sweeps at the latest when the turn ends); the new
+  `PermissionDenied` hook covers rule-based denials (real-machine probe:
+  it does not fire on a user-clicked "No"). The IM card is rewritten to
   "🖥 answered in terminal". Cancellation resolves as pass-through `{}` —
   never an auto-allow or auto-deny.
 - **`permission_prompt` notifications dropped** (and their `⏳` IM hint

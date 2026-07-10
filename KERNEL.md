@@ -96,10 +96,12 @@ Claude / Codex 的原始 hook JSON 在这里归一。加一个新 AI runtime = �
 **审批双通道(CC vs Codex)**:Claude Code 的 gating 走 `PermissionRequest`
 hook——它与本地权限对话**并行**(先答先得),所以窗口可以拉到 24h
 (hooks.json `timeout: 86400`,shim IPC 86100s,daemon pending 86000s,daemon
-侧 clamp 24h);本地答掉后 daemon 靠 PostToolUse(同 key+tool)/
-PermissionDenied(同 key+tool)/ UserPromptSubmit(同 key)/ Stop(同 key)
-四个信号 cancel 挂起请求(resolve 为 'local',wire 上映射回 'defer' → shim 输
-出 `{}` pass-through)。Codex 的 `run_permission_request_hooks` 在源码里与原生
+侧 clamp 24h);本地答掉后 daemon 靠 PostToolUse(同 key+tool,本地点了允许)/
+UserPromptSubmit(同 key)/ Stop(同 key)cancel 挂起请求(resolve 为
+'local',wire 上映射回 'defer' → shim 输出 `{}` pass-through)。
+PermissionDenied(同 key+tool)只覆盖规则型拒绝——真机实测:用户在对话框点
+"No" **不会** fire 它,本地拒绝靠 UserPromptSubmit/Stop 扫尾(最晚 turn 结束
+时释放)。Codex 的 `run_permission_request_hooks` 在源码里与原生
 提示严格串行(先 hook 后提示,同函数内 `.await`),长窗会冻结终端,故 Codex
 保持 `PreToolUse` 600s 中等窗;无限远程用 wrapped(`tlive run codex`)。
 `notification` 的 `permission_prompt` 类型在 CC shim 直接丢弃(并行卡已覆盖那
