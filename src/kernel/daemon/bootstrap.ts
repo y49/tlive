@@ -31,6 +31,18 @@ export interface BootstrapOpts {
   imAdapters?: IMAdapter[];
 }
 
+/** A Stop hook should not sit waiting when nothing can answer: no IM chat
+ *  configured AND no dashboard client connected → reply null immediately. */
+export function shouldFastNullContinue(chatCount: number, webClientCount: number): boolean {
+  return chatCount === 0 && webClientCount === 0;
+}
+
+/** Pending-approval window: absent = legacy 580s; capped at 24h (the CC
+ *  permission-request channel asks for ~86000s). */
+export function clampPermissionTimeout(timeoutSec: number | undefined): number {
+  return Math.min(timeoutSec ?? 580, 86_400);
+}
+
 export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle> {
   mkdirSync(opts.home, { recursive: true });
   const cfg = loadConfig(opts.home);
@@ -134,7 +146,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   }, 30_000);
   sweeper.unref();
 
-  const OUTCOME: Record<string, string> = { allow: '✅ 已允许', deny: '❌ 已拒绝', defer: '⏳ 已超时(回落本地)' };
+  const OUTCOME: Record<string, string> = { allow: '✅ 已允许', deny: '❌ 已拒绝', defer: '⏳ 已超时(回落本地)', local: '🖥 answered in terminal' };
 
   const permissionRouter = new PermissionRouter({
     configuredChats,
@@ -249,7 +261,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           return;
         case 'hook.permission.request': {
           const key = resolveKey(req.cwd, req.wrappedId);
-          const r = await permissionRouter.requestPermission({ cwd: key, toolName: req.toolName, input: req.input, permissionMode: req.permissionMode });
+          const r = await permissionRouter.requestPermission({ cwd: key, toolName: req.toolName, input: req.input, permissionMode: req.permissionMode, timeoutSec: clampPermissionTimeout(req.timeoutSec) });
           // 'local' (answered in the terminal) maps to 'defer' on the wire: the shim
           // outputs pass-through {} — a no-op for a dialog that is already gone.
           reply({ kind: 'hook.permission.result', decision: r.decision === 'local' ? 'defer' : r.decision });
@@ -261,6 +273,15 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           return;
         case 'hook.continue.request': {
           const key = resolveKey(req.cwd, req.wrappedId);
+          // Stop = the turn ended; any still-pending approval card is stale.
+          permissionRouter.cancel({ key });
+          if (shouldFastNullContinue(configuredChats().length, events.size())) {
+            // Nobody can answer (no IM chat, no dashboard client) — don't make
+            // the Stop hook sit its full window for nothing.
+            events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'idle', ...(req.lastMessage ? { lastMessage: req.lastMessage } : {}) }) });
+            reply({ kind: 'hook.continue.result', reply: null });
+            return;
+          }
           events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'waiting-input', ...(req.lastMessage ? { lastMessage: req.lastMessage } : {}) }) });
           const reply_text = await continueBroker.request({ cwd: key, context: req.context, timeoutSec: 170 });
           // Resolved (replied or timed out): clear the reply target; back to active if continuing, else idle.
@@ -279,7 +300,14 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           return;
         }
         case 'hook.event': {
-          events.broadcast(applyMonitorEvent(sessions, req.event, resolveKey(req.event.cwd, req.wrappedId)));
+          const key = resolveKey(req.event.cwd, req.wrappedId);
+          const ev = req.event;
+          // Local terminal answered a permission dialog → release the parallel
+          // remote card (CC dual-channel: PostToolUse = approved locally,
+          // PermissionDenied = denied locally, a new prompt = dialog long gone).
+          if (ev.event === 'activity' || ev.event === 'permission-denied') permissionRouter.cancel({ key, toolName: ev.toolName });
+          else if (ev.event === 'prompt') permissionRouter.cancel({ key });
+          events.broadcast(applyMonitorEvent(sessions, ev, key));
           reply({ kind: 'ack' });
           return;
         }
