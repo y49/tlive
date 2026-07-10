@@ -88,3 +88,14 @@ the vendor plugin CLI and installs the plugin instead (the plugin also
 strips these hand-written entries so they don't double-fire). Until then,
 re-copy the blocks above whenever a tlive release changes the hook set (see
 the note at the top of this file).
+
+## Upgrading from a pre-plugin dev build
+
+Early development builds wrote hook entries directly into vendor config.
+tlive no longer touches those files and does not auto-clean old entries —
+if you ran such a build, remove them once by hand (otherwise every hook
+fires twice):
+
+- `~/.claude/settings.json` — delete the hook groups tagged `"_tlive": true`.
+- `~/.codex/hooks.json` — delete the groups whose command starts with
+  `tlive hook`; delete the file if that leaves it empty.

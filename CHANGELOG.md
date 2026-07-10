@@ -170,9 +170,9 @@ All notable changes to this project will be documented in this file.
   for Claude Code, `codex plugin marketplace add <bundled dir>` + `codex
   plugin add tlive@tlive` for Codex. The plugin bundles the same hook event
   set as before (CC 9 events / Codex 5 events), plus a `tlive` skill and
-  Claude Code slash commands `/tlive:url` / `/tlive:status`. First
-  successful install strips any hooks a prior tlive version wrote directly,
-  so nothing double-fires. `installClaudeHooks()` / `installCodexHooks()`
+  Claude Code slash commands `/tlive:url` / `/tlive:status`. Pre-plugin
+  dev builds that wrote hooks directly: remove those entries by hand (see
+  docs/manual-hooks.md appendix) — tlive no longer auto-cleans them. `installClaudeHooks()` / `installCodexHooks()`
   are removed — no consumers outside this package, so this is a behavior
   change, not an API break. Vendors **copy** the plugin into their own
   cache; after a `tlive` upgrade, re-run `tlive setup --hooks-only` to

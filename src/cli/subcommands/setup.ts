@@ -8,7 +8,7 @@ import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { installClaudePlugin, installCodexPlugin, defaultRunner } from '../../kernel/integrations/plugin-install.js';
-import { stripLegacyClaudeHooks, stripLegacyCodexHooks, commandOnPath } from '../../kernel/integrations/hooks-cleanup.js';
+import { commandOnPath } from '../../kernel/integrations/hooks-cleanup.js';
 import { grantCodexTrust } from '../../kernel/integrations/codex-trust-grant.js';
 
 export type VendorSelection = { claude: boolean; codex: boolean };
@@ -26,8 +26,7 @@ async function registerPlugins(sel: VendorSelection): Promise<string> {
   if (sel.claude) {
     const cc = installClaudePlugin(run);
     if (cc.ok) {
-      const stripped = stripLegacyClaudeHooks();
-      lines.push(`✓ Claude plugin registered — ${cc.detail}${stripped ? '(已清理旧直写 hooks)' : ''}`);
+      lines.push(`✓ Claude plugin registered — ${cc.detail}`);
     } else {
       lines.push(`⚠ Claude plugin not registered: ${cc.detail}`);
     }
@@ -35,8 +34,7 @@ async function registerPlugins(sel: VendorSelection): Promise<string> {
   if (sel.codex) {
     const cx = installCodexPlugin(run);
     if (cx.ok) {
-      const stripped = stripLegacyCodexHooks();
-      lines.push(`✓ Codex plugin registered — ${cx.detail}${stripped ? '(已清理旧直写 hooks)' : ''}`);
+      lines.push(`✓ Codex plugin registered — ${cx.detail}`);
       const trust = await grantCodexTrust();
       lines.push(trust.verified
         ? `✓ Codex hooks 已自动信任(hooks/list 自检通过${trust.granted ? `,写入 ${trust.granted} 条` : ''})`

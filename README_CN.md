@@ -93,8 +93,9 @@ Claude Code 的 `/tlive:url`、`/tlive:status` 两个 slash 命令。厂商会�
 `$CODEX_HOME/plugins/cache/tlive/tlive/local/`)——升级 `tlive` 本体之后,
 重跑一次 `tlive setup --hooks-only` 刷新这份拷贝。
 
-首次插件安装成功还会**剥离**旧版本(直写年代)留下的 hooks,防止双发;
-你自己无关的 hooks 不受影响。
+用过早期直写 hooks 的开发版?请手动删一次旧条目(否则会双发)——见
+[docs/manual-hooks.md](docs/manual-hooks.md) 附录。tlive 本身不再改动你的
+厂商配置文件。
 
 **老版本厂商没有插件 CLI**:`tlive setup` 会检测到(`claude plugin list` /
 `codex plugin marketplace add` 失败)并打印指向手动配置附录的提示:

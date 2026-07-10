@@ -108,9 +108,10 @@ before), a `tlive` skill (usage, diagnostics, security model, under the
 `$CODEX_HOME/plugins/cache/tlive/tlive/local/` for Codex) — after upgrading
 `tlive` itself, re-run `tlive setup --hooks-only` to refresh that copy.
 
-The first successful plugin install also **strips** any hooks tlive wrote
-directly in an older version (the pre-plugin install path) so they can't
-double-fire; your own unrelated hooks are left untouched.
+Ran a pre-plugin dev build that wrote hooks directly into vendor config?
+Remove those entries by hand once (they'd double-fire otherwise) — see the
+appendix in [docs/manual-hooks.md](docs/manual-hooks.md). tlive itself never
+edits your vendor config files.
 
 **Old vendor versions without a plugin CLI**: `tlive setup` detects this
 (`claude plugin list` / `codex plugin marketplace add` failing) and prints a
