@@ -138,3 +138,23 @@ describe('grantCodexTrust', () => {
     expect(toml).not.toContain('sha256:OLD');
   });
 });
+
+describe('transport 失败韧性(终审回归)', () => {
+  it('spawn 不存在的二进制 → listCodexHooks 超时 reject,无未捕获异常', async () => {
+    const { spawnTransport } = await import('../codex-trust-grant');
+    await expect(
+      listCodexHooks(() => spawnTransport('tlive-definitely-no-such-binary-xyz', []), 800),
+    ).rejects.toThrow(/timeout/);
+  });
+  it('grantCodexTrust 面对失败 transport → verified:false 安全降级不崩', async () => {
+    const { spawnTransport } = await import('../codex-trust-grant');
+    const home = (() => { const d = mkdtempSync(join(tmpdir(), 'tlive-tf-')); return d; })();
+    try {
+      const r = await grantCodexTrust({
+        codexHome: home,
+        list: () => listCodexHooks(() => spawnTransport('tlive-definitely-no-such-binary-xyz', []), 800),
+      });
+      expect(r.verified).toBe(false);
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+});

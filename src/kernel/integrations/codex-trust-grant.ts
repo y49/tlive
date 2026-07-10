@@ -16,8 +16,14 @@ export type AppServerTransport = () => {
   kill: () => void;
 };
 
-export const defaultTransport: AppServerTransport = () => {
-  const p = spawn('codex', ['app-server'], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
+/** spawn 一个命令作为 app-server transport。导出供测试注入失败命令。 */
+export const spawnTransport = (cmd: string, args: string[]): ReturnType<AppServerTransport> => {
+  const p = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
+  // 无 'error' 监听的 EventEmitter 抛未捕获异常(spawn ENOENT / 老版本 codex 无
+  // app-server 子命令时 stdin EPIPE)—— 会绕过所有 try/catch 炸掉 setup。吞掉:
+  // 上层靠超时 reject 走安全降级(/hooks 引导)。
+  p.on('error', () => { /* handled via timeout */ });
+  p.stdin.on('error', () => { /* EPIPE on exiting child */ });
   let buf = '';
   let cb: (line: string) => void = () => {};
   p.stdout.on('data', (d: Buffer) => {
@@ -29,11 +35,13 @@ export const defaultTransport: AppServerTransport = () => {
     }
   });
   return {
-    send: (line) => p.stdin.write(line + '\n'),
+    send: (line) => { try { p.stdin.write(line + '\n'); } catch { /* child gone */ } },
     onLine: (fn) => { cb = fn; },
     kill: () => { try { p.kill(); } catch { /* already dead */ } },
   };
 };
+
+export const defaultTransport: AppServerTransport = () => spawnTransport('codex', ['app-server']);
 
 export function listCodexHooks(transport: AppServerTransport = defaultTransport, timeoutMs = 15_000): Promise<CodexHookMeta[]> {
   return new Promise((resolve, reject) => {
