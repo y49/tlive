@@ -24,7 +24,8 @@ overwriting).
 ```json
 {
   "hooks": {
-    "PreToolUse":         [{ "matcher": "*", "hooks": [{ "type": "command", "command": "tlive hook pre-tool-use", "timeout": 600 }] }],
+    "PermissionRequest":  [{ "matcher": "*", "hooks": [{ "type": "command", "command": "tlive hook permission-request", "timeout": 86400 }] }],
+    "PermissionDenied":   [{ "matcher": "*", "hooks": [{ "type": "command", "command": "tlive hook permission-denied" }] }],
     "Stop":               [{ "hooks": [{ "type": "command", "command": "tlive hook stop", "timeout": 180 }] }],
     "PostToolUse":        [{ "matcher": "*", "hooks": [{ "type": "command", "command": "tlive hook post-tool-use" }] }],
     "Notification":       [{ "hooks": [{ "type": "command", "command": "tlive hook notification" }] }],
@@ -32,10 +33,18 @@ overwriting).
     "SessionStart":       [{ "hooks": [{ "type": "command", "command": "tlive hook session-start" }] }],
     "SessionEnd":         [{ "hooks": [{ "type": "command", "command": "tlive hook session-end" }] }],
     "PostToolUseFailure": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "tlive hook post-tool-use-failure" }] }],
-    "StopFailure":        [{ "hooks": [{ "type": "command", "command": "tlive hook stop-failure" }] }]
+    "StopFailure":        [{ "hooks": [{ "type": "command", "command": "tlive hook stop-failure" }] }],
+    "SubagentStart":      [{ "hooks": [{ "type": "command", "command": "tlive hook subagent-start" }] }],
+    "SubagentStop":       [{ "hooks": [{ "type": "command", "command": "tlive hook subagent-stop" }] }]
   }
 }
 ```
+
+Approval gating on Claude Code rides `PermissionRequest`, which runs in
+PARALLEL with the local permission dialog: both are live, first answer
+wins, and a local answer releases the remote card within seconds. The
+24-hour `timeout` is what keeps the remote card answerable while you're
+away from the keyboard.
 
 `tlive hook <event>` must resolve on `PATH` (the same binary `tlive setup`
 installs). No further action needed on the Claude Code side — hooks fire as

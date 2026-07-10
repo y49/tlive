@@ -19,11 +19,13 @@ describe('plugins/claude marketplace', () => {
     expect(p.name).toBe('tlive');
     expect(typeof p.version).toBe('string');
   });
-  it('hooks.json: 11 事件(含 Subagent 监看)+ 关键 timeout', () => {
+  it('hooks.json: 12 events (PermissionRequest gating, dual-channel) + key timeouts', () => {
     const h = read(join(P, 'hooks', 'hooks.json')).hooks;
-    expect(Object.keys(h).sort()).toEqual(['Notification','PostToolUse','PostToolUseFailure','PreToolUse','SessionEnd','SessionStart','Stop','StopFailure','SubagentStart','SubagentStop','UserPromptSubmit'].sort());
-    expect(h.PreToolUse[0].matcher).toBe('*');
-    expect(h.PreToolUse[0].hooks[0]).toMatchObject({ type: 'command', command: 'tlive hook pre-tool-use', timeout: 600 });
+    expect(Object.keys(h).sort()).toEqual(['Notification','PermissionDenied','PermissionRequest','PostToolUse','PostToolUseFailure','SessionEnd','SessionStart','Stop','StopFailure','SubagentStart','SubagentStop','UserPromptSubmit'].sort());
+    expect(h.PreToolUse).toBeUndefined(); // CC gating rides PermissionRequest now
+    expect(h.PermissionRequest[0].matcher).toBe('*');
+    expect(h.PermissionRequest[0].hooks[0]).toMatchObject({ type: 'command', command: 'tlive hook permission-request', timeout: 86400 });
+    expect(h.PermissionDenied[0].hooks[0].command).toBe('tlive hook permission-denied');
     expect(h.Stop[0].hooks[0].timeout).toBe(180);
     expect(h.StopFailure[0].hooks[0].command).toBe('tlive hook stop-failure');
     expect(h.SubagentStart[0].hooks[0].command).toBe('tlive hook subagent-start');

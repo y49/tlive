@@ -51,13 +51,17 @@ which powers a session has.
 
 ## What's in the box
 
-- **Approvals** — `PreToolUse` hook blocks until you answer from IM buttons or
-  the web card. Diff/command rendering, risky-pattern flags, secret masking.
-  Policy engine auto-allows read-only tools; **"Always allow \<tool\>"** grants
-  a per-tool pass (in-memory, cleared on restart); `/trust on|off` pauses
-  approvals entirely. **Nothing is ever auto-denied**; timeout falls back to
-  your local terminal prompt (Claude Code) or a native approval prompt
-  (Codex — see Security model, its fail-open behavior differs).
+- **Approvals** — dual-channel on Claude Code: the `PermissionRequest` hook
+  fires **in parallel with the local permission dialog** — both are live,
+  first answer wins. Answer from IM buttons or the web card any time within
+  24 hours; answer at the keyboard and the remote card resolves itself
+  ("answered in terminal") within seconds. On Codex the `PreToolUse` hook
+  gates serially with a 600s window (see Security model). Diff/command
+  rendering, risky-pattern flags, secret masking. **"Always allow \<tool\>"**
+  grants a per-tool pass (in-memory, cleared on restart) — on Claude Code it
+  now answers the native dialog for you remotely; `/trust on|off` pauses
+  approvals entirely. **Nothing is ever auto-denied**; an unanswered card
+  simply leaves the local prompt in charge.
 - **Resume** — on `Stop`, reply to the IM message (or the web reply box) and
   the session keeps going.
 - **Daemon lazy-start** — hooks-only sessions no longer need a manual
@@ -68,10 +72,6 @@ which powers a session has.
   errored) and `StopFailure` (session-level error, e.g. rate-limit/billing)
   push a ❌ IM message. Pure side-channel, never affects approval decisions;
   Codex has no equivalent hooks so these aren't installed for it.
-- **Local-approval defer hint** — when Claude Code's own permission prompt
-  pops up in your terminal (tlive already deferred / timed out), the IM
-  attention message is prefixed `⏳ 终端正在等待你的审批` so an off-screen
-  user knows to go look at the terminal.
 - **In-session welcome hint (Claude Code only)** — if IM isn't configured
   yet, `SessionStart` injects a one-line prompt into the session context
   nudging you to say "help me configure tlive"; it stops appearing once IM
@@ -199,10 +199,12 @@ layer for sessions you already run.
   hooks cannot override it.
 - **Fallback is silence**: no configured chat, timeout, or a daemon that's
   down → the hook emits `{}` and Claude prompts in your local terminal as if
-  tlive weren't there.
+  tlive weren't there. On Claude Code the local dialog is live the whole
+  time anyway (parallel channels), so "fallback" just means the remote card
+  goes quiet.
 - **Codex's hook timeout fails open, not silent** — this is the one place
-  Codex and Claude Code genuinely diverge. Claude Code's `PreToolUse` hook
-  timing out falls back to its local prompt (safe, no default action).
+  Codex and Claude Code genuinely diverge. Claude Code's permission hook
+  timing out leaves its local prompt in charge (safe, no default action).
   Codex's hook timing out lets the tool call **run** by default. tlive's
   mitigation: `~/.codex/hooks.json` sets `timeout: 600` on `PreToolUse`, and
   the shim self-deadlines at ~590s — comfortably inside that window — so
@@ -211,7 +213,11 @@ layer for sessions you already run.
   approval prompt), never an auto-allow. Residual risk: if the shim
   **process itself crashes** (not just times out), there's nothing left to
   answer, and Codex will fail open after 600s regardless — that gap can't be
-  closed from a hook.
+  closed from a hook. (Why Codex can't get the parallel 24h channel: its
+  permission hook blocks the native prompt — confirmed in Codex's source —
+  so a long window would freeze the terminal. Want unlimited remote
+  interaction with Codex? Wrap it: `tlive run codex` has no hook and no
+  timeout — the web terminal and IM injection drive the session directly.)
 
 ## CLI
 

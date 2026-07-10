@@ -1,6 +1,7 @@
 {
   "hooks": {
-    "PreToolUse":        [{ "matcher": "*", "hooks": [{ "type": "command", "command": "tlive hook pre-tool-use", "timeout": 600 }] }],
+    "PermissionRequest": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "tlive hook permission-request", "timeout": 86400 }] }],
+    "PermissionDenied":  [{ "matcher": "*", "hooks": [{ "type": "command", "command": "tlive hook permission-denied" }] }],
     "Stop":              [{ "hooks": [{ "type": "command", "command": "tlive hook stop", "timeout": 180 }] }],
     "PostToolUse":       [{ "matcher": "*", "hooks": [{ "type": "command", "command": "tlive hook post-tool-use" }] }],
     "Notification":      [{ "hooks": [{ "type": "command", "command": "tlive hook notification" }] }],

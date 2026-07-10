@@ -60,35 +60,50 @@ type OutgoingMessage =
 File: `src/kernel/hook/normalizer.ts`
 
 ```typescript
-type HookEventName = 'pre-tool-use' | 'post-tool-use' | 'stop' | 'notification'
+type HookEventName = 'permission-request' | 'permission-denied'
+                   | 'pre-tool-use' | 'post-tool-use' | 'stop' | 'notification'
                    | 'user-prompt-submit' | 'session-start' | 'session-end'
-                   | 'post-tool-use-failure' | 'stop-failure';
+                   | 'post-tool-use-failure' | 'stop-failure'
+                   | 'subagent-start' | 'subagent-stop';
 
 type NormalizedHook =
-  | { event: 'approval-request'; cwd; sessionId; toolName; input; permissionMode? } // PreToolUse
+  | { event: 'approval-request'; cwd; sessionId; toolName; input; permissionMode? } // PermissionRequest (CC) / PreToolUse (Codex)
   | { event: 'activity';         cwd; sessionId; toolName; result }                // PostToolUse
   | { event: 'attention';        cwd; sessionId; message; lastMessage? }           // Stop / Notification
   | { event: 'prompt';           cwd; sessionId; prompt }                          // UserPromptSubmit
+  | { event: 'subagent';         cwd; sessionId; delta; agentType? }               // SubagentStart/Stop
+  | { event: 'permission-denied'; cwd; sessionId; toolName }                       // PermissionDenied (CC)
   | { event: 'session-start';    cwd; sessionId; source? }
   | { event: 'session-end';      cwd; sessionId; reason? };
   // post-tool-use-failure / stop-failure 归一为 attention(❌ 前缀消息),
   // 与 Stop/Notification 共用同一 MonitorEvent 变体,kernel 不额外建模。
 
 // 监看子集(经 IPC `hook.event` 传输):
-type MonitorEvent = activity | attention | prompt | session-start | session-end
+type MonitorEvent = activity | attention | prompt | subagent | permission-denied
+                  | session-start | session-end
 
 type HookVendor = 'claude' | 'codex';
 
 // decision 序列化回各 vendor 的 hook 格式(vendor 差异只在这一层收口,kernel 不感知):
-permissionDecisionOut(decision: 'allow'|'deny'|'defer', vendor?: HookVendor, reason?: string): object
+permissionDecisionOut(decision: 'allow'|'deny'|'defer', vendor?: HookVendor, reason?: string): object  // PreToolUse wire (Codex gating)
+permissionRequestDecisionOut(decision: 'allow'|'deny'|'defer'): object  // CC PermissionRequest wire; defer → {}
 continueDecisionOut(reply: string | null): object   // reply → {decision:'block',reason}
 ```
 
 Claude / Codex 的原始 hook JSON 在这里归一。加一个新 AI runtime = 把它的 hook
-事件映射进这套归一模型,kernel 不变。`notification` 事件感知
-`notification_type`:`permission_prompt`(本地权限对话已弹出,tlive 已
-defer/超时)会给 attention 消息加 `⏳` 前缀提醒离屏用户回终端,其余类型原样
-透传。
+事件映射进这套归一模型,kernel 不变。
+
+**审批双通道(CC vs Codex)**:Claude Code 的 gating 走 `PermissionRequest`
+hook——它与本地权限对话**并行**(先答先得),所以窗口可以拉到 24h
+(hooks.json `timeout: 86400`,shim IPC 86100s,daemon pending 86000s,daemon
+侧 clamp 24h);本地答掉后 daemon 靠 PostToolUse(同 key+tool)/
+PermissionDenied(同 key+tool)/ UserPromptSubmit(同 key)/ Stop(同 key)
+四个信号 cancel 挂起请求(resolve 为 'local',wire 上映射回 'defer' → shim 输
+出 `{}` pass-through)。Codex 的 `run_permission_request_hooks` 在源码里与原生
+提示严格串行(先 hook 后提示,同函数内 `.await`),长窗会冻结终端,故 Codex
+保持 `PreToolUse` 600s 中等窗;无限远程用 wrapped(`tlive run codex`)。
+`notification` 的 `permission_prompt` 类型在 CC shim 直接丢弃(并行卡已覆盖那
+个时刻,再发提醒就是每张卡都重复一条)。
 
 **Codex 是这套模式的实例**(打包进 `plugins/codex/plugins/tlive/hooks/hooks.json`
 的 hooks 块,schema 与 Claude `settings.json` 的 `hooks` 块同构;shim 靠

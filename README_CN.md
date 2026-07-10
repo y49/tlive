@@ -46,11 +46,13 @@ vs `[label]`(仅 hooks)。
 
 ## 功能一览
 
-- **审批** —— `PreToolUse` hook 阻塞等你在 IM 按钮或 web 卡上回答。diff/命令
-  渲染、高危模式标记、secret 打码。策略引擎自动放行只读工具;**"总是允许
-  \<工具\>"** 按工具放行(内存态,重启清零);`/trust on|off` 整体暂停审批。
-  **绝不自动拒绝**;超时回落到本地终端提示(Claude Code)或原生审批提示
-  (Codex——fail-open 行为不同,见安全模型)。
+- **审批** —— Claude Code 上是双通道:`PermissionRequest` hook 与本地权限
+  对话**并行**——两边同时可答,先到先得。IM 按钮 / web 卡 24 小时内随时可答;
+  在键盘上答了,远程卡几秒内自动收尾("已在终端处理")。Codex 上仍是
+  `PreToolUse` 串行拦截(600s 窗,见安全模型)。diff/命令渲染、高危模式标记、
+  secret 打码。**"总是允许 \<工具\>"** 按工具放行(内存态,重启清零)——在
+  Claude Code 上现在等于远程替你点掉原生对话;`/trust on|off` 整体暂停审批。
+  **绝不自动拒绝**;没人答时本地提示一直有效。
 - **续跑** —— `Stop` 时回复 IM 消息(或 web 回复框),会话继续。
 - **daemon 懒启动** —— 仅装 hooks 的会话不再需要先手动 `tlive start`:
   `SessionStart` 时 shim(以及 `tlive run` 启动时)检测到 daemon 未运行,会
@@ -59,9 +61,6 @@ vs `[label]`(仅 hooks)。
 - **失败告警(仅 Claude Code)** —— `PostToolUseFailure`(工具调用失败)与
   `StopFailure`(会话级错误,如 rate-limit/billing)会推一条 ❌ IM 消息。纯
   旁路,不影响任何审批决策;Codex 没有对应 hook,故不给它装。
-- **本地审批等待提醒** —— Claude Code 自己的权限对话在终端弹出时(tlive 已
-  回落/超时),IM 里的提醒消息会带 `⏳ 终端正在等待你的审批` 前缀,提示离屏
-  用户回终端处理。
 - **会话内欢迎提示(仅 Claude Code)** —— IM 还没配置时,`SessionStart` 会往
   会话上下文里注入一句提示,引导你说"帮我配置 tlive";配置好之后就不再出现。
   Codex 不注入。

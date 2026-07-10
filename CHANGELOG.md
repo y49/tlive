@@ -4,6 +4,42 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Changed — dual-channel approvals (Claude Code)
+
+- **Gating moved from `PreToolUse` to `PermissionRequest`** (breaking for
+  hand-written hook configs; the plugin updates itself on
+  `tlive setup --hooks-only`). The hook now runs in PARALLEL with the
+  local permission dialog: both channels are live, first answer wins.
+  The remote window is 24h (`timeout: 86400` / shim 86100s / daemon
+  pending 86000s, clamped server-side at 24h) instead of ~10 minutes.
+- **Local answers release the remote card**: the daemon cancels pending
+  approval requests on `PostToolUse` (same session+tool, i.e. approved
+  locally), the new `PermissionDenied` hook (denied locally),
+  `UserPromptSubmit`, and `Stop`; the IM card is rewritten to
+  "🖥 answered in terminal". Cancellation resolves as pass-through `{}` —
+  never an auto-allow or auto-deny.
+- **`permission_prompt` notifications dropped** (and their `⏳` IM hint
+  removed): with parallel gating the card is already live when the local
+  dialog pops, so the hint would duplicate every approval.
+- **Codex intentionally stays on `PreToolUse` (600s)**: Codex's
+  permission hook blocks its native prompt (confirmed in Codex source —
+  `start_approval_async` runs strictly after the hook `.await`), so a
+  long window would freeze the terminal. Unlimited remote interaction
+  with Codex = wrapped mode (`tlive run codex`).
+
+### Fixed — approval/continue reachability
+
+- **Web-only setups now receive approval cards**: with no IM chat
+  configured, the permission router used to defer before the dashboard
+  broadcast; it now sends the card whenever a `/ws/events` client is
+  connected.
+- **Stop hooks no longer hang with nobody to answer**: with no IM chat
+  and no dashboard client, `hook.continue.request` replies `null`
+  immediately instead of waiting out the 170s broker window.
+- **Approval card race fix**: `onPending` now fires after the pending
+  entry is registered, so a synchronous answer from the broadcast path
+  can no longer be dropped.
+
 ### Added — onboarding
 
 - **Codex hooks trusted automatically**: `tlive setup` (and `--hooks-only`)
