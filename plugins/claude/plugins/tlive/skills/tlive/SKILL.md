@@ -1,38 +1,62 @@
 ---
 name: tlive
-description: tlive — IM(Telegram/飞书)审批 + web 终端 + 会话监看,给 Claude Code / Codex 用。
-  用于:配置/诊断 tlive、连接 IM 平台、查看会话链接、解释审批/信任行为。
-  触发词:"tlive"、"IM 桥"、"手机审批"、"远程终端"、"飞书/Telegram 通知"。
+description: tlive — remote approvals (Telegram/Feishu/web), live web terminal, and
+  session monitoring for Claude Code / Codex. Use for configuring or diagnosing
+  tlive, connecting IM platforms, printing session links, or explaining approval
+  behavior. Triggers "tlive", "IM bridge", "phone approvals", "remote terminal",
+  "Telegram/Feishu notifications".
 ---
 
-# tlive 使用指引
+# tlive usage guide
 
-tlive 是自托管的 hook 审批/监看层:你的 claude/codex 会话经全局 hooks 把审批、完成、失败等事件送到 IM(Telegram/飞书)与 web dashboard;IM/网页上可批准/拒绝/回复续跑。daemon 随新会话自动拉起(`daemon.autoStart:false` 关闭)。
+tlive is a self-hosted approval/monitoring layer. Claude Code sessions report
+through global hooks; Codex sessions are watched through an app-server
+companion process (no hooks, no trust step). Approvals, completions, and
+failures land in IM (Telegram/Feishu) and the web dashboard, where you can
+approve/deny/reply-to-continue. The daemon auto-starts with new sessions
+(disable via `daemon.autoStart: false`).
 
-## 常用命令
-- `tlive setup` — 配置 IM token + 注册 Claude/Codex 插件(hooks 随插件挂载)。`--hooks-only` 只重注册插件。
-- `tlive status` — daemon/通道/Codex 信任状态。
-- `tlive run <cmd>` — 包装一个进程:本地终端 + web 实时终端(扫码可开)。
-- `tlive url` — 打印 dashboard 链接 + 二维码。
-- `tlive logs -f` — 跟 daemon 日志。
-- `tlive start` / `tlive stop` — 显式起停(通常不需要 start,会话会自动拉起;stop 后新会话会再拉起,除非 autoStart:false)。
+## Commands
+- `tlive setup` — configure IM credentials + register the Claude/Codex plugins
+  (hooks ride the Claude plugin; Codex needs none). `--hooks-only` re-registers
+  plugins only; add `--claude` / `--codex` to pick a vendor.
+- `tlive status` — daemon health, channels, and the Codex companion state
+  (`running` / `degraded` / `off`; degraded or off = Codex approvals local-only).
+- `tlive run <cmd>` — wrap a process: local terminal + live web terminal (QR to open).
+- `tlive url` — print the dashboard link + QR code.
+- `tlive logs -f` — follow the daemon log.
+- `tlive start` / `tlive stop` — explicit lifecycle (start is rarely needed;
+  sessions lazy-start the daemon unless autoStart is off).
 
-## 诊断路径
-1. IM 没收到消息:`tlive status` 看通道是否配置;`tlive logs -f` 看发送错误;确认发起会话后 daemon 在跑。
-2. Codex hooks 不生效:Codex 对未信任 hook **静默跳过** —— 运行一次交互式 `codex`,在 hooks review 里 approve tlive;`tlive status` 会显示信任态。
-3. 审批卡超时:响应窗 600s;超时回落本地终端提示(IM 会收到 ⏳ 提醒),回终端处理即可。
-4. web 打不开:`tlive url` 拿当前链接(token 在 URL 里);手机访问需同网段或配置 `web.publicUrl`。
+## Diagnostics
+1. No IM messages: `tlive status` for channel config; `tlive logs -f` for send
+   errors; confirm the daemon is up after starting a session.
+2. Codex has no remote cards: check `tlive status` — the companion line must say
+   `running`. `off` means codex isn't on PATH (or Windows); `degraded` means the
+   app-server child keeps dying — see `~/.tlive/codex-appserver.log`. Either way
+   Codex still prompts locally; nothing is ever auto-run.
+3. Claude approval card unanswered: the local dialog stays live the whole time
+   (parallel channels, first answer wins); answering locally resolves the remote
+   card as "answered in terminal". The remote window defaults to 30 minutes
+   (`approvals.claudeWindowSec`, up to ~24h).
+4. Web page unreachable: `tlive url` for the current link (token is in the URL);
+   phones need the same LAN or `web.publicUrl`.
 
-## 安全模型速记
-- 绝不自动放行:无人应答 → Claude 回落本地 TUI / Codex 弹原生提示。
-- 只读工具(Read/Glob/Grep)默认放行;`/trust on` 临时全放(高危,建议配 allowedSenders)。
-- deny 恒赢:用户在 vendor 侧配置的 permissions.deny tlive 不会越过。
+## Security model in one breath
+- Never auto-allow: unanswered → Claude's local dialog governs / Codex's native
+  prompt governs. Deny always carries a reason.
+- Read-only tools (Read/Glob/Grep) pass by default; `/trust on` pauses approvals
+  entirely (high risk — pair with allowedSenders).
+- Vendor-side `permissions.deny` always wins; tlive never overrides it.
 
-## 首次上手(onboarding)
+## First-time onboarding
 
-用户说"帮我配置 tlive"或调 /tlive:setup 时,按此引导(也可直接照做):
-1. `tlive status` 检查引擎;缺 → `npm i -g tlive`。
-2. 无通道 → 收集 Telegram(token+chatId)或飞书(appId+appSecret)凭据,合并写 `~/.tlive/config.json`:
+When the user says "help me set up tlive" (or runs /tlive:setup), walk them
+through:
+1. `tlive status` to check the engine; missing → `npm i -g tlive`.
+2. No channels → collect Telegram (bot token + chat id) or Feishu
+   (appId + appSecret) credentials and merge into `~/.tlive/config.json`:
    `{ "allowedSenders": [], "adapters": { "telegram": { "token": "…", "chatIdAllowList": ["…"] }, "feishu": { "appId": "…", "appSecret": "…" } } }`
-3. `tlive start` → `tlive status` 验证 channels;`tlive url` 给 dashboard 地址。
-4. Codex 信任:`tlive setup --hooks-only` 会自动信任(hooks/list 自检);失败则在 codex 里输入 `/hooks` approve。
+3. `tlive start` → `tlive status` to verify channels; `tlive url` for the dashboard.
+4. Codex needs no extra step — the companion starts with the daemon. If status
+   says `off`/`degraded`, that's diagnostic info, not a setup task.

@@ -1,21 +1,34 @@
 ---
-description: AI 引导完成 tlive 配置(IM 通道、启动、验证、Codex 信任)
+description: Guided tlive setup (IM channels, start, verification)
 ---
 
-你来引导用户完成 tlive 配置。按顺序执行,每步给用户看结果:
+Guide the user through tlive setup. Execute in order, showing each result:
 
-1. 跑 `tlive status`。若命令不存在 → 告诉用户先安装引擎:`npm i -g tlive`,装完重跑本命令。
-2. 看输出:daemon 没跑不用管(会话会自动拉起);重点看 channels 是否 `(none)`。
-3. 若无通道:问用户要用 Telegram 还是飞书(或都要),按平台收集凭据:
-   - Telegram:bot token(@BotFather 创建)+ chat id(给 bot 发消息后从 getUpdates 拿,或用户已知)
-   - 飞书:appId + appSecret(开放平台自建应用,开通 im 消息权限)
-4. 读取 `~/.tlive/config.json`(可能不存在或已有部分内容),**合并**写入(保留已有字段):
+1. Run `tlive status`. If the command is missing → tell the user to install the
+   engine first: `npm i -g tlive`, then re-run this command.
+2. Read the output: an idle daemon is fine (sessions auto-start it); what
+   matters is whether channels says `(none)`.
+3. If no channel: ask whether the user wants Telegram, Feishu, or both, and
+   collect credentials per platform:
+   - Telegram: bot token (create via @BotFather) + chat id (send the bot a
+     message and read getUpdates, or the user already knows it)
+   - Feishu: appId + appSecret (self-built app on the open platform with im
+     message permissions)
+4. Read `~/.tlive/config.json` (may be absent or partial) and MERGE the new
+   fields in (preserve existing ones):
+
    ```json
-   { "allowedSenders": [], "adapters": {
+   { "allowedSenders": [],
+     "adapters": {
        "telegram": { "token": "<token>", "chatIdAllowList": ["<chatId>"] },
        "feishu": { "appId": "<appId>", "appSecret": "<secret>" } } }
    ```
-   (只写用户选的平台;检查 JSON 合法。)
-5. `tlive stop`(若在跑)再 `tlive start`,然后 `tlive status` 确认 channels 里出现所配平台。
-6. 让用户在 IM 里给 bot 发条消息试试;dashboard 地址用 `tlive url` 给出。
-7. 若 status 显示 Codex hooks NOT trusted:先重跑 `tlive setup --hooks-only`(会自动信任);仍不行则让用户在 codex 里输入 `/hooks` approve tlive。
+   (Only write the platforms the user chose; validate the JSON.)
+5. `tlive stop` (if running) then `tlive start`, then `tlive status` to confirm
+   the configured platforms appear under channels.
+6. Have the user send the bot a test message; hand out the dashboard address
+   via `tlive url`.
+7. If status shows the Codex companion as `off` or `degraded`, explain what it
+   means (codex missing from PATH / app-server child failing — see
+   `~/.tlive/codex-appserver.log`); Codex approvals stay local-only until it is
+   `running`. There is no trust step to perform.

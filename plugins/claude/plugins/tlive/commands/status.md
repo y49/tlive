@@ -1,5 +1,9 @@
 ---
-description: 查看 tlive daemon/通道/Codex 信任状态
+description: Show tlive daemon, channel, and Codex companion status
 ---
 
-运行 `tlive status` 并把输出原样展示给用户;若显示 Codex hooks 未信任,向用户解释需要运行一次交互式 `codex` 在 hooks review 里 approve。
+Run `tlive status` and show the output to the user verbatim. If the Codex line
+says `degraded` or `off`, explain: Codex approvals are local-only right now
+(the native prompt still works; nothing is ever auto-run) — `off` usually means
+codex is not on PATH, `degraded` means the app-server child keeps failing (see
+`~/.tlive/codex-appserver.log`).

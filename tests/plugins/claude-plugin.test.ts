@@ -31,15 +31,23 @@ describe('plugins/claude marketplace', () => {
     expect(h.SubagentStart[0].hooks[0].command).toBe('tlive hook subagent-start');
     expect(h.SubagentStop[0].hooks[0].command).toBe('tlive hook subagent-stop');
   });
-  it('commands: url.md / status.md 存在且是 md 带 bash 调用', () => {
+  it('commands: url.md / status.md exist and invoke tlive', () => {
     for (const f of ['url.md', 'status.md']) {
       const s = readFileSync(join(P, 'commands', f), 'utf-8');
       expect(s).toContain('tlive');
     }
   });
-  it('commands/setup.md 存在且含引导要素', () => {
+  it('commands/setup.md guides through the setup steps (no retired trust step)', () => {
     const s = readFileSync(join(P, 'commands', 'setup.md'), 'utf-8');
-    for (const kw of ['tlive status', 'config.json', 'tlive start', 'npm i -g tlive', '/hooks']) expect(s).toContain(kw);
+    for (const kw of ['tlive status', 'config.json', 'tlive start', 'npm i -g tlive', 'companion']) expect(s).toContain(kw);
+    expect(s).not.toContain('/hooks'); // Codex trust flow is retired
+  });
+  it('plugin skill and commands are English-only on the display surface (frontmatter descriptions)', () => {
+    for (const f of ['commands/setup.md', 'commands/status.md', 'commands/url.md', 'skills/tlive/SKILL.md']) {
+      const s = readFileSync(join(P, f), 'utf-8');
+      const frontmatter = s.split('---')[1] ?? '';
+      expect(frontmatter).not.toMatch(/[一-鿿]/);
+    }
   });
   it('package.json files 含 plugins/', () => {
     expect(read(join(ROOT, 'package.json')).files).toContain('plugins/');
