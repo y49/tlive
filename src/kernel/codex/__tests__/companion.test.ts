@@ -173,4 +173,26 @@ describe('companion', () => {
   it('threadKey formats id', () => {
     expect(threadKey('abc')).toBe('codex:abc');
   });
+
+  it('requestPermission rejection does not crash; logs, never responds, leaves pending', async () => {
+    const { comp, router, getEvents } = harness();
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+    const events = getEvents();
+
+    const rejectionError = new Error('approval request failed');
+    router.requestPermission.mockRejectedValueOnce(rejectionError);
+    const respond = vi.fn();
+    events.onServerRequest(8, 'item/commandExecution/requestApproval', { threadId: 't1', itemId: 'i4', command: 'dangerous cmd' }, respond);
+
+    // Drain microtasks and wait a tick
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // respond should never be called (approval stays pending)
+    expect(respond).not.toHaveBeenCalled();
+
+    comp.stop();
+  });
 });

@@ -103,6 +103,11 @@ export function startCompanion(deps: CompanionDeps): Companion {
           if (r.decision === 'allow') respond({ decision: 'accept' });
           else if (r.decision === 'deny') respond({ decision: 'decline' });
           // defer / local: never respond — leave pending / already settled elsewhere.
+        })
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          log(`approval request failed: ${msg}`);
+          // Never respond — approval stays pending, native prompt still governs.
         });
       return;
     }
