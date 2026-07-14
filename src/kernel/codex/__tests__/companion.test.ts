@@ -375,4 +375,61 @@ describe('companion', () => {
 
     comp.stop();
   });
+
+  it('a thread whose resume retries exhaust is retried again on a later poll', async () => {
+    const calls: any[] = [];
+    let events: any;
+    let resumeAttempts = 0;
+    let shouldSucceed = false;
+    const rpc = {
+      call: vi.fn(async (method: string, params: any) => {
+        calls.push({ method, params });
+        if (method === 'thread/loaded/list') return { data: ['t2'] };
+        if (method === 'thread/resume') {
+          resumeAttempts++;
+          // Fail with 'no rollout' for first 10 attempts (RESUME_RETRY_MAX),
+          // then succeed on attempt 11 (after poll triggers fresh retry)
+          if (!shouldSucceed) throw new Error('no rollout found for thread t2');
+          return { thread: { id: params.threadId } };
+        }
+        return {};
+      }),
+      notify: vi.fn(),
+      close: vi.fn(),
+    };
+    const router = { requestPermission: vi.fn(async () => ({ decision: 'allow' })), cancel: vi.fn(() => 0) };
+    const comp = startCompanion({
+      connect: async (e: any) => { events = e; return rpc as any; },
+      permissionRouter: router as any,
+      onMonitor: vi.fn(),
+      onResumePrompt: vi.fn(),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Initial connect + poll should trigger first resume attempt
+    expect(resumeAttempts).toBe(1);
+
+    // Exhaust all RESUME_RETRY_MAX (10) retries: each at 3000ms intervals
+    // Attempts 2-10 (9 retries after initial)
+    for (let i = 0; i < 9; i++) {
+      await vi.advanceTimersByTimeAsync(3000);
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+    expect(resumeAttempts).toBe(10);
+
+    // Now allow resume to succeed
+    shouldSucceed = true;
+
+    // Advance to the next poll cycle (at 30s: initial poll at 0s, then 15s, 30s, 45s, ...)
+    // This poll will call resumeThread again since we deleted from resumed set on final failure
+    await vi.advanceTimersByTimeAsync(3000);
+    await Promise.resolve();
+    await Promise.resolve();
+    // At time 30s, poll should trigger and make attempt 11
+    expect(resumeAttempts).toBe(11);
+
+    comp.stop();
+  });
 });

@@ -58,6 +58,8 @@ export function startCompanion(deps: CompanionDeps): Companion {
           t.unref?.();
         } else {
           log(`companion: resume ${threadId} failed: ${msg}`);
+          // 清除 resumed 去重集，以便后续轮询周期可以重新尝试该线程
+          resumed.delete(threadId);
         }
       },
     );
