@@ -17,7 +17,10 @@ export interface CompanionDeps {
   log?: (msg: string) => void;
 }
 
-export interface Companion { stop(): void }
+export interface Companion {
+  stop(): void;
+  resume(threadId: string, input: string): Promise<void>;
+}
 
 export const threadKey = (threadId: string): string => `codex:${threadId}`;
 
@@ -202,6 +205,10 @@ export function startCompanion(deps: CompanionDeps): Companion {
       if (reconnectTimer) clearTimeout(reconnectTimer);
       rpc?.close();
       rpc = undefined;
+    },
+    async resume(threadId: string, input: string): Promise<void> {
+      if (!rpc) throw new Error('companion: not connected');
+      await rpc.call('turn/start', { threadId, input: [{ type: 'text', text: input }] });
     },
   };
 }

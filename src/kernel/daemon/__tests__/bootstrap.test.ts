@@ -2,9 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { bootstrapDaemon, shouldFastNullContinue, clampPermissionTimeout, type DaemonHandle } from '../bootstrap';
+import { bootstrapDaemon, shouldFastNullContinue, clampPermissionTimeout, makeCodexResumeHandler, type DaemonHandle } from '../bootstrap';
 import { request } from '../../ipc/client';
 import type { IMAdapter, IMChannel, OutgoingMessage, IncomingEnvelope } from '../../contracts/im-adapter';
+import { SessionRegistry } from '../../web/session-registry';
 
 let tmp: string;
 let h: DaemonHandle;
@@ -36,6 +37,68 @@ describe('dual-channel wiring helpers', () => {
     expect(clampPermissionTimeout(undefined)).toBe(580);
     expect(clampPermissionTimeout(86_000)).toBe(86_000);
     expect(clampPermissionTimeout(999_999)).toBe(86_400);
+  });
+});
+
+describe('makeCodexResumeHandler', () => {
+  function fakeEvents(size = 1) {
+    const broadcast = (v: unknown) => broadcasts.push(v);
+    const broadcasts: unknown[] = [];
+    return { broadcast, size: () => size, broadcasts };
+  }
+
+  it('reply path: resume called and active broadcast', async () => {
+    const sessions = new SessionRegistry();
+    const events = fakeEvents(1);
+    const resume = async (_t: string, _i: string) => undefined;
+    let resumeCall: [string, string] | undefined;
+    const handler = makeCodexResumeHandler({
+      broker: { request: async () => 'go on' },
+      sessions,
+      events,
+      chats: () => [],
+      resume: async (t, i) => { resumeCall = [t, i]; await resume(t, i); },
+    });
+    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'done' });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(resumeCall).toEqual(['t1', 'go on']);
+    expect(events.broadcasts.some((b: any) => b.session?.status === 'active')).toBe(true);
+  });
+
+  it('fast-null path: no channel → idle broadcast, broker/resume never called', async () => {
+    const sessions = new SessionRegistry();
+    const events = fakeEvents(0);
+    let requested = false;
+    let resumed = false;
+    const handler = makeCodexResumeHandler({
+      broker: { request: async () => { requested = true; return 'x'; } },
+      sessions,
+      events,
+      chats: () => [],
+      resume: async () => { resumed = true; },
+    });
+    handler({ threadId: 't1', key: 'codex:t1' });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(requested).toBe(false);
+    expect(resumed).toBe(false);
+    expect(events.broadcasts.some((b: any) => b.session?.status === 'idle')).toBe(true);
+  });
+
+  it('null-reply path: idle broadcast, resume not called', async () => {
+    const sessions = new SessionRegistry();
+    const events = fakeEvents(1);
+    let resumed = false;
+    const handler = makeCodexResumeHandler({
+      broker: { request: async () => null },
+      sessions,
+      events,
+      chats: () => [],
+      resume: async () => { resumed = true; },
+    });
+    handler({ threadId: 't1', key: 'codex:t1' });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(resumed).toBe(false);
+    expect(events.broadcasts.filter((b: any) => b.session?.status === 'idle').length).toBeGreaterThan(0);
   });
 });
 

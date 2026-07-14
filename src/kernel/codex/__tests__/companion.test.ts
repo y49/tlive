@@ -258,6 +258,27 @@ describe('companion', () => {
     comp.stop();
   });
 
+  it('resume() calls turn/start with items array', async () => {
+    const { comp, calls } = harness();
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+    await comp.resume('t1', 'fix tests');
+    expect(calls.some((c) => c.method === 'turn/start' && c.params.threadId === 't1'
+      && Array.isArray(c.params.input) && c.params.input[0].text === 'fix tests')).toBe(true);
+    comp.stop();
+  });
+
+  it('resume() throws when not connected', async () => {
+    const { comp, getEvents } = harness();
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+    getEvents().onClose();
+    await expect(comp.resume('t1', 'x')).rejects.toThrow();
+    comp.stop();
+  });
+
   it('threadKey formats id', () => {
     expect(threadKey('abc')).toBe('codex:abc');
   });

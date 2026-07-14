@@ -41,6 +41,44 @@ export function shouldFastNullContinue(chatCount: number, webClientCount: number
   return chatCount === 0 && webClientCount === 0;
 }
 
+/** Codex `turn/completed` → offer the reply to whoever's watching (IM/web) via
+ *  ContinueBroker, then feed a non-null reply back into the thread via
+ *  `turn/start`. Mirrors the `hook.continue.request` IPC handler minus the
+ *  IPC reply — the ContinueBroker.onRequest handler already does the IM
+ *  broadcast, so this only needs the session-upsert bookkeeping. Never throws
+ *  — the companion notify path must not crash on a broker/resume failure. */
+export function makeCodexResumeHandler(deps: {
+  broker: Pick<ContinueBroker, 'request'>;
+  sessions: SessionRegistry;
+  events: Pick<EventHub, 'broadcast' | 'size'>;
+  chats: () => unknown[];
+  resume: (threadId: string, input: string) => Promise<void>;
+}): (p: { threadId: string; key: string; lastMessage?: string }) => void {
+  return (p) => {
+    void (async () => {
+      const { threadId, key, lastMessage } = p;
+      if (shouldFastNullContinue(deps.chats().length, deps.events.size())) {
+        deps.events.broadcast({
+          type: 'session-upsert',
+          session: deps.sessions.upsert({ key, cwd: key, status: 'idle', ...(lastMessage ? { lastMessage } : {}) }),
+        });
+        return;
+      }
+      deps.events.broadcast({
+        type: 'session-upsert',
+        session: deps.sessions.upsert({ key, cwd: key, status: 'waiting-input', ...(lastMessage ? { lastMessage } : {}) }),
+      });
+      const reply = await deps.broker.request({ cwd: key, context: lastMessage ?? 'Turn finished', timeoutSec: 170 });
+      if (reply) {
+        deps.resume(threadId, reply).catch(() => undefined);
+        deps.events.broadcast({ type: 'session-upsert', session: deps.sessions.upsert({ key, cwd: key, status: 'active', continueId: null }) });
+      } else {
+        deps.events.broadcast({ type: 'session-upsert', session: deps.sessions.upsert({ key, cwd: key, status: 'idle', continueId: null }) });
+      }
+    })().catch(() => undefined);
+  };
+}
+
 /** Pending-approval window: absent = legacy 580s; capped at 24h (the CC
  *  permission-request channel asks for ~86000s). */
 export function clampPermissionTimeout(timeoutSec: number | undefined): number {
@@ -211,15 +249,26 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     logPath: join(opts.home, 'codex-appserver.log'),
     onStateChange: (s) => { codexState = s; },
   }).catch(() => null);
+  // Indirection: onResumePrompt is needed at construction time, but resume()
+  // only exists once startCompanion returns — close over this instead.
+  let codexResume: (threadId: string, input: string) => Promise<void> = async () => undefined;
+  const onCodexResumePrompt = makeCodexResumeHandler({
+    broker: continueBroker,
+    sessions,
+    events,
+    chats: configuredChats,
+    resume: (threadId, input) => codexResume(threadId, input),
+  });
   if (custody) {
     codexState = 'running';
     codexCompanion = startCompanion({
       connect: (events) => connectCodexRpc({ sockPath: codexAppServerSockPath(), events }),
       permissionRouter,
       onMonitor: (ev, key) => events.broadcast(applyMonitorEvent(sessions, ev, key)),
-      onResumePrompt: () => { /* Task 5 */ },
+      onResumePrompt: onCodexResumePrompt,
       log: (m) => console.log(`[codex] ${m}`),
     });
+    codexResume = (threadId, input) => codexCompanion!.resume(threadId, input);
   }
 
   // Upstream actions from a dashboard client (/ws/events): approve/reply/mute.
