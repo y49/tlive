@@ -28,18 +28,27 @@ const RESUME_RETRY_MS = 3000;
 const RESUME_RETRY_MAX = 10;
 const RECONNECT_MIN_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
+const POLL_MS = 15_000;
 
 export function startCompanion(deps: CompanionDeps): Companion {
   let stopped = false;
   let rpc: CodexRpc | undefined;
   let reconnectDelay = RECONNECT_MIN_MS;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  let pollTimer: ReturnType<typeof setInterval> | undefined;
   const lastMessages = new Map<string, string>();
+  // Threads we've already (attempted to) resume on the current connection.
+  // Cleared on disconnect — a reconnect doesn't preserve app-server subscriptions.
+  let resumed = new Set<string>();
 
   const log = deps.log ?? (() => undefined);
 
   function resumeThread(threadId: string, attempt = 1): void {
     if (stopped || !rpc) return;
+    if (attempt === 1) {
+      if (resumed.has(threadId)) return;
+      resumed.add(threadId);
+    }
     rpc.call('thread/resume', { threadId }).then(
       () => { reconnectDelay = RECONNECT_MIN_MS; },
       (err: unknown) => {
@@ -54,8 +63,8 @@ export function startCompanion(deps: CompanionDeps): Companion {
     );
   }
 
-  async function onConnected(): Promise<void> {
-    if (!rpc) return;
+  async function pollThreads(): Promise<void> {
+    if (stopped || !rpc) return;
     try {
       const res = (await rpc.call('thread/loaded/list', {})) as { data?: string[] } | undefined;
       const ids = res?.data ?? [];
@@ -64,6 +73,25 @@ export function startCompanion(deps: CompanionDeps): Companion {
       const msg = err instanceof Error ? err.message : String(err);
       log(`companion: thread/loaded/list failed: ${msg}`);
     }
+  }
+
+  function stopPolling(): void {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = undefined;
+    }
+  }
+
+  function startPolling(): void {
+    stopPolling();
+    pollTimer = setInterval(() => { void pollThreads(); }, POLL_MS);
+    pollTimer.unref?.();
+  }
+
+  async function onConnected(): Promise<void> {
+    if (!rpc) return;
+    await pollThreads();
+    startPolling();
   }
 
   function handleNotify(method: string, params: unknown): void {
@@ -183,6 +211,8 @@ export function startCompanion(deps: CompanionDeps): Companion {
       onServerRequest: handleServerRequest,
       onClose: () => {
         rpc = undefined;
+        stopPolling();
+        resumed = new Set();
         if (!stopped) scheduleReconnect();
       },
     };
@@ -203,6 +233,7 @@ export function startCompanion(deps: CompanionDeps): Companion {
     stop(): void {
       stopped = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      stopPolling();
       rpc?.close();
       rpc = undefined;
     },

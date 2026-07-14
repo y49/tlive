@@ -279,6 +279,77 @@ describe('companion', () => {
     comp.stop();
   });
 
+  it('polls thread/loaded/list periodically and resumes newly appearing threads', async () => {
+    let listResult: { data: string[] } = { data: [] };
+    const calls: any[] = [];
+    let events: any;
+    const rpc = {
+      call: vi.fn(async (method: string, params: any) => {
+        calls.push({ method, params });
+        if (method === 'thread/loaded/list') return listResult;
+        if (method === 'thread/resume') return { thread: { id: params.threadId } };
+        return {};
+      }),
+      notify: vi.fn(),
+      close: vi.fn(),
+    };
+    const router = { requestPermission: vi.fn(async () => ({ decision: 'allow' })), cancel: vi.fn(() => 0) };
+    const comp = startCompanion({
+      connect: async (e: any) => { events = e; return rpc as any; },
+      permissionRouter: router as any,
+      onMonitor: vi.fn(),
+      onResumePrompt: vi.fn(),
+    });
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(calls.filter((c) => c.method === 'thread/resume').length).toBe(0);
+
+    listResult = { data: ['t9'] };
+    await vi.advanceTimersByTimeAsync(15_000);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(calls.filter((c) => c.method === 'thread/resume' && c.params.threadId === 't9').length).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(calls.filter((c) => c.method === 'thread/resume' && c.params.threadId === 't9').length).toBe(1);
+
+    comp.stop();
+  });
+
+  it('clears resumed set and polling on close; re-resumes after reconnect', async () => {
+    let connectCount = 0;
+    let events: any;
+    const rpc = {
+      call: vi.fn(async (method: string) => (method === 'thread/loaded/list' ? { data: ['t1'] } : {})),
+      notify: vi.fn(),
+      close: vi.fn(),
+    };
+    const router = { requestPermission: vi.fn(async () => ({ decision: 'allow' })), cancel: vi.fn(() => 0) };
+    const comp = startCompanion({
+      connect: async (e: any) => { connectCount++; events = e; return rpc as any; },
+      permissionRouter: router as any,
+      onMonitor: vi.fn(),
+      onResumePrompt: vi.fn(),
+    });
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(connectCount).toBe(1);
+    expect(rpc.call.mock.calls.filter((c) => c[0] === 'thread/resume' && c[1].threadId === 't1').length).toBe(1);
+
+    events.onClose();
+    await vi.advanceTimersByTimeAsync(1000);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(connectCount).toBe(2);
+    expect(rpc.call.mock.calls.filter((c) => c[0] === 'thread/resume' && c[1].threadId === 't1').length).toBe(2);
+
+    comp.stop();
+  });
+
   it('threadKey formats id', () => {
     expect(threadKey('abc')).toBe('codex:abc');
   });
