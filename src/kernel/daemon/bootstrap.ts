@@ -15,6 +15,9 @@ import { startWebServer, type WebServerHandle } from '../web/server.js';
 import { loadOrCreateToken } from '../web/token.js';
 import { EventHub } from '../web/event-hub.js';
 import { applyMonitorEvent, sweepDeadSessions, pidAlive } from '../web/session-events.js';
+import { ensureCodexAppServer, codexAppServerSockPath } from '../codex/spawn.js';
+import { connectCodexRpc } from '../codex/rpc.js';
+import { startCompanion, type Companion } from '../codex/companion.js';
 
 export interface DaemonHandle {
   shutdown(): Promise<void>;
@@ -29,6 +32,7 @@ export interface DaemonHandle {
 export interface BootstrapOpts {
   home: string;
   imAdapters?: IMAdapter[];
+  ensureAppServer?: typeof ensureCodexAppServer;
 }
 
 /** A Stop hook should not sit waiting when nothing can answer: no IM chat
@@ -197,6 +201,27 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     }
   });
 
+  // Codex app-server companion: adopt-or-spawn custody + RPC subscription for
+  // monitoring/approvals. Absent codex / win32 / spawn failure → 'off', purely
+  // local (in-terminal) approvals still work; the daemon must never crash for this.
+  let codexCompanion: Companion | null = null;
+  let codexState: 'running' | 'degraded' | 'off' = 'off';
+  const ensureAppServer = opts.ensureAppServer ?? ensureCodexAppServer;
+  const custody = await ensureAppServer({
+    logPath: join(opts.home, 'codex-appserver.log'),
+    onStateChange: (s) => { codexState = s; },
+  }).catch(() => null);
+  if (custody) {
+    codexState = 'running';
+    codexCompanion = startCompanion({
+      connect: (events) => connectCodexRpc({ sockPath: codexAppServerSockPath(), events }),
+      permissionRouter,
+      onMonitor: (ev, key) => events.broadcast(applyMonitorEvent(sessions, ev, key)),
+      onResumePrompt: () => { /* Task 5 */ },
+      log: (m) => console.log(`[codex] ${m}`),
+    });
+  }
+
   // Upstream actions from a dashboard client (/ws/events): approve/reply/mute.
   const onAction = (action: import('../web/event-hub.js').EventAction): void => {
     switch (action.type) {
@@ -253,7 +278,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'info', msg: 'ipc.request', kind: req.kind, callerPid: ctx.callerPid ?? null }));
       switch (req.kind) {
         case 'daemon.status':
-          reply({ kind: 'daemon.status', uptimeMs: Date.now() - startedAt, pid: process.pid });
+          reply({ kind: 'daemon.status', uptimeMs: Date.now() - startedAt, pid: process.pid, codex: codexState });
           return;
         case 'daemon.stop':
           reply({ kind: 'daemon.stopped' });
@@ -392,6 +417,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     }, 2000);
     forceExit.unref();
     try {
+      codexCompanion?.stop();
+      custody?.stop();
       for (const a of opts.imAdapters ?? []) await a.stop();
       if (web) await web.close();
       await ipc.close();

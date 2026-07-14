@@ -31,6 +31,7 @@ export function startCompanion(deps: CompanionDeps): Companion {
   let rpc: CodexRpc | undefined;
   let reconnectDelay = RECONNECT_MIN_MS;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  const lastMessages = new Map<string, string>();
 
   const log = deps.log ?? (() => undefined);
 
@@ -69,17 +70,60 @@ export function startCompanion(deps: CompanionDeps): Companion {
       if (threadId) resumeThread(threadId);
       return;
     }
+    if (method === 'item/started') {
+      const threadId = (p.threadId as string | undefined) ?? '';
+      if (!threadId) return;
+      const item = (p.item ?? {}) as Record<string, unknown>;
+      const key = threadKey(threadId);
+      if (item.type === 'userMessage') {
+        const content = item.content as Array<{ text?: string }> | undefined;
+        const prompt = content?.[0]?.text ?? '';
+        deps.onMonitor({ event: 'prompt', cwd: key, sessionId: threadId, prompt }, key);
+      } else if (item.type === 'commandExecution') {
+        deps.onMonitor({ event: 'activity', cwd: key, sessionId: threadId, toolName: 'Bash', result: {} }, key);
+      }
+      return;
+    }
+    if (method === 'turn/started') {
+      const threadId = (p.threadId as string | undefined) ?? '';
+      if (!threadId) return;
+      const key = threadKey(threadId);
+      deps.onMonitor({ event: 'activity', cwd: key, sessionId: threadId, toolName: '(turn)', result: {} }, key);
+      return;
+    }
     if (method === 'item/completed') {
       const threadId = (p.threadId as string | undefined) ?? '';
       const item = (p.item ?? {}) as Record<string, unknown>;
       if (threadId && item.type === 'commandExecution') {
         deps.permissionRouter.cancel({ key: threadKey(threadId), toolName: 'Bash', sessionId: threadId });
       }
+      if (threadId && item.type === 'agentMessage') {
+        lastMessages.set(threadId, (item.text as string | undefined) ?? '');
+      }
       return;
     }
     if (method === 'turn/completed') {
       const threadId = (p.threadId as string | undefined) ?? '';
-      if (threadId) deps.permissionRouter.cancel({ key: threadKey(threadId) });
+      if (threadId) {
+        deps.permissionRouter.cancel({ key: threadKey(threadId) });
+        const key = threadKey(threadId);
+        const lastMessage = lastMessages.get(threadId);
+        deps.onMonitor(
+          { event: 'attention', cwd: key, sessionId: threadId, message: 'Turn finished — reply to continue', ...(lastMessage !== undefined ? { lastMessage } : {}) },
+          key,
+        );
+        deps.onResumePrompt({ threadId, key, ...(lastMessage !== undefined ? { lastMessage } : {}) });
+      }
+      return;
+    }
+    if (method === 'thread/status/changed') {
+      const threadId = (p.threadId as string | undefined) ?? readThreadId(p) ?? '';
+      const status = (p.status ?? {}) as Record<string, unknown>;
+      if (threadId && status.type === 'archived') {
+        const key = threadKey(threadId);
+        lastMessages.delete(threadId);
+        deps.onMonitor({ event: 'session-end', cwd: key, sessionId: threadId }, key);
+      }
       return;
     }
   }

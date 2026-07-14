@@ -170,6 +170,94 @@ describe('companion', () => {
     expect(connectCount).toBe(3);
   });
 
+  it('item/started userMessage -> prompt monitor event', async () => {
+    const { comp, onMonitor, getEvents } = harness();
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+    const events = getEvents();
+    events.onNotify('item/started', { threadId: 't1', item: { type: 'userMessage', content: [{ text: 'hello' }] } });
+    expect(onMonitor).toHaveBeenCalledWith({ event: 'prompt', cwd: 'codex:t1', sessionId: 't1', prompt: 'hello' }, 'codex:t1');
+    comp.stop();
+  });
+
+  it('item/started commandExecution -> activity monitor event', async () => {
+    const { comp, onMonitor, getEvents } = harness();
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+    const events = getEvents();
+    events.onNotify('item/started', { threadId: 't1', item: { type: 'commandExecution' } });
+    expect(onMonitor).toHaveBeenCalledWith({ event: 'activity', cwd: 'codex:t1', sessionId: 't1', toolName: 'Bash', result: {} }, 'codex:t1');
+    comp.stop();
+  });
+
+  it('turn/started -> (turn) activity monitor event', async () => {
+    const { comp, onMonitor, getEvents } = harness();
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+    const events = getEvents();
+    events.onNotify('turn/started', { threadId: 't1' });
+    expect(onMonitor).toHaveBeenCalledWith({ event: 'activity', cwd: 'codex:t1', sessionId: 't1', toolName: '(turn)', result: {} }, 'codex:t1');
+    comp.stop();
+  });
+
+  it('turn/completed -> attention with remembered lastMessage + onResumePrompt', async () => {
+    const calls: any[] = [];
+    let events: any;
+    const rpc = {
+      call: vi.fn(async (method: string) => (method === 'thread/loaded/list' ? { data: ['t1'] } : {})),
+      notify: vi.fn(),
+      close: vi.fn(),
+    };
+    const router = { requestPermission: vi.fn(async () => ({ decision: 'allow' })), cancel: vi.fn(() => 0) };
+    const onMonitor = vi.fn();
+    const onResumePrompt = vi.fn();
+    const comp = startCompanion({
+      connect: async (e: any) => { events = e; return rpc as any; },
+      permissionRouter: router as any,
+      onMonitor,
+      onResumePrompt,
+    });
+    calls.length = 0;
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    events.onNotify('item/completed', { threadId: 't1', item: { type: 'agentMessage', text: 'final answer' } });
+    events.onNotify('turn/completed', { threadId: 't1' });
+
+    expect(onMonitor).toHaveBeenCalledWith(
+      { event: 'attention', cwd: 'codex:t1', sessionId: 't1', message: 'Turn finished — reply to continue', lastMessage: 'final answer' },
+      'codex:t1',
+    );
+    expect(onResumePrompt).toHaveBeenCalledWith({ threadId: 't1', key: 'codex:t1', lastMessage: 'final answer' });
+    comp.stop();
+  });
+
+  it('thread/status/changed archived -> session-end monitor event', async () => {
+    const { comp, onMonitor, getEvents } = harness();
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+    const events = getEvents();
+    events.onNotify('thread/status/changed', { threadId: 't1', status: { type: 'archived' } });
+    expect(onMonitor).toHaveBeenCalledWith({ event: 'session-end', cwd: 'codex:t1', sessionId: 't1' }, 'codex:t1');
+    comp.stop();
+  });
+
+  it('thread/status/changed non-archived -> no session-end', async () => {
+    const { comp, onMonitor, getEvents } = harness();
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+    const events = getEvents();
+    events.onNotify('thread/status/changed', { threadId: 't1', status: { type: 'active' } });
+    expect(onMonitor).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'session-end' }), expect.anything());
+    comp.stop();
+  });
+
   it('threadKey formats id', () => {
     expect(threadKey('abc')).toBe('codex:abc');
   });

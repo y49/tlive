@@ -1,12 +1,10 @@
 // src/cli/subcommands/status.ts
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { request } from '../../kernel/ipc/client.js';
 import { loadConfig } from '../../kernel/config/loader.js';
 import { resolveWebUrls, printWebBanner } from '../web-url.js';
-import { codexHookState } from '../../kernel/integrations/codex-trust.js';
-import { codexPluginHooksPath } from '../../kernel/integrations/hooks-cleanup.js';
 
 export async function runStatus(_argv: string[]): Promise<void> {
   const home = process.env.TLIVE_HOME ?? join(homedir(), '.tlive');
@@ -16,28 +14,16 @@ export async function runStatus(_argv: string[]): Promise<void> {
     if (r.kind === 'daemon.status') {
       daemonOk = true;
       process.stdout.write(`daemon:   running (pid ${r.pid}, uptime ${(r.uptimeMs / 1000).toFixed(0)}s)\n`);
+      if (r.codex === 'running') {
+        process.stdout.write('codex:    app-server companion running\n');
+      } else if (r.codex === 'degraded') {
+        process.stdout.write('codex:    app-server companion degraded (respawn failed — approvals local-only)\n');
+      } else {
+        process.stdout.write('codex:    app-server companion off (codex not found or win32 — approvals local-only)\n');
+      }
     }
   } catch { /* not running */ }
   if (!daemonOk) process.stdout.write('daemon:   not running (run: tlive start)\n');
-
-  // codex 本体尊重 $CODEX_HOME(插件 cache/config 都在其下),status 检测同源。
-  const codexHome = process.env.CODEX_HOME ?? join(homedir(), '.codex');
-  const codexHooks = codexPluginHooksPath(codexHome);
-  const codexCfg = join(codexHome, 'config.toml');
-  let configTomlText: string | null = null;
-  try {
-    if (existsSync(codexCfg)) configTomlText = readFileSync(codexCfg, 'utf-8');
-  } catch {
-    configTomlText = null;
-  }
-  const codexState = codexHooks === null
-    ? 'not-installed'
-    : codexHookState({ hooksJsonExists: true, configTomlText, hooksJsonPath: codexHooks });
-  if (codexState === 'installed-untrusted') {
-    process.stdout.write('codex:    hooks installed but NOT trusted — run `codex` and approve tlive in the hooks review.\n');
-  } else if (codexState === 'installed-trusted') {
-    process.stdout.write('codex:    hooks installed and trusted\n');
-  }
 
   const cfg = loadConfig(home);
   const dests: string[] = [];

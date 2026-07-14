@@ -18,6 +18,12 @@ describe('daemon bootstrap', () => {
     const r = await request({ kind: 'daemon.status' }, { socketPath: join(tmp, 'daemon.sock'), timeoutMs: 2000 });
     expect(r.kind).toBe('daemon.status');
   });
+
+  it('reports codex: off when the app-server custody cannot be established', async () => {
+    h = await bootstrapDaemon({ home: tmp, ensureAppServer: async () => null });
+    const r = await request({ kind: 'daemon.status' }, { socketPath: join(tmp, 'daemon.sock'), timeoutMs: 2000 });
+    expect(r).toMatchObject({ kind: 'daemon.status', codex: 'off' });
+  });
 });
 
 describe('dual-channel wiring helpers', () => {
