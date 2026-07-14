@@ -27,6 +27,8 @@ describe('connectCodexRpc handshake', () => {
     sock.open();
     // first outbound message is initialize with experimentalApi
     expect(sock.sent[0]).toMatchObject({ method: 'initialize', params: { capabilities: { experimentalApi: true } } });
+    // clientInfo.version should match semantic versioning, not hardcoded '0.0.0'
+    expect(sock.sent[0].params.clientInfo.version).toMatch(/^\d+\.\d+\.\d+/);
     sock.reply({ jsonrpc: '2.0', id: sock.sent[0].id, result: { userAgent: 'x' } });
     const rpc = await p;
     expect(sock.sent[1]).toMatchObject({ method: 'initialized' });

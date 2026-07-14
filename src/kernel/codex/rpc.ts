@@ -4,6 +4,11 @@
 // 连接参数是真机探针钉死的:ws+unix 单斜杠格式 + perMessageDeflate:false +
 // Host 头缺一不可(tungstenite 否则拒握手)。传输可注入,测试全走 fake。
 import { WebSocket } from 'ws';
+import { createRequire } from 'node:module';
+
+const pkgVersion: string = (() => {
+  try { return (createRequire(import.meta.url)('../../../package.json') as { version: string }).version; } catch { return '0.0.0'; }
+})();
 
 export interface CodexRpcEvents {
   onNotify: (method: string, params: unknown) => void;
@@ -71,7 +76,7 @@ export async function connectCodexRpc(opts: {
   await new Promise<void>((resolve, reject) => {
     sock.once('open', () => {
       call('initialize', {
-        clientInfo: { name: 'tlive', title: 'tlive companion', version: '0.0.0' },
+        clientInfo: { name: 'tlive', title: 'tlive companion', version: pkgVersion },
         capabilities: { experimentalApi: true },
       }).then(() => resolve(), reject);
     });
