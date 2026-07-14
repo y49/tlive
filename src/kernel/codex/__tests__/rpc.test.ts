@@ -76,8 +76,12 @@ describe('call/notify/dispatch', () => {
       const onClose = vi.fn();
       const { sock, rpc } = await live({ onClose });
       const c = rpc.call('x', {}, 1000);
+      // Attach the rejection assertion BEFORE advancing timers — otherwise the
+      // timeout rejection fires before `.rejects` attaches, producing an
+      // unhandled rejection that makes vitest exit 1 despite all tests passing.
+      const r = expect(c).rejects.toThrow(/timeout/);
       await vi.advanceTimersByTimeAsync(1100);
-      await expect(c).rejects.toThrow(/timeout/);
+      await r;
       sock.close();
       expect(onClose).toHaveBeenCalled();
     } finally { vi.useRealTimers(); }

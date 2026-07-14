@@ -41,6 +41,34 @@ describe('ensureCodexAppServer', () => {
       expect(states.at(-1)).toBe('degraded');
     } finally { vi.useRealTimers(); }
   });
+  it('respawns after backoff when a child emits error with no exit', async () => {
+    vi.useFakeTimers();
+    try {
+      const children: any[] = [];
+      const spawnFn = vi.fn(() => { const ch = fakeChild(); children.push(ch); return ch; });
+      const c = await ensureCodexAppServer({ logPath: '/tmp/x.log', probe: async () => false, spawnFn: spawnFn as any, platform: 'linux', hasCodex: () => true });
+      expect(spawnFn).toHaveBeenCalledTimes(1);
+      children[0].emit('error', new Error('EACCES'));
+      await vi.advanceTimersByTimeAsync(1100);
+      expect(spawnFn).toHaveBeenCalledTimes(2);
+      c!.stop();
+    } finally { vi.useRealTimers(); }
+  });
+  it('counts a child emitting error then exit only once (no double respawn)', async () => {
+    vi.useFakeTimers();
+    try {
+      const children: any[] = [];
+      const spawnFn = vi.fn(() => { const ch = fakeChild(); children.push(ch); return ch; });
+      const c = await ensureCodexAppServer({ logPath: '/tmp/x.log', probe: async () => false, spawnFn: spawnFn as any, platform: 'linux', hasCodex: () => true });
+      children[0].emit('error', new Error('EACCES'));
+      children[0].emit('exit', 1);
+      await vi.advanceTimersByTimeAsync(1100);
+      expect(spawnFn).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(spawnFn).toHaveBeenCalledTimes(2);
+      c!.stop();
+    } finally { vi.useRealTimers(); }
+  });
   it('signals running via onStateChange when adopting an already-listening socket', async () => {
     const spawnFn = vi.fn();
     const states: string[] = [];

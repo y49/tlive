@@ -70,7 +70,7 @@ export function makeCodexResumeHandler(deps: {
       });
       const reply = await deps.broker.request({ cwd: key, context: lastMessage ?? 'Turn finished', timeoutSec: 170 });
       if (reply) {
-        deps.resume(threadId, reply).catch(() => undefined);
+        deps.resume(threadId, reply).catch((e) => console.log('[codex] resume failed: ' + (e instanceof Error ? e.message : String(e))));
         deps.events.broadcast({ type: 'session-upsert', session: deps.sessions.upsert({ key, cwd: key, status: 'active', continueId: null }) });
       } else {
         deps.events.broadcast({ type: 'session-upsert', session: deps.sessions.upsert({ key, cwd: key, status: 'idle', continueId: null }) });

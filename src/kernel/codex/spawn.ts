@@ -56,7 +56,11 @@ function defaultSpawnFn(logPath: string): ChildLike {
   });
   // spawn() 内部已 dup 该 fd 给子进程的 stdout/stderr,子进程持有独立的描述符引用,
   // 父进程这份 fd 用完即可关闭,否则每次 respawn 都会泄漏一个 fd。
-  closeSync(fd);
+  try {
+    closeSync(fd);
+  } catch {
+    // best-effort close; a failure here must not crash the daemon
+  }
   return child;
 }
 
@@ -106,7 +110,13 @@ export async function ensureCodexAppServer(opts: {
   const spawnChild = () => {
     const spawnedAt = Date.now();
     child = spawnFn(opts.logPath);
-    child.on('exit', () => {
+    let settled = false;
+    const onDeath = () => {
+      // A child can emit both 'error' and 'exit' for the same failure — only
+      // count/react once per child, or the fast-exit streak double-counts and
+      // scheduleRespawn fires twice (double-spawn).
+      if (settled) return;
+      settled = true;
       if (stopped) return;
       const lived = Date.now() - spawnedAt;
       if (lived < FAST_EXIT_MS) {
@@ -116,7 +126,12 @@ export async function ensureCodexAppServer(opts: {
         currentBackoffMs = 1000;
       }
       scheduleRespawn();
-    });
+    };
+    // Async spawn failures (ENOENT TOCTOU, EACCES, EMFILE) emit 'error' and
+    // never 'exit' — without this listener that's an uncaught exception that
+    // crashes the daemon and backoff never engages.
+    child.on('error', onDeath);
+    child.on('exit', onDeath);
     onStateChange('running');
   };
 
