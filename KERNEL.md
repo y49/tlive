@@ -82,71 +82,69 @@ type NormalizedHook =
 type MonitorEvent = activity | attention | prompt | subagent | permission-denied
                   | session-start | session-end
 
-type HookVendor = 'claude' | 'codex';
+type HookVendor = 'claude' | 'codex';  // codex 值仅用于 shim 的优雅短路分支,不再驱动任何 gating 逻辑
 
-// decision 序列化回各 vendor 的 hook 格式(vendor 差异只在这一层收口,kernel 不感知):
-permissionRequestDecisionOut(decision: 'allow'|'deny'|'defer', reason?: string): object  // PermissionRequest wire(两家同形);deny 恒带 message,defer → {}
+// decision 序列化回 Claude Code 的 hook 格式(Codex 不再走 hook,故此层现在是 claude-only):
+permissionRequestDecisionOut(decision: 'allow'|'deny'|'defer', reason?: string): object  // PermissionRequest wire;deny 恒带 message,defer → {}
 continueDecisionOut(reply: string | null): object   // reply → {decision:'block',reason}
 ```
 
-Claude / Codex 的原始 hook JSON 在这里归一。加一个新 AI runtime = 把它的 hook
-事件映射进这套归一模型,kernel 不变。
+Claude 的原始 hook JSON 在这里归一。加一个新 AI runtime = 把它的 hook 事件
+映射进这套归一模型(hook 式集成)或走 companion 式集成(见下),kernel 不变。
 
-**审批双通道(CC vs Codex)**:Claude Code 的 gating 走 `PermissionRequest`
-hook——它与本地权限对话**并行**(先答先得),窗口可长(默认 30min,
-`approvals.claudeWindowSec` 可配至 86200s≈24h;hooks.json `timeout: 86400`,
-shim IPC=窗+100s,daemon clamp 24h);本地答掉后 daemon 靠 PostToolUse(同
-key+tool,本地点了允许)/
+**审批(Claude Code)**:gating 走 `PermissionRequest` hook——它与本地权限
+对话**并行**(先答先得),窗口可长(默认 30min,`approvals.claudeWindowSec`
+可配至 86200s≈24h;hooks.json `timeout: 86400`,shim IPC=窗+100s,daemon
+clamp 24h);本地答掉后 daemon 靠 PostToolUse(同 key+tool,本地点了允许)/
 UserPromptSubmit(同 key)/ Stop(同 key)cancel 挂起请求(resolve 为
 'local',wire 上映射回 'defer' → shim 输出 `{}` pass-through)。
 PermissionDenied(同 key+tool)只覆盖规则型拒绝——真机实测:用户在对话框点
 "No" **不会** fire 它,本地拒绝靠 UserPromptSubmit/Stop 扫尾(最晚 turn 结束
-时释放)。Codex 的 `run_permission_request_hooks` 在源码里与原生
-提示严格串行(先 hook 后提示,同函数内 `.await`),长窗会冻结终端,故 Codex
-的 PermissionRequest 用中等窗(默认 ~600s,详见下方 vendor 差异节);无限
-远程用 wrapped(`tlive run codex`)。
-`notification` 的 `permission_prompt` 类型在 CC shim 直接丢弃(并行卡已覆盖那
-个时刻,再发提醒就是每张卡都重复一条)。
+时释放)。`notification` 的 `permission_prompt` 类型在 CC shim 直接丢弃
+(并行卡已覆盖那个时刻,再发提醒就是每张卡都重复一条)。
 
-**Codex 是这套模式的实例**(打包进 `plugins/codex/plugins/tlive/hooks/hooks.json`
-的 hooks 块,schema 与 Claude `settings.json` 的 `hooks` 块同构;shim 靠
-`tlive hook --codex <event>` 的 `--codex` flag 选 vendor)。gating 输出两家共用
-`permissionRequestDecisionOut`;PreToolUse gating 路径已整体删除(no-compat:
-早期直写配置的用户按 docs/manual-hooks.md 换 PermissionRequest 块)。另有装机层(hooks.json
-的事件集,无 Notification/SessionEnd)与超时层(`hook.ts` shim 死线兜 Codex
-fail-open)的差异:
-
-- **两家 gating 都走 PermissionRequest,输出 wire 同形**
-  (`permissionRequestDecisionOut` 共用,无 vendor 分支;CC 2.1.206 真机 +
-  Codex 0.144 源码 schema.rs `PermissionRequestDecisionWire` 双验证):
-  allow/deny(带 message)/`{}`。差异只剩窗口:CC 并行(默认 30min 可配至
-  24h),Codex 串行
-  ~600s(shim 内 vendor 分支选 timeoutSec)。
-- Codex PermissionRequest 超时/报错/空输出 = 无决策 → 落回原生审批流,
-  **结构性 fail-safe**(events/permission_request.rs:任一 deny 即胜,None
-  → normal approval)。旧的 590s 死线抢跑机制已退役。
 - ⚠ **历史教训(2026-07-10)**:codex 0.142→0.144 把 gating 从 PreToolUse
   挪到 PermissionRequest,`PreToolUse` 开始拒收 `ask`/裸 `allow` 且对非法
   输出 **fail-open**(output_parser.rs 有测试名就叫
   `unsupported_permission_decision_fails_open`)。凡 vendor hook 语义,版本
-  升级时必须回源码复核,不能假设两家或两版同构。
+  升级时必须回源码复核,不能假设两家或两版同构 —— 这条教训是 Codex hooks
+  被彻底退役、换成 companion 架构(下方)的直接背景之一。
 - PreToolUse gating(`permissionDecisionOut` / `pre-tool-use` 事件)已整体
   删除(no-compat);shim 收到未知事件一律优雅输出 `{}`。
-- Codex 没有 `Notification` / `SessionEnd` 这两个 hook 事件,插件只装
-  `PermissionRequest`(660s)/`Stop`(180s)/`PostToolUse`/
-  `UserPromptSubmit`/`SessionStart`。
 
-**装机层已从直写 vendor 配置改为插件分发**:`tlive setup` /
-`--hooks-only` 不再手改 `~/.claude/settings.json` / `~/.codex/hooks.json`,
-而是调用各家自己的插件管理器(`claude plugin marketplace add` +
-`claude plugin install tlive@tlive`;`codex plugin marketplace add` +
-`codex plugin add tlive@tlive`,见 `src/kernel/integrations/plugin-install.ts`)。
-插件(`plugins/claude/plugins/tlive/`、`plugins/codex/plugins/tlive/`)里打包
-的 hooks.json 事件集与之前直写的完全一致——本节的归一/超时/vendor 差异描述
-不受影响,只是 hooks 现在随插件挂载,而不是 tlive 进程直接写文件。老 vendor
-无插件 CLI 时退回 `docs/manual-hooks.md` 里的手动配置。旧版本直写在磁盘上
-留下的条目由插件首次安装成功时剥离(`src/kernel/integrations/hooks-cleanup.ts`),
-防止双发。
+**Codex 集成:app-server companion,不是 hook**(`src/kernel/codex/`)。
+Codex 的 hooks/trust 整套已退役(no-compat,2026-07-14)——`tlive hook
+--codex <event>` 现在是纯短路:立即输出 `{}` 并在 stderr 打一行 `codex
+hooks are retired; tlive integrates via app-server`,不再触碰任何决策逻辑。
+真正的集成路径:
+
+- **spawn custody**(`spawn.ts` 的 `codexAppServerSockPath` + adopt-or-spawn
+  逻辑):daemon 探测 tlive 的 unix socket 路径上是否已有 `codex app-server
+  --listen unix://…` 在监听——有就 adopt,没有就 spawn 并托管,带
+  respawn/backoff。Codex TUI 启动时**自行**连上那个 socket(Codex 自身特性,
+  tlive 不逐会话配置)。
+- **rpc**(`rpc.ts` 的 `defaultCodexSocket`):走 Codex 官方 app-server RPC,
+  订阅 thread/turn 事件流。
+- **companion**(`companion.ts` 的 `startCompanion`):把 RPC 事件接进
+  daemon 的会话模型(`threadKey` 做 codex thread → tlive session 的映射),
+  Codex 发起权限请求时以 `ServerRequest` 广播给 IM/web **和**原生 TUI 提示
+  ——**先答先得**,与 Claude Code 并行通道同一语义。没有窗口可配置:原生
+  提示永远不会被 tlive 卡住,因此没有超时概念。
+- **降级语义**:companion 连不上(未装 Codex、respawn 耗尽 backoff、
+  win32 尚未接好)时,`tlive status` 报告 `codex: app-server companion
+  unreachable — approvals local-only`,Codex 照常走自己的本地审批流——
+  无 IM/web 卡,不崩,只是少了远程通道。
+
+**装机层**:`tlive setup` / `--hooks-only` 不手改 `~/.claude/settings.json`
+/ `~/.codex/hooks.json`,而是调用各家自己的插件管理器(`claude plugin
+marketplace add` + `claude plugin install tlive@tlive`;`codex plugin
+marketplace add` + `codex plugin add tlive@tlive`,见
+`src/kernel/integrations/plugin-install.ts`)。Claude 插件
+(`plugins/claude/plugins/tlive/`)打包 hooks.json + skill;Codex 插件
+(`plugins/codex/plugins/tlive/`)只打包 skill——没有 hooks 目录,没有信任
+步骤。老 vendor 无插件 CLI 时退回 `docs/manual-hooks.md` 里的手动配置。
+旧版本直写在磁盘上留下的条目由插件首次安装成功时剥离
+(`src/kernel/integrations/hooks-cleanup.ts`),防止双发。
 
 ### 4. IPC 协议
 
@@ -190,17 +188,18 @@ setup, start, stop, status, logs, run, url, hook
 ## Contributing
 
 - 加 IM 平台 → 写新 `IMAdapter` plugin,别动 kernel。
-- 加 AI runtime → 写「该 runtime 的 hook 事件 → 归一模型」的映射;Codex
-  adapter(`src/kernel/hook/normalizer.ts` 的 `HookVendor`/
-  `src/kernel/integrations/plugin-install.ts` 的 `installCodexPlugin()`/
-  `plugins/codex/plugins/tlive/hooks/hooks.json`)是现成范例。
+- 加 AI runtime → 两条路都行:有 hook 机制就走「该 runtime 的 hook 事件 →
+  归一模型」映射(参考 `src/kernel/hook/normalizer.ts`);没有 hook 但有
+  RPC/server 协议就走 companion 式集成(参考 `src/kernel/codex/` 的
+  spawn custody + rpc + companion 三件套)。
 - 改任一契约 → breaking change,bump major + 更新 `tests/contract/`。
 - 重构 kernel 内部 → 随意,只要 `tests/contract/` 保持绿。
 
 ## Architecture(给新贡献者)
 
 ```
-你自己的 claude/codex ──hooks──▶ tlive hook shim ──IPC──▶ daemon
+你自己的 claude ────────── hooks ──▶ tlive hook shim ──IPC──▶ daemon
+你自己的 codex ─────────── rpc ───▶ tlive app-server companion ──▶ daemon
 tlive run <cmd>(前台拥有 pty)── per-session socket ──▶ PtyBridge
                                                        daemon ──▶ IM adapters(Telegram/飞书)
                                                        daemon ──▶ web(token 门):dashboard + /s/<id>

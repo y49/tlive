@@ -35,7 +35,7 @@ the web card lights up red.
 
 ## The two integration levels
 
-| | hooks only (`claude`/`codex` as usual) | wrapped (`tlive run claude`/`codex`) |
+| | hooks/companion only (`claude`/`codex` as usual) | wrapped (`tlive run claude`/`codex`) |
 |---|---|---|
 | Approval cards (IM + web) | ✅ | ✅ |
 | Stop-resume by IM reply | ✅ (reply window) | ✅ |
@@ -55,8 +55,10 @@ which powers a session has.
   fires **in parallel with the local permission dialog** — both are live,
   first answer wins. Answer from IM buttons or the web card any time within
   24 hours; answer at the keyboard and the remote card resolves itself
-  ("answered in terminal") within seconds. On Codex the `PermissionRequest`
-  hook gates serially with a ~10 min window (see Security model). Diff/command
+  ("answered in terminal") within seconds. On Codex, tlive spawns/adopts a
+  `codex app-server` companion process and Codex TUIs auto-attach to it —
+  the remote card and the native prompt race the same way, with no window
+  to configure (see Security model). Diff/command
   rendering, risky-pattern flags, secret masking. **"Always allow \<tool\>"**
   grants a per-tool pass (in-memory, cleared on restart) — on Claude Code it
   now answers the native dialog for you remotely; `/trust on|off` pauses
@@ -71,7 +73,7 @@ which powers a session has.
 - **Failure alerts (Claude Code only)** — `PostToolUseFailure` (a tool call
   errored) and `StopFailure` (session-level error, e.g. rate-limit/billing)
   push a ❌ IM message. Pure side-channel, never affects approval decisions;
-  Codex has no equivalent hooks so these aren't installed for it.
+  Codex has no equivalent hooks, so this only fires for Claude Code.
 - **In-session welcome hint (Claude Code only)** — if IM isn't configured
   yet, `SessionStart` injects a one-line prompt into the session context
   nudging you to say "help me configure tlive"; it stops appearing once IM
@@ -100,11 +102,12 @@ vendor's **own plugin manager**:
 - Codex (if `codex` is on `PATH`): `codex plugin marketplace add <bundled
   dir>` then `codex plugin add tlive@tlive`.
 
-The plugin bundles the hooks (same 9 Claude Code events / 5 Codex events as
-before), a `tlive` skill (usage, diagnostics, security model, under the
-`/tlive:*` namespace), and Claude Code slash commands `/tlive:url` and
-`/tlive:status`. The vendor **copies** the plugin into its own cache
-(`~/.claude/plugins/cache` for Claude Code,
+The Claude Code plugin bundles the 9 hook events, a `tlive` skill (usage,
+diagnostics, security model, under the `/tlive:*` namespace), and slash
+commands `/tlive:url` and `/tlive:status`. The Codex plugin ships only the
+skill — Codex has no hooks and needs none; its integration is the
+app-server companion (see below). The vendor **copies** the plugin into its
+own cache (`~/.claude/plugins/cache` for Claude Code,
 `$CODEX_HOME/plugins/cache/tlive/tlive/local/` for Codex) — after upgrading
 `tlive` itself, re-run `tlive setup --hooks-only` to refresh that copy.
 
@@ -137,35 +140,29 @@ through it and later say "help me configure tlive" inside Claude Code or
 Codex — or, in Claude Code, run `/tlive:setup` — to have the AI walk you
 through it interactively (Codex has no slash commands; use the phrase).
 
-## Codex: hooks are trusted automatically
+## Codex: the app-server companion
 
-Installed events (via the plugin, `tlive hook --codex <event>`):
-`PermissionRequest` (approval), `Stop` (resume), `PostToolUse`,
-`UserPromptSubmit`, `SessionStart`. Codex doesn't have `Notification` or
-`SessionEnd` hooks, so those two aren't installed for it.
+Codex has no hooks and no trust step — the entire Claude-style hooks/trust
+dance above doesn't apply. Instead, `tlive` takes custody of a `codex
+app-server --listen unix://…` process: it adopts one already listening on
+tlive's socket path, or spawns and owns one (with respawn/backoff) if none
+is there. Any `codex` TUI you run **auto-attaches** to that socket — this
+is a Codex feature, not something tlive configures per-session.
 
-The catch: **Codex silently skips hooks it doesn't trust** — no error, no
-prompt, they just never fire. `tlive setup` (and `--hooks-only`) handles
-this for you right after installing the Codex plugin: it calls `codex
-app-server`'s official read-only `hooks/list` RPC to read each tlive
-hook's `currentHash`, writes the matching `[hooks.state]` entries into
-`~/.codex/config.toml` (the same artifact an interactive `approve` in
-Codex's own hooks review would produce), then calls `hooks/list` again to
-self-check that every tlive hook now reports `trusted`. If that check
-fails for any reason, it rolls the file back and falls back to the manual
-path — it never touches hook entries other than tlive's own. `tlive
-status` reports whether you're on `hooks installed but NOT trusted` or
-`hooks installed and trusted`.
+Over that RPC connection tlive subscribes to Codex's own thread/turn
+events and drives approvals through `ServerRequest`: when Codex asks for a
+permission decision, tlive broadcasts the same request to IM/web and to
+the native TUI prompt simultaneously — **first answer wins**, exactly like
+Claude Code's parallel channel. There is no approval window to configure:
+the native prompt is never blocked waiting on tlive, so there's nothing
+that can time out.
 
-If auto-trust didn't go through (printed as a `⚠` line during setup), do
-it once by hand: run `codex`, type `/hooks`, and approve tlive's hook —
-the trust record lands in the same `~/.codex/config.toml`
-`[hooks.state]` section.
-
-If you'd rather skip both paths (needs root): add tlive's hook entries to
-`/etc/codex/requirements.toml` under `[hooks]`. Codex treats hooks listed
-there as pre-trusted "managed hooks" — see Codex's own docs for that
-file's format; tlive doesn't write it for you.
+If the companion can't be reached (Codex not installed, respawn exhausted
+its backoff, or you're on win32 where `codex app-server` isn't wired up
+yet), `tlive status` says so plainly (`codex: app-server companion
+unreachable — approvals local-only`) and Codex just runs with its normal
+local approval flow — no IM/web card, no crash, no degraded behavior
+beyond losing the remote channel.
 
 ## Why not the official remotes?
 
@@ -202,22 +199,13 @@ layer for sessions you already run.
   tlive weren't there. On Claude Code the local dialog is live the whole
   time anyway (parallel channels), so "fallback" just means the remote card
   goes quiet.
-- **Codex gating rides `PermissionRequest` and is fail-safe by design** —
-  a timeout, an error, or empty hook output means "no decision", and Codex
-  falls back to its own native approval flow (verified in Codex source:
-  decisions fold conservatively, any deny wins, `None` → normal approval).
-  There is no fail-open window to race against. Codex's permission hook
-  blocks the native prompt while it runs (serial — also source-verified),
-  so the remote window is kept moderate (~10 min, max 2h) versus Claude
-  Code's parallel channel (default 30min, configurable up to ~24h).
-  Want unlimited remote interaction with Codex? Wrap it:
-  `tlive run codex` has no hook and no timeout — the web terminal and IM
-  injection drive the session directly.
-- **Do not gate Codex through `PreToolUse`** (as tlive versions before this
-  one did): on codex ≥0.143 `PreToolUse` rejects `permissionDecision: ask`
-  and bare `allow` as unsupported output and then **fails open** — the tool
-  runs. If you ever hand-wrote such a config, replace it with the
-  `PermissionRequest` block from `docs/manual-hooks.md`.
+- **Codex approvals are fail-safe by construction** — the native prompt is
+  never blocked waiting on tlive (no window, nothing to time out); if the
+  companion is unreachable Codex just runs its own local approval flow and
+  `tlive status` reports `codex: app-server companion unreachable —
+  approvals local-only`. When the companion is up, the remote card and the
+  native prompt race — first answer wins, same semantics as Claude Code's
+  parallel channel.
 
 ## CLI
 
@@ -228,8 +216,8 @@ tlive status           health, web URLs + QR, config paths
 tlive logs [-f]        tail the daemon log
 tlive run <cmd> …      wrap a process: local terminal + web terminal
 tlive url              print the dashboard URL + QR (when a full-screen app hid the run banner)
-tlive hook <event>     hook shim (called by Claude/Codex, not by you;
-                        Codex passes --codex)
+tlive hook <event>     hook shim (called by Claude Code, not by you;
+                        Codex has no hooks — see the app-server companion)
 ```
 
 IM commands: `/perm on|off` (mute), `/trust on|off`, `/help`.
@@ -253,12 +241,10 @@ Quote-reply any session message to type into that session.
     "autoStart": true         // default true; false disables session-start lazy-start
   },
   "approvals": {
-    // remote-approval windows in seconds; the vendors differ on purpose:
-    // Claude Code's permission hook runs parallel to the local dialog (a long
-    // window costs nothing); Codex's blocks the native prompt (serial), so
-    // its window is capped at 2h — longer belongs to wrapped mode.
-    "claudeWindowSec": 1800,  // default 30min, max 86200 (~24h)
-    "codexWindowSec": 590     // default ~10min, max 7200 (2h)
+    // remote-approval window in seconds, Claude Code only: its permission
+    // hook runs parallel to the local dialog, so a long window costs
+    // nothing. Codex has no window — see the app-server companion section.
+    "claudeWindowSec": 1800   // default 30min, max 86200 (~24h)
   },
   "allowedSenders": [{ "channel": "telegram", "userId": "42" }]  // optional
 }
@@ -284,7 +270,8 @@ Quote-reply any session message to type into that session.
 ## Architecture
 
 ```
-your `claude` / `codex` ──hooks──▶ tlive hook shim ──IPC──▶ daemon
+your `claude` ────────── hooks ──▶ tlive hook shim ──IPC──▶ daemon
+your `codex` ─────────── rpc ───▶ tlive app-server companion ──▶ daemon
 tlive run <cmd> ─────── owns pty ── per-session socket ──▶ (bridge)
                                                             daemon ──▶ IM adapters (Telegram / Feishu)
                                                             daemon ──▶ web (token-gated): dashboard + /s/<id> terminal

@@ -77,15 +77,10 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
   }
 }
 
-/** PermissionRequest decision wire — identical for BOTH vendors (CC 2.1.206
- *  真机验证 allow/deny±message;Codex 0.144 源码 schema.rs
- *  PermissionRequestDecisionWire 同形,deny 缺 message 时 Codex 自动补默认
- *  理由,不像 PreToolUse 那样回落放行)。
- *  CC: 与本地对话并行,先答先得;{} = 留给用户。
- *  Codex: 串行(hook 返回 None 后才弹原生提示);{} / 超时 / 报错 → 原生
- *  审批流,结构性 fail-safe —— 不再有 PreToolUse 的 fail-open 问题。
- *  绝不 auto-allow / auto-deny。别发 updatedInput/updatedPermissions/
- *  interrupt(Codex 对这些 fail-closed)。 */
+/** PermissionRequest decision wire — CC only now (Codex hooks are retired;
+ *  app-server companion is the sole Codex integration).
+ *  真机验证 allow/deny±message。与本地对话并行,先答先得;{} = 留给用户。
+ *  绝不 auto-allow / auto-deny。别发 updatedInput/updatedPermissions/interrupt。 */
 export function permissionRequestDecisionOut(decision: 'allow' | 'deny' | 'defer', reason?: string): object {
   if (decision === 'allow') {
     return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } };
@@ -105,7 +100,7 @@ export function continueDecisionOut(reply: string | null): object {
   return reply ? { decision: 'block', reason: reply } : {};
 }
 
-/** session-start 欢迎提示:CC-only(Codex 输出 schema deny_unknown_fields,恒 '{}'),
+/** session-start 欢迎提示:CC-only(Codex hooks 已退役),
  *  仅在 IM 未配置时通过 additionalContext 引导 agent 主动提示用户配置。 */
 export function sessionStartOut(vendor: HookVendor, imConfigured: boolean): string {
   if (vendor !== 'claude' || imConfigured) return '{}';

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 const MK = join(__dirname, '..', '..', 'plugins', 'codex');
@@ -12,18 +12,15 @@ describe('plugins/codex marketplace', () => {
     expect(m.name).toBe('tlive');
     expect(m.plugins[0]).toMatchObject({ name: 'tlive', source: { source: 'local', path: './plugins/tlive' } });
   });
-  it('plugin.json 存在', () => {
-    expect(read(join(P, '.codex-plugin', 'plugin.json')).name).toBe('tlive');
+  it('plugin.json 存在, version 2.2.0', () => {
+    const pkg = read(join(P, '.codex-plugin', 'plugin.json'));
+    expect(pkg.name).toBe('tlive');
+    expect(pkg.version).toBe('2.2.0');
   });
-  it('hooks.json: Codex 5 events, PermissionRequest gating (PreToolUse retired), async:false', () => {
-    const h = read(join(P, 'hooks', 'hooks.json')).hooks;
-    expect(Object.keys(h).sort()).toEqual(['PermissionRequest','PostToolUse','SessionStart','Stop','UserPromptSubmit'].sort());
-    // codex ≥0.143 的 PreToolUse 拒绝 ask/裸 allow 且 fail-open —— gating 必须走 PermissionRequest
-    expect(h.PreToolUse).toBeUndefined();
-    // vendor timeout 7320 > shim ipc max 7300 > window clamp max 7200(2h)
-    expect(h.PermissionRequest[0].hooks[0]).toMatchObject({ command: 'tlive hook --codex permission-request', timeout: 7320, async: false });
-    expect(h.Stop[0].hooks[0].timeout).toBeGreaterThanOrEqual(175);
-    expect(h.SessionStart[0].matcher).toBe('startup|resume|clear|compact');
-    for (const ev of Object.keys(h)) for (const g of h[ev]) for (const k of g.hooks) expect(k.async).toBe(false);
+  it('hooks/ 目录已退役(companion 是唯一集成方式,不再靠 hook 授信)', () => {
+    expect(existsSync(join(P, 'hooks'))).toBe(false);
+  });
+  it('skill 存在', () => {
+    expect(existsSync(join(P, 'skills'))).toBe(true);
   });
 });

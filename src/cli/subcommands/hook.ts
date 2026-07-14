@@ -47,16 +47,14 @@ async function readStdin(): Promise<unknown> {
 const USAGE = 'Usage: tlive hook [--codex] <permission-request|permission-denied|post-tool-use|stop|notification|user-prompt-submit|session-start|session-end|post-tool-use-failure|stop-failure>\n';
 
 /** 远程审批窗口(秒)+ 对应 shim IPC 死线(毫秒)。clamp 上限对齐插件
- *  hooks.json 的 vendor timeout(claude 86400 / codex 7320),保证
- *  vendor 超时永远在 shim IPC 之后才触发:窗口 < ipc(+100s)< vendor。 */
+ *  hooks.json 的 vendor timeout(claude 86400),保证 vendor 超时永远在
+ *  shim IPC 之后才触发:窗口 < ipc(+100s)< vendor。claude-only —— Codex
+ *  不再靠 hook 审批(app-server companion 是唯一集成方式)。 */
 export function approvalWindow(
-  vendor: HookVendor,
-  approvals?: { claudeWindowSec?: number; codexWindowSec?: number },
+  approvals?: { claudeWindowSec?: number },
 ): { timeoutSec: number; ipcMs: number } {
   const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi);
-  const timeoutSec = vendor === 'codex'
-    ? clamp(approvals?.codexWindowSec ?? 590, 60, 7200)       // 串行:默认 ~10min,上限 2h
-    : clamp(approvals?.claudeWindowSec ?? 1800, 60, 86_200);  // 并行:默认 30min,可配到 ~24h
+  const timeoutSec = clamp(approvals?.claudeWindowSec ?? 1800, 60, 86_200); // 并行:默认 30min,可配到 ~24h
   return { timeoutSec, ipcMs: (timeoutSec + 100) * 1000 };
 }
 
@@ -73,6 +71,15 @@ export async function runHook(argv: string[]): Promise<void> {
     process.exit(1);
   }
 
+  if (vendor === 'codex') {
+    // Codex hooks are retired — the app-server companion is the sole
+    // integration now. Stray old dev-build hooks.json entries land here;
+    // answer gracefully instead of erroring so they don't break anything.
+    process.stderr.write('codex hooks are retired; tlive integrates via app-server\n');
+    process.stdout.write('{}');
+    return;
+  }
+
   try {
     const raw = await readStdin();
     const n = parseHookInput(event, raw);
@@ -81,14 +88,12 @@ export async function runHook(argv: string[]): Promise<void> {
     const wrappedId = process.env.TLIVE_SESSION;
 
     if (event === 'permission-request') {
-      // 双通道 gating。CC:hook 与本地对话并行(先答先得),窗口拉满 24h,
-      // 本地答掉由 daemon 的 cancel 触发器(PostToolUse/UserPromptSubmit/Stop)
-      // 释放本进程。Codex:hook 串行阻塞原生提示(orchestrator.rs 实证),
-      // 只给中等窗;超时输出 {} → Codex 落回原生审批流(fail-safe)。
+      // CC hook 与本地对话并行(先答先得),窗口拉满 24h,本地答掉由 daemon 的
+      // cancel 触发器(PostToolUse/UserPromptSubmit/Stop)释放本进程。
       const approvals = (() => {
         try { return loadConfig(process.env.TLIVE_HOME ?? join(homedir(), '.tlive')).approvals; } catch { return undefined; }
       })();
-      const win = approvalWindow(vendor, approvals);
+      const win = approvalWindow(approvals);
       const a = n as Extract<typeof n, { event: 'approval-request' }>;
       const r = await request(
         {

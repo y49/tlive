@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Breaking — Codex hooks/trust retired; app-server companion is the sole Codex integration (no-compat)
+
+- **All Codex hook plumbing is deleted**, not deprecated: the plugin's
+  `hooks/` directory (`hooks.json`) is gone, `codex-trust.ts` /
+  `codex-trust-grant.ts` and their auto-trust wiring in `tlive setup` are
+  gone, and `tlive hook --codex <event>` is now a pure graceful no-op —
+  it prints `codex hooks are retired; tlive integrates via app-server` to
+  stderr and writes `{}` to stdout, purely so stray old dev-build
+  `hooks.json` entries don't break. Codex approvals/monitoring now go
+  exclusively through the `codex app-server` companion process tlive
+  already spawns/adopts (Plan 9/companion work) — no hook registration,
+  no trust step, nothing to approve in a `/hooks` review.
+- **`approvals.codexWindowSec` config key removed.** Codex has no
+  approval window anymore — the companion never blocks the native
+  prompt, so there's nothing to time out. `approvals.claudeWindowSec`
+  is unaffected.
+- **Codex plugin no longer ships hooks**, only the `tlive` skill. Both
+  plugins bump to `2.2.0`. Re-run `tlive setup --hooks-only --codex` to
+  refresh the plugin — there's no trust step to redo.
+
 ### Fixed — Codex fail-open on current Codex versions (P0)
 
 - **Codex gating migrated from `PreToolUse` to `PermissionRequest`.** On

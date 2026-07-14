@@ -1,9 +1,0 @@
-{
-  "hooks": {
-    "PermissionRequest": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "tlive hook --codex permission-request", "timeout": 7320, "async": false }] }],
-    "Stop":              [{ "hooks": [{ "type": "command", "command": "tlive hook --codex stop", "timeout": 180, "async": false }] }],
-    "PostToolUse":       [{ "matcher": "*", "hooks": [{ "type": "command", "command": "tlive hook --codex post-tool-use", "async": false }] }],
-    "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "tlive hook --codex user-prompt-submit", "async": false }] }],
-    "SessionStart":      [{ "matcher": "startup|resume|clear|compact", "hooks": [{ "type": "command", "command": "tlive hook --codex session-start", "async": false }] }]
-  }
-}

@@ -1,1 +1,5 @@
-{ "name": "tlive", "version": "2.1.0", "description": "tlive hooks + skill — IM approvals and session monitoring for Codex" }
+{
+  "name": "tlive",
+  "version": "2.2.0",
+  "description": "tlive skill — IM approvals and session monitoring for Codex via the app-server companion"
+}

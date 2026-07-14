@@ -16,22 +16,15 @@ describe('parseHookArgs', () => {
   });
 });
 
-describe('approvalWindow (per-vendor remote-approval window)', () => {
-  it('defaults: claude 30min parallel, codex ~10min serial', () => {
-    expect(approvalWindow('claude')).toEqual({ timeoutSec: 1800, ipcMs: 1_900_000 });
-    expect(approvalWindow('codex')).toEqual({ timeoutSec: 590, ipcMs: 690_000 });
+describe('approvalWindow (claude-only remote-approval window)', () => {
+  it('default: 30min parallel', () => {
+    expect(approvalWindow()).toEqual({ timeoutSec: 1800, ipcMs: 1_900_000 });
   });
-  it('config overrides are honored', () => {
-    expect(approvalWindow('codex', { codexWindowSec: 1800 }).timeoutSec).toBe(1800);
-    expect(approvalWindow('claude', { claudeWindowSec: 3600 }).timeoutSec).toBe(3600);
+  it('config override is honored', () => {
+    expect(approvalWindow({ claudeWindowSec: 3600 }).timeoutSec).toBe(3600);
   });
-  it('clamps: codex max 2h (serial hook freezes the terminal), claude max 86200', () => {
-    expect(approvalWindow('codex', { codexWindowSec: 999_999 }).timeoutSec).toBe(7200);
-    expect(approvalWindow('claude', { claudeWindowSec: 999_999 }).timeoutSec).toBe(86_200);
-    expect(approvalWindow('codex', { codexWindowSec: 1 }).timeoutSec).toBe(60);
-  });
-  it('ipc deadline sits 100s above the window (inside the vendor hook timeout)', () => {
-    const w = approvalWindow('codex', { codexWindowSec: 7200 });
-    expect(w.ipcMs).toBe(7_300_000); // < 7320s vendor timeout
+  it('clamps: max 86200', () => {
+    expect(approvalWindow({ claudeWindowSec: 999_999 }).timeoutSec).toBe(86_200);
+    expect(approvalWindow({ claudeWindowSec: 1 }).timeoutSec).toBe(60);
   });
 });

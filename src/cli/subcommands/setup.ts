@@ -9,7 +9,6 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { installClaudePlugin, installCodexPlugin, defaultRunner } from '../../kernel/integrations/plugin-install.js';
 import { commandOnPath } from '../../kernel/integrations/hooks-cleanup.js';
-import { grantCodexTrust } from '../../kernel/integrations/codex-trust-grant.js';
 
 export type VendorSelection = { claude: boolean; codex: boolean };
 
@@ -42,10 +41,6 @@ async function registerPlugins(sel: VendorSelection): Promise<string> {
     const cx = installCodexPlugin(run);
     if (cx.ok) {
       lines.push(`✓ Codex plugin registered — ${cx.detail}`);
-      const trust = await grantCodexTrust();
-      lines.push(trust.verified
-        ? `✓ Codex hooks 已自动信任(hooks/list 自检通过${trust.granted ? `,写入 ${trust.granted} 条` : ''})`
-        : `⚠ Codex 自动信任未成(${trust.detail})— 在 codex 里输入 /hooks 并 approve tlive 即可`);
     } else if (cx.detail !== 'codex not on PATH') {
       lines.push(`⚠ Codex plugin not registered: ${cx.detail}`);
     }
