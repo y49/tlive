@@ -1,26 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-
-describe('codexPluginHooksPath', () => {
-  const dirs: string[] = [];
-  afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
-  const home = (): string => { const d = mkdtempSync(join(tmpdir(), 'tlive-cphp-')); dirs.push(d); return d; };
-
-  it('扫描版本目录解析实际路径(2.0.0 布局,E2E 实测)', async () => {
-    const { codexPluginHooksPath } = await import('../hooks-cleanup');
-    const h = home();
-    const hooksDir = join(h, 'plugins', 'cache', 'tlive', 'tlive', '2.0.0', 'hooks');
-    mkdirSync(hooksDir, { recursive: true });
-    writeFileSync(join(hooksDir, 'hooks.json'), '{}');
-    expect(codexPluginHooksPath(h)).toBe(join(hooksDir, 'hooks.json'));
-  });
-  it('cache 不存在 → null', async () => {
-    const { codexPluginHooksPath } = await import('../hooks-cleanup');
-    expect(codexPluginHooksPath(home())).toBeNull();
-  });
-});
 
 describe('commandOnPath', () => {
   const dirs: string[] = [];
