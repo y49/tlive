@@ -1,6 +1,6 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import { connect as netConnect } from 'node:net';
-import { openSync } from 'node:fs';
+import { openSync, closeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { commandOnPath } from '../integrations/hooks-cleanup.js';
@@ -50,10 +50,14 @@ function defaultProbe(sockPath: string): Promise<boolean> {
 
 function defaultSpawnFn(logPath: string): ChildLike {
   const fd = openSync(logPath, 'a');
-  return nodeSpawn('codex', ['app-server', '--listen', 'unix://'], {
+  const child = nodeSpawn('codex', ['app-server', '--listen', 'unix://'], {
     detached: false,
     stdio: ['ignore', fd, fd],
   });
+  // spawn() 内部已 dup 该 fd 给子进程的 stdout/stderr,子进程持有独立的描述符引用,
+  // 父进程这份 fd 用完即可关闭,否则每次 respawn 都会泄漏一个 fd。
+  closeSync(fd);
+  return child;
 }
 
 export async function ensureCodexAppServer(opts: {
@@ -75,6 +79,7 @@ export async function ensureCodexAppServer(opts: {
   const sockPath = codexAppServerSockPath();
   const listening = await probe(sockPath);
   if (listening) {
+    onStateChange('running');
     return { adopted: true, stop: () => {} };
   }
 

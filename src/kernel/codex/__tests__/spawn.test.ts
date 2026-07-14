@@ -41,6 +41,13 @@ describe('ensureCodexAppServer', () => {
       expect(states.at(-1)).toBe('degraded');
     } finally { vi.useRealTimers(); }
   });
+  it('signals running via onStateChange when adopting an already-listening socket', async () => {
+    const spawnFn = vi.fn();
+    const states: string[] = [];
+    const c = await ensureCodexAppServer({ logPath: '/tmp/x.log', probe: async () => true, spawnFn: spawnFn as any, onStateChange: (s) => states.push(s), platform: 'linux', hasCodex: () => true });
+    expect(c).toMatchObject({ adopted: true });
+    expect(states).toEqual(['running']);
+  });
   it('sock path honors CODEX_HOME arg', () => {
     expect(codexAppServerSockPath('/ch')).toBe('/ch/app-server-control/app-server-control.sock');
   });
