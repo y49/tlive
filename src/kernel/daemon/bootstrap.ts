@@ -229,6 +229,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
 
   const continueBroker = new ContinueBroker();
   let latestContinueId: string | null = null;
+  // key → cancel-grace:一个会话在续跑 grace 窗口内时,收到该会话的新 prompt
+  // 就调用它取消发卡(用户在键盘前继续了)。
+  const continueGrace = new Map<string, () => void>();
 
   continueBroker.onRequest((req) => {
     latestContinueId = req.requestId;
@@ -368,9 +371,24 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             reply({ kind: 'hook.continue.result', reply: null });
             return;
           }
+          // Grace 门控:turn 刚结束,先等 graceSec —— 你要是在键盘前很快开始新
+          // 一轮(UserPromptSubmit),就取消,不发续跑卡(消除刷屏);静默才推卡。
+          // (async Stop hook 让 turn 立即结束,本 grace 不占用你的终端。)
+          const graceSec = cfg.approvals?.continueGraceSec ?? 15;
+          const suppressed = await new Promise<boolean>((res) => {
+            continueGrace.set(key, () => res(true));
+            setTimeout(() => { if (continueGrace.delete(key)) res(false); }, graceSec * 1000).unref();
+          });
+          if (suppressed) {
+            events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'active' }) });
+            reply({ kind: 'hook.continue.result', reply: null });
+            return;
+          }
           events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'waiting-input', ...(req.lastMessage ? { lastMessage: req.lastMessage } : {}) }) });
-          // IM 摘录用真正的最后一句;没有才落回通用 context 文案
-          const reply_text = await continueBroker.request({ cwd: key, context: req.lastMessage ?? req.context, timeoutSec: 170 });
+          // IM 摘录用真正的最后一句;没有才落回通用 context 文案。async Stop hook
+          // 在后台等,窗口可以很长(默认 30min),覆盖"离开很久才看手机"。
+          const continueWin = Math.min(Math.max(cfg.approvals?.continueWindowSec ?? 1800, 30), 86_400);
+          const reply_text = await continueBroker.request({ cwd: key, context: req.lastMessage ?? req.context, timeoutSec: continueWin });
           // Resolved (replied or timed out): clear the reply target; back to active if continuing, else idle.
           events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: reply_text ? 'active' : 'idle', continueId: null }) });
           reply({ kind: 'hook.continue.result', reply: reply_text });
@@ -405,6 +423,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           } else if (ev.event === 'prompt') {
             // 清场:用户新输入意味着上一轮对话框(含子 agent 的)都没了
             permissionRouter.cancel({ key, sessionId: ev.sessionId });
+            // 用户在键盘前开始了新一轮 → 取消上一 turn 还在 grace 里的续跑卡
+            const g = continueGrace.get(key);
+            if (g) { continueGrace.delete(key); g(); }
           }
           events.broadcast(applyMonitorEvent(sessions, ev, key));
           reply({ kind: 'ack' });

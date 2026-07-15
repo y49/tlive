@@ -89,7 +89,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
       capturedMsg = out.kind === 'text' ? out.text : (out.body ?? '');
       return origSend(out);
     };
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, approvals: { continueGraceSec: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
     const frames = await openEvents();
 
@@ -116,7 +116,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
   });
 
   it('sets registry.pending on approval-ask and clears it on answer', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, approvals: { continueGraceSec: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
     h = await bootstrapDaemon({ home: tmp, imAdapters: [makeFakeAdapter('telegram')] });
     const frames = await openEvents();
     // fire the blocking permission request in the background
@@ -131,7 +131,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
   });
 
   it('upstream approve action over /ws/events resolves the permission request', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, approvals: { continueGraceSec: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
     h = await bootstrapDaemon({ home: tmp, imAdapters: [makeFakeAdapter('telegram')] });
     const { frames, ws } = await openEventsWs();
     const p = request({ kind: 'hook.permission.request', cwd: '/repo/act', sessionId: 's', toolName: 'Bash', input: { command: 'ls' } }, { socketPath: sock, timeoutMs: 5000 });
@@ -142,7 +142,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
   });
 
   it('upstream reply action over /ws/events answers the continue broker (session carries continueId)', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 } }));
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, approvals: { continueGraceSec: 0 } }));
     h = await bootstrapDaemon({ home: tmp });
     const { frames, ws } = await openEventsWs();
     const p = request({ kind: 'hook.continue.request', cwd: '/stop/x', sessionId: 's', context: 'ctx', lastMessage: 'lm' }, { socketPath: sock, timeoutMs: 8000 });
@@ -155,6 +155,23 @@ describe('daemon → /ws/events downstream broadcast', () => {
     expect(done.session.continueId).toBeUndefined();
   });
 
+  it('continue grace: a new prompt within the grace window suppresses the card and replies null fast', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, approvals: { continueGraceSec: 8 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+    const sent: string[] = [];
+    const adapter = makeFakeAdapter('telegram');
+    adapter.send = async (out: OutgoingMessage) => { sent.push(out.kind === 'text' ? out.text : (out.body ?? '')); return { messageId: 'm1' }; };
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const t0 = Date.now();
+    const p = request({ kind: 'hook.continue.request', cwd: '/g', sessionId: 's', context: 'ctx' }, { socketPath: sock, timeoutMs: 8000 });
+    await new Promise((r) => setTimeout(r, 150));
+    // user starts a new turn within the grace window → suppress the continue card
+    await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/g', sessionId: 's', prompt: 'next' } }, { socketPath: sock, timeoutMs: 2000 });
+    const res = (await p) as { reply: string | null };
+    expect(res.reply).toBeNull();
+    expect(Date.now() - t0).toBeLessThan(4000); // returned fast — did not wait the full 8s grace
+    expect(sent).toHaveLength(0); // no continue card was ever sent
+  });
+
   it('IM messages carry a web deep link when web.publicUrl is configured (and not otherwise)', async () => {
     const sent: string[] = [];
     const adapter = makeFakeAdapter('telegram');
@@ -164,7 +181,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
     };
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { port: 0, publicUrl: 'https://dev.example.ts.net/' },
-      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+      approvals: { continueGraceSec: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
     }));
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
     // continue (text path)
@@ -186,7 +203,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
     const sent: string[] = [];
     const adapter = makeFakeAdapter('telegram');
     adapter.send = async (out: OutgoingMessage) => { sent.push(out.kind === 'text' ? out.text : out.body); return { messageId: 'm1' }; };
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, approvals: { continueGraceSec: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
     const p = request({ kind: 'hook.continue.request', cwd: '/dl2', sessionId: 's', context: 'ctx' }, { socketPath: sock, timeoutMs: 8000 });
     await new Promise((r) => setTimeout(r, 100));
@@ -219,7 +236,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
     adapter.edit = async (messageId: string, out: OutgoingMessage) => {
       edits.push({ messageId, ...(out.kind === 'card' ? { title: out.title } : {}) });
     };
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, approvals: { continueGraceSec: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
     // seed the session so the card gets a label tag
     await request({ kind: 'hook.event', event: { event: 'session-start', cwd: '/tag/repo', sessionId: 's', source: 'startup' } }, { socketPath: sock, timeoutMs: 2000 });
@@ -237,7 +254,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
   });
 
   it('web approve with alwaysAllowTool auto-allows the next request for that tool', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, approvals: { continueGraceSec: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
     h = await bootstrapDaemon({ home: tmp, imAdapters: [makeFakeAdapter('telegram')] });
     const { frames, ws } = await openEventsWs();
     const p = request({ kind: 'hook.permission.request', cwd: '/aa', sessionId: 's', toolName: 'Edit', input: {} }, { socketPath: sock, timeoutMs: 5000 });
@@ -289,7 +306,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
   });
 
   it('concurrent approvals on one key: resolving the first keeps the second pending', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, approvals: { continueGraceSec: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
     h = await bootstrapDaemon({ home: tmp, imAdapters: [makeFakeAdapter('telegram')] });
     const frames = await openEvents();
     const pA = request({ kind: 'hook.permission.request', cwd: '/cc', sessionId: 's', toolName: 'Bash', input: { command: 'a' } }, { socketPath: sock, timeoutMs: 5000 });
@@ -310,7 +327,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
 
 
   it('session.activity flips running/idle but never overrides a hook wait', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, approvals: { continueGraceSec: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
     h = await bootstrapDaemon({ home: tmp, imAdapters: [makeFakeAdapter('telegram')] });
     const frames = await openEvents();
     await request({ kind: 'session.register', session: { id: 'w1', label: 'bash', cmd: 'bash', cwd: '/act', pid: 1, sockPath: '/a.sock' } }, { socketPath: sock, timeoutMs: 2000 });

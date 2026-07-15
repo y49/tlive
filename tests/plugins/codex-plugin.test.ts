@@ -12,10 +12,10 @@ describe('plugins/codex marketplace', () => {
     expect(m.name).toBe('tlive');
     expect(m.plugins[0]).toMatchObject({ name: 'tlive', source: { source: 'local', path: './plugins/tlive' } });
   });
-  it('plugin.json 存在, version 2.2.0', () => {
+  it('plugin.json 存在, version 2.3.0', () => {
     const pkg = read(join(P, '.codex-plugin', 'plugin.json'));
     expect(pkg.name).toBe('tlive');
-    expect(pkg.version).toBe('2.2.0');
+    expect(pkg.version).toBe('2.3.0');
   });
   it('hooks/ 目录已退役(companion 是唯一集成方式,不再靠 hook 授信)', () => {
     expect(existsSync(join(P, 'hooks'))).toBe(false);

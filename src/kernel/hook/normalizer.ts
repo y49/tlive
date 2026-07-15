@@ -19,7 +19,7 @@ export type NormalizedHook =
   // 关联回同一个 agent 的挂起审批,同 key 同 tool 的其他 agent 的卡不受影响。
   | { event: 'approval-request'; cwd: string; sessionId: string; toolName: string; input: unknown; permissionMode?: string; agentId?: string }
   | { event: 'activity'; cwd: string; sessionId: string; toolName: string; result: unknown; agentId?: string }
-  | { event: 'attention'; cwd: string; sessionId: string; message: string; lastMessage?: string }
+  | { event: 'attention'; cwd: string; sessionId: string; message: string; lastMessage?: string; stopHookActive?: boolean }
   | { event: 'prompt'; cwd: string; sessionId: string; prompt: string }
   | { event: 'subagent'; cwd: string; sessionId: string; delta: 1 | -1; agentType?: string }
   | { event: 'session-start'; cwd: string; sessionId: string; source?: string }
@@ -37,6 +37,7 @@ interface RawHook {
   tool_error?: unknown;
   error_type?: string;
   agent_type?: string;
+  stop_hook_active?: boolean;
   agent_id?: string;
 }
 
@@ -52,7 +53,9 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
     case 'post-tool-use':
       return { event: 'activity', cwd, sessionId, toolName: r.tool_name ?? '(unknown)', result: r.tool_response ?? {}, ...(r.agent_id ? { agentId: r.agent_id } : {}) };
     case 'stop':
-      return { event: 'attention', cwd, sessionId, message: 'Turn finished — reply to continue', ...(r.last_assistant_message ? { lastMessage: r.last_assistant_message } : {}) };
+      // stop_hook_active = 本 turn 是被上一次 stop hook 唤醒的续跑;shim 据此
+      // 不再等续跑,避免 async+asyncRewake 下的无限续跑循环。
+      return { event: 'attention', cwd, sessionId, message: 'Turn finished — reply to continue', ...(r.last_assistant_message ? { lastMessage: r.last_assistant_message } : {}), ...(r.stop_hook_active ? { stopHookActive: true } : {}) };
     case 'notification':
       // permission_prompt notifications are dropped in the shim (the parallel
       // PermissionRequest card already covers that moment); everything else
@@ -96,9 +99,6 @@ export function permissionRequestDecisionOut(decision: 'allow' | 'deny' | 'defer
   return {};
 }
 
-export function continueDecisionOut(reply: string | null): object {
-  return reply ? { decision: 'block', reason: reply } : {};
-}
 
 /** session-start 欢迎提示:CC-only(Codex hooks 已退役),
  *  仅在 IM 未配置时通过 additionalContext 引导 agent 主动提示用户配置。 */

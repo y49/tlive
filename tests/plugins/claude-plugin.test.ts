@@ -26,7 +26,9 @@ describe('plugins/claude marketplace', () => {
     expect(h.PermissionRequest[0].matcher).toBe('*');
     expect(h.PermissionRequest[0].hooks[0]).toMatchObject({ type: 'command', command: 'tlive hook permission-request', timeout: 86400 });
     expect(h.PermissionDenied[0].hooks[0].command).toBe('tlive hook permission-denied');
-    expect(h.Stop[0].hooks[0].timeout).toBe(180);
+    // async Stop hook: turn ends immediately (no keyboard-front stall), background
+    // waits for a reply-to-continue and rewakes on exit 2.
+    expect(h.Stop[0].hooks[0]).toMatchObject({ async: true, asyncRewake: true, timeout: 1860 });
     expect(h.StopFailure[0].hooks[0].command).toBe('tlive hook stop-failure');
     expect(h.SubagentStart[0].hooks[0].command).toBe('tlive hook subagent-start');
     expect(h.SubagentStop[0].hooks[0].command).toBe('tlive hook subagent-stop');

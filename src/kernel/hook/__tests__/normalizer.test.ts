@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseHookInput, permissionRequestDecisionOut, continueDecisionOut, sessionStartOut } from '../normalizer.js';
+import { parseHookInput, permissionRequestDecisionOut, sessionStartOut } from '../normalizer.js';
 
 describe('hook normalizer', () => {
   it('parses PostToolUse as activity', () => {
@@ -14,9 +14,11 @@ describe('hook normalizer', () => {
     const n = parseHookInput('notification', { cwd: '/r', session_id: 's', message: '需要权限' });
     expect(n).toEqual({ event: 'attention', cwd: '/r', sessionId: 's', message: '需要权限' });
   });
-  it('continue reply → block+reason; null → empty', () => {
-    expect(continueDecisionOut('run tests')).toEqual({ decision: 'block', reason: 'run tests' });
-    expect(continueDecisionOut(null)).toEqual({});
+  it('parses Stop with stop_hook_active (loop guard for async rewake)', () => {
+    const n = parseHookInput('stop', { cwd: '/r', session_id: 's', stop_hook_active: true });
+    expect(n).toMatchObject({ event: 'attention', stopHookActive: true });
+    const n2 = parseHookInput('stop', { cwd: '/r', session_id: 's' });
+    expect((n2 as { stopHookActive?: boolean }).stopHookActive).toBeUndefined();
   });
   it('parses Stop with last_assistant_message into attention.lastMessage', () => {
     const n = parseHookInput('stop', { cwd: '/r', session_id: 's', last_assistant_message: 'all done' });

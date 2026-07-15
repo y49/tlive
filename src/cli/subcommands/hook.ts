@@ -12,7 +12,6 @@ import { request } from '../../kernel/ipc/client.js';
 import {
   parseHookInput,
   permissionRequestDecisionOut,
-  continueDecisionOut,
   sessionStartOut,
   type HookEventName,
   type HookVendor,
@@ -56,6 +55,12 @@ export function approvalWindow(
   const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi);
   const timeoutSec = clamp(approvals?.claudeWindowSec ?? 1800, 60, 86_200); // 并行:默认 30min,可配到 ~24h
   return { timeoutSec, ipcMs: (timeoutSec + 100) * 1000 };
+}
+
+/** 续跑窗口(秒):async Stop hook 在后台等回复的时长。默认 1800(30min);
+ *  async 不占终端,所以窗口可以很长。clamp [30, 86400]。 */
+export function continueWindow(approvals?: { continueWindowSec?: number }): number {
+  return Math.min(Math.max(approvals?.continueWindowSec ?? 1800, 30), 86_400);
 }
 
 export function parseHookArgs(argv: string[]): { event?: HookEventName; vendor: HookVendor } {
@@ -123,7 +128,15 @@ export async function runHook(argv: string[]): Promise<void> {
     }
 
     if (event === 'stop') {
-      const att = n as { cwd: string; sessionId: string; message: string; lastMessage?: string };
+      // async Stop hook(插件配 async:true+asyncRewake:true):CC 不等本进程,turn
+      // 立即结束(键盘前零卡);本进程在后台等 daemon 的续跑回复。
+      const att = n as { cwd: string; sessionId: string; message: string; lastMessage?: string; stopHookActive?: boolean };
+      // 防循环:本 turn 是被上一次 stop hook 唤醒的续跑 → 不再等(否则无限续跑)。
+      if (att.stopHookActive) return;
+      const approvals = (() => {
+        try { return loadConfig(process.env.TLIVE_HOME ?? join(homedir(), '.tlive')).approvals; } catch { return undefined; }
+      })();
+      const windowSec = continueWindow(approvals);
       const r = await request(
         {
           kind: 'hook.continue.request',
@@ -133,10 +146,15 @@ export async function runHook(argv: string[]): Promise<void> {
           ...(att.lastMessage ? { lastMessage: att.lastMessage } : {}),
           ...(wrappedId ? { wrappedId } : {}),
         },
-        { timeoutMs: 175_000 },
-      );
-      const reply = r.kind === 'hook.continue.result' ? r.reply : null;
-      process.stdout.write(JSON.stringify(continueDecisionOut(reply)));
+        { timeoutMs: windowSec * 1000 + 10_000 },
+      ).catch(() => null);
+      const reply = r && r.kind === 'hook.continue.result' ? r.reply : null;
+      if (reply) {
+        // 续跑注入:exit 2 + reason 到 stderr → asyncRewake 唤醒会话继续。
+        process.stderr.write(reply);
+        process.exitCode = 2;
+      }
+      // 无回复 → exit 0:会话保持停止,不唤醒、不循环。
       return;
     }
 
