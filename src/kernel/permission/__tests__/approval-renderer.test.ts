@@ -19,7 +19,7 @@ describe('maskSecrets', () => {
 describe('renderApprovalCard', () => {
   it('Edit → unified diff of old→new', () => {
     const { title, body } = renderApprovalCard({ toolName: 'Edit', input: { file_path: '/a.ts', old_string: 'x', new_string: 'y' } });
-    expect(title).toBe('Approval: Edit');
+    expect(title).toBe('📝 Edit');
     expect(body).toContain('/a.ts');
     expect(body).toContain('- x');
     expect(body).toContain('+ y');
@@ -33,7 +33,8 @@ describe('renderApprovalCard', () => {
     const risky = renderApprovalCard({ toolName: 'Bash', input: { command: 'rm -rf /tmp/x', description: 'clean' } });
     expect(risky.body).toContain('clean');
     expect(risky.body).toContain('rm -rf /tmp/x');
-    expect(risky.body).toContain('risky command');
+    expect(risky.body).toContain('Risky');
+    expect(risky.body).toContain('rm -rf');
     const secret = renderApprovalCard({ toolName: 'Bash', input: { command: 'curl h?token=abc' } });
     expect(secret.body).toContain('token=***');
   });

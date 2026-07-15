@@ -86,7 +86,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
     const adapter = makeFakeAdapter('telegram');
     const origSend = adapter.send.bind(adapter);
     adapter.send = async (out: OutgoingMessage) => {
-      if (out.kind === 'text') capturedMsg = out.text;
+      capturedMsg = out.kind === 'text' ? out.text : (out.body ?? '');
       return origSend(out);
     };
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));

@@ -26,14 +26,25 @@ export function maskSecrets(s: string): string {
     .replace(/("(?:\w*(?:token|key|secret|password|auth)\w*)"\s*:\s*")[^"]+/gi, '$1***');
 }
 
-const RISKY = [
-  /\brm\s+-[rf]/, /\bsudo\b/, /\bcurl\b[^\n]*\|\s*(?:sh|bash)/, /\bwget\b[^\n]*\|\s*(?:sh|bash)/,
-  /:\(\)\s*\{/, /\bmkfs\b/, /\bdd\s+if=/, /\bchmod\s+(?:-R\s+)?[0-7]*7{2,}/, /authorized_keys/,
-  /\bgit\s+push\b[^\n]*(?:--force|-f)\b/, /\beval\b/, />\s*\/dev\/sd/,
+const RISKY: Array<{ re: RegExp; name: string }> = [
+  { re: /\brm\s+-[rf]/, name: 'rm -rf' },
+  { re: /\bsudo\b/, name: 'sudo' },
+  { re: /\bcurl\b[^\n]*\|\s*(?:sh|bash)/, name: 'curl | sh' },
+  { re: /\bwget\b[^\n]*\|\s*(?:sh|bash)/, name: 'wget | sh' },
+  { re: /:\(\)\s*\{/, name: 'fork bomb' },
+  { re: /\bmkfs\b/, name: 'mkfs' },
+  { re: /\bdd\s+if=/, name: 'dd' },
+  { re: /\bchmod\s+(?:-R\s+)?[0-7]*7{2,}/, name: 'chmod 777' },
+  { re: /authorized_keys/, name: 'authorized_keys' },
+  { re: /\bgit\s+push\b[^\n]*(?:--force|-f)\b/, name: 'git push --force' },
+  { re: /\beval\b/, name: 'eval' },
+  { re: />\s*\/dev\/sd/, name: 'write to disk' },
 ];
 
+/** 命中的高危模式点名(而非笼统"risky"),让审批者一眼看到危险在哪。 */
 function riskFlag(command: string): string {
-  return RISKY.some((re) => re.test(command)) ? '\n⚠️ **risky command**' : '';
+  const hits = RISKY.filter((r) => r.re.test(command)).map((r) => r.name);
+  return hits.length ? `\n⚠️ **Risky** — ${hits.join(', ')}` : '';
 }
 
 /** Break triple-backtick runs so agent-controlled content can't close or forge
@@ -52,9 +63,13 @@ function str(input: unknown, key: string): string | undefined {
   return typeof v === 'string' ? v : undefined;
 }
 
+const TOOL_ICON: Record<string, string> = {
+  Bash: '🖥️', apply_patch: '📝', Edit: '📝', Write: '📝', NotebookEdit: '📝',
+};
+
 export function renderApprovalCard(req: RenderRequest): { title: string; body: string } {
   const { toolName, input } = req;
-  const title = `Approval: ${toolName}`;
+  const title = `${TOOL_ICON[toolName] ?? '🔧'} ${toolName}`;
   switch (toolName) {
     case 'Edit': {
       const fp = inlineSafe(str(input, 'file_path') ?? '(unknown)');
@@ -79,7 +94,8 @@ export function renderApprovalCard(req: RenderRequest): { title: string; body: s
     case 'Bash': {
       const cmd = str(input, 'command') ?? '';
       const desc = str(input, 'description');
-      return { title, body: `${desc ? fenceSafe(desc) + '\n' : ''}\`\`\`bash\n${fenceSafe(maskSecrets(cmd))}\n\`\`\`${riskFlag(cmd)}` };
+      // 描述斜体、与命令块分层;命中的高危模式点名列出
+      return { title, body: `${desc ? `*${inlineSafe(desc)}*\n` : ''}\`\`\`bash\n${fenceSafe(maskSecrets(cmd))}\n\`\`\`${riskFlag(cmd)}` };
     }
     case 'apply_patch': {
       const patch = fenceSafe(maskSecrets(str(input, 'command') ?? '')).slice(0, 1500);

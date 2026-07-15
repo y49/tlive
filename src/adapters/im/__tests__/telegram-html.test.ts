@@ -51,3 +51,38 @@ describe('mdToTelegramHtml', () => {
     expect(out).toBe('Deploy script\n<pre><code class="language-bash">npm run deploy</code></pre>\n⚠️ <b>risky command</b>');
   });
 });
+
+describe('mdToTelegramHtml — rich inline + block markup', () => {
+  it('converts *italic* without clobbering **bold**', () => {
+    expect(mdToTelegramHtml('*Deploy to prod*')).toBe('<i>Deploy to prod</i>');
+    expect(mdToTelegramHtml('**risky** and *careful*')).toBe('<b>risky</b> and <i>careful</i>');
+  });
+
+  it('converts ~~strike~~ and ||spoiler||', () => {
+    expect(mdToTelegramHtml('~~gone~~ and ||secret||')).toBe('<s>gone</s> and <tg-spoiler>secret</tg-spoiler>');
+  });
+
+  it('converts a > blockquote (single and multi-line)', () => {
+    expect(mdToTelegramHtml('> one line')).toBe('<blockquote>one line</blockquote>');
+    expect(mdToTelegramHtml('> a\n> b')).toBe('<blockquote>a\nb</blockquote>');
+  });
+
+  it('converts >! to an expandable blockquote', () => {
+    expect(mdToTelegramHtml('>! long thing\n>! second')).toBe('<blockquote expandable>long thing\nsecond</blockquote>');
+  });
+
+  it('applies inline markup and escaping inside a blockquote', () => {
+    expect(mdToTelegramHtml('> **bad** <x> `q`')).toBe('<blockquote><b>bad</b> &lt;x&gt; <code>q</code></blockquote>');
+  });
+
+  it('mixes prose, blockquote, and a fence in one document', () => {
+    const md = '🛡 **Bash**\n*Deploy the app*\n```bash\nnpm run deploy\n```\n> reply to continue';
+    expect(mdToTelegramHtml(md)).toBe(
+      '🛡 <b>Bash</b>\n<i>Deploy the app</i>\n<pre><code class="language-bash">npm run deploy</code></pre>\n<blockquote>reply to continue</blockquote>',
+    );
+  });
+
+  it('leaves a bare > inside a fence untouched (redirection is not a quote)', () => {
+    expect(mdToTelegramHtml('```bash\necho hi > /tmp/x\n```')).toBe('<pre><code class="language-bash">echo hi &gt; /tmp/x</code></pre>');
+  });
+});

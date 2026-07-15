@@ -237,10 +237,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     if (muted || sessions.get(req.cwd)?.muted) return;
     for (const t of configuredChats()) {
       // requestId 不进显示文本:回复路由走 replyToMessageId,不解析正文。
-      // 摘录 = 真正的最后一句(context 若只是通用文案则不重复贴)。
+      // 摘录 = 真正的最后一句(context 若只是通用文案则不重复贴),用引用块分层。
       const raw = req.context === 'Turn finished — reply to continue' ? '' : req.context;
-      const excerpt = raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
-      void sendToChat(t, { text: `⏸ Turn finished — reply to this message to continue${excerpt ? `\n${excerpt}` : ''}`, cwd: req.cwd });
+      const excerpt = raw.length > 300 ? `${raw.slice(0, 300)}…` : raw;
+      const quote = excerpt ? excerpt.split('\n').map((l) => `> ${l}`).join('\n') + '\n' : '';
+      void sendToChat(t, { title: '⏸ Turn finished', body: `${quote}*Reply to this message to continue.*`, cwd: req.cwd });
     }
   });
 
