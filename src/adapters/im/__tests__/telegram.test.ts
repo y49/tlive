@@ -140,3 +140,56 @@ describe('TelegramAdapter', () => {
     });
   });
 });
+
+// --- outbound card rendering (Telegram HTML) ---
+
+describe('send() card rendering', () => {
+  async function adapterWithApi() {
+    const a = new TelegramAdapter({ token: 'T', allowedChatIds: ['100'] });
+    await a.start();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 7 });
+    (a as any).bot.api = { sendMessage };
+    return { a, sendMessage };
+  }
+
+  it('sends cards as HTML with converted body and bold title', async () => {
+    const { a, sendMessage } = await adapterWithApi();
+    await a.send({ kind: 'card', title: 'Approval: Bash', body: 'run `ls`\n```bash\nls -la\n```' });
+    const [, text, opts] = sendMessage.mock.calls[0];
+    expect(opts.parse_mode).toBe('HTML');
+    expect(text).toContain('<b>Approval: Bash</b>');
+    expect(text).toContain('<pre><code>ls -la</code></pre>');
+    expect(text).toContain('run <code>ls</code>');
+  });
+
+  it('escapes HTML in the title', async () => {
+    const { a, sendMessage } = await adapterWithApi();
+    await a.send({ kind: 'card', title: 'x <&> y', body: 'b' });
+    expect(sendMessage.mock.calls[0][1]).toContain('<b>x &lt;&amp;&gt; y</b>');
+  });
+
+  it('lays buttons out two per row', async () => {
+    const { a, sendMessage } = await adapterWithApi();
+    await a.send({
+      kind: 'card', title: 't', body: 'b',
+      buttons: [
+        { id: 'a', label: 'Allow' }, { id: 'd', label: 'Deny' },
+        { id: 'w', label: 'Always' }, { id: 'p', label: 'Pause' },
+      ],
+    });
+    const kb = sendMessage.mock.calls[0][2].reply_markup.inline_keyboard;
+    expect(kb).toHaveLength(2);
+    expect(kb[0].map((b: { text: string }) => b.text)).toEqual(['Allow', 'Deny']);
+    expect(kb[1].map((b: { text: string }) => b.text)).toEqual(['Always', 'Pause']);
+  });
+
+  it('falls back to plain text when HTML parsing is rejected', async () => {
+    const { a, sendMessage } = await adapterWithApi();
+    sendMessage
+      .mockRejectedValueOnce(new Error("Bad Request: can't parse entities"))
+      .mockResolvedValueOnce({ message_id: 9 });
+    const r = await a.send({ kind: 'card', title: 't', body: 'b' });
+    expect(r.messageId).toBe('9');
+    expect(sendMessage.mock.calls[1][2]?.parse_mode).toBeUndefined();
+  });
+});

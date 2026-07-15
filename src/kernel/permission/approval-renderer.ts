@@ -33,7 +33,7 @@ const RISKY = [
 ];
 
 function riskFlag(command: string): string {
-  return RISKY.some((re) => re.test(command)) ? '\n⚠️ **高危命令**' : '';
+  return RISKY.some((re) => re.test(command)) ? '\n⚠️ **risky command**' : '';
 }
 
 /** Break triple-backtick runs so agent-controlled content can't close or forge
@@ -54,7 +54,7 @@ function str(input: unknown, key: string): string | undefined {
 
 export function renderApprovalCard(req: RenderRequest): { title: string; body: string } {
   const { toolName, input } = req;
-  const title = `权限请求: ${toolName}`;
+  const title = `Approval: ${toolName}`;
   switch (toolName) {
     case 'Edit': {
       const fp = inlineSafe(str(input, 'file_path') ?? '(unknown)');
@@ -69,7 +69,7 @@ export function renderApprovalCard(req: RenderRequest): { title: string; body: s
     case 'Write': {
       const fp = inlineSafe(str(input, 'file_path') ?? '(unknown)');
       const content = fenceSafe(maskSecrets(str(input, 'content') ?? '')).slice(0, 800);
-      return { title, body: `写入 \`${fp}\`\n\`\`\`\n${content}\n\`\`\`` };
+      return { title, body: `Write to \`${fp}\`\n\`\`\`\n${content}\n\`\`\`` };
     }
     case 'NotebookEdit': {
       const fp = inlineSafe(str(input, 'notebook_path') ?? '(unknown)');
@@ -86,8 +86,19 @@ export function renderApprovalCard(req: RenderRequest): { title: string; body: s
       return { title, body: `\`\`\`diff\n${patch}\n\`\`\`` };
     }
     default: {
-      const json = fenceSafe(maskSecrets(JSON.stringify(input ?? {}))).slice(0, 500);
-      return { title, body: `\`\`\`json\n${json}\n\`\`\`` };
+      // 未知/MCP 工具:键值摘要比裸 JSON 可读得多;值截断,防长文淹没卡片
+      const obj = (input ?? {}) as Record<string, unknown>;
+      const secretKey = /token|key|secret|password|passwd|auth/i;
+      const lines = Object.entries(obj)
+        .slice(0, 8)
+        .map(([k, v]) => {
+          const raw = typeof v === 'string' ? v : JSON.stringify(v);
+          // 键名即敏感 → 整值打码(maskSecrets 只认 k=v/JSON 形态,盖不住裸值)
+          const val = secretKey.test(k) ? '***' : inlineSafe(maskSecrets(raw ?? '')).slice(0, 120);
+          return `${inlineSafe(k)}: ${val}`;
+        });
+      const body = lines.length ? fenceSafe(lines.join('\n')).slice(0, 500) : '(no input)';
+      return { title, body: `\`\`\`\n${body}\n\`\`\`` };
     }
   }
 }

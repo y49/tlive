@@ -166,10 +166,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         body,
         ...(msg.requestId ? {
           buttons: [
-            { id: `approve:${msg.requestId}`, label: '✅ 允许' },
-            { id: `deny:${msg.requestId}`, label: '❌ 拒绝' },
-            ...(msg.toolName ? [{ id: `allowtool:${msg.requestId}:${msg.toolName}`, label: `✅ 总是允许 ${msg.toolName}` }] : []),
-            { id: `pause:${msg.requestId}`, label: '⏸ 暂停审批' },
+            { id: `approve:${msg.requestId}`, label: '✅ Allow' },
+            { id: `deny:${msg.requestId}`, label: '❌ Deny' },
+            ...(msg.toolName ? [{ id: `allowtool:${msg.requestId}:${msg.toolName}`, label: `♾ Always allow ${msg.toolName}` }] : []),
+            { id: `pause:${msg.requestId}`, label: '⏸ Pause approvals' },
           ],
         } : {}),
       });
@@ -188,7 +188,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   }, 30_000);
   sweeper.unref();
 
-  const OUTCOME: Record<string, string> = { allow: '✅ 已允许', deny: '❌ 已拒绝', defer: '⏳ 已超时(回落本地)', local: '🖥 answered in terminal' };
+  const OUTCOME: Record<string, string> = { allow: '✅ Allowed', deny: '❌ Denied', defer: '⏳ Timed out (local prompt governs)', local: '🖥 Answered in terminal' };
 
   const permissionRouter = new PermissionRouter({
     configuredChats,
@@ -220,7 +220,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         for (const c of cards) {
           const adapter = (opts.imAdapters ?? []).find((a) => a.channel === c.channel);
           if (!adapter) continue;
-          void adapter.edit(c.messageId, { kind: 'card', title: `${OUTCOME[decision] ?? decision} · ${c.title}`, body: c.body }).catch(() => undefined);
+          // 紧凑回写:结果 + 标题一行足够,不再重挂全 body(高卡变短讯)
+          void adapter.edit(c.messageId, { kind: 'card', title: `${OUTCOME[decision] ?? decision} · ${c.title}`, body: '' }).catch(() => undefined);
         }
       }
     },
@@ -235,7 +236,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key: req.cwd, cwd: req.cwd, status: 'waiting-input', continueId: req.requestId }) });
     if (muted || sessions.get(req.cwd)?.muted) return;
     for (const t of configuredChats()) {
-      void sendToChat(t, { text: `⏸ ${req.context}\n回复本条以续跑 (id: ${req.requestId})`, cwd: req.cwd });
+      // requestId 不进显示文本:回复路由走 replyToMessageId,不解析正文
+      const excerpt = req.context.length > 200 ? `${req.context.slice(0, 200)}…` : req.context;
+      void sendToChat(t, { text: `⏸ Turn finished — reply to this message to continue\n${excerpt}`, cwd: req.cwd });
     }
   });
 
@@ -373,7 +376,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           const key = resolveKey(req.cwd, req.wrappedId);
           if (!muted && !sessions.get(key)?.muted) {
             // cwd carries the resolved KEY so the [⌨ label] tag + reply-routing map are consistent.
-            await Promise.all(configuredChats().map((t) => sendToChat(t, { text: `[${req.level}] ${req.message}`, cwd: key })));
+            await Promise.all(configuredChats().map((t) => sendToChat(t, { text: `${req.level === 'error' ? '❌' : 'ℹ️'} ${req.message}`, cwd: key })));
           }
           events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.message }, key));
           reply({ kind: 'ack' });

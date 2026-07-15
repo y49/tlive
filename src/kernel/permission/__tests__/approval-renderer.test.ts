@@ -19,7 +19,7 @@ describe('maskSecrets', () => {
 describe('renderApprovalCard', () => {
   it('Edit → unified diff of old→new', () => {
     const { title, body } = renderApprovalCard({ toolName: 'Edit', input: { file_path: '/a.ts', old_string: 'x', new_string: 'y' } });
-    expect(title).toBe('权限请求: Edit');
+    expect(title).toBe('Approval: Edit');
     expect(body).toContain('/a.ts');
     expect(body).toContain('- x');
     expect(body).toContain('+ y');
@@ -33,13 +33,15 @@ describe('renderApprovalCard', () => {
     const risky = renderApprovalCard({ toolName: 'Bash', input: { command: 'rm -rf /tmp/x', description: 'clean' } });
     expect(risky.body).toContain('clean');
     expect(risky.body).toContain('rm -rf /tmp/x');
-    expect(risky.body).toContain('高危');
+    expect(risky.body).toContain('risky command');
     const secret = renderApprovalCard({ toolName: 'Bash', input: { command: 'curl h?token=abc' } });
     expect(secret.body).toContain('token=***');
   });
-  it('unknown/MCP tool → masked JSON fallback', () => {
+  it('unknown/MCP tool → masked key:value summary (not raw JSON)', () => {
     const { body } = renderApprovalCard({ toolName: 'mcp__s__t', input: { password: 'p', q: 1 } });
-    expect(body).toContain('json');
+    expect(body).toContain('password: ***');
+    expect(body).toContain('q: 1');
+    expect(body).not.toContain('{"');
   });
   it('apply_patch(Codex 编辑)渲染成 diff', () => {
     const { body } = renderApprovalCard({ toolName: 'apply_patch', input: { command: '*** Begin Patch\n*** Update File: a.ts\n-old\n+new\n*** End Patch' } });

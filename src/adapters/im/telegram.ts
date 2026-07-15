@@ -12,10 +12,24 @@ import { randomUUID } from 'node:crypto';
 import type {
   IMAdapter, IncomingEnvelope, OutgoingMessage,
 } from '../../kernel/contracts/im-adapter.js';
+import { mdToTelegramHtml, escapeHtml } from './telegram-html.js';
 
 interface TelegramAdapterOpts {
   token: string;
   allowedChatIds?: string[];
+}
+
+type Keyboard = Array<Array<{ text: string; callback_data: string }>>;
+
+/** card → Telegram HTML 文本 + 两钮一行的 inline keyboard。 */
+function renderCard(out: Extract<OutgoingMessage, { kind: 'card' }>): { text: string; keyboard: Keyboard } {
+  const text = (out.title ? `<b>${escapeHtml(out.title)}</b>\n` : '') + mdToTelegramHtml(out.body);
+  const keyboard: Keyboard = [];
+  const btns = out.buttons ?? [];
+  for (let i = 0; i < btns.length; i += 2) {
+    keyboard.push(btns.slice(i, i + 2).map((b) => ({ text: b.label, callback_data: b.id })));
+  }
+  return { text, keyboard };
 }
 
 export class TelegramAdapter implements IMAdapter {
@@ -153,14 +167,23 @@ export class TelegramAdapter implements IMAdapter {
       const sent = await this.bot.api.sendMessage(chatId, out.text);
       return { messageId: String(sent.message_id) };
     }
-    // card → render as text + inline_keyboard buttons
-    const text = (out.title ? `*${out.title}*\n\n` : '') + out.body;
-    const buttons = (out.buttons ?? []).map((b) => [{ text: b.label, callback_data: b.id }]);
-    const sent = await this.bot.api.sendMessage(chatId, text, {
-      parse_mode: 'Markdown',
-      reply_markup: { inline_keyboard: buttons },
-    });
-    return { messageId: String(sent.message_id) };
+    // card → Telegram HTML entities + inline keyboard(两钮一行)
+    const { text, keyboard } = renderCard(out);
+    try {
+      const sent = await this.bot.api.sendMessage(chatId, text, {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: keyboard },
+      });
+      return { messageId: String(sent.message_id) };
+    } catch (e) {
+      // HTML 实体不平衡等解析错 → 降级纯文本重发一次;卡片必须送达
+      if (!/parse/i.test(e instanceof Error ? e.message : '')) throw e;
+      const plain = (out.title ? `${out.title}\n\n` : '') + out.body;
+      const sent = await this.bot.api.sendMessage(chatId, plain, {
+        reply_markup: { inline_keyboard: keyboard },
+      });
+      return { messageId: String(sent.message_id) };
+    }
   }
 
   async edit(messageId: string, out: OutgoingMessage): Promise<void> {
@@ -169,12 +192,19 @@ export class TelegramAdapter implements IMAdapter {
     if (out.kind === 'text') {
       await this.bot.api.editMessageText(chatId, Number(messageId), out.text);
     } else {
-      const text = (out.title ? `*${out.title}*\n\n` : '') + out.body;
-      const buttons = (out.buttons ?? []).map((b) => [{ text: b.label, callback_data: b.id }]);
-      await this.bot.api.editMessageText(chatId, Number(messageId), text, {
-        parse_mode: 'Markdown',
-        reply_markup: { inline_keyboard: buttons },
-      });
+      const { text, keyboard } = renderCard(out);
+      try {
+        await this.bot.api.editMessageText(chatId, Number(messageId), text, {
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: keyboard },
+        });
+      } catch (e) {
+        if (!/parse/i.test(e instanceof Error ? e.message : '')) throw e;
+        const plain = (out.title ? `${out.title}\n\n` : '') + out.body;
+        await this.bot.api.editMessageText(chatId, Number(messageId), plain, {
+          reply_markup: { inline_keyboard: keyboard },
+        });
+      }
     }
   }
 

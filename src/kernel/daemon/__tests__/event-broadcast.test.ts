@@ -106,11 +106,12 @@ describe('daemon → /ws/events downstream broadcast', () => {
     // Effect 2: ContinueBroker received the request → IM message sent containing requestId.
     await new Promise((r) => setTimeout(r, 100));
     expect(capturedMsg).toMatch(/stop ctx/);
-    const match = capturedMsg.match(/id: ([a-f0-9-]{36})/);
-    expect(match).toBeTruthy();
+    // requestId no longer appears in the display text — take it from the registry
+    const continueId = h.sessions.get('/stop/cwd')!.continueId!;
+    expect(continueId).toMatch(/[a-f0-9-]{36}/);
 
     // Unblock the IPC handler by answering the broker.
-    h.continueBroker.answer(match![1], 'go');
+    h.continueBroker.answer(continueId, 'go');
     await p;
   });
 
@@ -170,8 +171,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
     const p = request({ kind: 'hook.continue.request', cwd: '/dl', sessionId: 's', context: 'ctx' }, { socketPath: sock, timeoutMs: 8000 });
     await new Promise((r) => setTimeout(r, 100));
     expect(sent.some((t) => t.includes('🔗 https://dev.example.ts.net/?token='))).toBe(true);
-    const id = sent.join('\n').match(/id: ([a-f0-9-]{36})/)![1];
-    h.continueBroker.answer(id, 'go');
+    h.continueBroker.answer(h.sessions.get('/dl')!.continueId!, 'go');
     await p;
     // approval card (card path)
     sent.length = 0;
@@ -191,8 +191,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
     const p = request({ kind: 'hook.continue.request', cwd: '/dl2', sessionId: 's', context: 'ctx' }, { socketPath: sock, timeoutMs: 8000 });
     await new Promise((r) => setTimeout(r, 100));
     expect(sent.join('\n')).not.toContain('🔗');
-    const id = sent.join('\n').match(/id: ([a-f0-9-]{36})/)![1];
-    h.continueBroker.answer(id, 'go');
+    h.continueBroker.answer(h.sessions.get('/dl2')!.continueId!, 'go');
     await p;
   });
 
@@ -234,7 +233,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
     await p;
     await new Promise((r) => setTimeout(r, 100));
     expect(edits.length).toBe(1);
-    expect(edits[0].title).toContain('已拒绝');
+    expect(edits[0].title).toContain('Denied');
   });
 
   it('web approve with alwaysAllowTool auto-allows the next request for that tool', async () => {

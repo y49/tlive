@@ -22,8 +22,8 @@ describe('PolicyEngine.decide', () => {
   it('unknown/MCP tool defaults to ask (fail-safe)', () => {
     expect(decide({ toolName: 'mcp__x__do' }, ask).decision).toBe('ask');
   });
-  it('READ_ONLY_TOOLS is exactly Read/Glob/Grep', () => {
-    expect([...READ_ONLY_TOOLS].sort()).toEqual(['Glob', 'Grep', 'Read']);
+  it('READ_ONLY_TOOLS is exactly Read/Glob/Grep/AskUserQuestion', () => {
+    expect([...READ_ONLY_TOOLS].sort()).toEqual(['AskUserQuestion', 'Glob', 'Grep', 'Read']);
   });
 });
 

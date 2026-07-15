@@ -63,7 +63,9 @@ which powers a session has.
   grants a per-tool pass (in-memory, cleared on restart) — on Claude Code it
   now answers the native dialog for you remotely; `/trust on|off` pauses
   approvals entirely. **Nothing is ever auto-denied**; an unanswered card
-  simply leaves the local prompt in charge.
+  simply leaves the local prompt in charge. Telegram cards use modern
+  formatting (HTML entities, expandable quotes for long diffs/commands) —
+  use a reasonably recent Telegram app for best rendering.
 - **Resume** — on `Stop`, reply to the IM message (or the web reply box) and
   the session keeps going.
 - **Daemon lazy-start** — hooks-only sessions no longer need a manual

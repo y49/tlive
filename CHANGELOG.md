@@ -62,6 +62,30 @@ All notable changes to this project will be documented in this file.
   `approvals.claudeWindowSec` still configures up to 86200s (~24h) for
   away-overnight use.
 
+### Changed — Telegram card styling + English copy (Phase 2, TG-first)
+
+- **Telegram switches to HTML formatting** (`parse_mode: 'HTML'`): bold
+  titles, `<pre><code>` command/diff blocks, expandable blockquotes for
+  long bodies (≥8 lines; Bot API 7.3+ clients — older clients degrade to
+  a plain quote). All agent-controlled content is HTML-escaped before
+  entity mapping; a parse failure falls back to plain text so a card can
+  never fail to deliver. Buttons now lay out two per row.
+- **English copy across cards**: `Approval: <tool>`, Allow/Deny/Always
+  allow/Pause approvals buttons, `✅ Allowed / ❌ Denied / ⏳ Timed out /
+  🖥 Answered in terminal` outcomes, `⏸ Turn finished — reply to this
+  message to continue`, `ℹ️/❌` notify prefixes.
+- **Outcome rewrites are compact**: resolved cards collapse to one line
+  (outcome + title) instead of re-carrying the full body.
+- **Continue messages no longer leak the request UUID** (reply routing
+  uses Telegram's reply-to metadata, never the text).
+- **`AskUserQuestion` is auto-allowed** by the policy engine: it is an
+  interactive UI tool with zero destructive power, and CC fires
+  PermissionRequest for it even though the question can only be answered
+  in the terminal — the card was pure noise.
+- **Unknown/MCP tools render as a key:value summary** (secret-named keys
+  masked) instead of a raw JSON dump.
+- Feishu styling: next round.
+
 ### Changed — dual-channel approvals (Claude Code)
 
 - **Gating moved from `PreToolUse` to `PermissionRequest`** (breaking for

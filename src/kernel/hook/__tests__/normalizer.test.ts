@@ -8,7 +8,7 @@ describe('hook normalizer', () => {
   });
   it('parses Stop as attention', () => {
     const n = parseHookInput('stop', { cwd: '/r', session_id: 's' });
-    expect(n).toEqual({ event: 'attention', cwd: '/r', sessionId: 's', message: '已完成,回复以续跑' });
+    expect(n).toEqual({ event: 'attention', cwd: '/r', sessionId: 's', message: 'Turn finished — reply to continue' });
   });
   it('parses Notification with message', () => {
     const n = parseHookInput('notification', { cwd: '/r', session_id: 's', message: '需要权限' });
@@ -20,7 +20,7 @@ describe('hook normalizer', () => {
   });
   it('parses Stop with last_assistant_message into attention.lastMessage', () => {
     const n = parseHookInput('stop', { cwd: '/r', session_id: 's', last_assistant_message: 'all done' });
-    expect(n).toEqual({ event: 'attention', cwd: '/r', sessionId: 's', message: '已完成,回复以续跑', lastMessage: 'all done' });
+    expect(n).toEqual({ event: 'attention', cwd: '/r', sessionId: 's', message: 'Turn finished — reply to continue', lastMessage: 'all done' });
   });
   it('parses UserPromptSubmit as prompt', () => {
     const n = parseHookInput('user-prompt-submit', { cwd: '/r', session_id: 's', prompt: 'fix the bug' });

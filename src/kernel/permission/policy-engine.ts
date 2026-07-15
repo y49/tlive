@@ -25,7 +25,9 @@ export interface PolicyDecision {
 
 /** Read-only built-in tools. Empirically CC/Codex don't prompt for these in
  *  default mode; tlive's `*` hook matcher would otherwise add friction. */
-export const READ_ONLY_TOOLS = new Set<string>(['Read', 'Glob', 'Grep']);
+// AskUserQuestion:交互 UI 工具,零破坏性;CC 会为它 fire PermissionRequest,
+// 但远程"允许"只是让问题在终端弹出,问题本身必须在终端答 —— 发卡纯属噪音。
+export const READ_ONLY_TOOLS = new Set<string>(['Read', 'Glob', 'Grep', 'AskUserQuestion']);
 
 export function decide(req: PolicyRequest, state: PolicyState): PolicyDecision {
   if (state.trustUntilRevoked) return { decision: 'allow', reason: 'trust-switch' };

@@ -52,12 +52,12 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
     case 'post-tool-use':
       return { event: 'activity', cwd, sessionId, toolName: r.tool_name ?? '(unknown)', result: r.tool_response ?? {}, ...(r.agent_id ? { agentId: r.agent_id } : {}) };
     case 'stop':
-      return { event: 'attention', cwd, sessionId, message: '已完成,回复以续跑', ...(r.last_assistant_message ? { lastMessage: r.last_assistant_message } : {}) };
+      return { event: 'attention', cwd, sessionId, message: 'Turn finished — reply to continue', ...(r.last_assistant_message ? { lastMessage: r.last_assistant_message } : {}) };
     case 'notification':
       // permission_prompt notifications are dropped in the shim (the parallel
       // PermissionRequest card already covers that moment); everything else
       // passes through verbatim.
-      return { event: 'attention', cwd, sessionId, message: r.message ?? '需要你处理' };
+      return { event: 'attention', cwd, sessionId, message: r.message ?? 'needs your attention' };
     case 'user-prompt-submit':
       return { event: 'prompt', cwd, sessionId, prompt: r.prompt ?? '' };
     case 'session-start':
@@ -66,10 +66,10 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
       return { event: 'session-end', cwd, sessionId, ...(r.reason ? { reason: r.reason } : {}) };
     case 'post-tool-use-failure': {
       const err = typeof r.tool_error === 'string' ? r.tool_error : JSON.stringify(r.tool_error ?? '');
-      return { event: 'attention', cwd, sessionId, message: `❌ ${r.tool_name ?? '(unknown)'} 失败: ${err.slice(0, 200)}` };
+      return { event: 'attention', cwd, sessionId, message: `❌ ${r.tool_name ?? '(unknown)'} failed: ${err.slice(0, 200)}` };
     }
     case 'stop-failure':
-      return { event: 'attention', cwd, sessionId, message: `❌ 会话出错: ${r.error_type ?? 'unknown'}` };
+      return { event: 'attention', cwd, sessionId, message: `❌ session error: ${r.error_type ?? 'unknown'}` };
     case 'subagent-start':
       return { event: 'subagent', cwd, sessionId, delta: 1, ...(r.agent_type ? { agentType: r.agent_type } : {}) };
     case 'subagent-stop':
