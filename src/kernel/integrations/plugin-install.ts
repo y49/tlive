@@ -32,8 +32,19 @@ export function installClaudePlugin(run: Runner): { ok: boolean; detail: string 
   }
   const mk = run('claude', ['plugin', 'marketplace', 'add', claudePluginDir()]);
   if (!alreadyOk(mk)) return { ok: false, detail: `marketplace add failed: ${mk.output.slice(0, 200)}` };
+  // marketplace add 对已注册的 marketplace 不刷新 source —— 必须 update 才会从
+  // bundled 目录重读最新 version;否则升级 tlive 后插件永远停在旧版(实测坑)。
+  run('claude', ['plugin', 'marketplace', 'update', 'tlive']);
   const inst = run('claude', ['plugin', 'install', 'tlive@tlive', '--scope', 'user']);
   if (!alreadyOk(inst)) return { ok: false, detail: `plugin install failed: ${inst.output.slice(0, 200)}` };
+  // install 对已装插件跳过 —— 已装则 update 到刷新后的 version。
+  if (/already/i.test(inst.output)) {
+    const up = run('claude', ['plugin', 'update', 'tlive@tlive']);
+    if (!up.ok && !/already|up to date|latest/i.test(up.output)) {
+      return { ok: false, detail: `plugin update failed: ${up.output.slice(0, 200)}` };
+    }
+    return { ok: true, detail: 'tlive@tlive updated to latest (user scope)' };
+  }
   return { ok: true, detail: 'tlive@tlive installed (user scope)' };
 }
 
