@@ -8,14 +8,23 @@ describe('escapeHtml', () => {
 });
 
 describe('mdToTelegramHtml', () => {
-  it('converts a code fence to <pre><code>', () => {
-    expect(mdToTelegramHtml('```bash\nls -la\n```')).toBe('<pre><code>ls -la</code></pre>');
+  it('converts a code fence to <pre><code> with a language class', () => {
+    expect(mdToTelegramHtml('```bash\nls -la\n```')).toBe('<pre><code class="language-bash">ls -la</code></pre>');
+    expect(mdToTelegramHtml('```\nplain\n```')).toBe('<pre><code>plain</code></pre>');
   });
 
-  it('folds long fences (>= 8 lines) into an expandable blockquote', () => {
-    const body = Array.from({ length: 9 }, (_, i) => `line${i}`).join('\n');
+  it('truncates long fences (> 14 lines) to 12 lines + a more-lines marker', () => {
+    // TG 不允许 pre 嵌 blockquote(真机实证外层被丢),改为截断 + 提示
+    const body = Array.from({ length: 20 }, (_, i) => `line${i}`).join('\n');
     const out = mdToTelegramHtml('```\n' + body + '\n```');
-    expect(out).toBe(`<blockquote expandable><pre><code>${body}</code></pre></blockquote>`);
+    const head = Array.from({ length: 12 }, (_, i) => `line${i}`).join('\n');
+    expect(out).toBe(`<pre><code>${head}</code></pre>\n<i>… +8 more lines — open the dashboard for the full text</i>`);
+  });
+
+  it('does not truncate fences of exactly 14 lines', () => {
+    const body = Array.from({ length: 14 }, (_, i) => `l${i}`).join('\n');
+    const out = mdToTelegramHtml('```\n' + body + '\n```');
+    expect(out).toBe(`<pre><code>${body}</code></pre>`);
   });
 
   it('escapes HTML inside fences so agent content cannot inject markup', () => {
@@ -34,11 +43,11 @@ describe('mdToTelegramHtml', () => {
 
   it('keeps diff fence content verbatim (escaped, no per-line styling)', () => {
     const out = mdToTelegramHtml('```diff\n- old\n+ new\n```');
-    expect(out).toBe('<pre><code>- old\n+ new</code></pre>');
+    expect(out).toBe('<pre><code class="language-diff">- old\n+ new</code></pre>');
   });
 
   it('handles mixed prose + fence documents', () => {
     const out = mdToTelegramHtml('Deploy script\n```bash\nnpm run deploy\n```\n⚠️ **risky command**');
-    expect(out).toBe('Deploy script\n<pre><code>npm run deploy</code></pre>\n⚠️ <b>risky command</b>');
+    expect(out).toBe('Deploy script\n<pre><code class="language-bash">npm run deploy</code></pre>\n⚠️ <b>risky command</b>');
   });
 });

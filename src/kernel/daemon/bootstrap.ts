@@ -236,9 +236,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key: req.cwd, cwd: req.cwd, status: 'waiting-input', continueId: req.requestId }) });
     if (muted || sessions.get(req.cwd)?.muted) return;
     for (const t of configuredChats()) {
-      // requestId 不进显示文本:回复路由走 replyToMessageId,不解析正文
-      const excerpt = req.context.length > 200 ? `${req.context.slice(0, 200)}…` : req.context;
-      void sendToChat(t, { text: `⏸ Turn finished — reply to this message to continue\n${excerpt}`, cwd: req.cwd });
+      // requestId 不进显示文本:回复路由走 replyToMessageId,不解析正文。
+      // 摘录 = 真正的最后一句(context 若只是通用文案则不重复贴)。
+      const raw = req.context === 'Turn finished — reply to continue' ? '' : req.context;
+      const excerpt = raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
+      void sendToChat(t, { text: `⏸ Turn finished — reply to this message to continue${excerpt ? `\n${excerpt}` : ''}`, cwd: req.cwd });
     }
   });
 
@@ -366,7 +368,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             return;
           }
           events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'waiting-input', ...(req.lastMessage ? { lastMessage: req.lastMessage } : {}) }) });
-          const reply_text = await continueBroker.request({ cwd: key, context: req.context, timeoutSec: 170 });
+          // IM 摘录用真正的最后一句;没有才落回通用 context 文案
+          const reply_text = await continueBroker.request({ cwd: key, context: req.lastMessage ?? req.context, timeoutSec: 170 });
           // Resolved (replied or timed out): clear the reply target; back to active if continuing, else idle.
           events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: reply_text ? 'active' : 'idle', continueId: null }) });
           reply({ kind: 'hook.continue.result', reply: reply_text });
@@ -376,7 +379,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           const key = resolveKey(req.cwd, req.wrappedId);
           if (!muted && !sessions.get(key)?.muted) {
             // cwd carries the resolved KEY so the [⌨ label] tag + reply-routing map are consistent.
-            await Promise.all(configuredChats().map((t) => sendToChat(t, { text: `${req.level === 'error' ? '❌' : 'ℹ️'} ${req.message}`, cwd: key })));
+            // normalizer 的失败文案自带 ❌ —— 已有表情前缀就别再叠一个
+            const icon = req.level === 'error' ? '❌' : 'ℹ️';
+            const text = /^[ℹ❌⚠⏸✅🖥]/u.test(req.message) ? req.message : `${icon} ${req.message}`;
+            await Promise.all(configuredChats().map((t) => sendToChat(t, { text, cwd: key })));
           }
           events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.message }, key));
           reply({ kind: 'ack' });

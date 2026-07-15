@@ -158,7 +158,7 @@ describe('send() card rendering', () => {
     const [, text, opts] = sendMessage.mock.calls[0];
     expect(opts.parse_mode).toBe('HTML');
     expect(text).toContain('<b>Approval: Bash</b>');
-    expect(text).toContain('<pre><code>ls -la</code></pre>');
+    expect(text).toContain('<pre><code class="language-bash">ls -la</code></pre>');
     expect(text).toContain('run <code>ls</code>');
   });
 

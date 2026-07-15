@@ -105,7 +105,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
 
     // Effect 2: ContinueBroker received the request → IM message sent containing requestId.
     await new Promise((r) => setTimeout(r, 100));
-    expect(capturedMsg).toMatch(/stop ctx/);
+    expect(capturedMsg).toMatch(/last_msg/); // excerpt = 真正的最后一句
     // requestId no longer appears in the display text — take it from the registry
     const continueId = h.sessions.get('/stop/cwd')!.continueId!;
     expect(continueId).toMatch(/[a-f0-9-]{36}/);
