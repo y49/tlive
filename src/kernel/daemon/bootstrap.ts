@@ -101,10 +101,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   let muted = false;
   const policyState: PolicyState = { trustUntilRevoked: false, allowTools: new Set<string>() };
 
-  // IM → web deep link. Only meaningful when the user configured an externally
-  // reachable base URL (tailscale / reverse proxy) — a 127.0.0.1 link is useless on a phone.
-  let deepLink: string | undefined; // set after the web server starts (token known)
-
   const configuredChats = (): PermChat[] => {
     const out: PermChat[] = [];
     const tg = cfg.adapters.telegram;
@@ -157,10 +153,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     let sent: { messageId: string };
     if (msg.text !== undefined) {
       const text = `${tag}${msg.text}`;
-      sent = await adapter.send({ kind: 'text', text: deepLink ? `${text}\n🔗 ${deepLink}` : text });
+      sent = await adapter.send({ kind: 'text', text });
     } else {
       const title = msg.title ? `${tag}${msg.title}` : undefined;
-      const body = deepLink ? `${msg.body ?? ''}\n🔗 ${deepLink}` : (msg.body ?? '');
+      const body = msg.body ?? '';
       sent = await adapter.send({
         kind: 'card',
         ...(title ? { title } : {}),
@@ -318,7 +314,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     try {
       web = await startWebServer({ bind, port, token, sessions, events, onAction, inboxDir: join(opts.home, 'inbox'), webDir });
       webUrl = web.url;
-      if (cfg.web?.publicUrl) deepLink = `${cfg.web.publicUrl.replace(/\/+$/, '')}/?token=${token}`;
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error(`tlive web server failed to start: ${(e as Error).message}`);

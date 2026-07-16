@@ -26,4 +26,9 @@ describe('loadConfig', () => {
     expect(c.adapters.telegram?.chatIdAllowList).toEqual(['c1']);
     expect(c.web?.port).toBe(7681);
   });
+  it('web config has no publicUrl field (deep links retired for security)', () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { publicUrl: 'http://x:1/' } }));
+    const cfg = loadConfig(tmp);
+    expect((cfg.web as Record<string, unknown>)?.publicUrl).toBeUndefined();
+  });
 });

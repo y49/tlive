@@ -10,9 +10,6 @@ export interface WebConfig {
   enabled?: boolean;
   bind?: string;
   port?: number;
-  /** Externally reachable base URL (e.g. tailscale/reverse-proxy). When set,
-   *  IM approval/continue messages carry a deep link to the web dashboard. */
-  publicUrl?: string;
 }
 export interface PolicyConfig { autoAllow?: string[]; autoDeny?: string[]; ask?: string[] }
 
@@ -43,5 +40,9 @@ export function loadConfig(home: string): KernelConfig {
   const p = join(home, 'config.json');
   if (!existsSync(p)) return { ...DEFAULT };
   const raw = JSON.parse(readFileSync(p, 'utf-8'));
-  return { ...DEFAULT, ...raw };
+  const cfg: KernelConfig = { ...DEFAULT, ...raw };
+  // Allowlist `web` fields explicitly — a blind spread would let a stray
+  // `publicUrl` (retired deep-link token) survive into the loaded config.
+  if (raw.web) cfg.web = { enabled: raw.web.enabled, bind: raw.web.bind, port: raw.web.port };
+  return cfg;
 }
