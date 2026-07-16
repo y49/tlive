@@ -19,7 +19,7 @@ export type NormalizedHook =
   // 关联回同一个 agent 的挂起审批,同 key 同 tool 的其他 agent 的卡不受影响。
   | { event: 'approval-request'; cwd: string; sessionId: string; toolName: string; input: unknown; permissionMode?: string; agentId?: string }
   | { event: 'activity'; cwd: string; sessionId: string; toolName: string; result: unknown; agentId?: string }
-  | { event: 'attention'; cwd: string; sessionId: string; message: string; lastMessage?: string; stopHookActive?: boolean }
+  | { event: 'attention'; cwd: string; sessionId: string; message: string; lastMessage?: string; stopHookActive?: boolean; droppable?: boolean }
   | { event: 'prompt'; cwd: string; sessionId: string; prompt: string }
   | { event: 'subagent'; cwd: string; sessionId: string; delta: 1 | -1; agentType?: string }
   | { event: 'session-start'; cwd: string; sessionId: string; source?: string }
@@ -78,9 +78,20 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
       return { event: 'session-end', cwd, sessionId, ...(r.reason ? { reason: r.reason } : {}) };
     case 'post-tool-use-failure': {
       const err = typeof r.tool_error === 'string' ? r.tool_error : JSON.stringify(r.tool_error ?? '');
+      // 语义上"空"的错误文本:真正空串/纯空白,或 JSON.stringify 序列化出的
+      // 空壳(空对象 {}、null、双引号空串)——这些都不是"有效错误内容"。最常见
+      // 的来源是 Bash 命令非零退出但 stderr 为空(grep 没命中/test 判假/
+      // diff --quiet 这类正常非零退出),属于噪音,不该推告警到手机;有真正
+      // 内容的失败(如 permission denied)不受影响,照常发。
+      const trimmed = err.trim();
+      const isEmptyError = trimmed === '' || trimmed === '{}' || trimmed === '""' || trimmed === "''" || trimmed === 'null';
       // No emoji prefix here — single responsibility: normalizer only normalizes
       // text. The ⚠️ prefix (for error-level notify) is bootstrap's call.
-      return { event: 'attention', cwd, sessionId, message: `${r.tool_name ?? '(unknown)'} failed: ${err.slice(0, 200)}` };
+      return {
+        event: 'attention', cwd, sessionId,
+        message: `${r.tool_name ?? '(unknown)'} failed: ${err.slice(0, 200)}`,
+        ...(isEmptyError ? { droppable: true } : {}),
+      };
     }
     case 'stop-failure':
       return { event: 'attention', cwd, sessionId, message: `session error: ${r.error_type ?? 'unknown'}` };

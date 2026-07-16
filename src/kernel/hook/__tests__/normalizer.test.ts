@@ -99,6 +99,40 @@ describe('failure events', () => {
     expect((n as any).message).toContain('rate_limit');
     expect((n as any).message).not.toMatch(/^[⚠❌]/u);
   });
+
+  describe('post-tool-use-failure with empty tool_error → droppable (noise, e.g. grep no-match / test false / diff --quiet)', () => {
+    it('tool_error missing → droppable: true', () => {
+      const n = parseHookInput('post-tool-use-failure', { cwd: '/x', session_id: 's', tool_name: 'Bash' });
+      expect((n as any).droppable).toBe(true);
+    });
+    it('tool_error: "" (empty string) → droppable: true', () => {
+      const n = parseHookInput('post-tool-use-failure', { cwd: '/x', session_id: 's', tool_name: 'Bash', tool_error: '' });
+      expect((n as any).droppable).toBe(true);
+    });
+    it('tool_error: "   " (whitespace only) → droppable: true', () => {
+      const n = parseHookInput('post-tool-use-failure', { cwd: '/x', session_id: 's', tool_name: 'Bash', tool_error: '   \n\t ' });
+      expect((n as any).droppable).toBe(true);
+    });
+    it('tool_error: {} (empty object → JSON.stringify "{}") → droppable: true', () => {
+      const n = parseHookInput('post-tool-use-failure', { cwd: '/x', session_id: 's', tool_name: 'Bash', tool_error: {} });
+      expect((n as any).droppable).toBe(true);
+    });
+    it('tool_error: null → droppable: true', () => {
+      const n = parseHookInput('post-tool-use-failure', { cwd: '/x', session_id: 's', tool_name: 'Bash', tool_error: null });
+      expect((n as any).droppable).toBe(true);
+    });
+  });
+
+  it('post-tool-use-failure with real content ("permission denied") → not droppable, message carries the reason', () => {
+    const n = parseHookInput('post-tool-use-failure', { cwd: '/x', session_id: 's', tool_name: 'Bash', tool_error: 'permission denied' });
+    expect((n as any).droppable).toBeFalsy();
+    expect((n as any).message).toContain('permission denied');
+  });
+
+  it('stop-failure is unaffected — never droppable (Stop hook failing itself, not tool_error-based)', () => {
+    const n = parseHookInput('stop-failure', { cwd: '/x', session_id: 's', error_type: 'rate_limit' });
+    expect((n as any).droppable).toBeUndefined();
+  });
 });
 
 describe('sessionStartOut(欢迎提示)', () => {

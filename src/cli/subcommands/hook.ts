@@ -160,7 +160,15 @@ export async function runHook(argv: string[]): Promise<void> {
     }
 
     if (event === 'notification' || event === 'post-tool-use-failure' || event === 'stop-failure') {
-      const att = n as { cwd: string; sessionId: string; message: string };
+      const att = n as { cwd: string; sessionId: string; message: string; droppable?: boolean };
+      if (att.droppable) {
+        // 空失败(如 Bash 非零退出但 stderr 为空:grep 没命中/test 判假/
+        // diff --quiet)——normalizer 已判定"无实际错误内容",不发 hook.notify
+        // IPC(IM/dashboard 都不收这条噪音;PostToolUse 的 activity 事件仍会
+        // 覆盖到这次工具活动,不受影响)。
+        process.stdout.write('{}');
+        return;
+      }
       const level = event === 'notification' ? 'info' : 'error';
       await request(
         { kind: 'hook.notify', cwd: att.cwd, sessionId: att.sessionId, level, message: att.message, ...(wrappedId ? { wrappedId } : {}) },
