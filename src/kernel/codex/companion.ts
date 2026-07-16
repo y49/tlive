@@ -7,7 +7,7 @@
 // 层不直接碰 ws/net —— 一切通过注入的 connect。
 import type { CodexRpc, CodexRpcEvents } from './rpc.js';
 import type { PermissionRouter } from '../daemon/permission-router.js';
-import type { MonitorEvent } from '../hook/normalizer.js';
+import { TURN_FINISHED_SENTINEL, type MonitorEvent } from '../hook/normalizer.js';
 
 export interface CompanionDeps {
   connect: (events: CodexRpcEvents) => Promise<CodexRpc>;
@@ -142,7 +142,7 @@ export function startCompanion(deps: CompanionDeps): Companion {
         const key = threadKey(threadId);
         const lastMessage = lastMessages.get(threadId);
         deps.onMonitor(
-          { event: 'attention', cwd: key, sessionId: threadId, message: 'Turn finished — reply to continue', ...(lastMessage !== undefined ? { lastMessage } : {}) },
+          { event: 'attention', cwd: key, sessionId: threadId, message: TURN_FINISHED_SENTINEL, ...(lastMessage !== undefined ? { lastMessage } : {}) },
           key,
         );
         deps.onResumePrompt({ threadId, key, ...(lastMessage !== undefined ? { lastMessage } : {}) });

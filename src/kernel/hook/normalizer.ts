@@ -29,6 +29,15 @@ export type NormalizedHook =
 /** Vendor-neutral monitoring subset carried over IPC `hook.event`. */
 export type MonitorEvent = Extract<NormalizedHook, { event: 'activity' | 'attention' | 'prompt' | 'subagent' | 'session-start' | 'session-end' | 'permission-denied' }>;
 
+/** Codex(app-server companion)和 CC(本文件 stop 事件)共用的"通用续跑占位
+ *  文案"哨兵。agent 没留下真正的最后一句话时,attention/continue 的
+ *  message/context 字段就落回这个值;daemon 层(bootstrap.ts)拿到 context
+ *  后跟它做 === 比较,判定"没有可摘录的真实内容",从而清空续跑卡正文,只留
+ *  标题 + `Reply to continue` 提示。三处(甚至更多)若各写各的字面量,任何一
+ *  处漂移都会让这个比较失配,导致正文把标题原样再引用一遍——这正是本常量
+ *  要消灭的重复。 */
+export const TURN_FINISHED_SENTINEL = 'Turn finished — reply to continue';
+
 interface RawHook {
   cwd?: string; session_id?: string; permission_mode?: string;
   tool_name?: string; tool_input?: unknown; tool_response?: unknown; message?: string;
@@ -55,7 +64,7 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
     case 'stop':
       // stop_hook_active = 本 turn 是被上一次 stop hook 唤醒的续跑;shim 据此
       // 不再等续跑,避免 async+asyncRewake 下的无限续跑循环。
-      return { event: 'attention', cwd, sessionId, message: 'Turn finished — reply to continue', ...(r.last_assistant_message ? { lastMessage: r.last_assistant_message } : {}), ...(r.stop_hook_active ? { stopHookActive: true } : {}) };
+      return { event: 'attention', cwd, sessionId, message: TURN_FINISHED_SENTINEL, ...(r.last_assistant_message ? { lastMessage: r.last_assistant_message } : {}), ...(r.stop_hook_active ? { stopHookActive: true } : {}) };
     case 'notification':
       // permission_prompt notifications are dropped in the shim (the parallel
       // PermissionRequest card already covers that moment); everything else

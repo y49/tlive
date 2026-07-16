@@ -19,6 +19,7 @@ import { ensureCodexAppServer, codexAppServerSockPath } from '../codex/spawn.js'
 import { connectCodexRpc } from '../codex/rpc.js';
 import { startCompanion, type Companion } from '../codex/companion.js';
 import { excerptForCard } from './excerpt.js';
+import { TURN_FINISHED_SENTINEL } from '../hook/normalizer.js';
 
 export interface DaemonHandle {
   shutdown(): Promise<void>;
@@ -69,7 +70,7 @@ export function makeCodexResumeHandler(deps: {
         type: 'session-upsert',
         session: deps.sessions.upsert({ key, cwd: key, status: 'waiting-input', ...(lastMessage ? { lastMessage } : {}) }),
       });
-      const reply = await deps.broker.request({ cwd: key, context: lastMessage ?? 'Turn finished', timeoutSec: 170 });
+      const reply = await deps.broker.request({ cwd: key, context: lastMessage ?? TURN_FINISHED_SENTINEL, timeoutSec: 170 });
       if (reply) {
         deps.resume(threadId, reply).catch((e) => console.log('[codex] resume failed: ' + (e instanceof Error ? e.message : String(e))));
         deps.events.broadcast({ type: 'session-upsert', session: deps.sessions.upsert({ key, cwd: key, status: 'active', continueId: null }) });
@@ -247,7 +248,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     if (muted || sessions.get(req.cwd)?.muted) return;
     for (const t of configuredChats()) {
       // requestId 不进显示文本:回复路由走 replyToMessageId,不解析正文。
-      const raw = req.context === 'Turn finished — reply to continue' ? '' : req.context;
+      const raw = req.context === TURN_FINISHED_SENTINEL ? '' : req.context;
       void sendToChat(t, { title: 'Turn finished', body: buildContinueCardBody(raw), cwd: req.cwd });
     }
   });

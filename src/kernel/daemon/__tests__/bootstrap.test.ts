@@ -147,3 +147,55 @@ describe('local-answer cancel + Stop fast-null (integration)', () => {
     expect(Date.now() - t0).toBeLessThan(2_000);
   });
 });
+
+// Regression: the Codex resume path (makeCodexResumeHandler → ContinueBroker →
+// continueBroker.onRequest wired in bootstrapDaemon) used to default the
+// continue-request `context` to the bare string 'Turn finished', while the
+// card-body-emptying check in bootstrap.ts compared against the longer
+// 'Turn finished — reply to continue' sentinel that only the CC (normalizer.ts
+// stop event) path actually produces. The two hardcoded literals drifted, so
+// on Codex with no lastMessage the emptying check never matched and the card
+// body quoted 'Turn finished' right under a 'Turn finished' title.
+describe('Codex resume handler → continue card (regression: sentinel mismatch)', () => {
+  function recordingAdapter(channel: IMChannel, sent: OutgoingMessage[]): IMAdapter {
+    return {
+      channel,
+      async start() { /* noop */ },
+      async stop() { /* noop */ },
+      async send(out: OutgoingMessage) { sent.push(out); return { messageId: 'm1' }; },
+      async edit() { /* noop */ },
+      onInbound(_h: (e: IncomingEnvelope) => void) { /* noop */ },
+      isConnected() { return 'connected' as const; },
+    };
+  }
+
+  it('renders an empty continue-card body (no duplicated title) when Codex has no lastMessage', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [recordingAdapter('telegram', sent)] });
+
+    // Mirrors exactly how bootstrapDaemon wires makeCodexResumeHandler: same
+    // (real, shared) continueBroker instance whose onRequest handler is the
+    // one that builds the IM card.
+    const onCodexResumePrompt = makeCodexResumeHandler({
+      broker: h.continueBroker,
+      sessions: h.sessions,
+      events: h.events,
+      chats: () => [{}], // non-empty → bypasses the fast-null path
+      resume: async () => undefined,
+    });
+
+    onCodexResumePrompt({ threadId: 't1', key: 'codex:t1' }); // no lastMessage
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    expect(sent).toHaveLength(1);
+    const card = sent[0] as { kind: 'card'; title?: string; body?: string };
+    // Title carries the usual `<label> · ` session tag (unrelated to this bug);
+    // what matters here is that the body is NOT a quoted repeat of the title.
+    expect(card.title?.endsWith('Turn finished')).toBe(true);
+    expect(card.body).toBe('\n*Reply to continue*');
+  });
+});
