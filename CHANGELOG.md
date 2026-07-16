@@ -78,10 +78,15 @@ All notable changes to this project will be documented in this file.
   (outcome + title) instead of re-carrying the full body.
 - **Continue messages no longer leak the request UUID** (reply routing
   uses Telegram's reply-to metadata, never the text).
-- **`AskUserQuestion` is auto-allowed** by the policy engine: it is an
-  interactive UI tool with zero destructive power, and CC fires
-  PermissionRequest for it even though the question can only be answered
-  in the terminal — the card was pure noise.
+- **`AskUserQuestion` gets its own remote card** (single-select option
+  buttons, not Allow/Deny) instead of being auto-allowed: CC fires
+  `PermissionRequest` for it like any tool, and a `deny` + `message` reply
+  makes CC skip its own dialog and relay the picked option into the
+  conversation as the answer (verified live on claude 2.1.210 — the local
+  dialog still renders in parallel and wins any race, so tlive never
+  overrides an answer given at the keyboard). `Skip` passes through with
+  `allow` so the local dialog can be answered at the keyboard instead — not
+  an auto-approve.
 - **Unknown/MCP tools render as a key:value summary** (secret-named keys
   masked) instead of a raw JSON dump.
 - Feishu styling: next round.

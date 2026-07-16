@@ -34,6 +34,7 @@ const baseDeps = (over: Partial<InboundHandlerDeps> = {}): InboundHandlerDeps =>
   sessionInfo: () => undefined,
   listSessions: () => [],
   inject: vi.fn().mockResolvedValue(undefined),
+  takeAskContext: () => undefined,
   ...over,
 });
 
@@ -101,6 +102,52 @@ describe('InboundHandler', () => {
     expect(setTrust).toHaveBeenCalledWith(true);
     await h.handle(envelope({ text: '/trust off' }));
     expect(setTrust).toHaveBeenCalledWith(false);
+  });
+
+  it('ask:<id>:<idx> answers with a deny+message wire carrying the picked option', async () => {
+    const permAnswer = vi.fn();
+    const h = new InboundHandler(baseDeps({
+      takeAskContext: (rid) => (rid === 'req-9' ? { question: 'Pick a color?', options: [{ label: 'Red' }, { label: 'Blue' }] } : undefined),
+      permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
+    }));
+    await h.handle(envelope({ text: 'ask:req-9:1' }));
+    expect(permAnswer).toHaveBeenCalledTimes(1);
+    const [rid, approved, message] = permAnswer.mock.calls[0];
+    expect(rid).toBe('req-9');
+    expect(approved).toBe(false);
+    expect(message).toContain('Selected: Blue');
+  });
+
+  it('ask:<id>:<idx> is a no-op when the context is gone (already answered/stale)', async () => {
+    const permAnswer = vi.fn();
+    const h = new InboundHandler(baseDeps({
+      takeAskContext: () => undefined,
+      permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
+    }));
+    await h.handle(envelope({ text: 'ask:req-9:1' }));
+    expect(permAnswer).not.toHaveBeenCalled();
+  });
+
+  it('ask:<id>:<idx> is a no-op when the index is out of range', async () => {
+    const permAnswer = vi.fn();
+    const h = new InboundHandler(baseDeps({
+      takeAskContext: () => ({ question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] }),
+      permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
+    }));
+    await h.handle(envelope({ text: 'ask:req-9:5' }));
+    expect(permAnswer).not.toHaveBeenCalled();
+  });
+
+  it('askskip:<id> passes through with answer(rid, true) — not an auto-approve', async () => {
+    const permAnswer = vi.fn();
+    const takeAskContext = vi.fn().mockReturnValue({ question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] });
+    const h = new InboundHandler(baseDeps({
+      takeAskContext,
+      permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
+    }));
+    await h.handle(envelope({ text: 'askskip:req-9' }));
+    expect(takeAskContext).toHaveBeenCalledWith('req-9');
+    expect(permAnswer).toHaveBeenCalledWith('req-9', true);
   });
 
   it('"pause:<id>" approves the in-hand request and sets trust', async () => {

@@ -1,5 +1,6 @@
 // src/kernel/daemon/permission-router.ts
 import { randomUUID } from 'node:crypto';
+import type { AskOption } from '../permission/ask-renderer.js';
 
 /** 'local' = the user answered in the local terminal; the IPC layer maps it to
  *  'defer' on the wire (shim outputs pass-through {}) — never an auto-allow. */
@@ -8,17 +9,21 @@ export interface PermChat { channel: string; chatId: string }
 
 export interface PermissionRouterDeps {
   configuredChats: () => PermChat[];
-  sendToChat: (target: PermChat, card: { title: string; body: string; requestId: string; toolName: string; cwd: string }) => Promise<void>;
+  /** askOptions (present only for an AskUserQuestion card) drives the remote
+   *  card's option buttons instead of the usual Allow/Deny (Task 9). */
+  sendToChat: (target: PermChat, card: { title: string; body: string; requestId: string; toolName: string; cwd: string; askOptions?: AskOption[] }) => Promise<void>;
   isMuted: (cwd: string) => boolean;
   /** True when at least one dashboard client is connected on /ws/events —
    *  a card can be answered from the web even with zero IM chats. */
   hasWebClients: () => boolean;
   /** Vendor-neutral policy: allow (auto) vs ask (send card). Never auto-denies. */
   policyDecide: (req: { toolName: string; input: unknown; permissionMode?: string }) => { decision: 'allow' | 'ask'; reason?: string };
-  /** Render the approval card body from the normalized request. */
-  renderCard: (req: { toolName: string; input: unknown }) => { title: string; body: string };
+  /** Render the approval card body from the normalized request. askOptions/
+   *  askQuestion are the AskUserQuestion branch's extras (Task 9): absent for
+   *  every other tool. */
+  renderCard: (req: { toolName: string; input: unknown }) => { title: string; body: string; askOptions?: AskOption[]; askQuestion?: string };
   /** Fired when a card is created & sent (session enters waiting-approval). */
-  onPending?: (p: { cwd: string; requestId: string; title: string; body: string; toolName: string }) => void;
+  onPending?: (p: { cwd: string; requestId: string; title: string; body: string; toolName: string; askOptions?: AskOption[]; askQuestion?: string }) => void;
   /** Fired when the request resolves (answered / timed out / deferred after a card). */
   onResolved?: (p: { cwd: string; requestId: string; decision: Decision }) => void;
   /** 发 IM 卡前的静默期(秒)。本地秒答的审批在此窗口内 cancel → 卡永不发出
@@ -59,7 +64,7 @@ export class PermissionRouter {
     if (targets.length === 0 && !this.deps.hasWebClients()) return { decision: 'defer' };
 
     const requestId = randomUUID();
-    const { title, body } = this.deps.renderCard({ toolName: opts.toolName, input: opts.input });
+    const { title, body, askOptions, askQuestion } = this.deps.renderCard({ toolName: opts.toolName, input: opts.input });
     const result = await new Promise<{ decision: Decision; message?: string }>((resolve) => {
       this.pending.set(requestId, {
         resolve,
@@ -72,14 +77,18 @@ export class PermissionRouter {
         if (this.pending.has(requestId)) { this.pending.delete(requestId); resolve({ decision: 'defer' }); }
       }, (opts.timeoutSec ?? PERMISSION_TIMEOUT_SEC) * 1000).unref();
       // web 立即 —— dashboard 是 pull 视图,不该等 grace。
-      this.deps.onPending?.({ cwd: opts.cwd, requestId, title, body, toolName: opts.toolName });
+      this.deps.onPending?.({
+        cwd: opts.cwd, requestId, title, body, toolName: opts.toolName,
+        ...(askOptions ? { askOptions } : {}),
+        ...(askQuestion ? { askQuestion } : {}),
+      });
       // IM 卡走 grace:开火时 pending 还在才发。cancel()/answer() 都先 delete
       // 再 resolve,所以这一句就是权威判据,不需要额外的取消令牌。
       const push = (): void => {
         if (!this.pending.has(requestId)) return;
         if (this.deps.isMuted(opts.cwd)) return; // grace 期间 mute 了 → 尊重
         for (const t of targets) {
-          void this.deps.sendToChat(t, { title, body, requestId, toolName: opts.toolName, cwd: opts.cwd }).catch(() => undefined);
+          void this.deps.sendToChat(t, { title, body, requestId, toolName: opts.toolName, cwd: opts.cwd, ...(askOptions ? { askOptions } : {}) }).catch(() => undefined);
         }
       };
       const grace = this.deps.graceSec();

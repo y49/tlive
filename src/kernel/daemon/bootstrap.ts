@@ -6,6 +6,7 @@ import { startIpcServer, type IpcServer } from '../ipc/server.js';
 import { PermissionRouter, type PermChat } from './permission-router.js';
 import { decide as policyDecide, type PolicyState } from '../permission/policy-engine.js';
 import { renderApprovalCard } from '../permission/approval-renderer.js';
+import { renderAskCard, type AskOption } from '../permission/ask-renderer.js';
 import { ContinueBroker } from '../permission/continue-broker.js';
 import { SenderGuard } from './sender-guard.js';
 import { loadConfig } from '../config/loader.js';
@@ -152,6 +153,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // Approval cards sent per requestId — edited to their outcome on resolve (no zombie buttons).
   const sentCards = new Map<string, Array<{ channel: string; messageId: string; title: string; body: string }>>();
 
+  // AskUserQuestion (Task 9): raw question + options per pending requestId, so an
+  // `ask:<rid>:<idx>` button click can build the deny+message answer. Written at
+  // onPending, cleared at onResolved (or consumed once by the button click) —
+  // never leaks across the request's lifetime.
+  const askContexts = new Map<string, { question: string; options: AskOption[] }>();
+
   /** `<label> · ` prefix. wrapped/hook-only 不再用图标区分 —— 续跑卡自带
    *  "Reply to continue" 引导,该区分对用户的实际操作没有影响。 */
   const sessionTag = (cwd: string | undefined): string => {
@@ -163,7 +170,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
 
   const sendToChat = async (
     target: PermChat,
-    msg: { title?: string; body?: string; text?: string; requestId?: string; toolName?: string; cwd?: string },
+    msg: { title?: string; body?: string; text?: string; requestId?: string; toolName?: string; cwd?: string; askOptions?: AskOption[] },
   ): Promise<void> => {
     const adapter = (opts.imAdapters ?? []).find((a) => a.channel === target.channel);
     if (!adapter) return;
@@ -179,13 +186,18 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         kind: 'card',
         ...(title ? { title } : {}),
         body,
-        ...(msg.requestId ? {
-          buttons: [
-            { id: `approve:${msg.requestId}`, label: 'Allow' },
-            { id: `deny:${msg.requestId}`, label: 'Deny' },
-            ...(msg.toolName ? [{ id: `allowtool:${msg.requestId}:${msg.toolName}`, label: `Always allow ${msg.toolName}` }] : []),
-            { id: `pause:${msg.requestId}`, label: 'Pause approvals' },
-          ],
+        // AskUserQuestion cards get option buttons instead of Allow/Deny (Task 9).
+        ...(msg.requestId ? { buttons: msg.askOptions
+          ? [
+              ...msg.askOptions.map((o, i) => ({ id: `ask:${msg.requestId}:${i}`, label: `${i + 1}. ${o.label}` })),
+              { id: `askskip:${msg.requestId}`, label: 'Skip' },
+            ]
+          : [
+              { id: `approve:${msg.requestId}`, label: 'Allow' },
+              { id: `deny:${msg.requestId}`, label: 'Deny' },
+              ...(msg.toolName ? [{ id: `allowtool:${msg.requestId}:${msg.toolName}`, label: `Always allow ${msg.toolName}` }] : []),
+              { id: `pause:${msg.requestId}`, label: 'Pause approvals' },
+            ],
         } : {}),
       });
       if (msg.requestId) {
@@ -215,13 +227,27 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       if (d.decision === 'allow') console.log(`[policy] auto-allow ${req.toolName} (${d.reason})`); // 审计
       return d;
     },
-    renderCard: (req) => renderApprovalCard({ toolName: req.toolName, input: req.input }),
+    renderCard: (req) => {
+      // AskUserQuestion (Task 9) is CC-only and gets its own single-select
+      // card instead of the generic diff/command renderer — malformed input
+      // falls through to the normal approval card so CC reports its own error.
+      if (req.toolName === 'AskUserQuestion') {
+        const ask = renderAskCard(req.input);
+        if (ask) {
+          const question = (req.input as { questions?: Array<{ question?: string }> } | null)?.questions?.[0]?.question ?? '';
+          return { title: ask.title, body: ask.body, askOptions: ask.options, askQuestion: question };
+        }
+      }
+      return renderApprovalCard({ toolName: req.toolName, input: req.input });
+    },
     graceSec: () => Math.max(cfg.approvals?.approvalGraceSec ?? 10, 0),
-    onPending: ({ cwd, requestId, title, body, toolName }) => {
+    onPending: ({ cwd, requestId, title, body, toolName, askOptions, askQuestion }) => {
+      if (askOptions && askQuestion) askContexts.set(requestId, { question: askQuestion, options: askOptions });
       // `cwd` here is the resolved registry key (see resolveKey).
       events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key: cwd, cwd, status: 'waiting-approval', pending: { requestId, title, body, toolName } }) });
     },
     onResolved: ({ cwd, requestId, decision }) => {
+      askContexts.delete(requestId); // no leak whether consumed by a button click or resolved another way
       // Only touch the session view if THIS request still owns the pending slot —
       // with two concurrent approvals on one key, resolving A must not wipe B's
       // indicator (registry holds a single pending; B's card/router entry live on).
@@ -490,6 +516,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     setMuted: (m: boolean) => { muted = m; },
     setTrust: (t: boolean) => { policyState.trustUntilRevoked = t; },
     addAllowTool: (tool: string) => { policyState.allowTools?.add(tool); },
+    takeAskContext: (rid: string) => {
+      const ctx = askContexts.get(rid);
+      if (ctx) askContexts.delete(rid);
+      return ctx;
+    },
     resolveReply: (channel, messageId) => msgToCwd.get(`${channel}:${messageId}`),
     sessionInfo: (cwd) => {
       const s = sessions.get(cwd);

@@ -158,6 +158,108 @@ describe('local-answer cancel + Stop fast-null (integration)', () => {
   });
 });
 
+describe('AskUserQuestion remote card (Task 9)', () => {
+  function interactiveAdapter(channel: IMChannel, sent: OutgoingMessage[]): IMAdapter & { fire: (env: IncomingEnvelope) => void } {
+    let handler: ((e: IncomingEnvelope) => void) | undefined;
+    return {
+      channel,
+      async start() { /* noop */ },
+      async stop() { /* noop */ },
+      async send(out: OutgoingMessage) { sent.push(out); return { messageId: `m${sent.length}` }; },
+      async edit() { /* noop */ },
+      onInbound(h) { handler = h; },
+      isConnected() { return 'connected' as const; },
+      fire(env) { handler?.(env); },
+    };
+  }
+
+  it('sends option buttons (not Allow/Deny) and picking one answers deny+message with the selection', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      approvals: { approvalGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const sock = join(tmp, 'daemon.sock');
+    const pending = request(
+      {
+        kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'AskUserQuestion',
+        input: { questions: [{ question: 'Pick a color?', options: [{ label: 'Red' }, { label: 'Blue' }] }] },
+        timeoutSec: 60,
+      },
+      { socketPath: sock, timeoutMs: 10_000 },
+    );
+    await new Promise((r) => setTimeout(r, 100)); // grace=0, let the card go out
+    expect(sent).toHaveLength(1);
+    const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+    const ids = card.buttons?.map((b) => b.id) ?? [];
+    expect(ids.filter((id) => id.startsWith('ask:')).length).toBe(2); // one per option
+    expect(ids.some((id) => id.startsWith('askskip:'))).toBe(true);
+    expect(ids).not.toContain(expect.stringMatching(/^approve:/));
+
+    const pickBlue = card.buttons!.find((b) => b.id.endsWith(':1'))!;
+    adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: pickBlue.id, ts: 0 });
+
+    const r = await pending as { kind: string; decision?: string; message?: string };
+    expect(r.kind).toBe('hook.permission.result');
+    expect(r.decision).toBe('deny');
+    expect(r.message).toContain('Selected: Blue');
+    expect(r.message).toContain('"Pick a color?": "Blue"');
+  });
+
+  it('Skip passes through with an allow decision and no message (local terminal answers)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      approvals: { approvalGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const sock = join(tmp, 'daemon.sock');
+    const pending = request(
+      {
+        kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'AskUserQuestion',
+        input: { questions: [{ question: 'Pick a color?', options: [{ label: 'Red' }, { label: 'Blue' }] }] },
+        timeoutSec: 60,
+      },
+      { socketPath: sock, timeoutMs: 10_000 },
+    );
+    await new Promise((r) => setTimeout(r, 100));
+    const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+    const skipBtn = card.buttons!.find((b) => b.id.startsWith('askskip:'))!;
+    adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: skipBtn.id, ts: 0 });
+
+    const r = await pending as { kind: string; decision?: string; message?: string };
+    expect(r).toEqual({ kind: 'hook.permission.result', decision: 'allow' });
+  });
+
+  it('malformed AskUserQuestion input falls through to the normal approval card (Allow/Deny)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      approvals: { approvalGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const sock = join(tmp, 'daemon.sock');
+    const pending = request(
+      { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'AskUserQuestion', input: { questions: [] }, timeoutSec: 60 },
+      { socketPath: sock, timeoutMs: 10_000 },
+    );
+    await new Promise((r) => setTimeout(r, 100));
+    const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+    const ids = card.buttons?.map((b) => b.id) ?? [];
+    expect(ids.some((id) => id.startsWith('approve:'))).toBe(true);
+    expect(ids.some((id) => id.startsWith('deny:'))).toBe(true);
+    adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: `deny:${ids[1].split(':')[1]}`, ts: 0 });
+    await pending;
+  });
+});
+
 // Regression: the Codex resume path (makeCodexResumeHandler → ContinueBroker →
 // continueBroker.onRequest wired in bootstrapDaemon) used to default the
 // continue-request `context` to the bare string 'Turn finished', while the

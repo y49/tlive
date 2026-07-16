@@ -7,6 +7,7 @@ import type { PermissionRouter } from './permission-router.js';
 import type { ContinueBroker } from '../permission/continue-broker.js';
 import type { SenderGuard } from './sender-guard.js';
 import { parseImCommand } from './im-commands.js';
+import { buildAskAnswerMessage, type AskOption } from '../permission/ask-renderer.js';
 
 export interface InboundHandlerDeps {
   senderGuard: SenderGuard;
@@ -21,6 +22,10 @@ export interface InboundHandlerDeps {
   setTrust: (trusted: boolean) => void;
   /** Grant "always allow <tool>" (in-memory). */
   addAllowTool: (tool: string) => void;
+  /** Returns + clears the pending AskUserQuestion context for a requestId
+   *  (single-use; Task 9). Populated by the permission router's onPending,
+   *  consumed here on an `ask:`/`askskip:` button click. */
+  takeAskContext: (requestId: string) => { question: string; options: AskOption[] } | undefined;
   /** Reply-to routing: IM messageId → session cwd (daemon-lifetime map). */
   resolveReply: (channel: string, messageId: string) => string | undefined;
   /** Session lookup for injection routing. */
@@ -63,6 +68,27 @@ export class InboundHandler {
         this.deps.permissionRouter.answer(requestId, true);
         await this.reply(env, { kind: 'text', text: `Approved. ${tool} will be auto-allowed from now on (until daemon restart; unaffected by /trust off).` });
       }
+      return;
+    }
+
+    if (env.text.startsWith('ask:')) {
+      // ask:<requestId>:<optionIndex> — a picked AskUserQuestion option.
+      const [, rid, idxRaw] = env.text.split(':');
+      const ctx = this.deps.takeAskContext(rid);
+      const idx = Number(idxRaw);
+      if (ctx && Number.isInteger(idx) && ctx.options[idx]) {
+        // deny + message = 答案(见 ask-renderer 文件头):CC 跳过内置问题框,
+        // message 送进 agent 对话流当答案。
+        this.deps.permissionRouter.answer(rid, false, buildAskAnswerMessage(ctx.question, [ctx.options[idx].label]));
+      }
+      return;
+    }
+    if (env.text.startsWith('askskip:')) {
+      const rid = env.text.slice('askskip:'.length);
+      this.deps.takeAskContext(rid); // clear, avoid leak — the answer itself is discarded
+      // Skip = allow = pass-through:本地问题框归你在电脑前答(等同 defer 语义),
+      // 不是自动批准执行工具。
+      this.deps.permissionRouter.answer(rid, true);
       return;
     }
 
