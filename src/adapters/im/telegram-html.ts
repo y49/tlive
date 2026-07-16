@@ -18,21 +18,25 @@ export function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// U+0000 占位符:抽出 code span 后再跑强调标记,否则 split 会把一对 ** 切到
+// 不同碎片里,`**含 code 的粗体**` 永远配不上对(真机实锤)。
+// 入口 strip U+0000 —— 占位符不可被内容伪造。
+const NUL = String.fromCharCode(0);
+
 /** 行内标记 → HTML。escape 先行;`code` span 内部不再吃其它标记。 */
 function inline(md: string): string {
-  const parts = escapeHtml(md).split(/(`[^`\n]*`)/);
-  return parts
-    .map((p) => {
-      if (p.startsWith('`') && p.endsWith('`') && p.length >= 2) {
-        return `<code>${p.slice(1, -1)}</code>`;
-      }
-      return p
-        .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')   // 先 bold,消耗成对 **
-        .replace(/\*([^*\n]+)\*/g, '<i>$1</i>')        // 残留单 * 才是 italic
-        .replace(/~~([^~\n]+)~~/g, '<s>$1</s>')
-        .replace(/\|\|([^|\n]+)\|\|/g, '<tg-spoiler>$1</tg-spoiler>');
-    })
-    .join('');
+  const codes: string[] = [];
+  let s = escapeHtml(md.split(NUL).join(''));
+  s = s.replace(/`([^`\n]*)`/g, (_m, c: string) => {
+    codes.push(c);
+    return `${NUL}${codes.length - 1}${NUL}`;
+  });
+  s = s
+    .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')   // 先 bold,消耗成对 **
+    .replace(/\*([^*\n]+)\*/g, '<i>$1</i>')        // 残留单 * 才是 italic
+    .replace(/~~([^~\n]+)~~/g, '<s>$1</s>')
+    .replace(/\|\|([^|\n]+)\|\|/g, '<tg-spoiler>$1</tg-spoiler>');
+  return s.replace(new RegExp(`${NUL}(\\d+)${NUL}`, 'g'), (_m, i: string) => `<code>${codes[Number(i)]}</code>`);
 }
 
 /** 非 fence 段落:按行聚合 blockquote(`> `)/ expandable(`>! `),其余行 inline。 */

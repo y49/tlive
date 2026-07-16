@@ -86,3 +86,23 @@ describe('mdToTelegramHtml — rich inline + block markup', () => {
     expect(mdToTelegramHtml('```bash\necho hi > /tmp/x\n```')).toBe('<pre><code class="language-bash">echo hi &gt; /tmp/x</code></pre>');
   });
 });
+
+describe('inline emphasis spanning code spans', () => {
+  it('renders bold that contains an inline code span', () => {
+    expect(mdToTelegramHtml('**A. `X` delayed**')).toBe('<b>A. <code>X</code> delayed</b>');
+  });
+
+  it('renders italic that contains an inline code span', () => {
+    expect(mdToTelegramHtml('*see `foo` here*')).toBe('<i>see <code>foo</code> here</i>');
+  });
+
+  it('renders bold containing multiple code spans', () => {
+    expect(mdToTelegramHtml('**`a` and `b`**')).toBe('<b><code>a</code> and <code>b</code></b>');
+  });
+
+  it('does not let content forge the placeholder', () => {
+    // U+0000 in content must be stripped, never mistaken for a placeholder
+    const NUL = String.fromCharCode(0);
+    expect(mdToTelegramHtml(`a${NUL}0${NUL}b`)).toBe('a0b');
+  });
+});
