@@ -34,9 +34,27 @@ const baseDeps = (over: Partial<InboundHandlerDeps> = {}): InboundHandlerDeps =>
   sessionInfo: () => undefined,
   listSessions: () => [],
   inject: vi.fn().mockResolvedValue(undefined),
+  peekAskContext: () => undefined,
   takeAskContext: () => undefined,
   ...over,
 });
+
+/** A real get-and-clear store (mirrors bootstrap.ts's askContexts Map) so tests
+ *  can observe whether a bad `ask:` click actually consumed the context —
+ *  a plain `takeAskContext: () => ({...})` stub (as the old tests used) always
+ *  returns the same value regardless of calls and can't catch that regression
+ *  (review Minor 1). */
+function makeAskStore(entries: Record<string, { question: string; options: Array<{ label: string; description?: string }> }>) {
+  const map = new Map(Object.entries(entries));
+  return {
+    peekAskContext: (rid: string) => map.get(rid),
+    takeAskContext: (rid: string) => {
+      const v = map.get(rid);
+      if (v) map.delete(rid);
+      return v;
+    },
+  };
+}
 
 describe('InboundHandler', () => {
   it('approve:<id> answers true, sends no reply', async () => {
@@ -107,7 +125,7 @@ describe('InboundHandler', () => {
   it('ask:<id>:<idx> answers with a deny+message wire carrying the picked option', async () => {
     const permAnswer = vi.fn();
     const h = new InboundHandler(baseDeps({
-      takeAskContext: (rid) => (rid === 'req-9' ? { question: 'Pick a color?', options: [{ label: 'Red' }, { label: 'Blue' }] } : undefined),
+      ...makeAskStore({ 'req-9': { question: 'Pick a color?', options: [{ label: 'Red' }, { label: 'Blue' }] } }),
       permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
     }));
     await h.handle(envelope({ text: 'ask:req-9:1' }));
@@ -121,6 +139,7 @@ describe('InboundHandler', () => {
   it('ask:<id>:<idx> is a no-op when the context is gone (already answered/stale)', async () => {
     const permAnswer = vi.fn();
     const h = new InboundHandler(baseDeps({
+      peekAskContext: () => undefined,
       takeAskContext: () => undefined,
       permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
     }));
@@ -128,13 +147,45 @@ describe('InboundHandler', () => {
     expect(permAnswer).not.toHaveBeenCalled();
   });
 
-  it('ask:<id>:<idx> is a no-op when the index is out of range', async () => {
+  it('an out-of-range index does not consume the context — a later legit index still answers (review Minor 1)', async () => {
     const permAnswer = vi.fn();
+    const store = makeAskStore({ 'req-9': { question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] } });
     const h = new InboundHandler(baseDeps({
-      takeAskContext: () => ({ question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] }),
+      ...store,
       permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
     }));
-    await h.handle(envelope({ text: 'ask:req-9:5' }));
+    await h.handle(envelope({ text: 'ask:req-9:5' })); // out of range — must NOT eat the context
+    expect(permAnswer).not.toHaveBeenCalled();
+    expect(store.peekAskContext('req-9')).toBeDefined(); // still there for a real pick
+
+    await h.handle(envelope({ text: 'ask:req-9:1' })); // the legit follow-up click
+    expect(permAnswer).toHaveBeenCalledTimes(1);
+    const [rid, approved, message] = permAnswer.mock.calls[0];
+    expect(rid).toBe('req-9');
+    expect(approved).toBe(false);
+    expect(message).toContain('Selected: Blue');
+  });
+
+  it('ask:<id>: (empty index) is a no-op, not a silent pick of option 0 — Number("") === 0 (review Minor 2)', async () => {
+    const permAnswer = vi.fn();
+    const store = makeAskStore({ 'req-9': { question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] } });
+    const h = new InboundHandler(baseDeps({
+      ...store,
+      permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
+    }));
+    await h.handle(envelope({ text: 'ask:req-9:' }));
+    expect(permAnswer).not.toHaveBeenCalled();
+    expect(store.peekAskContext('req-9')).toBeDefined(); // not consumed either
+  });
+
+  it('ask:<id>:<idx> with a non-numeric index is a no-op', async () => {
+    const permAnswer = vi.fn();
+    const store = makeAskStore({ 'req-9': { question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] } });
+    const h = new InboundHandler(baseDeps({
+      ...store,
+      permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
+    }));
+    await h.handle(envelope({ text: 'ask:req-9:abc' }));
     expect(permAnswer).not.toHaveBeenCalled();
   });
 

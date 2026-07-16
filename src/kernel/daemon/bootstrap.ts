@@ -158,6 +158,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // onPending, cleared at onResolved (or consumed once by the button click) —
   // never leaks across the request's lifetime.
   const askContexts = new Map<string, { question: string; options: AskOption[] }>();
+  // Same lifetime as askContexts' *pending* window, but never consumed by the
+  // button-click handler (askContexts is get-and-clear there) — lets onResolved
+  // still know "this requestId was an ask card" after the answer already
+  // cleared askContexts (Minor 4: label the IM card "Answered", not "Denied").
+  const askRequestIds = new Set<string>();
 
   /** `<label> · ` prefix. wrapped/hook-only 不再用图标区分 —— 续跑卡自带
    *  "Reply to continue" 引导,该区分对用户的实际操作没有影响。 */
@@ -233,21 +238,35 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // falls through to the normal approval card so CC reports its own error.
       if (req.toolName === 'AskUserQuestion') {
         const ask = renderAskCard(req.input);
-        if (ask) {
-          const question = (req.input as { questions?: Array<{ question?: string }> } | null)?.questions?.[0]?.question ?? '';
-          return { title: ask.title, body: ask.body, askOptions: ask.options, askQuestion: question };
-        }
+        // ask.question (not a re-extraction from req.input) — renderAskCard
+        // already validated it; a single source of truth (review Minor 5).
+        if (ask) return { title: ask.title, body: ask.body, askOptions: ask.options, askQuestion: ask.question };
       }
       return renderApprovalCard({ toolName: req.toolName, input: req.input });
     },
     graceSec: () => Math.max(cfg.approvals?.approvalGraceSec ?? 10, 0),
     onPending: ({ cwd, requestId, title, body, toolName, askOptions, askQuestion }) => {
-      if (askOptions && askQuestion) askContexts.set(requestId, { question: askQuestion, options: askOptions });
+      if (askOptions && askQuestion) {
+        askContexts.set(requestId, { question: askQuestion, options: askOptions });
+        askRequestIds.add(requestId); // Task 9 review Minor 4: survives the button-click's askContexts consumption, so onResolved can still tell this was an ask card
+        // Task 9 review Important: an AskUserQuestion card must NOT reach the
+        // dashboard. /ws/events' onAction only understands generic approve/deny
+        // (web/src/dashboard.ts renders plain Allow/Deny buttons for `pending`),
+        // and deny-with-no-message would feed the agent a bogus "Denied via
+        // tlive" answer to its own question. Before this feature, AskUserQuestion
+        // auto-allowed at the policy layer and never reached onPending at all —
+        // this restores that "invisible to web" behavior for the ask branch only.
+        // IM still gets the card via sendToChat below (grace push), unaffected.
+        // Full web support (message-carrying EventAction + option buttons) is a
+        // follow-up task, not this fix.
+        return;
+      }
       // `cwd` here is the resolved registry key (see resolveKey).
       events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key: cwd, cwd, status: 'waiting-approval', pending: { requestId, title, body, toolName } }) });
     },
     onResolved: ({ cwd, requestId, decision }) => {
       askContexts.delete(requestId); // no leak whether consumed by a button click or resolved another way
+      const isAsk = askRequestIds.delete(requestId); // true only for an AskUserQuestion card (Minor 4)
       // Only touch the session view if THIS request still owns the pending slot —
       // with two concurrent approvals on one key, resolving A must not wipe B's
       // indicator (registry holds a single pending; B's card/router entry live on).
@@ -262,8 +281,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         for (const c of cards) {
           const adapter = (opts.imAdapters ?? []).find((a) => a.channel === c.channel);
           if (!adapter) continue;
-          // 紧凑回写:结果 + 标题一行足够,不再重挂全 body(高卡变短讯)
-          void adapter.edit(c.messageId, { kind: 'card', title: `${OUTCOME[decision] ?? decision} · ${c.title}`, body: '' }).catch(() => undefined);
+          // 紧凑回写:结果 + 标题一行足够,不再重挂全 body(高卡变短讯)。
+          // An ask card's wire mechanism IS a deny (see ask-renderer.ts file
+          // header) even when the user picked an answer — label it "Answered"
+          // so the user isn't scared into thinking their pick failed (Minor 4).
+          const label = isAsk && decision === 'deny' ? 'Answered' : (OUTCOME[decision] ?? decision);
+          void adapter.edit(c.messageId, { kind: 'card', title: `${label} · ${c.title}`, body: '' }).catch(() => undefined);
         }
       }
     },
@@ -516,6 +539,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     setMuted: (m: boolean) => { muted = m; },
     setTrust: (t: boolean) => { policyState.trustUntilRevoked = t; },
     addAllowTool: (tool: string) => { policyState.allowTools?.add(tool); },
+    peekAskContext: (rid: string) => askContexts.get(rid),
     takeAskContext: (rid: string) => {
       const ctx = askContexts.get(rid);
       if (ctx) askContexts.delete(rid);

@@ -130,6 +130,44 @@ describe('daemon → /ws/events downstream broadcast', () => {
     expect(cleared.session.pending).toBeUndefined();
   });
 
+  it('AskUserQuestion does NOT broadcast a pending session to /ws/events — the dashboard\'s generic Allow/Deny buttons would misanswer it (Task 9 review, Important)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { port: 0 },
+      approvals: { approvalGraceSec: 0, continueGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    let inboundHandler: ((e: IncomingEnvelope) => void) | undefined;
+    const sentIm: OutgoingMessage[] = [];
+    const askAdapter: IMAdapter = {
+      channel: 'telegram',
+      async start() { /* noop */ },
+      async stop() { /* noop */ },
+      async send(out: OutgoingMessage) { sentIm.push(out); return { messageId: `m${sentIm.length}` }; },
+      async edit() { /* noop */ },
+      onInbound(handler) { inboundHandler = handler; },
+      isConnected() { return 'connected'; },
+    };
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [askAdapter] });
+    const frames = await openEvents();
+    const p = request(
+      {
+        kind: 'hook.permission.request', cwd: '/repo/ask', sessionId: 's', toolName: 'AskUserQuestion',
+        input: { questions: [{ question: 'Pick a color?', options: [{ label: 'Red' }, { label: 'Blue' }] }] },
+      },
+      { socketPath: sock, timeoutMs: 5000 },
+    );
+    // give both the IM card and any (incorrect) web broadcast time to land
+    await new Promise((r) => setTimeout(r, 150));
+    expect(sentIm).toHaveLength(1); // IM still gets the ask card with option buttons
+    expect(frames.some((f) => f.type === 'session-upsert' && f.session.id === '/repo/ask')).toBe(false);
+
+    // Settle the pending permission request via IM (Skip) so it doesn't dangle past the test.
+    const card = sentIm[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+    const skip = card.buttons!.find((b) => b.id.startsWith('askskip:'))!;
+    inboundHandler?.({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: skip.id, ts: 0 });
+    await p;
+  });
+
   it('upstream approve action over /ws/events resolves the permission request', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, approvals: { continueGraceSec: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
     h = await bootstrapDaemon({ home: tmp, imAdapters: [makeFakeAdapter('telegram')] });

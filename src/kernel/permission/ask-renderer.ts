@@ -12,7 +12,7 @@
 // 的做法)。措辞是这套机制唯一的软肋 —— 措辞差 agent 就会重问一遍。
 
 export interface AskOption { label: string; description?: string }
-export interface AskCard { title: string; body: string; options: AskOption[]; multiSelect: boolean }
+export interface AskCard { title: string; body: string; question: string; options: AskOption[]; multiSelect: boolean }
 
 interface RawAsk {
   questions?: Array<{
@@ -38,6 +38,7 @@ export function renderAskCard(input: unknown): AskCard | null {
   return {
     title: 'Question',
     body: `${header}${q.question}\n\n${lines.join('\n')}`,
+    question: q.question,
     options,
     multiSelect: Boolean(q.multiSelect),
   };

@@ -159,14 +159,18 @@ describe('local-answer cancel + Stop fast-null (integration)', () => {
 });
 
 describe('AskUserQuestion remote card (Task 9)', () => {
-  function interactiveAdapter(channel: IMChannel, sent: OutgoingMessage[]): IMAdapter & { fire: (env: IncomingEnvelope) => void } {
+  function interactiveAdapter(
+    channel: IMChannel,
+    sent: OutgoingMessage[],
+    edits: Array<{ messageId: string; msg: OutgoingMessage }> = [],
+  ): IMAdapter & { fire: (env: IncomingEnvelope) => void } {
     let handler: ((e: IncomingEnvelope) => void) | undefined;
     return {
       channel,
       async start() { /* noop */ },
       async stop() { /* noop */ },
       async send(out: OutgoingMessage) { sent.push(out); return { messageId: `m${sent.length}` }; },
-      async edit() { /* noop */ },
+      async edit(messageId, msg) { edits.push({ messageId, msg }); },
       onInbound(h) { handler = h; },
       isConnected() { return 'connected' as const; },
       fire(env) { handler?.(env); },
@@ -197,7 +201,10 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const ids = card.buttons?.map((b) => b.id) ?? [];
     expect(ids.filter((id) => id.startsWith('ask:')).length).toBe(2); // one per option
     expect(ids.some((id) => id.startsWith('askskip:'))).toBe(true);
-    expect(ids).not.toContain(expect.stringMatching(/^approve:/));
+    // NB: `toContain` uses ===, not an asymmetric-matcher-aware deep-equal — it
+    // would silently accept `expect.stringMatching(...)` and never fail
+    // (review Minor 3). `.some(...)` is the real check.
+    expect(ids.some((id) => id.startsWith('approve:'))).toBe(false);
 
     const pickBlue = card.buttons!.find((b) => b.id.endsWith(':1'))!;
     adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: pickBlue.id, ts: 0 });
@@ -234,6 +241,37 @@ describe('AskUserQuestion remote card (Task 9)', () => {
 
     const r = await pending as { kind: string; decision?: string; message?: string };
     expect(r).toEqual({ kind: 'hook.permission.result', decision: 'allow' });
+  });
+
+  it('picking an option edits the IM card to "Answered" — the wire is a deny, but the user picked an answer (review Minor 4)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      approvals: { approvalGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
+    const adapter = interactiveAdapter('telegram', sent, edits);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const sock = join(tmp, 'daemon.sock');
+    const pending = request(
+      {
+        kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'AskUserQuestion',
+        input: { questions: [{ question: 'Pick a color?', options: [{ label: 'Red' }, { label: 'Blue' }] }] },
+        timeoutSec: 60,
+      },
+      { socketPath: sock, timeoutMs: 10_000 },
+    );
+    await new Promise((r) => setTimeout(r, 100));
+    const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+    const pickBlue = card.buttons!.find((b) => b.id.endsWith(':1'))!;
+    adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: pickBlue.id, ts: 0 });
+    await pending;
+
+    expect(edits).toHaveLength(1);
+    const editedTitle = (edits[0].msg as { title?: string }).title ?? '';
+    expect(editedTitle).toContain('Answered');
+    expect(editedTitle).not.toContain('Denied');
   });
 
   it('malformed AskUserQuestion input falls through to the normal approval card (Allow/Deny)', async () => {

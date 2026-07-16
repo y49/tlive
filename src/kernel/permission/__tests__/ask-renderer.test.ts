@@ -26,6 +26,11 @@ describe('renderAskCard', () => {
     expect(card.multiSelect).toBe(false);
   });
 
+  it('carries the raw question text on the card (review Minor 5: single source of truth, no re-extraction by callers)', () => {
+    const card = renderAskCard(INPUT)!;
+    expect(card.question).toBe('What is your favorite color?');
+  });
+
   it('omits the header chip when absent', () => {
     const card = renderAskCard({ questions: [{ question: 'Q?', options: [{ label: 'A' }, { label: 'B' }] }] })!;
     expect(card.body.startsWith('Q?')).toBe(true);

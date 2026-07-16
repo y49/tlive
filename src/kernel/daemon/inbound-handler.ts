@@ -22,9 +22,15 @@ export interface InboundHandlerDeps {
   setTrust: (trusted: boolean) => void;
   /** Grant "always allow <tool>" (in-memory). */
   addAllowTool: (tool: string) => void;
+  /** Read-only lookup of the pending AskUserQuestion context for a requestId —
+   *  no side effect. Used to validate an `ask:` click BEFORE consuming, so a
+   *  malformed/out-of-range index doesn't eat the context out from under a
+   *  legit follow-up click (review Minor 1/2). */
+  peekAskContext: (requestId: string) => { question: string; options: AskOption[] } | undefined;
   /** Returns + clears the pending AskUserQuestion context for a requestId
    *  (single-use; Task 9). Populated by the permission router's onPending,
-   *  consumed here on an `ask:`/`askskip:` button click. */
+   *  consumed here once a click is validated (`ask:`), or unconditionally on
+   *  `askskip:` (discarded either way). */
   takeAskContext: (requestId: string) => { question: string; options: AskOption[] } | undefined;
   /** Reply-to routing: IM messageId → session cwd (daemon-lifetime map). */
   resolveReply: (channel: string, messageId: string) => string | undefined;
@@ -74,9 +80,15 @@ export class InboundHandler {
     if (env.text.startsWith('ask:')) {
       // ask:<requestId>:<optionIndex> — a picked AskUserQuestion option.
       const [, rid, idxRaw] = env.text.split(':');
-      const ctx = this.deps.takeAskContext(rid);
-      const idx = Number(idxRaw);
+      // Peek (no side effect) and validate BEFORE consuming — an out-of-range
+      // or malformed index must not eat the context out from under a legit
+      // follow-up click (review Minor 1). Strict digits-only match rejects ''
+      // and non-numeric input; `Number('')` is 0, which would otherwise
+      // silently pick option 0 (review Minor 2).
+      const ctx = this.deps.peekAskContext(rid);
+      const idx = /^\d+$/.test(idxRaw) ? Number(idxRaw) : NaN;
       if (ctx && Number.isInteger(idx) && ctx.options[idx]) {
+        this.deps.takeAskContext(rid); // valid pick — now consume (single-use)
         // deny + message = 答案(见 ask-renderer 文件头):CC 跳过内置问题框,
         // message 送进 agent 对话流当答案。
         this.deps.permissionRouter.answer(rid, false, buildAskAnswerMessage(ctx.question, [ctx.options[idx].label]));
