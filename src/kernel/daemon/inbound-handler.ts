@@ -43,6 +43,15 @@ export interface InboundHandlerDeps {
    *  state. Empty when nothing was sent yet (still in grace) or it already
    *  resolved. */
   getAskCards: (requestId: string) => Array<{ channel: string; messageId: string; title: string; body: string }>;
+  /** Task 10 review Important fix: per-requestId edit serialization. edit()
+   *  is a real network call — nothing guarantees a toggle edit dispatched
+   *  earlier actually LANDS earlier than the settlement edit onResolved
+   *  fires afterward. Every edit for a rid (toggle here, settlement in
+   *  bootstrap.ts's onResolved) must go through the SAME queue instance so
+   *  landing order matches enqueue order — otherwise a slow toggle edit can
+   *  land after the fast settlement edit and resurrect the checkbox layout
+   *  on top of the "Answered" card (a zombie-card regression). */
+  queueEdit: (requestId: string, fn: () => Promise<unknown>) => Promise<void>;
   /** Reply-to routing: IM messageId → session cwd (daemon-lifetime map). */
   resolveReply: (channel: string, messageId: string) => string | undefined;
   /** Session lookup for injection routing. */
@@ -120,7 +129,12 @@ export class InboundHandler {
       const buttons = askMultiButtons(rid, ctx.options, this.deps.askSelection.selected(rid));
       for (const card of this.deps.getAskCards(rid)) {
         const adapter = this.deps.imBy(card.channel as IMChannel);
-        await adapter?.edit(card.messageId, { kind: 'card', title: card.title, body: card.body, buttons }).catch(() => undefined);
+        if (!adapter) continue;
+        // Queued (not a bare edit()) — must land in enqueue order relative to
+        // the eventual onResolved settlement edit for the SAME rid (Task 10
+        // review Important fix), otherwise a slow toggle edit can land after
+        // a fast settlement edit and resurrect the checkbox layout.
+        await this.deps.queueEdit(rid, () => adapter.edit(card.messageId, { kind: 'card', title: card.title, body: card.body, buttons }));
       }
       return;
     }

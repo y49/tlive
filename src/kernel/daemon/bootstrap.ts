@@ -8,6 +8,7 @@ import { decide as policyDecide, type PolicyState } from '../permission/policy-e
 import { renderApprovalCard } from '../permission/approval-renderer.js';
 import { renderAskCard, askMultiButtons, type AskOption } from '../permission/ask-renderer.js';
 import { AskSelection } from './ask-state.js';
+import { createEditQueue } from './edit-queue.js';
 import { ContinueBroker } from '../permission/continue-broker.js';
 import { SenderGuard } from './sender-guard.js';
 import { loadConfig } from '../config/loader.js';
@@ -153,6 +154,14 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
 
   // Approval cards sent per requestId — edited to their outcome on resolve (no zombie buttons).
   const sentCards = new Map<string, Array<{ channel: string; messageId: string; title: string; body: string }>>();
+
+  // Task 10 review Important fix: a multi-select card's toggle edit and its
+  // eventual onResolved settlement edit both hit adapter.edit() (real network
+  // I/O) for the same rid — nothing guarantees the settlement edit (always
+  // fired LAST) lands last too. Route every edit for a rid through this
+  // per-rid serial queue so landing order matches enqueue order, keeping the
+  // "no zombie cards" invariant even under network reordering.
+  const editQueue = createEditQueue();
 
   // AskUserQuestion (Task 9): raw question + options per pending requestId, so an
   // `ask:<rid>:<idx>` button click can build the deny+message answer. Written at
@@ -300,7 +309,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // header) even when the user picked an answer — label it "Answered"
           // so the user isn't scared into thinking their pick failed (Minor 4).
           const label = isAsk && decision === 'deny' ? 'Answered' : (OUTCOME[decision] ?? decision);
-          void adapter.edit(c.messageId, { kind: 'card', title: `${label} · ${c.title}`, body: '' }).catch(() => undefined);
+          // Queued (not a bare fire-and-forget edit) — this settlement edit is
+          // always enqueued LAST for requestId, so it always lands last too,
+          // even if an earlier toggle edit for the same rid is still in flight.
+          void editQueue.enqueue(requestId, () => adapter.edit(c.messageId, { kind: 'card', title: `${label} · ${c.title}`, body: '' }));
         }
       }
     },
@@ -561,6 +573,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     },
     askSelection,
     getAskCards: (rid: string) => sentCards.get(rid) ?? [],
+    queueEdit: (rid, fn) => editQueue.enqueue(rid, fn),
     resolveReply: (channel, messageId) => msgToCwd.get(`${channel}:${messageId}`),
     sessionInfo: (cwd) => {
       const s = sessions.get(cwd);

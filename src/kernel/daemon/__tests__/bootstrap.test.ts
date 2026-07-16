@@ -354,13 +354,18 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
       const toggleBlue = card.buttons!.find((b) => b.id.startsWith('asktoggle:') && b.id.endsWith(':1'))!;
 
+      // Edits now go through the per-rid serial queue (Task 10 review Important
+      // fix) — the edit lands on a later microtask, no longer synchronously
+      // within fire(), so each assertion needs a tick to let the queue drain.
       adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: toggleBlue.id, ts: 0 });
+      await new Promise((r) => setTimeout(r, 0));
       expect(edits).toHaveLength(1);
       const edited1 = edits[0].msg as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
       expect(edited1.buttons!.map((b) => b.label)).toEqual(['▢ Red', '▣ Blue', 'Submit (1)', 'Skip']);
 
       // toggling the same option again flips it back off
       adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: toggleBlue.id, ts: 0 });
+      await new Promise((r) => setTimeout(r, 0));
       expect(edits).toHaveLength(2);
       const edited2 = edits[1].msg as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
       expect(edited2.buttons!.map((b) => b.label)).toEqual(['▢ Red', '▢ Blue', 'Submit (0)', 'Skip']);
@@ -388,6 +393,59 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       const skipBtn = card.buttons!.find((b) => b.id.startsWith('askskip:'))!;
       adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: skipBtn.id, ts: 0 });
       await pending;
+    });
+
+    it('toggle-then-submit race: a slow toggle edit landing after the fast settlement edit must not resurrect the checkbox layout (Important bug repro)', async () => {
+      writeFileSync(join(tmp, 'config.json'), multiSelectConfig());
+      const sent: OutgoingMessage[] = [];
+      const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
+      // edit() is a real network call in production — nothing guarantees "later
+      // dispatched → later landed". Here the toggle edit (carries `buttons`) is
+      // deliberately made SLOWER than the settlement edit from onResolved (no
+      // `buttons`), reproducing the exact reordering the bug report describes —
+      // regardless of which one was actually *dispatched* first.
+      let handler: ((e: IncomingEnvelope) => void) | undefined;
+      const adapter: IMAdapter & { fire: (env: IncomingEnvelope) => void } = {
+        channel: 'telegram',
+        async start() { /* noop */ },
+        async stop() { /* noop */ },
+        async send(out: OutgoingMessage) { sent.push(out); return { messageId: `m${sent.length}` }; },
+        async edit(messageId: string, msg: OutgoingMessage) {
+          const hasButtons = Boolean((msg as { buttons?: unknown }).buttons);
+          await new Promise((r) => setTimeout(r, hasButtons ? 50 : 5));
+          edits.push({ messageId, msg });
+        },
+        onInbound(h) { handler = h; },
+        isConnected() { return 'connected' as const; },
+        fire(env) { handler?.(env); },
+      };
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+      const sock = join(tmp, 'daemon.sock');
+      const pending = fireMultiSelectRequest(sock);
+      await new Promise((r) => setTimeout(r, 100));
+      const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+      const toggleRed = card.buttons!.find((b) => b.id.startsWith('asktoggle:') && b.id.endsWith(':0'))!;
+      const submitBtn = card.buttons!.find((b) => b.id.startsWith('asksubmit:'))!;
+
+      // Toggle, then Submit — back to back, synchronously, mirroring "quickly
+      // tap a checkbox then Submit" from the bug report.
+      adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: toggleRed.id, ts: 0 });
+      adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: submitBtn.id, ts: 0 });
+
+      const r = await pending as { kind: string; decision?: string; message?: string };
+      expect(r.decision).toBe('deny');
+
+      // Let both artificially-delayed edits land (serialized: ~50ms + ~5ms with the fix).
+      await new Promise((r2) => setTimeout(r2, 150));
+
+      expect(edits.length).toBe(2);
+      const last = edits.at(-1)!;
+      const lastMsg = last.msg as { title?: string; buttons?: unknown };
+      // The settlement edit (from onResolved) must be the one that lands LAST —
+      // "no zombie cards": the final state must be the answered card, not the
+      // reverted checkbox layout.
+      expect(lastMsg.title).toContain('Answered');
+      expect(lastMsg.buttons).toBeUndefined();
     });
 
     it('Submit with picks answers deny+message carrying every selected label, and edits the card to Answered', async () => {

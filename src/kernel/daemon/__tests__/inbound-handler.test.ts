@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { InboundHandler, type InboundHandlerDeps } from '../inbound-handler.js';
 import { SenderGuard } from '../sender-guard.js';
 import { AskSelection } from '../ask-state.js';
+import { createEditQueue } from '../edit-queue.js';
 import type { IncomingEnvelope, IMAdapter, OutgoingMessage } from '../../contracts/im-adapter.js';
 import type { PermissionRouter } from '../permission-router.js';
 import type { ContinueBroker } from '../../permission/continue-broker.js';
@@ -22,25 +23,29 @@ function makeAdapter(msgs: Array<{ kind: string; text?: string }>): IMAdapter {
   };
 }
 
-const baseDeps = (over: Partial<InboundHandlerDeps> = {}): InboundHandlerDeps => ({
-  senderGuard: new SenderGuard([]),
-  imBy: () => undefined,
-  permissionRouter: { answer: vi.fn(), requestPermission: vi.fn() } as unknown as PermissionRouter,
-  continueBroker: { answer: vi.fn().mockReturnValue(false), request: vi.fn(), onRequest: vi.fn() } as unknown as ContinueBroker,
-  takeLatestContinueId: () => null,
-  setMuted: vi.fn(),
-  setTrust: vi.fn(),
-  addAllowTool: vi.fn(),
-  resolveReply: () => undefined,
-  sessionInfo: () => undefined,
-  listSessions: () => [],
-  inject: vi.fn().mockResolvedValue(undefined),
-  peekAskContext: () => undefined,
-  takeAskContext: () => undefined,
-  askSelection: new AskSelection(),
-  getAskCards: () => [],
-  ...over,
-});
+const baseDeps = (over: Partial<InboundHandlerDeps> = {}): InboundHandlerDeps => {
+  const editQueue = createEditQueue(); // fresh per test — mirrors bootstrap.ts's one shared instance
+  return {
+    senderGuard: new SenderGuard([]),
+    imBy: () => undefined,
+    permissionRouter: { answer: vi.fn(), requestPermission: vi.fn() } as unknown as PermissionRouter,
+    continueBroker: { answer: vi.fn().mockReturnValue(false), request: vi.fn(), onRequest: vi.fn() } as unknown as ContinueBroker,
+    takeLatestContinueId: () => null,
+    setMuted: vi.fn(),
+    setTrust: vi.fn(),
+    addAllowTool: vi.fn(),
+    resolveReply: () => undefined,
+    sessionInfo: () => undefined,
+    listSessions: () => [],
+    inject: vi.fn().mockResolvedValue(undefined),
+    peekAskContext: () => undefined,
+    takeAskContext: () => undefined,
+    askSelection: new AskSelection(),
+    getAskCards: () => [],
+    queueEdit: (rid, fn) => editQueue.enqueue(rid, fn),
+    ...over,
+  };
+};
 
 /** A real get-and-clear store (mirrors bootstrap.ts's askContexts Map) so tests
  *  can observe whether a bad `ask:` click actually consumed the context —
