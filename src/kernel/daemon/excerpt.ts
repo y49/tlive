@@ -11,9 +11,11 @@
 
 /** 代码块保留的行数上限;超出截断并标注。 */
 const FENCE_KEEP_LINES = 5;
-/** 超预算时首段保留量。 */
+/** excerptForCard 的默认预算,同时也是下面两个常量的基准刻度。 */
+const DEFAULT_BUDGET = 3500;
+/** 默认预算下的首段保留量上限。 */
 const HEAD_BUDGET = 2500;
-/** 超预算时尾段保留量 —— agent 的问题/下一步通常在结尾。 */
+/** 默认预算下的尾段保留量上限 —— agent 的问题/下一步通常在结尾。 */
 const TAIL_BUDGET = 800;
 
 /** break preference chain(借鉴 openclaw):段落 → 换行 → 句子 → 空白 → 硬切。
@@ -40,7 +42,7 @@ function breakAtEnd(s: string, max: number): string {
   return cut;
 }
 
-export function excerptForCard(md: string, budget = 3500): string {
+export function excerptForCard(md: string, budget = DEFAULT_BUDGET): string {
   // 代码块 → 逐行 inline code。整块丢弃会让引导语("Looks like:")变成
   // 没有下文的孤儿句(原型实测踩过)。
   let s = md.replace(/```[^\n]*\n([\s\S]*?)```/g, (_m, code: string) => {
@@ -60,8 +62,19 @@ export function excerptForCard(md: string, budget = 3500): string {
   s = s.replace(/\n{3,}/g, '\n\n').trim();
 
   if (s.length <= budget) return s;
-  const head = breakAt(s, HEAD_BUDGET);
-  const tail = breakAtEnd(s, TAIL_BUDGET);
+
+  // 首尾预算须随 budget 等比例缩放,并钳在默认值(2500/800)以内 —— 否则
+  // 当调用方传入比这两个常量还小的 budget(比如未来接飞书,字数上限比
+  // Telegram 窄得多)时,breakAt/breakAtEnd 内部 `s.length <= max` 的短路
+  // 会把整段原文原样吐回去,导致"全文重复两遍、中间夹一个负数"的坏输出。
+  // Math.min 保证 budget=3500(默认值)时结果精确等于 2500/800,不回归。
+  const headBudget = Math.min(HEAD_BUDGET, Math.max(1, Math.round((budget * HEAD_BUDGET) / DEFAULT_BUDGET)));
+  const tailBudget = Math.min(TAIL_BUDGET, Math.max(1, Math.round((budget * TAIL_BUDGET) / DEFAULT_BUDGET)));
+  const head = breakAt(s, headBudget);
+  const tail = breakAtEnd(s, tailBudget);
   const omitted = s.length - head.length - tail.length;
+  // 首尾预算已经覆盖了全文(极端小 budget 或短文本边界巧合) —— 直接吐
+  // 全文,绝不能让 omitted 变成负数拼进用户可见的省略提示里。
+  if (omitted <= 0) return s;
   return `${head}\n\n⋯ ${omitted} chars omitted ⋯\n\n${tail}`;
 }
