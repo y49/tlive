@@ -13,6 +13,16 @@
 // 修法:per-requestId 的串行队列。同一 rid 上的所有 edit 严格按"入队顺序"
 // (调用 enqueue 的顺序,不是网络返回顺序)一个接一个跑;于是总是最后入队的
 // onResolved 结算 edit 必然是最后落地的那个。
+//
+// 多渠道复审补充:这个保证只在"入队顺序本身正确"的前提下成立。队列只按
+// rid 键控(不区分 channel)是有意的、也是安全的一句话 —— 但前提是所有调用
+// 方都必须在同一个事件循环 tick 内**同步**把某一批 edit 全部 enqueue 完,
+// 不能在多张卡的循环里逐张 await。哪怕只有一条调用链在循环内 await,只要另
+// 一条链(如 onResolved 的结算循环)恰好在这段 await 期间抢先同步入队了"更
+// 快的那个 channel"的结算 edit,后者就会插到该 channel 尚未入队的 toggle
+// edit 之前 —— 入队顺序本身就错了,队列再"忠实执行入队顺序"也没用。两条
+// 生产者(inbound-handler.ts 的 asktoggle: 分支、bootstrap.ts 的 onResolved)
+// 必须都遵守"同步批量入队,不逐张 await"这一纪律,详见各自调用点的注释。
 
 export interface EditQueue {
   /** 把 fn 排到 rid 队列尾部,等前一个(如果有)完成后再跑。返回的 Promise 在
@@ -31,8 +41,20 @@ export function createEditQueue(): EditQueue {
     const prev = queues.get(rid) ?? Promise.resolve();
     // fn 本身吞掉自己的错误(转成 resolved undefined)——链条上没有会传播的
     // rejection,`.then(settle, settle)` 的第二个 handler 只是双保险,防御性
-    // 地兜住理论上不该发生的"prev 被拒绝"。
-    const settle = (): Promise<void> => fn().then(() => undefined, () => undefined);
+    // 地兜住理论上不该发生的"prev 被拒绝"。try/catch 再兜一层:`fn` 的类型是
+    // `() => Promise<unknown>`,但调用方传入的实参未必真是 async 函数 ——
+    // 若 fn 在拿到 Promise 之前就同步 throw(现实中两个真实 IMAdapter.edit()
+    // 都是 async 函数,不会发生),没有这层 try/catch 时 `settle()` 本身会
+    // 同步抛出,链条(`next`)直接 reject,cleanup 那句 `next.then(...)` 因为
+    // 没挂 onRejected 而永不触发 —— 既破坏"enqueue 永不 reject"的约定,也让
+    // 该 rid 的 map 条目泄漏,还会产生一条 unhandled rejection 告警。
+    const settle = (): Promise<void> => {
+      try {
+        return fn().then(() => undefined, () => undefined);
+      } catch {
+        return Promise.resolve();
+      }
+    };
     const next = prev.then(settle, settle);
     queues.set(rid, next);
     // 清理:只有自己仍是链尾(没有更新的 edit 排在自己后面)才删除 map 条目 ——

@@ -82,6 +82,18 @@ describe('createEditQueue', () => {
     expect(q.isActive('r1')).toBe(false);
   });
 
+  it('a fn that throws SYNCHRONOUSLY (not just returns a rejected promise) does not break the enqueue-never-rejects contract or leak the queue slot (hardening — unreachable via a real async IMAdapter.edit(), but fn is typed as a plain callback)', async () => {
+    const q = createEditQueue();
+    const syncThrow = (): Promise<unknown> => { throw new Error('sync boom'); };
+    await expect(q.enqueue('r1', syncThrow)).resolves.toBeUndefined();
+    expect(q.isActive('r1')).toBe(false);
+    // The chain must still be usable afterward — a synchronous throw for one
+    // rid must not wedge that rid's queue for subsequent enqueues.
+    let ran = false;
+    await q.enqueue('r1', async () => { ran = true; });
+    expect(ran).toBe(true);
+  });
+
   it('does not drop a newer link when an earlier one finishes and cleans up (no lost queued call)', async () => {
     const q = createEditQueue();
     const order: string[] = [];

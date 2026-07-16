@@ -448,6 +448,87 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       expect(lastMsg.buttons).toBeUndefined();
     });
 
+    it('dual-channel race: a slow channel\'s in-flight toggle loop must not let a fast channel\'s settlement land, then get overwritten by a late toggle edit (multi-channel review Important repro)', async () => {
+      // Reproduces the review's multi-channel finding: `asktoggle:`'s edit
+      // loop used to `await` each card's queueEdit one at a time. With TWO
+      // configured channels (Telegram + Feishu, the onboarding-doc default),
+      // a slow channel 1 (telegram) keeps that loop suspended on its own
+      // `await` before it ever reaches channel 2 (feishu)'s card. Meanwhile
+      // Submit arrives (a SEPARATE inbound message) and onResolved's
+      // settlement loop enqueues BOTH channels' settlement edits
+      // synchronously, in one tick — including feishu's, which the toggle
+      // loop hasn't gotten to yet. Once the toggle loop finally resumes and
+      // enqueues feishu's toggle edit, it lands behind the already-enqueued
+      // feishu settlement edit → feishu's card reverts to the checkbox
+      // layout even though it "answered" first. Fixed by mirroring
+      // onResolved's own pattern: enqueue every card's edit synchronously,
+      // no per-card await.
+      writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+        web: { enabled: false },
+        approvals: { approvalGraceSec: 0 },
+        adapters: {
+          telegram: { token: 't', chatIdAllowList: ['c1'] },
+          feishu: { appId: 'a', appSecret: 's', chatId: 'c2' },
+        },
+      }));
+      function delayedChannelAdapter(
+        channel: IMChannel,
+        delayMs: number,
+        sent: OutgoingMessage[],
+        edits: Array<{ channel: IMChannel; messageId: string; msg: OutgoingMessage }>,
+      ): IMAdapter & { fire: (env: IncomingEnvelope) => void } {
+        let handler: ((e: IncomingEnvelope) => void) | undefined;
+        return {
+          channel,
+          async start() { /* noop */ },
+          async stop() { /* noop */ },
+          async send(out: OutgoingMessage) { sent.push(out); return { messageId: `${channel}-m${sent.length}` }; },
+          async edit(messageId: string, msg: OutgoingMessage) {
+            await new Promise((r) => setTimeout(r, delayMs));
+            edits.push({ channel, messageId, msg });
+          },
+          onInbound(h) { handler = h; },
+          isConnected() { return 'connected' as const; },
+          fire(env) { handler?.(env); },
+        };
+      }
+      const sentTg: OutgoingMessage[] = [];
+      const sentFs: OutgoingMessage[] = [];
+      const edits: Array<{ channel: IMChannel; messageId: string; msg: OutgoingMessage }> = [];
+      const tg = delayedChannelAdapter('telegram', 80, sentTg, edits); // channel 1: slow
+      const fs = delayedChannelAdapter('feishu', 5, sentFs, edits); // channel 2: fast
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [tg, fs] });
+      const sock = join(tmp, 'daemon.sock');
+      const pending = fireMultiSelectRequest(sock);
+      await new Promise((r) => setTimeout(r, 100)); // grace=0, let both cards go out
+      expect(sentTg).toHaveLength(1);
+      expect(sentFs).toHaveLength(1);
+      const card = sentTg[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+      const toggleRed = card.buttons!.find((b) => b.id.startsWith('asktoggle:') && b.id.endsWith(':0'))!;
+      const submitBtn = card.buttons!.find((b) => b.id.startsWith('asksubmit:'))!;
+
+      // Tap a checkbox then Submit, back to back on the SAME chat client
+      // (telegram) — mirrors real usage: the user only ever interacts via
+      // one channel, but both channels' cards must still settle correctly.
+      tg.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: toggleRed.id, ts: 0 });
+      tg.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: submitBtn.id, ts: 0 });
+
+      const r = await pending as { kind: string; decision?: string };
+      expect(r.decision).toBe('deny');
+
+      // Let both artificially-delayed channels' edits fully land (serialized
+      // per-rid: worst case is well under 80ms*2 + 5ms*2).
+      await new Promise((r2) => setTimeout(r2, 300));
+
+      const fsEdits = edits.filter((e) => e.channel === 'feishu');
+      const last = fsEdits.at(-1)!;
+      const lastMsg = last.msg as { title?: string; buttons?: unknown };
+      // "no zombie cards": feishu's card must end up on the settled/Answered
+      // state too, not reverted to the checkbox layout by a late toggle edit.
+      expect(lastMsg.title).toContain('Answered');
+      expect(lastMsg.buttons).toBeUndefined();
+    });
+
     it('Submit with picks answers deny+message carrying every selected label, and edits the card to Answered', async () => {
       writeFileSync(join(tmp, 'config.json'), multiSelectConfig());
       const sent: OutgoingMessage[] = [];

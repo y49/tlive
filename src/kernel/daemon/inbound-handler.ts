@@ -127,14 +127,26 @@ export class InboundHandler {
       if (!ctx || !Number.isInteger(idx) || !ctx.options[idx]) return;
       this.deps.askSelection.toggle(rid, idx);
       const buttons = askMultiButtons(rid, ctx.options, this.deps.askSelection.selected(rid));
+      // Enqueue every card's edit SYNCHRONOUSLY, in this same tick — mirrors
+      // bootstrap.ts's onResolved settlement loop (`void editQueue.enqueue`,
+      // no per-card await). Multi-channel review Important fix: awaiting
+      // each queueEdit() one at a time here left the loop suspended on a
+      // slow channel's edit before it ever reached a later, faster channel's
+      // card. A Submit that arrives while that await is in flight triggers
+      // onResolved, whose settlement loop enqueues ALL channels' settlement
+      // edits synchronously — including the fast channel this loop hadn't
+      // reached yet. That settlement edit then lands first, and the toggle
+      // edit (enqueued only once the slow channel's await finally resolved)
+      // lands after it — resurrecting the checkbox layout on the fast
+      // channel's already-"Answered" card (a zombie-card regression visible
+      // only with 2+ configured channels). Firing every enqueue call before
+      // yielding to the event loop guarantees this click's toggle edits are
+      // all registered ahead of any settlement edit a later message could
+      // trigger.
       for (const card of this.deps.getAskCards(rid)) {
         const adapter = this.deps.imBy(card.channel as IMChannel);
         if (!adapter) continue;
-        // Queued (not a bare edit()) — must land in enqueue order relative to
-        // the eventual onResolved settlement edit for the SAME rid (Task 10
-        // review Important fix), otherwise a slow toggle edit can land after
-        // a fast settlement edit and resurrect the checkbox layout.
-        await this.deps.queueEdit(rid, () => adapter.edit(card.messageId, { kind: 'card', title: card.title, body: card.body, buttons }));
+        void this.deps.queueEdit(rid, () => adapter.edit(card.messageId, { kind: 'card', title: card.title, body: card.body, buttons }));
       }
       return;
     }
