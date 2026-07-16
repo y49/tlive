@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { bootstrapDaemon, shouldFastNullContinue, clampPermissionTimeout, makeCodexResumeHandler, type DaemonHandle } from '../bootstrap';
+import { bootstrapDaemon, shouldFastNullContinue, clampPermissionTimeout, makeCodexResumeHandler, shouldDropNotify, type DaemonHandle } from '../bootstrap';
 import { request } from '../../ipc/client';
 import type { IMAdapter, IMChannel, OutgoingMessage, IncomingEnvelope } from '../../contracts/im-adapter';
 import { SessionRegistry } from '../../web/session-registry';
@@ -37,6 +37,16 @@ describe('dual-channel wiring helpers', () => {
     expect(clampPermissionTimeout(undefined)).toBe(580);
     expect(clampPermissionTimeout(86_000)).toBe(86_000);
     expect(clampPermissionTimeout(999_999)).toBe(86_400);
+  });
+});
+
+describe('shouldDropNotify', () => {
+  it('drops when a continue card is already pending for the session', () => {
+    expect(shouldDropNotify('req-1')).toBe(true);
+  });
+  it('keeps the notify when no continue card is outstanding', () => {
+    expect(shouldDropNotify(null)).toBe(false);
+    expect(shouldDropNotify(undefined)).toBe(false);
   });
 });
 

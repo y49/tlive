@@ -43,6 +43,13 @@ export function shouldFastNullContinue(chatCount: number, webClientCount: number
   return chatCount === 0 && webClientCount === 0;
 }
 
+/** 该会话已挂着一张续跑卡(continueId 非空)时,idle notification 是重复
+ *  —— CC 在 turn 结束 60s 后会 fire 一条 "waiting for your input",而
+ *  Turn finished 卡早就在等你了。用状态判断,不匹配 vendor 文案。 */
+export function shouldDropNotify(continueId: string | null | undefined): boolean {
+  return Boolean(continueId);
+}
+
 /** Codex `turn/completed` → offer the reply to whoever's watching (IM/web) via
  *  ContinueBroker, then feed a non-null reply back into the thread via
  *  `turn/start`. Mirrors the `hook.continue.request` IPC handler minus the
@@ -401,7 +408,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         }
         case 'hook.notify': {
           const key = resolveKey(req.cwd, req.wrappedId);
-          if (!muted && !sessions.get(key)?.muted) {
+          const s = sessions.get(key);
+          if (!muted && !s?.muted && !shouldDropNotify(s?.continueId)) {
             // cwd carries the resolved KEY so the label tag + reply-routing map are consistent.
             // 装饰性 emoji 一律不发;error 级别用 ⚠️(有信息量)。
             // normalizer 不再自带任何前缀(单一职责:只归一化文本)——
