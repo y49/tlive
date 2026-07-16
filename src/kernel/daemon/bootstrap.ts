@@ -18,6 +18,7 @@ import { applyMonitorEvent, sweepDeadSessions, pidAlive } from '../web/session-e
 import { ensureCodexAppServer, codexAppServerSockPath } from '../codex/spawn.js';
 import { connectCodexRpc } from '../codex/rpc.js';
 import { startCompanion, type Companion } from '../codex/companion.js';
+import { excerptForCard } from './excerpt.js';
 
 export interface DaemonHandle {
   shutdown(): Promise<void>;
@@ -83,6 +84,15 @@ export function makeCodexResumeHandler(deps: {
  *  permission-request channel asks for ~86000s). */
 export function clampPermissionTimeout(timeoutSec: number | undefined): number {
   return Math.min(timeoutSec ?? 580, 86_400);
+}
+
+/** 续跑卡 body:摘录进 expandable 引用块,前后空行分段(B1)。
+ *  body 前导 \n 是有意的 —— renderCard 只在 title 后放一个换行,这一个
+ *  额外换行就是标题与正文之间的那道留白。 */
+export function buildContinueCardBody(lastMessage: string): string {
+  const ex = excerptForCard(lastMessage ?? '');
+  const quote = ex ? ex.split('\n').map((l) => `>! ${l}`).join('\n') + '\n\n' : '';
+  return `\n${quote}*Reply to continue*`;
 }
 
 export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle> {
@@ -237,11 +247,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     if (muted || sessions.get(req.cwd)?.muted) return;
     for (const t of configuredChats()) {
       // requestId 不进显示文本:回复路由走 replyToMessageId,不解析正文。
-      // 摘录 = 真正的最后一句(context 若只是通用文案则不重复贴),用引用块分层。
       const raw = req.context === 'Turn finished — reply to continue' ? '' : req.context;
-      const excerpt = raw.length > 300 ? `${raw.slice(0, 300)}…` : raw;
-      const quote = excerpt ? excerpt.split('\n').map((l) => `> ${l}`).join('\n') + '\n' : '';
-      void sendToChat(t, { title: '⏸ Turn finished', body: `${quote}*Reply to this message to continue.*`, cwd: req.cwd });
+      void sendToChat(t, { title: 'Turn finished', body: buildContinueCardBody(raw), cwd: req.cwd });
     }
   });
 
