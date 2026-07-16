@@ -165,6 +165,11 @@ export class InboundHandler {
     }
     if (env.text.startsWith('askskip:')) {
       const rid = env.text.slice('askskip:'.length);
+      // 对称性 hardening(opus 终审):与 ask:/asktoggle:/asksubmit: 一致,先
+      // peek 校验(只读,不消费)context 还在才往下动。实际不可达(没有非
+      // ask 卡渲染 askskip 按钮,普通卡 rid 不进文本),但纵深防御——防止
+      // 未知/过期 rid 被当场 answer(rid, true) 放行。
+      if (!this.deps.peekAskContext(rid)) return;
       this.deps.takeAskContext(rid); // clear, avoid leak — the answer itself is discarded
       this.deps.askSelection.clear(rid); // free any multi-select picks too (Task 10, no leak)
       // Skip = allow = pass-through:本地问题框归你在电脑前答(等同 defer 语义),

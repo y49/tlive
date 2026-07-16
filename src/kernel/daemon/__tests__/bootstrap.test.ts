@@ -41,12 +41,17 @@ describe('dual-channel wiring helpers', () => {
 });
 
 describe('shouldDropNotify', () => {
-  it('drops when a continue card is already pending for the session', () => {
-    expect(shouldDropNotify('req-1')).toBe(true);
+  it('drops an info-level idle notify when a continue card is already pending for the session', () => {
+    expect(shouldDropNotify('req-1', 'info')).toBe(true);
   });
-  it('keeps the notify when no continue card is outstanding', () => {
-    expect(shouldDropNotify(null)).toBe(false);
-    expect(shouldDropNotify(undefined)).toBe(false);
+  it('never drops an error-level failure notify, even with a continue card pending — a stale continueId (up to continueWindowSec, default 30min) must not silently eat a tool/stop failure alert', () => {
+    expect(shouldDropNotify('req-1', 'error')).toBe(false);
+  });
+  it('keeps the notify when no continue card is outstanding, for both levels', () => {
+    expect(shouldDropNotify(null, 'info')).toBe(false);
+    expect(shouldDropNotify(undefined, 'info')).toBe(false);
+    expect(shouldDropNotify(null, 'error')).toBe(false);
+    expect(shouldDropNotify(undefined, 'error')).toBe(false);
   });
 });
 

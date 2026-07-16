@@ -46,11 +46,15 @@ export function shouldFastNullContinue(chatCount: number, webClientCount: number
   return chatCount === 0 && webClientCount === 0;
 }
 
-/** 该会话已挂着一张续跑卡(continueId 非空)时,idle notification 是重复
- *  —— CC 在 turn 结束 60s 后会 fire 一条 "waiting for your input",而
- *  Turn finished 卡早就在等你了。用状态判断,不匹配 vendor 文案。 */
-export function shouldDropNotify(continueId: string | null | undefined): boolean {
-  return Boolean(continueId);
+/** 该会话已挂着一张续跑卡(continueId 非空)时,idle notification(level=info)
+ *  是重复 —— CC 在 turn 结束 60s 后会 fire 一条 "waiting for your input",而
+ *  Turn finished 卡早就在等你了。只对 info 级去重;error 级(工具失败 /
+ *  Stop 失败告警,见 hook.ts 的 level 判定)永不去重 —— continueId 只在
+ *  broker resolve 时清空(最长 continueWindowSec,默认 30min),且
+ *  'prompt' 事件(键盘前续跑)不清它,残留期间任何失败告警都不能被静默吞掉。
+ *  用状态 + level 判断,不匹配 vendor 文案。 */
+export function shouldDropNotify(continueId: string | null | undefined, level: 'info' | 'warn' | 'error'): boolean {
+  return level === 'info' && Boolean(continueId);
 }
 
 /** Codex `turn/completed` → offer the reply to whoever's watching (IM/web) via
@@ -488,7 +492,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         case 'hook.notify': {
           const key = resolveKey(req.cwd, req.wrappedId);
           const s = sessions.get(key);
-          if (!muted && !s?.muted && !shouldDropNotify(s?.continueId)) {
+          if (!muted && !s?.muted && !shouldDropNotify(s?.continueId, req.level)) {
             // cwd carries the resolved KEY so the label tag + reply-routing map are consistent.
             // 装饰性 emoji 一律不发;error 级别用 ⚠️(有信息量)。
             // normalizer 不再自带任何前缀(单一职责:只归一化文本)——

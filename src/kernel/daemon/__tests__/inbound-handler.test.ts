@@ -201,6 +201,7 @@ describe('InboundHandler', () => {
     const permAnswer = vi.fn();
     const takeAskContext = vi.fn().mockReturnValue({ question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] });
     const h = new InboundHandler(baseDeps({
+      peekAskContext: () => ({ question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] }),
       takeAskContext,
       permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
     }));
@@ -213,12 +214,26 @@ describe('InboundHandler', () => {
     const askSelection = new AskSelection();
     askSelection.toggle('req-9', 0);
     const h = new InboundHandler(baseDeps({
+      peekAskContext: () => ({ question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] }),
       takeAskContext: vi.fn().mockReturnValue({ question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] }),
       askSelection,
       permissionRouter: { answer: vi.fn(), requestPermission: vi.fn() } as unknown as PermissionRouter,
     }));
     await h.handle(envelope({ text: 'askskip:req-9' }));
     expect(askSelection.selected('req-9')).toEqual([]);
+  });
+
+  it('askskip:<id> is a no-op when the context is gone — symmetric with ask:/asktoggle:/asksubmit: peek-before-consume hardening (opus review)', async () => {
+    const permAnswer = vi.fn();
+    const takeAskContext = vi.fn();
+    const h = new InboundHandler(baseDeps({
+      peekAskContext: () => undefined,
+      takeAskContext,
+      permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
+    }));
+    await h.handle(envelope({ text: 'askskip:req-9' }));
+    expect(permAnswer).not.toHaveBeenCalled();
+    expect(takeAskContext).not.toHaveBeenCalled();
   });
 
   it('asktoggle:<id>:<idx> flips the selection and edits every sent card with refreshed checkboxes + Submit(N) (Task 10)', async () => {
