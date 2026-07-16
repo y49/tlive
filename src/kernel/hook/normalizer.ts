@@ -69,10 +69,12 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
       return { event: 'session-end', cwd, sessionId, ...(r.reason ? { reason: r.reason } : {}) };
     case 'post-tool-use-failure': {
       const err = typeof r.tool_error === 'string' ? r.tool_error : JSON.stringify(r.tool_error ?? '');
-      return { event: 'attention', cwd, sessionId, message: `❌ ${r.tool_name ?? '(unknown)'} failed: ${err.slice(0, 200)}` };
+      // No emoji prefix here — single responsibility: normalizer only normalizes
+      // text. The ⚠️ prefix (for error-level notify) is bootstrap's call.
+      return { event: 'attention', cwd, sessionId, message: `${r.tool_name ?? '(unknown)'} failed: ${err.slice(0, 200)}` };
     }
     case 'stop-failure':
-      return { event: 'attention', cwd, sessionId, message: `❌ session error: ${r.error_type ?? 'unknown'}` };
+      return { event: 'attention', cwd, sessionId, message: `session error: ${r.error_type ?? 'unknown'}` };
     case 'subagent-start':
       return { event: 'subagent', cwd, sessionId, delta: 1, ...(r.agent_type ? { agentType: r.agent_type } : {}) };
     case 'subagent-stop':

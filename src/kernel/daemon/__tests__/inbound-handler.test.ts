@@ -129,7 +129,7 @@ describe('reply-to routing & injection', () => {
     }));
     await h.handle(envelope({ text: '继续修测试', replyToMessageId: 'q1' }));
     expect(inject).toHaveBeenCalledWith('/s.sock', '继续修测试');
-    expect(msgs.some((m) => m.text?.includes('已发送到'))).toBe(true);
+    expect(msgs.some((m) => m.text?.includes('Sent to'))).toBe(true);
   });
 
   it('quoted reply prefers a live continue over injection', async () => {
@@ -216,7 +216,7 @@ describe('attachment injection', () => {
       attachments: [{ name: 'err.png', mime: 'image/png', localPath: '/home/u/.tlive/inbox/ab-err.png', sizeBytes: 12345 }],
     }));
     expect(inject).toHaveBeenCalledWith('/s.sock', '看看这张报错截图\n/home/u/.tlive/inbox/ab-err.png');
-    expect(msgs.some((m) => m.text?.includes('1 个附件'))).toBe(true);
+    expect(msgs.some((m) => m.text?.includes('1 attachment path'))).toBe(true);
   });
 
   it('attachment-only message (no caption) still injects the path, skips continue', async () => {

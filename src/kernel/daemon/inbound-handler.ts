@@ -61,7 +61,7 @@ export class InboundHandler {
         const tool = rest.slice(sep + 1);
         this.deps.addAllowTool(tool);
         this.deps.permissionRouter.answer(requestId, true);
-        await this.reply(env, { kind: 'text', text: `✅ 已放行,且后续 ${tool} 将自动允许(daemon 重启前有效;/trust off 不影响此项)。` });
+        await this.reply(env, { kind: 'text', text: `Approved. ${tool} will be auto-allowed from now on (until daemon restart; unaffected by /trust off).` });
       }
       return;
     }
@@ -138,7 +138,7 @@ export class InboundHandler {
     try {
       await this.deps.inject(sockPath, text);
       const n = paths.length;
-      await this.reply(env, { kind: 'text', text: `⌨ 已发送到 [${label}]${n ? `(含 ${n} 个附件路径)` : ''}` });
+      await this.reply(env, { kind: 'text', text: `Sent to [${label}]${n ? ` (${n} attachment path${n === 1 ? '' : 's'})` : ''}` });
     } catch {
       await this.reply(env, { kind: 'text', text: `[${label}] 注入失败:会话可能已退出。` });
     }

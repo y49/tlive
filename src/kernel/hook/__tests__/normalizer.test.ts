@@ -85,17 +85,19 @@ describe('permission-request / permission-denied (CC dual-channel)', () => {
 });
 
 describe('failure events', () => {
-  it('post-tool-use-failure → attention ❌ 工具名+错误截断', () => {
+  it('post-tool-use-failure → attention message with tool name + truncated error, no emoji prefix', () => {
     const n = parseHookInput('post-tool-use-failure', { cwd: '/x', session_id: 's', tool_name: 'Bash', tool_error: 'E'.repeat(500) });
     expect(n.event).toBe('attention');
-    expect((n as any).message).toContain('❌');
     expect((n as any).message).toContain('Bash');
+    expect((n as any).message).toContain('failed');
     expect((n as any).message.length).toBeLessThan(300);
+    // normalizer has one job (normalize text) — the ⚠️ prefix is bootstrap's call, by level.
+    expect((n as any).message).not.toMatch(/^[⚠❌]/u);
   });
-  it('stop-failure → attention ❌ error_type', () => {
+  it('stop-failure → attention message with error_type, no emoji prefix', () => {
     const n = parseHookInput('stop-failure', { cwd: '/x', session_id: 's', error_type: 'rate_limit' });
-    expect((n as any).message).toContain('❌');
     expect((n as any).message).toContain('rate_limit');
+    expect((n as any).message).not.toMatch(/^[⚠❌]/u);
   });
 });
 

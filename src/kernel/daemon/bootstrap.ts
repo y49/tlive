@@ -400,8 +400,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           if (!muted && !sessions.get(key)?.muted) {
             // cwd carries the resolved KEY so the label tag + reply-routing map are consistent.
             // 装饰性 emoji 一律不发;error 级别用 ⚠️(有信息量)。
-            // normalizer 的失败文案自带前缀 —— 已有就别再叠。
-            const text = /^[⚠❌]/u.test(req.message)
+            // normalizer 不再自带任何前缀(单一职责:只归一化文本)——
+            // 前缀统一由这里按 level 决定;调用方若已手动带 ⚠️ 就不叠加。
+            const text = req.message.startsWith('⚠️')
               ? req.message
               : req.level === 'error' ? `⚠️ ${req.message}` : req.message;
             await Promise.all(configuredChats().map((t) => sendToChat(t, { text, cwd: key })));
