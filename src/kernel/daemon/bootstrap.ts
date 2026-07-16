@@ -138,12 +138,13 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // Approval cards sent per requestId — edited to their outcome on resolve (no zombie buttons).
   const sentCards = new Map<string, Array<{ channel: string; messageId: string; title: string; body: string }>>();
 
-  /** `[⌨ label]` for wrapped (injectable), `[label]` for hook-only sessions. */
+  /** `<label> · ` prefix. wrapped/hook-only 不再用图标区分 —— 续跑卡自带
+   *  "Reply to continue" 引导,该区分对用户的实际操作没有影响。 */
   const sessionTag = (cwd: string | undefined): string => {
     if (!cwd) return '';
     const s = sessions.get(cwd);
     if (!s) return '';
-    return s.kind === 'wrapped' ? `[⌨ ${s.label}] ` : `[${s.label}] `;
+    return `${s.label} · `;
   };
 
   const sendToChat = async (
@@ -166,10 +167,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         body,
         ...(msg.requestId ? {
           buttons: [
-            { id: `approve:${msg.requestId}`, label: '✅ Allow' },
-            { id: `deny:${msg.requestId}`, label: '❌ Deny' },
-            ...(msg.toolName ? [{ id: `allowtool:${msg.requestId}:${msg.toolName}`, label: `♾ Always allow ${msg.toolName}` }] : []),
-            { id: `pause:${msg.requestId}`, label: '⏸ Pause approvals' },
+            { id: `approve:${msg.requestId}`, label: 'Allow' },
+            { id: `deny:${msg.requestId}`, label: 'Deny' },
+            ...(msg.toolName ? [{ id: `allowtool:${msg.requestId}:${msg.toolName}`, label: `Always allow ${msg.toolName}` }] : []),
+            { id: `pause:${msg.requestId}`, label: 'Pause approvals' },
           ],
         } : {}),
       });
@@ -188,7 +189,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   }, 30_000);
   sweeper.unref();
 
-  const OUTCOME: Record<string, string> = { allow: '✅ Allowed', deny: '❌ Denied', defer: '⏳ Timed out (local prompt governs)', local: '🖥 Answered in terminal' };
+  const OUTCOME: Record<string, string> = { allow: 'Allowed', deny: 'Denied', defer: 'Timed out', local: 'Answered in terminal' };
 
   const permissionRouter = new PermissionRouter({
     configuredChats,
@@ -397,10 +398,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         case 'hook.notify': {
           const key = resolveKey(req.cwd, req.wrappedId);
           if (!muted && !sessions.get(key)?.muted) {
-            // cwd carries the resolved KEY so the [⌨ label] tag + reply-routing map are consistent.
-            // normalizer 的失败文案自带 ❌ —— 已有表情前缀就别再叠一个
-            const icon = req.level === 'error' ? '❌' : 'ℹ️';
-            const text = /^[ℹ❌⚠⏸✅🖥]/u.test(req.message) ? req.message : `${icon} ${req.message}`;
+            // cwd carries the resolved KEY so the label tag + reply-routing map are consistent.
+            // 装饰性 emoji 一律不发;error 级别用 ⚠️(有信息量)。
+            // normalizer 的失败文案自带前缀 —— 已有就别再叠。
+            const text = /^[⚠❌]/u.test(req.message)
+              ? req.message
+              : req.level === 'error' ? `⚠️ ${req.message}` : req.message;
             await Promise.all(configuredChats().map((t) => sendToChat(t, { text, cwd: key })));
           }
           events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.message }, key));

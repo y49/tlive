@@ -63,13 +63,9 @@ function str(input: unknown, key: string): string | undefined {
   return typeof v === 'string' ? v : undefined;
 }
 
-const TOOL_ICON: Record<string, string> = {
-  Bash: '🖥️', apply_patch: '📝', Edit: '📝', Write: '📝', NotebookEdit: '📝',
-};
-
 export function renderApprovalCard(req: RenderRequest): { title: string; body: string } {
   const { toolName, input } = req;
-  const title = `${TOOL_ICON[toolName] ?? '🔧'} ${toolName}`;
+  const title = toolName;
   switch (toolName) {
     case 'Edit': {
       const fp = inlineSafe(str(input, 'file_path') ?? '(unknown)');
@@ -94,8 +90,8 @@ export function renderApprovalCard(req: RenderRequest): { title: string; body: s
     case 'Bash': {
       const cmd = str(input, 'command') ?? '';
       const desc = str(input, 'description');
-      // 描述斜体、与命令块分层;命中的高危模式点名列出
-      return { title, body: `${desc ? `*${inlineSafe(desc)}*\n` : ''}\`\`\`bash\n${fenceSafe(maskSecrets(cmd))}\n\`\`\`${riskFlag(cmd)}` };
+      // 描述斜体、与命令块空一行分层;命中的高危模式点名列出
+      return { title, body: `${desc ? `*${inlineSafe(desc)}*\n\n` : ''}\`\`\`bash\n${fenceSafe(maskSecrets(cmd))}\n\`\`\`${riskFlag(cmd)}` };
     }
     case 'apply_patch': {
       const patch = fenceSafe(maskSecrets(str(input, 'command') ?? '')).slice(0, 1500);

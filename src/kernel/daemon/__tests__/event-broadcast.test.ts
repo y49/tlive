@@ -243,7 +243,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
     const p = request({ kind: 'hook.permission.request', cwd: '/tag/repo', sessionId: 's', toolName: 'Edit', input: { file_path: '/x', old_string: 'a', new_string: 'b' } }, { socketPath: sock, timeoutMs: 5000 });
     await new Promise((r) => setTimeout(r, 150));
     const card = sent.find((s) => s.kind === 'card');
-    expect(card?.title).toContain('[repo]'); // hook session tag
+    expect(card?.title).toContain('repo · '); // session tag prefix
     // answer → card edited to outcome
     const reqId = h.sessions.get('/tag/repo')!.pending!.requestId;
     await request({ kind: 'hook.permission.answer', requestId: reqId, approved: false }, { socketPath: sock, timeoutMs: 2000 });

@@ -19,7 +19,7 @@ describe('maskSecrets', () => {
 describe('renderApprovalCard', () => {
   it('Edit → unified diff of old→new', () => {
     const { title, body } = renderApprovalCard({ toolName: 'Edit', input: { file_path: '/a.ts', old_string: 'x', new_string: 'y' } });
-    expect(title).toBe('📝 Edit');
+    expect(title).toBe('Edit');
     expect(body).toContain('/a.ts');
     expect(body).toContain('- x');
     expect(body).toContain('+ y');
@@ -49,6 +49,24 @@ describe('renderApprovalCard', () => {
     expect(body).toContain('```diff');
     expect(body).toContain('+new');
     expect(body).toContain('-old');
+  });
+});
+
+describe('emoji allowlist', () => {
+  it('title carries no tool icon', () => {
+    expect(renderApprovalCard({ toolName: 'Bash', input: { command: 'ls' } }).title).toBe('Bash');
+    expect(renderApprovalCard({ toolName: 'Edit', input: { file_path: '/a' } }).title).toBe('Edit');
+    expect(renderApprovalCard({ toolName: 'mcp__x__y', input: {} }).title).toBe('mcp__x__y');
+  });
+
+  it('keeps the risk warning emoji — it carries information', () => {
+    const { body } = renderApprovalCard({ toolName: 'Bash', input: { command: 'rm -rf /tmp/x' } });
+    expect(body).toContain('⚠️ **Risky** — rm -rf');
+  });
+
+  it('separates description from the command block with a blank line', () => {
+    const { body } = renderApprovalCard({ toolName: 'Bash', input: { command: 'ls', description: 'List' } });
+    expect(body).toBe('*List*\n\n```bash\nls\n```');
   });
 });
 
