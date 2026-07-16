@@ -87,6 +87,11 @@ All notable changes to this project will be documented in this file.
   overrides an answer given at the keyboard). `Skip` passes through with
   `allow` so the local dialog can be answered at the keyboard instead — not
   an auto-approve.
+- **`multiSelect: true` questions get checkboxes + a live `Submit (N)`
+  count** instead of the numbered single-pick buttons: each tap toggles one
+  option and edits the card in place (`▣`/`▢` — geometric glyphs, not emoji,
+  so Telegram renders them as plain monochrome text); Submit with nothing
+  picked is a no-op, never an empty answer.
 - **Unknown/MCP tools render as a key:value summary** (secret-named keys
   masked) instead of a raw JSON dump.
 - Feishu styling: next round.

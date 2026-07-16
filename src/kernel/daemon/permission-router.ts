@@ -10,8 +10,11 @@ export interface PermChat { channel: string; chatId: string }
 export interface PermissionRouterDeps {
   configuredChats: () => PermChat[];
   /** askOptions (present only for an AskUserQuestion card) drives the remote
-   *  card's option buttons instead of the usual Allow/Deny (Task 9). */
-  sendToChat: (target: PermChat, card: { title: string; body: string; requestId: string; toolName: string; cwd: string; askOptions?: AskOption[] }) => Promise<void>;
+   *  card's option buttons instead of the usual Allow/Deny (Task 9). askMulti
+   *  (Task 10) additionally selects the checkbox/Submit(N)/Skip layout over
+   *  the single-pick numbered buttons — both are opaque booleans/arrays to
+   *  this vendor-neutral layer, it never inspects toolName itself. */
+  sendToChat: (target: PermChat, card: { title: string; body: string; requestId: string; toolName: string; cwd: string; askOptions?: AskOption[]; askMulti?: boolean }) => Promise<void>;
   isMuted: (cwd: string) => boolean;
   /** True when at least one dashboard client is connected on /ws/events —
    *  a card can be answered from the web even with zero IM chats. */
@@ -19,9 +22,9 @@ export interface PermissionRouterDeps {
   /** Vendor-neutral policy: allow (auto) vs ask (send card). Never auto-denies. */
   policyDecide: (req: { toolName: string; input: unknown; permissionMode?: string }) => { decision: 'allow' | 'ask'; reason?: string };
   /** Render the approval card body from the normalized request. askOptions/
-   *  askQuestion are the AskUserQuestion branch's extras (Task 9): absent for
-   *  every other tool. */
-  renderCard: (req: { toolName: string; input: unknown }) => { title: string; body: string; askOptions?: AskOption[]; askQuestion?: string };
+   *  askQuestion/askMulti are the AskUserQuestion branch's extras (Task 9/10):
+   *  absent for every other tool. */
+  renderCard: (req: { toolName: string; input: unknown }) => { title: string; body: string; askOptions?: AskOption[]; askQuestion?: string; askMulti?: boolean };
   /** Fired when a card is created & sent (session enters waiting-approval). */
   onPending?: (p: { cwd: string; requestId: string; title: string; body: string; toolName: string; askOptions?: AskOption[]; askQuestion?: string }) => void;
   /** Fired when the request resolves (answered / timed out / deferred after a card). */
@@ -64,7 +67,7 @@ export class PermissionRouter {
     if (targets.length === 0 && !this.deps.hasWebClients()) return { decision: 'defer' };
 
     const requestId = randomUUID();
-    const { title, body, askOptions, askQuestion } = this.deps.renderCard({ toolName: opts.toolName, input: opts.input });
+    const { title, body, askOptions, askQuestion, askMulti } = this.deps.renderCard({ toolName: opts.toolName, input: opts.input });
     const result = await new Promise<{ decision: Decision; message?: string }>((resolve) => {
       this.pending.set(requestId, {
         resolve,
@@ -88,7 +91,7 @@ export class PermissionRouter {
         if (!this.pending.has(requestId)) return;
         if (this.deps.isMuted(opts.cwd)) return; // grace 期间 mute 了 → 尊重
         for (const t of targets) {
-          void this.deps.sendToChat(t, { title, body, requestId, toolName: opts.toolName, cwd: opts.cwd, ...(askOptions ? { askOptions } : {}) }).catch(() => undefined);
+          void this.deps.sendToChat(t, { title, body, requestId, toolName: opts.toolName, cwd: opts.cwd, ...(askOptions ? { askOptions } : {}), ...(askMulti ? { askMulti } : {}) }).catch(() => undefined);
         }
       };
       const grace = this.deps.graceSec();

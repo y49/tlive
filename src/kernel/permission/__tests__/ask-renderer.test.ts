@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderAskCard, buildAskAnswerMessage } from '../ask-renderer.js';
+import { renderAskCard, buildAskAnswerMessage, askMultiButtons, type AskOption } from '../ask-renderer.js';
 
 const INPUT = {
   questions: [{
@@ -65,5 +65,44 @@ describe('buildAskAnswerMessage', () => {
 
   it('joins multiple selections', () => {
     expect(buildAskAnswerMessage('Q?', ['A', 'B'])).toContain('Selected: A, B');
+  });
+});
+
+describe('askMultiButtons (Task 10)', () => {
+  const options: AskOption[] = [{ label: 'Red' }, { label: 'Blue' }, { label: 'Green' }];
+
+  it('renders one checkbox button per option, unchecked when nothing is selected', () => {
+    const buttons = askMultiButtons('r1', options, []);
+    expect(buttons.slice(0, 3)).toEqual([
+      { id: 'asktoggle:r1:0', label: '▢ Red' },
+      { id: 'asktoggle:r1:1', label: '▢ Blue' },
+      { id: 'asktoggle:r1:2', label: '▢ Green' },
+    ]);
+  });
+
+  it('marks selected options with a filled checkbox', () => {
+    const buttons = askMultiButtons('r1', options, [0, 2]);
+    expect(buttons[0].label).toBe('▣ Red');
+    expect(buttons[1].label).toBe('▢ Blue');
+    expect(buttons[2].label).toBe('▣ Green');
+  });
+
+  it('appends a Submit(N) button carrying the live selection count', () => {
+    expect(askMultiButtons('r1', options, []).at(-2)).toEqual({ id: 'asksubmit:r1', label: 'Submit (0)' });
+    expect(askMultiButtons('r1', options, [0, 1]).at(-2)).toEqual({ id: 'asksubmit:r1', label: 'Submit (2)' });
+  });
+
+  it('appends a Skip button', () => {
+    expect(askMultiButtons('r1', options, []).at(-1)).toEqual({ id: 'askskip:r1', label: 'Skip' });
+  });
+
+  it('uses geometric checkbox glyphs, never an emoji-presentation character — project emoji allowlist is ⚠️ only', () => {
+    const labels = askMultiButtons('r1', options, [1]).map((b) => b.label).join(' ');
+    expect(labels).toContain('▣');
+    expect(labels).toContain('▢');
+    // U+2600-27BF (Misc Symbols/Dingbats, includes ☑ U+2611 / ☐ U+2610) would
+    // render as a colorful emoji on Telegram — our glyphs live in Geometric
+    // Shapes (U+25A0-25FF) instead, which stays monochrome text.
+    expect(labels).not.toMatch(/[\u2600-\u27BF\uFE0F]/);
   });
 });

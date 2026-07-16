@@ -2,12 +2,13 @@
 //
 // v2.1: SenderGuard 鉴权 + 审批按钮回调 + /perm 静音 + 续跑自由文本。无 workspace/绑定。
 
-import type { IncomingEnvelope, IMAdapter, OutgoingMessage } from '../contracts/im-adapter.js';
+import type { IncomingEnvelope, IMAdapter, IMChannel, OutgoingMessage } from '../contracts/im-adapter.js';
 import type { PermissionRouter } from './permission-router.js';
 import type { ContinueBroker } from '../permission/continue-broker.js';
 import type { SenderGuard } from './sender-guard.js';
+import type { AskSelection } from './ask-state.js';
 import { parseImCommand } from './im-commands.js';
-import { buildAskAnswerMessage, type AskOption } from '../permission/ask-renderer.js';
+import { buildAskAnswerMessage, askMultiButtons, type AskOption } from '../permission/ask-renderer.js';
 
 export interface InboundHandlerDeps {
   senderGuard: SenderGuard;
@@ -29,9 +30,19 @@ export interface InboundHandlerDeps {
   peekAskContext: (requestId: string) => { question: string; options: AskOption[] } | undefined;
   /** Returns + clears the pending AskUserQuestion context for a requestId
    *  (single-use; Task 9). Populated by the permission router's onPending,
-   *  consumed here once a click is validated (`ask:`), or unconditionally on
-   *  `askskip:` (discarded either way). */
+   *  consumed here once a click is validated (`ask:`/`asksubmit:`), or
+   *  unconditionally on `askskip:` (discarded either way). */
   takeAskContext: (requestId: string) => { question: string; options: AskOption[] } | undefined;
+  /** Multi-select checkbox state (Task 10) — per-requestId picks toggled by
+   *  `asktoggle:`, read/cleared by `asksubmit:`, also freed on `askskip:` and
+   *  (by the caller's onResolved) on any other resolution — never leaks past
+   *  a request's pending window, same discipline as askContexts. */
+  askSelection: Pick<AskSelection, 'toggle' | 'selected' | 'clear'>;
+  /** The IM cards already sent for a requestId (channel + messageId), so an
+   *  `asktoggle:` click can edit them in place with the refreshed checkbox
+   *  state. Empty when nothing was sent yet (still in grace) or it already
+   *  resolved. */
+  getAskCards: (requestId: string) => Array<{ channel: string; messageId: string; title: string; body: string }>;
   /** Reply-to routing: IM messageId → session cwd (daemon-lifetime map). */
   resolveReply: (channel: string, messageId: string) => string | undefined;
   /** Session lookup for injection routing. */
@@ -95,9 +106,41 @@ export class InboundHandler {
       }
       return;
     }
+    if (env.text.startsWith('asktoggle:')) {
+      // asktoggle:<requestId>:<optionIndex> — a multi-select checkbox flip
+      // (Task 10). Same peek-then-validate discipline as `ask:`: a bad index
+      // must not mutate AskSelection or touch the card. On a valid toggle,
+      // edit every sent card in place so the checkboxes + Submit(N) count
+      // reflect the new pick immediately.
+      const [, rid, idxRaw] = env.text.split(':');
+      const ctx = this.deps.peekAskContext(rid);
+      const idx = /^\d+$/.test(idxRaw) ? Number(idxRaw) : NaN;
+      if (!ctx || !Number.isInteger(idx) || !ctx.options[idx]) return;
+      this.deps.askSelection.toggle(rid, idx);
+      const buttons = askMultiButtons(rid, ctx.options, this.deps.askSelection.selected(rid));
+      for (const card of this.deps.getAskCards(rid)) {
+        const adapter = this.deps.imBy(card.channel as IMChannel);
+        await adapter?.edit(card.messageId, { kind: 'card', title: card.title, body: card.body, buttons }).catch(() => undefined);
+      }
+      return;
+    }
+    if (env.text.startsWith('asksubmit:')) {
+      // asksubmit:<requestId> — commit the current multi-select picks (Task
+      // 10). Nothing selected → no-op: a Submit tap with zero checkboxes must
+      // NOT answer with an empty selection.
+      const rid = env.text.slice('asksubmit:'.length);
+      const ctx = this.deps.peekAskContext(rid);
+      const picked = this.deps.askSelection.selected(rid);
+      if (!ctx || !picked.length) return;
+      this.deps.takeAskContext(rid); // valid submit — now consume (single-use)
+      this.deps.askSelection.clear(rid); // free the selection, no leak
+      this.deps.permissionRouter.answer(rid, false, buildAskAnswerMessage(ctx.question, picked.map((i) => ctx.options[i].label)));
+      return;
+    }
     if (env.text.startsWith('askskip:')) {
       const rid = env.text.slice('askskip:'.length);
       this.deps.takeAskContext(rid); // clear, avoid leak — the answer itself is discarded
+      this.deps.askSelection.clear(rid); // free any multi-select picks too (Task 10, no leak)
       // Skip = allow = pass-through:本地问题框归你在电脑前答(等同 defer 语义),
       // 不是自动批准执行工具。
       this.deps.permissionRouter.answer(rid, true);

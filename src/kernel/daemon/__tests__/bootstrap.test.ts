@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -295,6 +295,127 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     expect(ids.some((id) => id.startsWith('deny:'))).toBe(true);
     adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: `deny:${ids[1].split(':')[1]}`, ts: 0 });
     await pending;
+  });
+
+  describe('multi-select (Task 10)', () => {
+    function multiSelectConfig(): string {
+      return JSON.stringify({
+        web: { enabled: false },
+        approvals: { approvalGraceSec: 0 },
+        adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+      });
+    }
+
+    function fireMultiSelectRequest(sock: string) {
+      return request(
+        {
+          kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'AskUserQuestion',
+          input: { questions: [{ question: 'Pick colors?', multiSelect: true, options: [{ label: 'Red' }, { label: 'Blue' }] }] },
+          timeoutSec: 60,
+        },
+        { socketPath: sock, timeoutMs: 10_000 },
+      );
+    }
+
+    it('sends checkbox/Submit/Skip buttons instead of numbered single-pick buttons', async () => {
+      writeFileSync(join(tmp, 'config.json'), multiSelectConfig());
+      const sent: OutgoingMessage[] = [];
+      const adapter = interactiveAdapter('telegram', sent);
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+      const sock = join(tmp, 'daemon.sock');
+      const pending = fireMultiSelectRequest(sock);
+      await new Promise((r) => setTimeout(r, 100));
+      const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+      const ids = card.buttons?.map((b) => b.id) ?? [];
+      expect(ids.filter((id) => id.startsWith('asktoggle:')).length).toBe(2); // one per option
+      expect(ids.some((id) => id.startsWith('asksubmit:'))).toBe(true);
+      expect(ids.some((id) => id.startsWith('askskip:'))).toBe(true);
+      expect(ids.some((id) => id.startsWith('ask:'))).toBe(false); // not the single-select numbered form
+      const checkboxLabels = card.buttons!.filter((b) => b.id.startsWith('asktoggle:')).map((b) => b.label);
+      expect(checkboxLabels).toEqual(['▢ Red', '▢ Blue']);
+      const submitBtn = card.buttons!.find((b) => b.id.startsWith('asksubmit:'))!;
+      expect(submitBtn.label).toBe('Submit (0)');
+
+      const skipBtn = card.buttons!.find((b) => b.id.startsWith('askskip:'))!;
+      adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: skipBtn.id, ts: 0 });
+      const r = await pending;
+      expect(r).toEqual({ kind: 'hook.permission.result', decision: 'allow' });
+    });
+
+    it('toggling a checkbox edits the sent card with refreshed state and a live Submit(N) count', async () => {
+      writeFileSync(join(tmp, 'config.json'), multiSelectConfig());
+      const sent: OutgoingMessage[] = [];
+      const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
+      const adapter = interactiveAdapter('telegram', sent, edits);
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+      const sock = join(tmp, 'daemon.sock');
+      const pending = fireMultiSelectRequest(sock);
+      await new Promise((r) => setTimeout(r, 100));
+      const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+      const toggleBlue = card.buttons!.find((b) => b.id.startsWith('asktoggle:') && b.id.endsWith(':1'))!;
+
+      adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: toggleBlue.id, ts: 0 });
+      expect(edits).toHaveLength(1);
+      const edited1 = edits[0].msg as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+      expect(edited1.buttons!.map((b) => b.label)).toEqual(['▢ Red', '▣ Blue', 'Submit (1)', 'Skip']);
+
+      // toggling the same option again flips it back off
+      adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: toggleBlue.id, ts: 0 });
+      expect(edits).toHaveLength(2);
+      const edited2 = edits[1].msg as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+      expect(edited2.buttons!.map((b) => b.label)).toEqual(['▢ Red', '▢ Blue', 'Submit (0)', 'Skip']);
+
+      const skipBtn = card.buttons!.find((b) => b.id.startsWith('askskip:'))!;
+      adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: skipBtn.id, ts: 0 });
+      await pending;
+    });
+
+    it('Submit with nothing selected is a no-op — the request stays pending', async () => {
+      writeFileSync(join(tmp, 'config.json'), multiSelectConfig());
+      const sent: OutgoingMessage[] = [];
+      const adapter = interactiveAdapter('telegram', sent);
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+      const sock = join(tmp, 'daemon.sock');
+      const pending = fireMultiSelectRequest(sock);
+      await new Promise((r) => setTimeout(r, 100));
+      const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+      const answerSpy = vi.spyOn(h.permissionRouter, 'answer');
+      const submitBtn = card.buttons!.find((b) => b.id.startsWith('asksubmit:'))!;
+      adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: submitBtn.id, ts: 0 });
+      expect(answerSpy).not.toHaveBeenCalled();
+
+      // wrap up so the pending IPC call resolves
+      const skipBtn = card.buttons!.find((b) => b.id.startsWith('askskip:'))!;
+      adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: skipBtn.id, ts: 0 });
+      await pending;
+    });
+
+    it('Submit with picks answers deny+message carrying every selected label, and edits the card to Answered', async () => {
+      writeFileSync(join(tmp, 'config.json'), multiSelectConfig());
+      const sent: OutgoingMessage[] = [];
+      const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
+      const adapter = interactiveAdapter('telegram', sent, edits);
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+      const sock = join(tmp, 'daemon.sock');
+      const pending = fireMultiSelectRequest(sock);
+      await new Promise((r) => setTimeout(r, 100));
+      const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+      const toggleRed = card.buttons!.find((b) => b.id.startsWith('asktoggle:') && b.id.endsWith(':0'))!;
+      const toggleBlue = card.buttons!.find((b) => b.id.startsWith('asktoggle:') && b.id.endsWith(':1'))!;
+      adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: toggleRed.id, ts: 0 });
+      adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: toggleBlue.id, ts: 0 });
+      const submitBtn = card.buttons!.find((b) => b.id.startsWith('asksubmit:'))!;
+      adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: submitBtn.id, ts: 0 });
+
+      const r = await pending as { kind: string; decision?: string; message?: string };
+      expect(r.decision).toBe('deny');
+      expect(r.message).toContain('Selected: Red, Blue');
+
+      const lastEdit = edits.at(-1)!;
+      const title = (lastEdit.msg as { title?: string }).title ?? '';
+      expect(title).toContain('Answered');
+      expect(title).not.toContain('Denied');
+    });
   });
 });
 

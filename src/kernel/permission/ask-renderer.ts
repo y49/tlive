@@ -44,6 +44,21 @@ export function renderAskCard(input: unknown): AskCard | null {
   };
 }
 
+/** 多选卡按钮:每个选项一个 checkbox toggle + Submit(N) 计数 + Skip。每次
+ *  toggle 都要用最新 selected 重算一遍,调用方拿去 edit 卡片(Task 10)。
+ *  ▣/▢(U+25A3/U+25A2,Geometric Shapes)——几何字符,不带 emoji presentation,
+ *  不会被 Telegram 渲染成彩色方块;项目 emoji 白名单仅剩 ⚠️,这两个不算违规。 */
+export function askMultiButtons(requestId: string, options: AskOption[], selected: number[]): Array<{ id: string; label: string }> {
+  return [
+    ...options.map((o, i) => ({
+      id: `asktoggle:${requestId}:${i}`,
+      label: `${selected.includes(i) ? '▣' : '▢'} ${o.label}`,
+    })),
+    { id: `asksubmit:${requestId}`, label: `Submit (${selected.length})` },
+    { id: `askskip:${requestId}`, label: 'Skip' },
+  ];
+}
+
 /** deny 的 message —— agent 读它当答案。三段式,见文件头注释。
  *  synthetic JSON 手拼(而非整体 JSON.stringify)是为了在 "key": "value" 之间
  *  留一个空格——像真实 AskUserQuestionOutput 的通常格式化,而非压缩 JSON。 */

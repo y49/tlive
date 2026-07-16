@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { InboundHandler, type InboundHandlerDeps } from '../inbound-handler.js';
 import { SenderGuard } from '../sender-guard.js';
-import type { IncomingEnvelope, IMAdapter } from '../../contracts/im-adapter.js';
+import { AskSelection } from '../ask-state.js';
+import type { IncomingEnvelope, IMAdapter, OutgoingMessage } from '../../contracts/im-adapter.js';
 import type { PermissionRouter } from '../permission-router.js';
 import type { ContinueBroker } from '../../permission/continue-broker.js';
 
@@ -36,6 +37,8 @@ const baseDeps = (over: Partial<InboundHandlerDeps> = {}): InboundHandlerDeps =>
   inject: vi.fn().mockResolvedValue(undefined),
   peekAskContext: () => undefined,
   takeAskContext: () => undefined,
+  askSelection: new AskSelection(),
+  getAskCards: () => [],
   ...over,
 });
 
@@ -199,6 +202,126 @@ describe('InboundHandler', () => {
     await h.handle(envelope({ text: 'askskip:req-9' }));
     expect(takeAskContext).toHaveBeenCalledWith('req-9');
     expect(permAnswer).toHaveBeenCalledWith('req-9', true);
+  });
+
+  it('askskip:<id> also frees any multi-select picks — no AskSelection leak (Task 10)', async () => {
+    const askSelection = new AskSelection();
+    askSelection.toggle('req-9', 0);
+    const h = new InboundHandler(baseDeps({
+      takeAskContext: vi.fn().mockReturnValue({ question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] }),
+      askSelection,
+      permissionRouter: { answer: vi.fn(), requestPermission: vi.fn() } as unknown as PermissionRouter,
+    }));
+    await h.handle(envelope({ text: 'askskip:req-9' }));
+    expect(askSelection.selected('req-9')).toEqual([]);
+  });
+
+  it('asktoggle:<id>:<idx> flips the selection and edits every sent card with refreshed checkboxes + Submit(N) (Task 10)', async () => {
+    const askSelection = new AskSelection();
+    const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
+    const edit = vi.fn().mockImplementation((messageId: string, msg: OutgoingMessage) => { edits.push({ messageId, msg }); return Promise.resolve(); });
+    const h = new InboundHandler(baseDeps({
+      ...makeAskStore({ 'req-1': { question: 'Pick colors?', options: [{ label: 'Red' }, { label: 'Blue' }] } }),
+      askSelection,
+      getAskCards: (rid) => (rid === 'req-1' ? [{ channel: 'telegram', messageId: 'm1', title: 'Question', body: 'Pick colors?' }] : []),
+      imBy: () => ({ ...makeAdapter([]), edit }),
+    }));
+    await h.handle(envelope({ text: 'asktoggle:req-1:1' }));
+    expect(askSelection.selected('req-1')).toEqual([1]);
+    expect(edits).toHaveLength(1);
+    expect(edits[0].messageId).toBe('m1');
+    const card = edits[0].msg as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+    expect(card.buttons).toEqual([
+      { id: 'asktoggle:req-1:0', label: '▢ Red' },
+      { id: 'asktoggle:req-1:1', label: '▣ Blue' },
+      { id: 'asksubmit:req-1', label: 'Submit (1)' },
+      { id: 'askskip:req-1', label: 'Skip' },
+    ]);
+  });
+
+  it('asktoggle: with an out-of-range index is a no-op — no state change, no card edit', async () => {
+    const askSelection = new AskSelection();
+    const edit = vi.fn();
+    const h = new InboundHandler(baseDeps({
+      ...makeAskStore({ 'req-1': { question: 'Q?', options: [{ label: 'Red' }, { label: 'Blue' }] } }),
+      askSelection,
+      getAskCards: () => [{ channel: 'telegram', messageId: 'm1', title: 't', body: 'b' }],
+      imBy: () => ({ ...makeAdapter([]), edit }),
+    }));
+    await h.handle(envelope({ text: 'asktoggle:req-1:9' }));
+    expect(askSelection.selected('req-1')).toEqual([]);
+    expect(edit).not.toHaveBeenCalled();
+  });
+
+  it('asktoggle: with a non-numeric index is a no-op', async () => {
+    const askSelection = new AskSelection();
+    const edit = vi.fn();
+    const h = new InboundHandler(baseDeps({
+      ...makeAskStore({ 'req-1': { question: 'Q?', options: [{ label: 'Red' }, { label: 'Blue' }] } }),
+      askSelection,
+      getAskCards: () => [{ channel: 'telegram', messageId: 'm1', title: 't', body: 'b' }],
+      imBy: () => ({ ...makeAdapter([]), edit }),
+    }));
+    await h.handle(envelope({ text: 'asktoggle:req-1:abc' }));
+    expect(askSelection.selected('req-1')).toEqual([]);
+    expect(edit).not.toHaveBeenCalled();
+  });
+
+  it('asktoggle: for an unknown/expired requestId is a no-op', async () => {
+    const askSelection = new AskSelection();
+    const edit = vi.fn();
+    const h = new InboundHandler(baseDeps({
+      askSelection,
+      getAskCards: () => [{ channel: 'telegram', messageId: 'm1', title: 't', body: 'b' }],
+      imBy: () => ({ ...makeAdapter([]), edit }),
+    }));
+    await h.handle(envelope({ text: 'asktoggle:gone:0' }));
+    expect(askSelection.selected('gone')).toEqual([]);
+    expect(edit).not.toHaveBeenCalled();
+  });
+
+  it('asksubmit:<id> with nothing selected is a no-op — never answers with an empty selection', async () => {
+    const permAnswer = vi.fn();
+    const h = new InboundHandler(baseDeps({
+      ...makeAskStore({ 'req-1': { question: 'Q?', options: [{ label: 'Red' }, { label: 'Blue' }] } }),
+      askSelection: new AskSelection(),
+      permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
+    }));
+    await h.handle(envelope({ text: 'asksubmit:req-1' }));
+    expect(permAnswer).not.toHaveBeenCalled();
+  });
+
+  it('asksubmit:<id> answers deny+message with every picked label, consumes the context, and frees the selection', async () => {
+    const permAnswer = vi.fn();
+    const askSelection = new AskSelection();
+    askSelection.toggle('req-1', 0);
+    askSelection.toggle('req-1', 1);
+    const store = makeAskStore({ 'req-1': { question: 'Pick colors?', options: [{ label: 'Red' }, { label: 'Blue' }] } });
+    const h = new InboundHandler(baseDeps({
+      ...store,
+      askSelection,
+      permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
+    }));
+    await h.handle(envelope({ text: 'asksubmit:req-1' }));
+    expect(permAnswer).toHaveBeenCalledTimes(1);
+    const [rid, approved, message] = permAnswer.mock.calls[0];
+    expect(rid).toBe('req-1');
+    expect(approved).toBe(false);
+    expect(message).toContain('Selected: Red, Blue');
+    expect(askSelection.selected('req-1')).toEqual([]); // freed, no leak
+    expect(store.peekAskContext('req-1')).toBeUndefined(); // consumed
+  });
+
+  it('asksubmit: for an unknown/expired requestId is a no-op', async () => {
+    const permAnswer = vi.fn();
+    const askSelection = new AskSelection();
+    askSelection.toggle('gone', 0); // stale selection with no matching context
+    const h = new InboundHandler(baseDeps({
+      askSelection,
+      permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
+    }));
+    await h.handle(envelope({ text: 'asksubmit:gone' }));
+    expect(permAnswer).not.toHaveBeenCalled();
   });
 
   it('"pause:<id>" approves the in-hand request and sets trust', async () => {

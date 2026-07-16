@@ -6,7 +6,8 @@ import { startIpcServer, type IpcServer } from '../ipc/server.js';
 import { PermissionRouter, type PermChat } from './permission-router.js';
 import { decide as policyDecide, type PolicyState } from '../permission/policy-engine.js';
 import { renderApprovalCard } from '../permission/approval-renderer.js';
-import { renderAskCard, type AskOption } from '../permission/ask-renderer.js';
+import { renderAskCard, askMultiButtons, type AskOption } from '../permission/ask-renderer.js';
+import { AskSelection } from './ask-state.js';
 import { ContinueBroker } from '../permission/continue-broker.js';
 import { SenderGuard } from './sender-guard.js';
 import { loadConfig } from '../config/loader.js';
@@ -163,6 +164,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // still know "this requestId was an ask card" after the answer already
   // cleared askContexts (Minor 4: label the IM card "Answered", not "Denied").
   const askRequestIds = new Set<string>();
+  // Multi-select checkbox state (Task 10) — per-requestId picks, toggled by
+  // asktoggle: (via inbound-handler), read/cleared by asksubmit:. Also freed
+  // on askskip: and unconditionally in onResolved below (same no-leak
+  // discipline as askContexts — covers defer/timeout/local-answer races that
+  // never reach asksubmit:/askskip: at all).
+  const askSelection = new AskSelection();
 
   /** `<label> · ` prefix. wrapped/hook-only 不再用图标区分 —— 续跑卡自带
    *  "Reply to continue" 引导,该区分对用户的实际操作没有影响。 */
@@ -175,7 +182,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
 
   const sendToChat = async (
     target: PermChat,
-    msg: { title?: string; body?: string; text?: string; requestId?: string; toolName?: string; cwd?: string; askOptions?: AskOption[] },
+    msg: { title?: string; body?: string; text?: string; requestId?: string; toolName?: string; cwd?: string; askOptions?: AskOption[]; askMulti?: boolean },
   ): Promise<void> => {
     const adapter = (opts.imAdapters ?? []).find((a) => a.channel === target.channel);
     if (!adapter) return;
@@ -191,8 +198,14 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         kind: 'card',
         ...(title ? { title } : {}),
         body,
-        // AskUserQuestion cards get option buttons instead of Allow/Deny (Task 9).
-        ...(msg.requestId ? { buttons: msg.askOptions
+        // AskUserQuestion cards get option buttons instead of Allow/Deny (Task
+        // 9); a multiSelect question gets checkboxes + Submit(N) + Skip
+        // instead of the numbered single-pick buttons (Task 10). Freshly-sent
+        // card always starts with an empty selection — askSelection has no
+        // entry yet for a brand-new requestId.
+        ...(msg.requestId ? { buttons: msg.askMulti
+          ? askMultiButtons(msg.requestId, msg.askOptions ?? [], [])
+          : msg.askOptions
           ? [
               ...msg.askOptions.map((o, i) => ({ id: `ask:${msg.requestId}:${i}`, label: `${i + 1}. ${o.label}` })),
               { id: `askskip:${msg.requestId}`, label: 'Skip' },
@@ -240,7 +253,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         const ask = renderAskCard(req.input);
         // ask.question (not a re-extraction from req.input) — renderAskCard
         // already validated it; a single source of truth (review Minor 5).
-        if (ask) return { title: ask.title, body: ask.body, askOptions: ask.options, askQuestion: ask.question };
+        if (ask) return { title: ask.title, body: ask.body, askOptions: ask.options, askQuestion: ask.question, askMulti: ask.multiSelect };
       }
       return renderApprovalCard({ toolName: req.toolName, input: req.input });
     },
@@ -266,6 +279,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     },
     onResolved: ({ cwd, requestId, decision }) => {
       askContexts.delete(requestId); // no leak whether consumed by a button click or resolved another way
+      askSelection.clear(requestId); // no leak — covers defer/timeout/local-answer paths that skip asksubmit:/askskip: entirely (Task 10)
       const isAsk = askRequestIds.delete(requestId); // true only for an AskUserQuestion card (Minor 4)
       // Only touch the session view if THIS request still owns the pending slot —
       // with two concurrent approvals on one key, resolving A must not wipe B's
@@ -545,6 +559,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       if (ctx) askContexts.delete(rid);
       return ctx;
     },
+    askSelection,
+    getAskCards: (rid: string) => sentCards.get(rid) ?? [],
     resolveReply: (channel, messageId) => msgToCwd.get(`${channel}:${messageId}`),
     sessionInfo: (cwd) => {
       const s = sessions.get(cwd);

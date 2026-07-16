@@ -216,6 +216,36 @@ describe('PermissionRouter answer message passthrough', () => {
   });
 });
 
+describe('PermissionRouter askMulti passthrough (Task 10)', () => {
+  it('threads renderCard askMulti through to sendToChat, without affecting a plain (non-ask) card', async () => {
+    let sentCard: { askMulti?: boolean } | undefined;
+    let pendingId = '';
+    const r = new PermissionRouter(base({
+      renderCard: () => ({ title: 'T', body: 'B', askMulti: true }),
+      sendToChat: async (_t: unknown, c: { requestId: string; askMulti?: boolean }) => { pendingId = c.requestId; sentCard = c; },
+    }));
+    const p = r.requestPermission({ cwd: '/w', toolName: 'AskUserQuestion', input: {} });
+    await new Promise((res) => setTimeout(res, 0));
+    expect(sentCard?.askMulti).toBe(true);
+    r.answer(pendingId, true);
+    await p;
+  });
+
+  it('omits askMulti on the wire when renderCard does not set it (single-select / every other tool)', async () => {
+    let sentCard: { askMulti?: boolean } | undefined;
+    let pendingId = '';
+    const r = new PermissionRouter(base({
+      renderCard: () => ({ title: 'T', body: 'B' }),
+      sendToChat: async (_t: unknown, c: { requestId: string; askMulti?: boolean }) => { pendingId = c.requestId; sentCard = c; },
+    }));
+    const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {} });
+    await new Promise((res) => setTimeout(res, 0));
+    expect(sentCard?.askMulti).toBeUndefined();
+    r.answer(pendingId, true);
+    await p;
+  });
+});
+
 describe('approval grace gating', () => {
   const mkDeps = (sent: string[], graceMs: number) => ({
     configuredChats: () => [{ channel: 'telegram', chatId: 'c1' }],
