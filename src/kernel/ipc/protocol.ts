@@ -25,7 +25,7 @@ export type IpcRequest =
   // cancel THIS agent's pending card on its local answer without touching
   // sibling agents that share the same key+tool.
   | { kind: 'hook.permission.request'; cwd: string; sessionId: string; toolName: string; input: unknown; permissionMode?: string; wrappedId?: string; timeoutSec?: number; agentId?: string }
-  | { kind: 'hook.permission.answer'; requestId: string; approved: boolean }
+  | { kind: 'hook.permission.answer'; requestId: string; approved: boolean; message?: string }
   | { kind: 'hook.continue.request'; cwd: string; sessionId: string; context: string; lastMessage?: string; wrappedId?: string }
   | { kind: 'hook.event'; event: MonitorEvent; wrappedId?: string }
   | { kind: 'hook.notify'; cwd: string; sessionId: string; level: 'info' | 'warn' | 'error'; message: string; wrappedId?: string }
@@ -40,7 +40,7 @@ export type IpcResponse =
   | { kind: 'daemon.status'; uptimeMs: number; pid: number; codex?: 'running' | 'degraded' | 'off' }
   | { kind: 'daemon.stopped' }
   | { kind: 'ack' }
-  | { kind: 'hook.permission.result'; decision: 'allow' | 'deny' | 'defer' }
+  | { kind: 'hook.permission.result'; decision: 'allow' | 'deny' | 'defer'; message?: string }
   | { kind: 'hook.continue.result'; reply: string | null }
   | { kind: 'session.list'; sessions: SessionView[] }
   | { kind: 'error'; message: string };

@@ -115,7 +115,8 @@ export async function runHook(argv: string[]): Promise<void> {
         { timeoutMs: win.ipcMs },
       );
       const decision = r.kind === 'hook.permission.result' ? r.decision : 'defer';
-      process.stdout.write(JSON.stringify(permissionRequestDecisionOut(decision)));
+      const message = r.kind === 'hook.permission.result' ? r.message : undefined;
+      process.stdout.write(JSON.stringify(permissionRequestDecisionOut(decision, message)));
       return;
     }
 

@@ -196,6 +196,26 @@ describe('PermissionRouter web-only gate + cancel + per-request timeout', () => 
   });
 });
 
+describe('PermissionRouter answer message passthrough', () => {
+  it('carries the answer message through to the decision', async () => {
+    let pendingId = '';
+    const r = new PermissionRouter(base({ onPending: (p: { requestId: string }) => { pendingId = p.requestId; } }));
+    const p = r.requestPermission({ cwd: '/w', toolName: 'AskUserQuestion', input: {}, timeoutSec: 60 });
+    await new Promise((res) => setTimeout(res, 10));
+    r.answer(pendingId, false, 'User answered: Blue');
+    expect(await p).toEqual({ decision: 'deny', message: 'User answered: Blue' });
+  });
+
+  it('omits message when none was given', async () => {
+    let pendingId = '';
+    const r = new PermissionRouter(base({ onPending: (p: { requestId: string }) => { pendingId = p.requestId; } }));
+    const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
+    await new Promise((res) => setTimeout(res, 10));
+    r.answer(pendingId, true);
+    expect(await p).toEqual({ decision: 'allow' });
+  });
+});
+
 describe('approval grace gating', () => {
   const mkDeps = (sent: string[], graceMs: number) => ({
     configuredChats: () => [{ channel: 'telegram', chatId: 'c1' }],

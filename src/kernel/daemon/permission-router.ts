@@ -30,7 +30,7 @@ export interface PermissionRouterDeps {
 const PERMISSION_TIMEOUT_SEC = 580;
 
 interface PendingEntry {
-  resolve: (d: Decision) => void;
+  resolve: (d: { decision: Decision; message?: string }) => void;
   key: string;
   toolName: string;
   sessionId?: string;
@@ -48,7 +48,7 @@ export class PermissionRouter {
   private pending = new Map<string, PendingEntry>();
   constructor(private deps: PermissionRouterDeps) {}
 
-  async requestPermission(opts: { cwd: string; toolName: string; input: unknown; permissionMode?: string; timeoutSec?: number; sessionId?: string; agentId?: string }): Promise<{ decision: Decision }> {
+  async requestPermission(opts: { cwd: string; toolName: string; input: unknown; permissionMode?: string; timeoutSec?: number; sessionId?: string; agentId?: string }): Promise<{ decision: Decision; message?: string }> {
     // Policy first: an auto-allow (read-only / trust switch) skips the card even when muted.
     const pd = this.deps.policyDecide({ toolName: opts.toolName, input: opts.input, permissionMode: opts.permissionMode });
     if (pd.decision === 'allow') return { decision: 'allow' };
@@ -60,7 +60,7 @@ export class PermissionRouter {
 
     const requestId = randomUUID();
     const { title, body } = this.deps.renderCard({ toolName: opts.toolName, input: opts.input });
-    const decision = await new Promise<Decision>((resolve) => {
+    const result = await new Promise<{ decision: Decision; message?: string }>((resolve) => {
       this.pending.set(requestId, {
         resolve,
         key: opts.cwd,
@@ -69,7 +69,7 @@ export class PermissionRouter {
         ...(opts.agentId ? { agentId: opts.agentId } : {}),
       });
       setTimeout(() => {
-        if (this.pending.has(requestId)) { this.pending.delete(requestId); resolve('defer'); }
+        if (this.pending.has(requestId)) { this.pending.delete(requestId); resolve({ decision: 'defer' }); }
       }, (opts.timeoutSec ?? PERMISSION_TIMEOUT_SEC) * 1000).unref();
       // web 立即 —— dashboard 是 pull 视图,不该等 grace。
       this.deps.onPending?.({ cwd: opts.cwd, requestId, title, body, toolName: opts.toolName });
@@ -86,15 +86,15 @@ export class PermissionRouter {
       if (grace > 0) setTimeout(push, grace * 1000).unref();
       else push();
     });
-    this.deps.onResolved?.({ cwd: opts.cwd, requestId, decision });
-    return { decision };
+    this.deps.onResolved?.({ cwd: opts.cwd, requestId, decision: result.decision });
+    return result;
   }
 
-  answer(requestId: string, approved: boolean): void {
+  answer(requestId: string, approved: boolean, message?: string): void {
     const e = this.pending.get(requestId);
     if (!e) return;
     this.pending.delete(requestId);
-    e.resolve(approved ? 'allow' : 'deny');
+    e.resolve({ decision: approved ? 'allow' : 'deny', ...(message ? { message } : {}) });
   }
 
   /** The user answered in the local terminal (PostToolUse / PermissionDenied /
@@ -112,7 +112,7 @@ export class PermissionRouter {
       if (!fieldMatches(e.sessionId, opts.sessionId)) continue;
       if (opts.matchAgent !== undefined && e.agentId !== (opts.matchAgent ?? undefined)) continue;
       this.pending.delete(rid);
-      e.resolve('local'); // onResolved fires from requestPermission's own path
+      e.resolve({ decision: 'local' }); // onResolved fires from requestPermission's own path
       n++;
     }
     return n;

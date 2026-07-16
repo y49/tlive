@@ -365,11 +365,15 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           });
           // 'local' (answered in the terminal) maps to 'defer' on the wire: the shim
           // outputs pass-through {} — a no-op for a dialog that is already gone.
-          reply({ kind: 'hook.permission.result', decision: r.decision === 'local' ? 'defer' : r.decision });
+          reply({
+            kind: 'hook.permission.result',
+            decision: r.decision === 'local' ? 'defer' : r.decision,
+            ...(r.message ? { message: r.message } : {}),
+          });
           return;
         }
         case 'hook.permission.answer':
-          permissionRouter.answer(req.requestId, req.approved);
+          permissionRouter.answer(req.requestId, req.approved, req.message);
           reply({ kind: 'ack' });
           return;
         case 'hook.continue.request': {
