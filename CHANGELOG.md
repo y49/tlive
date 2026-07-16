@@ -4,6 +4,38 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Breaking — `web.publicUrl` retired; cards never carry a link
+
+- **`web.publicUrl` removed.** Cards never contain URLs. The deep link carried
+  the dashboard token — full control over every session — and shipping it to
+  IM parked that token on the messaging provider's servers permanently. Open
+  the dashboard yourself; IM is push, web is pull.
+
+### Added — approval grace + remote `AskUserQuestion` answers (Phase 3)
+
+- **Answer `AskUserQuestion` from Telegram** (Claude only — Codex has no such
+  concept). Single-select and multi-select cards. The local prompt still
+  renders in parallel and wins any race, so an answer given at the keyboard
+  is never overridden.
+- **`approvals.approvalGraceSec`** (default 10, `0` disables). Approval cards
+  are held for this long; answering at the keyboard within the window means
+  the card is never sent at all. Mirrors `continueGraceSec`.
+
+### Changed — Telegram card restyle (Phase 3)
+
+- Telegram cards restyled: emoji limited to risk warnings, plain-text
+  buttons, blank-line separation, bold titles.
+- Continue cards carry a structure-preserving excerpt in an expandable quote
+  — headings, lists, tables and code survive; nothing is cut mid-word.
+- Idle notifications are dropped while a continue card is already pending.
+
+### Fixed — card rendering edge cases (Phase 3)
+
+- Bold/italic containing inline code no longer leaks its markers
+  (`**a \`b\` c**`).
+- Excerpts no longer truncate mid-fence, which used to break the whole
+  block.
+
 ### Breaking — Codex hooks/trust retired; app-server companion is the sole Codex integration (no-compat)
 
 - **All Codex hook plumbing is deleted**, not deprecated: the plugin's

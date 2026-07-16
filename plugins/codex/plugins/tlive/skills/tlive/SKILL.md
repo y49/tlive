@@ -40,7 +40,8 @@ approve/deny/reply-to-continue. The daemon auto-starts with new sessions
    card as "answered in terminal". The remote window defaults to 30 minutes
    (`approvals.claudeWindowSec`, up to ~24h).
 4. Web page unreachable: `tlive url` for the current link (token is in the URL);
-   phones need the same LAN or `web.publicUrl`.
+   phones need the same LAN (or your own reverse proxy/VPN — tlive has no
+   `publicUrl` config, and cards never carry the link).
 
 ## Security model in one breath
 - Never auto-allow: unanswered → Claude's local dialog governs / Codex's native

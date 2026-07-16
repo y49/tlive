@@ -45,37 +45,54 @@ the web card lights up red.
 | IM photo/file → agent | — | ✅ (downloaded, path injected) |
 | Web paste/drop upload | — | ✅ |
 
-Hooks-only always works — wrapping is pure addition. IM messages are tagged
-`[⌨ label]` (wrapped, injectable) vs `[label]` (hooks-only) so you always know
-which powers a session has.
+Hooks-only always works — wrapping is pure addition. IM messages carry a
+`label · ` prefix (the session's directory) but no longer mark wrapped vs.
+hooks-only visually — the continue card's own "Reply to continue" line makes
+the distinction moot for what you actually do.
 
 ## What's in the box
 
 - **Approvals** — dual-channel on Claude Code: the `PermissionRequest` hook
   fires **in parallel with the local permission dialog** — both are live,
-  first answer wins. Answer from IM buttons or the web card any time within
-  24 hours; answer at the keyboard and the remote card resolves itself
-  ("answered in terminal") within seconds. On Codex, tlive spawns/adopts a
-  `codex app-server` companion process and Codex TUIs auto-attach to it —
-  the remote card and the native prompt race the same way, with no window
-  to configure (see Security model). Diff/command
+  first answer wins. A card isn't sent immediately: `approvals.approvalGraceSec`
+  (default 10s, `0` disables) holds it first, so answering at the keyboard
+  right away means the IM card is never sent at all. Answer from IM buttons
+  or the web card any time within 24 hours; answer at the keyboard and the
+  remote card resolves itself ("answered in terminal") within seconds. On
+  Codex, tlive spawns/adopts a `codex app-server` companion process and
+  Codex TUIs auto-attach to it — the remote card and the native prompt race
+  the same way, with no window to configure (see Security model). Diff/command
   rendering, risky-pattern flags, secret masking. **"Always allow \<tool\>"**
   grants a per-tool pass (in-memory, cleared on restart) — on Claude Code it
   now answers the native dialog for you remotely; `/trust on|off` pauses
   approvals entirely. **Nothing is ever auto-denied**; an unanswered card
-  simply leaves the local prompt in charge. Telegram cards use modern
-  formatting (HTML entities, expandable quotes for long diffs/commands) —
-  use a reasonably recent Telegram app for best rendering.
+  simply leaves the local prompt in charge. Telegram cards keep formatting
+  restrained: bold titles, plain-text buttons, blank-line breathing room, and
+  the only emoji left anywhere is `⚠️` on a risky-command flag or an
+  error-level notification; expandable quotes still handle long diffs/
+  commands — use a reasonably recent Telegram app for best rendering.
+- **Answer `AskUserQuestion` from IM (Claude Code only)** — CC fires a
+  `PermissionRequest` for its own question tool; tlive relays it as a
+  single-select or multi-select card (checkboxes, a live `Submit (N)` count,
+  `Skip`) instead of Allow/Deny. The local question prompt still renders in
+  parallel and always wins a race, so an answer given at the keyboard is
+  never overridden — `Skip` just passes the tool through so the local prompt
+  can be answered instead; it is not an auto-approval of anything. Codex has
+  no equivalent concept.
 - **Resume** — on `Stop`, reply to the IM message (or the web reply box) and
-  the session keeps going.
+  the session keeps going. The card's excerpt sits inside a collapsed
+  expandable quote (headings, lists, tables and code all survive the
+  conversion — nothing is cut mid-word or mid-fence); while that card is
+  still pending, the 60-second idle "waiting for your input" notification is
+  suppressed instead of piling a second message on top of it.
 - **Daemon lazy-start** — hooks-only sessions no longer need a manual
   `tlive start` first: on `SessionStart` (and when `tlive run` launches), the daemon is
   started detached (non-blocking) if it isn't already up. Disable with
   `daemon.autoStart: false`; `tlive start` still works and is unaffected.
 - **Failure alerts (Claude Code only)** — `PostToolUseFailure` (a tool call
   errored) and `StopFailure` (session-level error, e.g. rate-limit/billing)
-  push a ❌ IM message. Pure side-channel, never affects approval decisions;
-  Codex has no equivalent hooks, so this only fires for Claude Code.
+  push a `⚠️`-prefixed IM message. Pure side-channel, never affects approval
+  decisions; Codex has no equivalent hooks, so this only fires for Claude Code.
 - **In-session welcome hint (Claude Code only)** — if IM isn't configured
   yet, `SessionStart` injects a one-line prompt into the session context
   nudging you to say "help me configure tlive"; it stops appearing once IM
@@ -185,10 +202,12 @@ layer for sessions you already run.
 - **Web**: every HTTP/WS request requires the single token
   (`~/.tlive/web-token`, 0600). Default bind is `0.0.0.0` so your phone can
   reach it on the LAN — the token is the gate. Set `web.bind: "127.0.0.1"`
-  to go loopback-only.
-- **`web.publicUrl`** (optional, e.g. a tailscale/HTTPS reverse proxy): when
-  set, IM messages carry a deep link **containing the token** — treat the
-  chat as trusted, or leave it unset.
+  to go loopback-only. **Cards never carry a link to the dashboard.** The
+  deep link that used to ship there carried the token itself — full control
+  over every session — and sending it to IM would park that token on the
+  messaging provider's servers permanently. Open the dashboard yourself (over
+  your own tailscale/HTTPS reverse proxy if you need it off the LAN); IM is
+  push, web is pull.
 - **IM inbound**: fail-closed. Messages/button-taps are dropped unless they
   come from the configured chat; add `allowedSenders` for per-user hardening
   in group chats.
@@ -236,8 +255,7 @@ Quote-reply any session message to type into that session.
   "web": {
     "enabled": true,          // default true
     "bind": "0.0.0.0",        // default; use 127.0.0.1 for loopback-only
-    "port": 7681,
-    "publicUrl": "https://dev.example.ts.net"  // optional: IM deep links
+    "port": 7681
   },
   "daemon": {
     "autoStart": true         // default true; false disables session-start lazy-start
@@ -246,7 +264,10 @@ Quote-reply any session message to type into that session.
     // remote-approval window in seconds, Claude Code only: its permission
     // hook runs parallel to the local dialog, so a long window costs
     // nothing. Codex has no window — see the app-server companion section.
-    "claudeWindowSec": 1800   // default 30min, max 86200 (~24h)
+    "claudeWindowSec": 1800,  // default 30min, max 86200 (~24h)
+    // grace period before an approval card is sent — answering at the
+    // keyboard within this window means it's never sent at all
+    "approvalGraceSec": 10    // default 10s, 0 disables
   },
   "allowedSenders": [{ "channel": "telegram", "userId": "42" }]  // optional
 }

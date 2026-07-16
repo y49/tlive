@@ -41,13 +41,16 @@ tlive run claude   # (可选)包装会话 → 实时 web 终端 + 预览卡
 | IM 发图/文件 → agent | — | ✅(下载后注入路径) |
 | web 粘贴/拖拽上传 | — | ✅ |
 
-只装 hooks 永远可用,包装是纯加法。IM 消息带标签区分:`[⌨ label]`(包装,可注入)
-vs `[label]`(仅 hooks)。
+只装 hooks 永远可用,包装是纯加法。IM 消息带 `label · ` 前缀(会话目录名),
+但不再用图标区分包装/仅 hooks——续跑卡自带的"回复继续"提示已经让这个区分对
+你实际要做的事没有影响。
 
 ## 功能一览
 
 - **审批** —— Claude Code 上是双通道:`PermissionRequest` hook 与本地权限
-  对话**并行**——两边同时可答,先到先得。IM 按钮 / web 卡默认 30 分钟内可答
+  对话**并行**——两边同时可答,先到先得。卡片不会立刻发出:
+  `approvals.approvalGraceSec`(默认 10 秒,`0` 关闭)先静默这么久,你在键盘前
+  马上答掉的话,IM 卡就压根不会发出。IM 按钮 / web 卡默认 30 分钟内可答
   (`approvals.claudeWindowSec` 可配至约 24 小时);
   在键盘上答了,远程卡几秒内自动收尾("已在终端处理")。Codex 上是 tlive
   接管(adopt-or-spawn)一个 `codex app-server` companion 进程,Codex TUI
@@ -55,15 +58,27 @@ vs `[label]`(仅 hooks)。
   (见安全模型)。diff/命令渲染、高危模式标记、
   secret 打码。**"总是允许 \<工具\>"** 按工具放行(内存态,重启清零)——在
   Claude Code 上现在等于远程替你点掉原生对话;`/trust on|off` 整体暂停审批。
-  **绝不自动拒绝**;没人答时本地提示一直有效。
-- **续跑** —— `Stop` 时回复 IM 消息(或 web 回复框),会话继续。
+  **绝不自动拒绝**;没人答时本地提示一直有效。Telegram 卡片克制留白:标题
+  整行粗体、按钮纯文字、段落间空行分层,唯一保留的 emoji 是高危命令标记或
+  error 级别通知上的 `⚠️`;长 diff/命令仍走 expandable 折叠——用较新版本
+  Telegram 客户端渲染最佳。
+- **远程回答 `AskUserQuestion`(仅 Claude Code)** —— CC 为自己的提问工具
+  fire `PermissionRequest`;tlive 把它转成单选或多选卡(复选框、实时
+  `Submit (N)` 计数、`Skip`)而非 Allow/Deny。本地问题框依旧并行渲染且永远
+  赢下竞速——键盘前给出的答案绝不会被覆盖;`Skip` 只是放行该工具,让你在
+  本地答,不是自动批准任何操作。Codex 无此概念。
+- **续跑** —— `Stop` 时回复 IM 消息(或 web 回复框),会话继续。摘录进
+  折叠态的 expandable 引用块(标题、列表、表格、代码在展开后都完整保留,
+  绝不从词中间或代码块中间截断);该卡还挂着时,60 秒后的"等待输入"空闲
+  提醒会被抑制,不会在同一件事上再叠一条消息。
 - **daemon 懒启动** —— 仅装 hooks 的会话不再需要先手动 `tlive start`:
   `SessionStart` 时 shim(以及 `tlive run` 启动时)检测到 daemon 未运行,会
   自动 detached 拉起(不阻塞会话)。`daemon.autoStart: false` 可关闭;
   `tlive start` 手动启动语义不变。
 - **失败告警(仅 Claude Code)** —— `PostToolUseFailure`(工具调用失败)与
-  `StopFailure`(会话级错误,如 rate-limit/billing)会推一条 ❌ IM 消息。纯
-  旁路,不影响任何审批决策;Codex 没有对应 hook,只对 Claude Code 生效。
+  `StopFailure`(会话级错误,如 rate-limit/billing)会推一条 `⚠️` 前缀的
+  IM 消息。纯旁路,不影响任何审批决策;Codex 没有对应 hook,只对 Claude
+  Code 生效。
 - **会话内欢迎提示(仅 Claude Code)** —— IM 还没配置时,`SessionStart` 会往
   会话上下文里注入一句提示,引导你说"帮我配置 tlive";配置好之后就不再出现。
   Codex 不注入。
@@ -156,9 +171,10 @@ tlive 刻意**不做**"手机从零 vibe coding"——官方远程做得更好�
 
 - **web**:每个 HTTP/WS 请求都要 token(`~/.tlive/web-token`,0600)。默认绑
   `0.0.0.0` 方便手机走局域网——token 是门。想只留本机,设
-  `web.bind: "127.0.0.1"`。
-- **`web.publicUrl`**(可选,如 tailscale/HTTPS 反代):设置后 IM 消息携带
-  **含 token 的**深链——聊天必须可信,否则别设。
+  `web.bind: "127.0.0.1"`。**卡片永不携带 dashboard 链接。** 以前的深链
+  本身就带着 token——等于完整会话控制权——发进 IM 就等于把它永久寄存在
+  消息服务商的服务器上。想在局域网外访问就自己开(比如自建
+  tailscale/HTTPS 反代);IM 是推送,web 需要你自己去拉。
 - **IM 入站**:fail-closed。非配置 chat 的消息/按钮一律丢弃;群聊场景可加
   `allowedSenders` 按用户加固。
 - **`/trust on` 与"总是允许"是高危开关**:会自动放行。两者皆内存态、daemon
@@ -199,11 +215,17 @@ IM 命令:`/perm on|off`(静音)、`/trust on|off`、`/help`。
   "web": {
     "enabled": true,          // 默认 true
     "bind": "0.0.0.0",        // 默认;只留本机用 127.0.0.1
-    "port": 7681,
-    "publicUrl": "https://dev.example.ts.net"  // 可选:IM 深链
+    "port": 7681
   },
   "daemon": {
     "autoStart": true         // 默认 true;设 false 关闭 session-start 懒启动
+  },
+  "approvals": {
+    // 远程审批窗口(秒),仅 Claude Code:它的 permission hook 与本地对话
+    // 并行,窗口开长也不费事。Codex 没有窗口概念——见 app-server companion。
+    "claudeWindowSec": 1800,  // 默认 30 分钟,最大 86200(约 24 小时)
+    // 审批卡发出前的静默期——键盘前这段时间内答掉就永不发卡
+    "approvalGraceSec": 10    // 默认 10 秒,0 = 关闭
   },
   "allowedSenders": [{ "channel": "telegram", "userId": "42" }]  // 可选
 }

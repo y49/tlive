@@ -103,6 +103,36 @@ PermissionDenied(同 key+tool)只覆盖规则型拒绝——真机实测:用户�
 时释放)。`notification` 的 `permission_prompt` 类型在 CC shim 直接丢弃
 (并行卡已覆盖那个时刻,再发提醒就是每张卡都重复一条)。
 
+**`AskUserQuestion` (Claude Code only — Codex has no equivalent concept).**
+CC fires a `PermissionRequest` for its own question tool, same as any other
+tool. Replying `decision.behavior='deny'` + `message` makes CC **skip its
+built-in question prompt** and feed `message` into the agent's conversation
+stream instead — this is the *only* channel for a remote answer, since the
+wire carries nothing richer than allow/deny/defer (no way to say "pick
+option N" directly).
+
+Verified live (claude 2.1.210, hook-only, isolated environment):
+- while the hook is pending, the **local question prompt renders in
+  parallel** — first answer wins, same as every other approval
+- answering locally fires `PostToolUse(tool=AskUserQuestion)`, and the
+  existing cancel machinery withdraws the remote card through the normal
+  path
+- **a `deny` that arrives after the local answer is completely ignored** —
+  tlive never overrides a choice already made at the keyboard
+
+The agent only ever sees `Error: <message>`, so the message has to prove
+itself as an answer, not a failure: a source line, `Selected: <choice>`,
+and a synthesized `AskUserQuestionOutput` JSON blob (`ask-renderer.ts`'s
+`buildAskAnswerMessage`). **Wording is the single point of failure in this
+whole mechanism** — change it and you must re-verify on real hardware,
+because a weak phrasing reads as noise and the agent re-asks the question.
+
+`Skip` = `allow` = pass-through. For `AskUserQuestion` specifically, `allow`
+just means "run the tool" — i.e. render the question prompt — and that tool
+has no other side effect, so `allow` is equivalent to handing the question
+back to the local keyboard. It is **not** an auto-approval of anything the
+agent does next.
+
 - ⚠ **历史教训(2026-07-10)**:codex 0.142→0.144 把 gating 从 PreToolUse
   挪到 PermissionRequest,`PreToolUse` 开始拒收 `ask`/裸 `allow` 且对非法
   输出 **fail-open**(output_parser.rs 有测试名就叫
