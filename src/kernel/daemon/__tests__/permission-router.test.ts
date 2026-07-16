@@ -8,7 +8,9 @@ const base = (over = {}) => ({
   configuredChats: chats, isMuted: () => false,
   sendToChat: vi.fn().mockResolvedValue(undefined),
   hasWebClients: () => false,
-  policyDecide: askAll, renderCard: card, ...over,
+  policyDecide: askAll, renderCard: card,
+  graceSec: () => 0, // existing suites answer synchronously — keep them instant
+  ...over,
 });
 
 describe('PermissionRouter (configured-chats, allow/deny/defer)', () => {
@@ -191,5 +193,76 @@ describe('PermissionRouter web-only gate + cancel + per-request timeout', () => 
       await vi.advanceTimersByTimeAsync(1_100);
       expect((await p).decision).toBe('defer');
     } finally { vi.useRealTimers(); }
+  });
+});
+
+describe('approval grace gating', () => {
+  const mkDeps = (sent: string[], graceMs: number) => ({
+    configuredChats: () => [{ channel: 'telegram', chatId: 'c1' }],
+    sendToChat: async (_t: unknown, card: { requestId: string }) => { sent.push(card.requestId); },
+    isMuted: () => false,
+    hasWebClients: () => false,
+    policyDecide: () => ({ decision: 'ask' as const }),
+    renderCard: () => ({ title: 'T', body: 'B' }),
+    graceSec: () => graceMs / 1000,
+  });
+
+  it('never sends the card when the local terminal answers within grace', async () => {
+    const sent: string[] = [];
+    const r = new PermissionRouter(mkDeps(sent, 200));
+    const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
+    await new Promise((res) => setTimeout(res, 50));
+    expect(r.cancel({ key: '/w' })).toBe(1);
+    expect(await p).toEqual({ decision: 'local' });
+    await new Promise((res) => setTimeout(res, 300));
+    expect(sent).toEqual([]); // 卡永不诞生
+  });
+
+  it('never sends the card when answered remotely within grace', async () => {
+    const sent: string[] = [];
+    let pendingId = '';
+    const deps = { ...mkDeps(sent, 200), onPending: (p: { requestId: string }) => { pendingId = p.requestId; } };
+    const r = new PermissionRouter(deps);
+    const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
+    await new Promise((res) => setTimeout(res, 50));
+    r.answer(pendingId, true);
+    expect(await p).toEqual({ decision: 'allow' });
+    await new Promise((res) => setTimeout(res, 300));
+    expect(sent).toEqual([]);
+  });
+
+  it('sends the card once grace elapses with nobody answering', async () => {
+    const sent: string[] = [];
+    const r = new PermissionRouter(mkDeps(sent, 100));
+    const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
+    await new Promise((res) => setTimeout(res, 250));
+    expect(sent.length).toBe(1);
+    r.cancel({ key: '/w' });
+    await p;
+  });
+
+  it('broadcasts onPending immediately — the dashboard must not wait for grace', async () => {
+    const sent: string[] = [];
+    let pendingAt = 0;
+    const t0 = Date.now();
+    const deps = { ...mkDeps(sent, 500), onPending: () => { pendingAt = Date.now() - t0; } };
+    const r = new PermissionRouter(deps);
+    const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
+    await new Promise((res) => setTimeout(res, 50));
+    expect(pendingAt).toBeLessThan(50);
+    r.cancel({ key: '/w' });
+    await p;
+  });
+
+  it('respects a mute that lands during grace', async () => {
+    const sent: string[] = [];
+    let muted = false;
+    const r = new PermissionRouter({ ...mkDeps(sent, 150), isMuted: () => muted });
+    const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
+    muted = true;
+    await new Promise((res) => setTimeout(res, 250));
+    expect(sent).toEqual([]);
+    r.cancel({ key: '/w' });
+    await p;
   });
 });

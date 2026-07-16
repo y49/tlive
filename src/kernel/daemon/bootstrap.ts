@@ -209,6 +209,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       return d;
     },
     renderCard: (req) => renderApprovalCard({ toolName: req.toolName, input: req.input }),
+    graceSec: () => Math.max(cfg.approvals?.approvalGraceSec ?? 10, 0),
     onPending: ({ cwd, requestId, title, body, toolName }) => {
       // `cwd` here is the resolved registry key (see resolveKey).
       events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key: cwd, cwd, status: 'waiting-approval', pending: { requestId, title, body, toolName } }) });

@@ -21,6 +21,9 @@ export interface PermissionRouterDeps {
   onPending?: (p: { cwd: string; requestId: string; title: string; body: string; toolName: string }) => void;
   /** Fired when the request resolves (answered / timed out / deferred after a card). */
   onResolved?: (p: { cwd: string; requestId: string; decision: Decision }) => void;
+  /** 发 IM 卡前的静默期(秒)。本地秒答的审批在此窗口内 cancel → 卡永不发出
+   *  (键盘前零刷屏)。0 = 立即发。web 广播(onPending)不受影响。 */
+  graceSec: () => number;
 }
 
 /** Unanswered request auto-defers after this (s). Must be < shim IPC (590s) < hook timeout (600s). */
@@ -68,11 +71,20 @@ export class PermissionRouter {
       setTimeout(() => {
         if (this.pending.has(requestId)) { this.pending.delete(requestId); resolve('defer'); }
       }, (opts.timeoutSec ?? PERMISSION_TIMEOUT_SEC) * 1000).unref();
-      // After pending registration: an answer() from the broadcast path resolves.
+      // web 立即 —— dashboard 是 pull 视图,不该等 grace。
       this.deps.onPending?.({ cwd: opts.cwd, requestId, title, body, toolName: opts.toolName });
-      for (const t of targets) {
-        void this.deps.sendToChat(t, { title, body, requestId, toolName: opts.toolName, cwd: opts.cwd }).catch(() => undefined);
-      }
+      // IM 卡走 grace:开火时 pending 还在才发。cancel()/answer() 都先 delete
+      // 再 resolve,所以这一句就是权威判据,不需要额外的取消令牌。
+      const push = (): void => {
+        if (!this.pending.has(requestId)) return;
+        if (this.deps.isMuted(opts.cwd)) return; // grace 期间 mute 了 → 尊重
+        for (const t of targets) {
+          void this.deps.sendToChat(t, { title, body, requestId, toolName: opts.toolName, cwd: opts.cwd }).catch(() => undefined);
+        }
+      };
+      const grace = this.deps.graceSec();
+      if (grace > 0) setTimeout(push, grace * 1000).unref();
+      else push();
     });
     this.deps.onResolved?.({ cwd: opts.cwd, requestId, decision });
     return { decision };

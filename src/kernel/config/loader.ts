@@ -22,8 +22,11 @@ export interface PolicyConfig { autoAllow?: string[]; autoDeny?: string[]; ask?:
  *  a reply-to-continue (default 1800 = 30min; the hook is async so this never
  *  blocks the local terminal). continueGraceSec: after a turn ends, wait this
  *  long before pushing a continue card — if you start a new prompt within it
- *  (you're at the keyboard) the card is suppressed (default 15s). */
-export interface ApprovalsConfig { claudeWindowSec?: number; continueWindowSec?: number; continueGraceSec?: number }
+ *  (you're at the keyboard) the card is suppressed (default 15s).
+ *  approvalGraceSec: 收到审批请求后先静默这么久再推 IM 卡 —— 你在键盘前
+ *  答掉了(PostToolUse → cancel)卡就永不发出(默认 10s;0 = 立即发)。
+ *  与 continueGraceSec 对称。web 广播不受影响。 */
+export interface ApprovalsConfig { claudeWindowSec?: number; continueWindowSec?: number; continueGraceSec?: number; approvalGraceSec?: number }
 
 export interface KernelConfig {
   allowedSenders: Array<{ channel: 'telegram' | 'feishu'; userId: string }>;

@@ -196,7 +196,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
     adapter.edit = async (messageId: string, out: OutgoingMessage) => {
       edits.push({ messageId, ...(out.kind === 'card' ? { title: out.title } : {}) });
     };
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, approvals: { continueGraceSec: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, approvals: { continueGraceSec: 0, approvalGraceSec: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
     // seed the session so the card gets a label tag
     await request({ kind: 'hook.event', event: { event: 'session-start', cwd: '/tag/repo', sessionId: 's', source: 'startup' } }, { socketPath: sock, timeoutMs: 2000 });
