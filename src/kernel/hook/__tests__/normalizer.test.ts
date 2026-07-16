@@ -121,6 +121,21 @@ describe('failure events', () => {
       const n = parseHookInput('post-tool-use-failure', { cwd: '/x', session_id: 's', tool_name: 'Bash', tool_error: null });
       expect((n as any).droppable).toBe(true);
     });
+
+    // Fix 3b: droppable only suppresses IM (see bootstrap.ts's hook.notify
+    // handler) — the dashboard still displays this attention's message
+    // verbatim, so `Bash failed: ""` (bare empty quotes) is ugly there. Empty
+    // errors get a clean human sentence instead; non-empty errors keep the
+    // original "<tool> failed: <err>" shape untouched.
+    it('empty tool_error → clean message, no bare quotes ("Bash failed (no error output)")', () => {
+      const n = parseHookInput('post-tool-use-failure', { cwd: '/x', session_id: 's', tool_name: 'Bash' });
+      expect((n as any).message).toBe('Bash failed (no error output)');
+      expect((n as any).message).not.toContain('""');
+    });
+    it('whitespace-only tool_error → same clean message', () => {
+      const n = parseHookInput('post-tool-use-failure', { cwd: '/x', session_id: 's', tool_name: 'Bash', tool_error: '   \n\t ' });
+      expect((n as any).message).toBe('Bash failed (no error output)');
+    });
   });
 
   it('post-tool-use-failure with real content ("permission denied") → not droppable, message carries the reason', () => {

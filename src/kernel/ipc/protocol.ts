@@ -28,7 +28,12 @@ export type IpcRequest =
   | { kind: 'hook.permission.answer'; requestId: string; approved: boolean; message?: string }
   | { kind: 'hook.continue.request'; cwd: string; sessionId: string; context: string; lastMessage?: string; wrappedId?: string }
   | { kind: 'hook.event'; event: MonitorEvent; wrappedId?: string }
-  | { kind: 'hook.notify'; cwd: string; sessionId: string; level: 'info' | 'warn' | 'error'; message: string; wrappedId?: string }
+  // droppable: normalizer 判定"无实际错误内容"(如 Bash 非零退出但 stderr
+  // 为空)的 attention 事件透传标记。daemon 侧只据此跳过 IM 发送(见
+  // bootstrap.ts 的 hook.notify handler);dashboard 广播不受影响,照常收到
+  // ——这条 attention 往往是 dashboard 看到这次工具活动的唯一途径
+  // (PostToolUse/PostToolUseFailure 互斥,失败时没有 activity 事件替补)。
+  | { kind: 'hook.notify'; cwd: string; sessionId: string; level: 'info' | 'warn' | 'error'; message: string; wrappedId?: string; droppable?: boolean }
   | { kind: 'session.register'; session: SessionMeta }
   | { kind: 'session.unregister'; id: string }
   // Terminal-derived activity for a wrapped session (running vs idle) — updates

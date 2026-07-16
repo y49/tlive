@@ -344,4 +344,73 @@ describe('daemon → /ws/events downstream broadcast', () => {
     await p;
   });
 
+  describe('hook.notify droppable (Fix 3b: suppression lives in the daemon, not the shim)', () => {
+    // A prior fix made the shim short-circuit droppable attention events before
+    // hook.notify IPC even fired, which also erased the dashboard's only view of
+    // that tool failure (PostToolUse and PostToolUseFailure are mutually
+    // exclusive per CC docs — no activity event ever substitutes). The fix now
+    // lives here: the daemon still gets the event and always broadcasts it to
+    // the dashboard; only the IM send is skipped when droppable is set.
+    it('droppable:true → IM never gets a message, but the dashboard still sees the attention', async () => {
+      const sent: string[] = [];
+      const adapter = makeFakeAdapter('telegram');
+      adapter.send = async (out: OutgoingMessage) => { sent.push(out.kind === 'text' ? out.text : (out.body ?? '')); return { messageId: 'm1' }; };
+      writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+      const frames = await openEvents();
+
+      const res = await request(
+        { kind: 'hook.notify', cwd: '/drop/repo', sessionId: 's', level: 'error', message: 'Bash failed (no error output)', droppable: true },
+        { socketPath: sock, timeoutMs: 2000 },
+      );
+      expect(res.kind).toBe('ack');
+
+      // Effect 1 (must hold): dashboard still gets the attention — this event is
+      // its only view of the failed tool call.
+      const f = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/drop/repo' && x.session.status === 'waiting-input');
+      expect(f.session.lastMessage).toBe('Bash failed (no error output)');
+
+      // Effect 2 (must hold): IM adapter.send was never invoked for this notify.
+      await new Promise((r) => setTimeout(r, 100));
+      expect(sent).toHaveLength(0);
+    });
+
+    it('a non-droppable failure (real error content) still reaches both IM and the dashboard', async () => {
+      const sent: string[] = [];
+      const adapter = makeFakeAdapter('telegram');
+      adapter.send = async (out: OutgoingMessage) => { sent.push(out.kind === 'text' ? out.text : (out.body ?? '')); return { messageId: 'm1' }; };
+      writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+      const frames = await openEvents();
+
+      await request(
+        { kind: 'hook.notify', cwd: '/real/repo', sessionId: 's', level: 'error', message: 'Bash failed: permission denied' },
+        { socketPath: sock, timeoutMs: 2000 },
+      );
+
+      await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/real/repo' && x.session.lastMessage === 'Bash failed: permission denied');
+      await new Promise((r) => setTimeout(r, 100));
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toContain('permission denied');
+    });
+
+    it('a plain notification (no droppable field at all) is unaffected — IM + dashboard both fire as before', async () => {
+      const sent: string[] = [];
+      const adapter = makeFakeAdapter('telegram');
+      adapter.send = async (out: OutgoingMessage) => { sent.push(out.kind === 'text' ? out.text : (out.body ?? '')); return { messageId: 'm1' }; };
+      writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+      const frames = await openEvents();
+
+      await request(
+        { kind: 'hook.notify', cwd: '/notif/repo', sessionId: 's', level: 'info', message: 'needs your attention' },
+        { socketPath: sock, timeoutMs: 2000 },
+      );
+
+      await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/notif/repo');
+      await new Promise((r) => setTimeout(r, 100));
+      expect(sent).toHaveLength(1);
+    });
+  });
+
 });

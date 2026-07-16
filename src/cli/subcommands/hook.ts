@@ -161,17 +161,16 @@ export async function runHook(argv: string[]): Promise<void> {
 
     if (event === 'notification' || event === 'post-tool-use-failure' || event === 'stop-failure') {
       const att = n as { cwd: string; sessionId: string; message: string; droppable?: boolean };
-      if (att.droppable) {
-        // 空失败(如 Bash 非零退出但 stderr 为空:grep 没命中/test 判假/
-        // diff --quiet)——normalizer 已判定"无实际错误内容",不发 hook.notify
-        // IPC(IM/dashboard 都不收这条噪音;PostToolUse 的 activity 事件仍会
-        // 覆盖到这次工具活动,不受影响)。
-        process.stdout.write('{}');
-        return;
-      }
       const level = event === 'notification' ? 'info' : 'error';
+      // droppable(空失败,如 Bash 非零退出但 stderr 为空:grep 没命中/test
+      // 判假/diff --quiet)照常发 hook.notify IPC——只透传标记,让 daemon 决定
+      // 怎么处理。Fix 3b:曾经在这里提前 return 跳过整条 IPC,连 dashboard 的
+      // events.broadcast 一起吞了(PostToolUse/PostToolUseFailure 互斥,dashboard
+      // 没有别的途径看到这次工具活动)——落点错了,daemon 层(bootstrap.ts 的
+      // hook.notify handler)现在只据 droppable 跳过 IM 发送,dashboard 广播
+      // 不受影响。
       await request(
-        { kind: 'hook.notify', cwd: att.cwd, sessionId: att.sessionId, level, message: att.message, ...(wrappedId ? { wrappedId } : {}) },
+        { kind: 'hook.notify', cwd: att.cwd, sessionId: att.sessionId, level, message: att.message, ...(wrappedId ? { wrappedId } : {}), ...(att.droppable ? { droppable: true } : {}) },
         { timeoutMs: 4_000 },
       ).catch(() => undefined);
       process.stdout.write('{}');

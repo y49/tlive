@@ -492,7 +492,13 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         case 'hook.notify': {
           const key = resolveKey(req.cwd, req.wrappedId);
           const s = sessions.get(key);
-          if (!muted && !s?.muted && !shouldDropNotify(s?.continueId, req.level)) {
+          // droppable(normalizer 判定"无实际错误内容",如 Bash 非零退出但
+          // stderr 为空)只压 IM——dashboard 广播(下面的 events.broadcast)
+          // 不受影响,始终照常:这条 attention 常是 dashboard 看到这次工具
+          // 活动的唯一途径(PostToolUse/PostToolUseFailure 互斥,失败时没有
+          // activity 事件替补)。Fix 3b:上一版把这个短路放在 shim 层,连
+          // dashboard 一起吞了——落点错了,改回这里。
+          if (!muted && !s?.muted && !shouldDropNotify(s?.continueId, req.level) && !req.droppable) {
             // cwd carries the resolved KEY so the label tag + reply-routing map are consistent.
             // 装饰性 emoji 一律不发;error 级别用 ⚠️(有信息量)。
             // normalizer 不再自带任何前缀(单一职责:只归一化文本)——

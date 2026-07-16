@@ -85,11 +85,22 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
       // 内容的失败(如 permission denied)不受影响,照常发。
       const trimmed = err.trim();
       const isEmptyError = trimmed === '' || trimmed === '{}' || trimmed === '""' || trimmed === "''" || trimmed === 'null';
+      const tool = r.tool_name ?? '(unknown)';
       // No emoji prefix here — single responsibility: normalizer only normalizes
       // text. The ⚠️ prefix (for error-level notify) is bootstrap's call.
+      //
+      // droppable 只管 IM(bootstrap.ts 的 hook.notify handler 据此跳过
+      // sendToChat)——dashboard 广播(events.broadcast)在那个 if 之外,不受
+      // droppable 影响,始终照常收到这条 attention。这也是它唯一能看到这次
+      // 工具活动的途径:CC 的 PostToolUse 与 PostToolUseFailure 互斥(同一次
+      // 工具调用只触发其一,见 code.claude.com/docs/en/hooks),失败时
+      // PostToolUse 根本不 fire,没有 activity 事件能替补。所以即使
+      // droppable,message 也要保持人话可读——空错误时不带一对孤零零的空
+      // 引号(`Bash failed: ""`),换成说人话的文案;有内容的失败照旧
+      // `<tool> failed: <err>`。
       return {
         event: 'attention', cwd, sessionId,
-        message: `${r.tool_name ?? '(unknown)'} failed: ${err.slice(0, 200)}`,
+        message: isEmptyError ? `${tool} failed (no error output)` : `${tool} failed: ${err.slice(0, 200)}`,
         ...(isEmptyError ? { droppable: true } : {}),
       };
     }
