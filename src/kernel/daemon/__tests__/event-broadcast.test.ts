@@ -134,6 +134,27 @@ describe('daemon → /ws/events downstream broadcast', () => {
     expect(cleared.session.pending).toBeUndefined();
   });
 
+  it('permission-request as a session\'s FIRST event keeps key and cwd separate — id=sessionId, cwd=real dir, label=basename(real dir) (Task 5 review, Important: PermissionRouter key/cwd conflation)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 }, approvals: { continueGraceSec: 0 }, adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } } }));
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [makeFakeAdapter('telegram')] });
+    const frames = await openEvents();
+    // Deliberately no session-start (or any other) event seeded first — this
+    // permission-request IS the session's only/first event. Before the fix,
+    // bootstrap.ts fed the resolved key into PermissionRouter's single `cwd`
+    // opt, so the registry upsert wrote the key into BOTH id and cwd.
+    const p = request(
+      { kind: 'hook.permission.request', cwd: '/real/project/dir', sessionId: 'sess-xyz', toolName: 'Bash', input: { command: 'ls' } },
+      { socketPath: sock, timeoutMs: 5000 },
+    );
+    const ask = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.status === 'waiting-approval');
+    expect(ask.session.id).toBe('sess-xyz'); // registry key = the session id, never the cwd
+    expect(ask.session.cwd).toBe('/real/project/dir'); // real cwd threaded through separately from the key
+    expect(ask.session.label).toBe('dir'); // basename(real cwd) — not basename(key)
+    // Settle so the pending request doesn't dangle past the test.
+    await request({ kind: 'hook.permission.answer', requestId: ask.session.pending.requestId, approved: true }, { socketPath: sock, timeoutMs: 2000 });
+    await p;
+  });
+
   it('AskUserQuestion does NOT broadcast a pending session to /ws/events — the dashboard\'s generic Allow/Deny buttons would misanswer it (Task 9 review, Important)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { port: 0 },
@@ -163,7 +184,11 @@ describe('daemon → /ws/events downstream broadcast', () => {
     // give both the IM card and any (incorrect) web broadcast time to land
     await new Promise((r) => setTimeout(r, 150));
     expect(sentIm).toHaveLength(1); // IM still gets the ask card with option buttons
-    expect(frames.some((f) => f.type === 'session-upsert' && f.session.id === '/repo/ask')).toBe(false);
+    // Registry key is the session id ('s'), not the cwd — assert the real
+    // new-model identity, or this guards nothing (Task 5 review, Important:
+    // the old '/repo/ask' assertion is vacuously true under the new model,
+    // since no frame ever carries that id regardless of suppression).
+    expect(frames.some((f) => f.type === 'session-upsert' && f.session.id === 's')).toBe(false);
 
     // Settle the pending permission request via IM (Skip) so it doesn't dangle past the test.
     const card = sentIm[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };

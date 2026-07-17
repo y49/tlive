@@ -17,7 +17,8 @@ export interface PermissionRouterDeps {
    *  the single-pick numbered buttons — both are opaque booleans/arrays to
    *  this vendor-neutral layer, it never inspects toolName itself. */
   sendToChat: (target: PermChat, card: { title: string; body: string; requestId: string; toolName: string; cwd: string; askOptions?: AskOption[]; askMulti?: boolean }) => Promise<void>;
-  isMuted: (cwd: string) => boolean;
+  /** `key` — the session's registry identity (see requestPermission's `key` opt), NOT the real cwd. */
+  isMuted: (key: string) => boolean;
   /** True when at least one dashboard client is connected on /ws/events —
    *  a card can be answered from the web even with zero IM chats. */
   hasWebClients: () => boolean;
@@ -27,10 +28,16 @@ export interface PermissionRouterDeps {
    *  askQuestion/askMulti are the AskUserQuestion branch's extras (Task 9/10):
    *  absent for every other tool. */
   renderCard: (req: { toolName: string; input: unknown }) => { title: string; body: string; askOptions?: AskOption[]; askQuestion?: string; askMulti?: boolean };
-  /** Fired when a card is created & sent (session enters waiting-approval). */
-  onPending?: (p: { cwd: string; requestId: string; title: string; body: string; toolName: string; askOptions?: AskOption[]; askQuestion?: string }) => void;
-  /** Fired when the request resolves (answered / timed out / deferred after a card). */
-  onResolved?: (p: { cwd: string; requestId: string; decision: Decision }) => void;
+  /** Fired when a card is created & sent (session enters waiting-approval).
+   *  `key` and `cwd` are carried as two separate, explicit fields — never
+   *  collapse them back into one. `key` is the session's registry identity
+   *  (matches requestPermission's `key` opt); `cwd` is the real working
+   *  directory, threaded through only for the registry's display field
+   *  (label = basename(cwd)). Conflating them here is exactly the bug this
+   *  split fixes (see resolveKey in bootstrap.ts). */
+  onPending?: (p: { key: string; cwd: string; requestId: string; title: string; body: string; toolName: string; askOptions?: AskOption[]; askQuestion?: string }) => void;
+  /** Fired when the request resolves (answered / timed out / deferred after a card). Same key/cwd split as onPending. */
+  onResolved?: (p: { key: string; cwd: string; requestId: string; decision: Decision }) => void;
   /** 发 IM 卡前的静默期(秒)。本地秒答的审批在此窗口内 cancel → 卡永不发出
    *  (键盘前零刷屏)。0 = 立即发。web 广播(onPending)不受影响。 */
   graceSec: () => number;
@@ -58,12 +65,20 @@ export class PermissionRouter {
   private pending = new Map<string, PendingEntry>();
   constructor(private deps: PermissionRouterDeps) {}
 
-  async requestPermission(opts: { cwd: string; toolName: string; input: unknown; permissionMode?: string; timeoutSec?: number; sessionId?: string; agentId?: string; onAbandoned?: (cb: () => void) => void }): Promise<{ decision: Decision; message?: string }> {
+  /** `key` is the session's registry identity — used for pending-map matching
+   *  (cancel/mute/card-routing) exactly like `cancel()`'s `key` opt. `cwd` is
+   *  the real working directory; this layer never matches on it, it is only
+   *  threaded through to onPending/onResolved so the registry can display the
+   *  real directory without the router having to know what a registry is.
+   *  Keeping them as two required, separate fields is the whole point of this
+   *  split — collapsing them back into one is the bug (see bootstrap.ts's
+   *  resolveKey doc comment). */
+  async requestPermission(opts: { key: string; cwd: string; toolName: string; input: unknown; permissionMode?: string; timeoutSec?: number; sessionId?: string; agentId?: string; onAbandoned?: (cb: () => void) => void }): Promise<{ decision: Decision; message?: string }> {
     // Policy first: an auto-allow (read-only / trust switch) skips the card even when muted.
     const pd = this.deps.policyDecide({ toolName: opts.toolName, input: opts.input, permissionMode: opts.permissionMode });
     if (pd.decision === 'allow') return { decision: 'allow' };
 
-    if (this.deps.isMuted(opts.cwd)) return { decision: 'defer' };
+    if (this.deps.isMuted(opts.key)) return { decision: 'defer' };
     const targets = this.deps.configuredChats();
     // Web-only users still get the card via onPending → /ws/events broadcast.
     if (targets.length === 0 && !this.deps.hasWebClients()) return { decision: 'defer' };
@@ -73,7 +88,7 @@ export class PermissionRouter {
     const result = await new Promise<{ decision: Decision; message?: string }>((resolve) => {
       this.pending.set(requestId, {
         resolve,
-        key: opts.cwd,
+        key: opts.key,
         toolName: opts.toolName,
         ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
         ...(opts.agentId ? { agentId: opts.agentId } : {}),
@@ -91,7 +106,7 @@ export class PermissionRouter {
       });
       // web 立即 —— dashboard 是 pull 视图,不该等 grace。
       this.deps.onPending?.({
-        cwd: opts.cwd, requestId, title, body, toolName: opts.toolName,
+        key: opts.key, cwd: opts.cwd, requestId, title, body, toolName: opts.toolName,
         ...(askOptions ? { askOptions } : {}),
         ...(askQuestion ? { askQuestion } : {}),
       });
@@ -99,16 +114,20 @@ export class PermissionRouter {
       // 再 resolve,所以这一句就是权威判据,不需要额外的取消令牌。
       const push = (): void => {
         if (!this.pending.has(requestId)) return;
-        if (this.deps.isMuted(opts.cwd)) return; // grace 期间 mute 了 → 尊重
+        if (this.deps.isMuted(opts.key)) return; // grace 期间 mute 了 → 尊重
         for (const t of targets) {
-          void this.deps.sendToChat(t, { title, body, requestId, toolName: opts.toolName, cwd: opts.cwd, ...(askOptions ? { askOptions } : {}), ...(askMulti ? { askMulti } : {}) }).catch(() => undefined);
+          // card.cwd carries `key` (not the real directory) — the label tag
+          // lookup and reply-routing map (bootstrap.ts's sessionTag/rememberMsg)
+          // both index by registry key, same convention as hook.notify/
+          // hook.continue.request elsewhere in bootstrap.ts.
+          void this.deps.sendToChat(t, { title, body, requestId, toolName: opts.toolName, cwd: opts.key, ...(askOptions ? { askOptions } : {}), ...(askMulti ? { askMulti } : {}) }).catch(() => undefined);
         }
       };
       const grace = this.deps.graceSec();
       if (grace > 0) setTimeout(push, grace * 1000).unref();
       else push();
     });
-    this.deps.onResolved?.({ cwd: opts.cwd, requestId, decision: result.decision });
+    this.deps.onResolved?.({ key: opts.key, cwd: opts.cwd, requestId, decision: result.decision });
     return result;
   }
 

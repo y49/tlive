@@ -87,6 +87,9 @@ describe('companion', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(router.requestPermission).toHaveBeenCalledWith(expect.objectContaining({
+      // key/cwd are still the same value here (Task 6 will thread the real
+      // `/w` as cwd; today's fix only makes that change safe, see companion.ts).
+      key: 'codex:t1',
       cwd: 'codex:t1',
       toolName: 'Bash',
       timeoutSec: 86_400,

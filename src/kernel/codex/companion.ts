@@ -173,6 +173,14 @@ export function startCompanion(deps: CompanionDeps): Companion {
       const reason = p.reason;
       void deps.permissionRouter
         .requestPermission({
+          key: threadKey(threadId),
+          // TODO(Task 6): thread the real `cwd` (from `p.cwd`, already
+          // extracted above) instead of the thread key once the registry's
+          // cwd threading is verified end-to-end for Codex. Safe to change
+          // in isolation now — the router matches pending requests on `key`
+          // only, never on `cwd` (see permission-router.ts's requestPermission
+          // doc comment), so this will no longer collide the way it used to
+          // before the key/cwd split.
           cwd: threadKey(threadId),
           toolName: 'Bash',
           input: { command, cwd, reason },

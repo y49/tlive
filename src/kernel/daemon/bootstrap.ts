@@ -259,7 +259,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const permissionRouter = new PermissionRouter({
     configuredChats,
     sendToChat: (t, card) => sendToChat(t, card),
-    isMuted: (cwd) => muted || (sessions.get(cwd)?.muted ?? false),
+    isMuted: (key) => muted || (sessions.get(key)?.muted ?? false),
     hasWebClients: () => events.size() > 0,
     policyDecide: (req) => {
       const d = policyDecide({ toolName: req.toolName, permissionMode: req.permissionMode }, policyState);
@@ -279,7 +279,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       return renderApprovalCard({ toolName: req.toolName, input: req.input });
     },
     graceSec: () => Math.max(cfg.approvals?.approvalGraceSec ?? 10, 0),
-    onPending: ({ cwd, requestId, title, body, toolName, askOptions, askQuestion }) => {
+    onPending: ({ key, cwd, requestId, title, body, toolName, askOptions, askQuestion }) => {
       if (askOptions && askQuestion) {
         askContexts.set(requestId, { question: askQuestion, options: askOptions });
         askRequestIds.add(requestId); // Task 9 review Minor 4: survives the button-click's askContexts consumption, so onResolved can still tell this was an ask card
@@ -295,19 +295,22 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         // follow-up task, not this fix.
         return;
       }
-      // `cwd` here is the resolved registry key (see resolveKey).
-      events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key: cwd, cwd, status: 'waiting-approval', pending: { requestId, title, body, toolName } }) });
+      // key = registry identity, cwd = real directory — carried as two
+      // explicit fields all the way from requestPermission's opts (Task 5 fix
+      // wave: this is exactly the upsert that used to write the key into both
+      // id and cwd, permanently, when both arrived as one field).
+      events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd, status: 'waiting-approval', pending: { requestId, title, body, toolName } }) });
     },
-    onResolved: ({ cwd, requestId, decision }) => {
+    onResolved: ({ key, cwd, requestId, decision }) => {
       askContexts.delete(requestId); // no leak whether consumed by a button click or resolved another way
       askSelection.clear(requestId); // no leak — covers defer/timeout/local-answer paths that skip asksubmit:/askskip: entirely (Task 10)
       const isAsk = askRequestIds.delete(requestId); // true only for an AskUserQuestion card (Minor 4)
       // Only touch the session view if THIS request still owns the pending slot —
       // with two concurrent approvals on one key, resolving A must not wipe B's
       // indicator (registry holds a single pending; B's card/router entry live on).
-      if (sessions.get(cwd)?.pending?.requestId === requestId) {
+      if (sessions.get(key)?.pending?.requestId === requestId) {
         // Non-approved outcomes (deny/defer) leave the session idle; only allow → active.
-        events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key: cwd, cwd, status: decision === 'allow' ? 'active' : 'idle', pending: null }) });
+        events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd, status: decision === 'allow' ? 'active' : 'idle', pending: null }) });
       }
       // Rewrite the IM cards to their outcome (buttons removed) — no zombie cards.
       const cards = sentCards.get(requestId);
@@ -454,7 +457,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         case 'hook.permission.request': {
           const key = resolveKey(req.sessionId, req.cwd, req.wrappedId);
           const r = await permissionRouter.requestPermission({
-            cwd: key, toolName: req.toolName, input: req.input,
+            key, cwd: req.cwd, toolName: req.toolName, input: req.input,
             permissionMode: req.permissionMode,
             timeoutSec: clampPermissionTimeout(req.timeoutSec),
             ...(req.sessionId ? { sessionId: req.sessionId } : {}),

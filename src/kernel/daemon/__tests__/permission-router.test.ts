@@ -17,7 +17,7 @@ describe('PermissionRouter (configured-chats, allow/deny/defer)', () => {
   it('defers after timeout (bounded pending)', async () => {
     vi.useFakeTimers();
     const r = new PermissionRouter(base());
-    const p = r.requestPermission({ cwd: '/p/foo', toolName: 'Bash', input: {} });
+    const p = r.requestPermission({ key: '/p/foo', cwd: '/p/foo', toolName: 'Bash', input: {} });
     vi.advanceTimersByTime(581_000);
     expect((await p).decision).toBe('defer');
     vi.useRealTimers();
@@ -25,17 +25,17 @@ describe('PermissionRouter (configured-chats, allow/deny/defer)', () => {
   it('defers immediately when muted', async () => {
     const send = vi.fn();
     const r = new PermissionRouter(base({ sendToChat: send, isMuted: () => true }));
-    expect((await r.requestPermission({ cwd: '/x', toolName: 'Bash', input: {} })).decision).toBe('defer');
+    expect((await r.requestPermission({ key: '/x', cwd: '/x', toolName: 'Bash', input: {} })).decision).toBe('defer');
     expect(send).not.toHaveBeenCalled();
   });
   it('defers when no chat configured', async () => {
     const r = new PermissionRouter(base({ configuredChats: () => [] }));
-    expect((await r.requestPermission({ cwd: '/nowhere', toolName: 'Bash', input: {} })).decision).toBe('defer');
+    expect((await r.requestPermission({ key: '/nowhere', cwd: '/nowhere', toolName: 'Bash', input: {} })).decision).toBe('defer');
   });
   it('allow when answered true', async () => {
     let id = '';
     const r = new PermissionRouter(base({ sendToChat: async (_t: unknown, c: { requestId: string }) => { id = c.requestId; } }));
-    const p = r.requestPermission({ cwd: '/p/foo', toolName: 'Bash', input: { cmd: 'ls' } });
+    const p = r.requestPermission({ key: '/p/foo', cwd: '/p/foo', toolName: 'Bash', input: { cmd: 'ls' } });
     await new Promise((res) => setTimeout(res, 0));
     r.answer(id, true);
     expect((await p).decision).toBe('allow');
@@ -43,7 +43,7 @@ describe('PermissionRouter (configured-chats, allow/deny/defer)', () => {
   it('deny when answered false', async () => {
     let id = '';
     const r = new PermissionRouter(base({ sendToChat: async (_t: unknown, c: { requestId: string }) => { id = c.requestId; } }));
-    const p = r.requestPermission({ cwd: '/p/foo', toolName: 'Write', input: {} });
+    const p = r.requestPermission({ key: '/p/foo', cwd: '/p/foo', toolName: 'Write', input: {} });
     await new Promise((res) => setTimeout(res, 0));
     r.answer(id, false);
     expect((await p).decision).toBe('deny');
@@ -61,19 +61,39 @@ describe('PermissionRouter pending lifecycle callbacks', () => {
       onPending: (p: unknown) => pend.push(p),
       onResolved: (p: unknown) => done.push(p),
     }));
-    const p = r.requestPermission({ cwd: '/p/foo', toolName: 'Bash', input: {} });
+    const p = r.requestPermission({ key: '/p/foo', cwd: '/p/foo', toolName: 'Bash', input: {} });
     await new Promise((res) => setTimeout(res, 0));
-    expect(pend).toEqual([{ cwd: '/p/foo', requestId: id, title: 'T', body: 'B', toolName: 'Bash' }]);
+    expect(pend).toEqual([{ key: '/p/foo', cwd: '/p/foo', requestId: id, title: 'T', body: 'B', toolName: 'Bash' }]);
     r.answer(id, true);
     await p;
-    expect(done).toEqual([{ cwd: '/p/foo', requestId: id, decision: 'allow' }]);
+    expect(done).toEqual([{ key: '/p/foo', cwd: '/p/foo', requestId: id, decision: 'allow' }]);
   });
 
   it('does not fire onPending when muted (deferred before a card)', async () => {
     const pend: unknown[] = [];
     const r = new PermissionRouter(base({ isMuted: () => true, onPending: (p: unknown) => pend.push(p) }));
-    await r.requestPermission({ cwd: '/x', toolName: 'Bash', input: {} });
+    await r.requestPermission({ key: '/x', cwd: '/x', toolName: 'Bash', input: {} });
     expect(pend).toEqual([]);
+  });
+
+  it('carries key and cwd as two independent fields through onPending/onResolved — never collapses them (Task 5 review, Important)', async () => {
+    const pend: Array<{ key: string; cwd: string }> = [];
+    const done: Array<{ key: string; cwd: string }> = [];
+    let id = '';
+    const r = new PermissionRouter(base({
+      renderCard: () => ({ title: 'T', body: 'B' }),
+      sendToChat: async (_t: unknown, c: { requestId: string }) => { id = c.requestId; },
+      onPending: (p: { key: string; cwd: string }) => pend.push(p),
+      onResolved: (p: { key: string; cwd: string }) => done.push(p),
+    }));
+    // key (registry identity) and cwd (real directory) are deliberately different
+    // values — a session id is never a directory path in practice.
+    const p = r.requestPermission({ key: 'sess-xyz', cwd: '/real/project/dir', toolName: 'Bash', input: {} });
+    await new Promise((res) => setTimeout(res, 0));
+    expect(pend).toEqual([{ key: 'sess-xyz', cwd: '/real/project/dir', requestId: id, title: 'T', body: 'B', toolName: 'Bash' }]);
+    r.answer(id, true);
+    await p;
+    expect(done).toEqual([{ key: 'sess-xyz', cwd: '/real/project/dir', requestId: id, decision: 'allow' }]);
   });
 });
 
@@ -81,7 +101,7 @@ describe('PermissionRouter policy short-circuit', () => {
   it('auto-allows without sending a card when policy says allow', async () => {
     const send = vi.fn();
     const r = new PermissionRouter(base({ policyDecide: () => ({ decision: 'allow', reason: 'read-only' }), sendToChat: send }));
-    const res = await r.requestPermission({ cwd: '/p', toolName: 'Read', input: {}, permissionMode: 'default' });
+    const res = await r.requestPermission({ key: '/p', cwd: '/p', toolName: 'Read', input: {}, permissionMode: 'default' });
     expect(res.decision).toBe('allow');
     expect(send).not.toHaveBeenCalled();
   });
@@ -89,7 +109,7 @@ describe('PermissionRouter policy short-circuit', () => {
     const render = vi.fn().mockReturnValue({ title: 'T', body: 'B' });
     let sent: { title?: string; body: string } | undefined;
     const r = new PermissionRouter(base({ renderCard: render, sendToChat: async (_t: unknown, c: { title?: string; body: string }) => { sent = c; } }));
-    const p = r.requestPermission({ cwd: '/p', toolName: 'Bash', input: { command: 'ls' } });
+    const p = r.requestPermission({ key: '/p', cwd: '/p', toolName: 'Bash', input: { command: 'ls' } });
     await new Promise((res) => setTimeout(res, 0));
     expect(render).toHaveBeenCalledWith({ toolName: 'Bash', input: { command: 'ls' } });
     expect(sent?.body).toBe('B');
@@ -101,7 +121,7 @@ describe('PermissionRouter policy short-circuit', () => {
 describe('PermissionRouter web-only gate + cancel + per-request timeout', () => {
   it('defers immediately when no IM chats AND no web clients', async () => {
     const r = new PermissionRouter(base({ configuredChats: () => [] }));
-    expect((await r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {} })).decision).toBe('defer');
+    expect((await r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {} })).decision).toBe('defer');
   });
 
   it('sends the card to web (onPending) when no IM chats but a web client is connected', async () => {
@@ -111,7 +131,7 @@ describe('PermissionRouter web-only gate + cancel + per-request timeout', () => 
       hasWebClients: () => true,
       onPending: (p: { requestId: string }) => { pend.push(p); r.answer(p.requestId, true); },
     }));
-    const res = await r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {} });
+    const res = await r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {} });
     expect(pend).toHaveLength(1);
     expect(res.decision).toBe('allow');
   });
@@ -125,7 +145,7 @@ describe('PermissionRouter web-only gate + cancel + per-request timeout', () => 
       onPending: (p: { requestId: string }) => { rid = p.requestId; },
       onResolved: (p: { requestId: string; decision: string }) => resolved.push({ requestId: p.requestId, decision: p.decision }),
     }));
-    const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {} });
+    const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {} });
     await new Promise((res) => setImmediate(res));
     expect(r.cancel({ key: '/other', toolName: 'Bash' })).toBe(0); // wrong key: no-op
     expect(r.cancel({ key: '/w', toolName: 'Edit' })).toBe(0);     // wrong tool: no-op
@@ -136,8 +156,8 @@ describe('PermissionRouter web-only gate + cancel + per-request timeout', () => 
 
   it('cancel({key}) without toolName sweeps all pending for the key', async () => {
     const r = new PermissionRouter(base({ configuredChats: () => [], hasWebClients: () => true }));
-    const p1 = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {} });
-    const p2 = r.requestPermission({ cwd: '/w', toolName: 'Edit', input: {} });
+    const p1 = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {} });
+    const p2 = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Edit', input: {} });
     await new Promise((res) => setImmediate(res));
     expect(r.cancel({ key: '/w' })).toBe(2);
     expect((await p1).decision).toBe('local');
@@ -148,8 +168,8 @@ describe('PermissionRouter web-only gate + cancel + per-request timeout', () => 
     // 两个子 agent(同 key 同 tool 不同 agentId)各有一张 pending 卡:
     // 本地答掉 agent A 的对话框,不得误伤 agent B 的卡。
     const r = new PermissionRouter(base({ configuredChats: () => [], hasWebClients: () => true }));
-    const pA = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, sessionId: 's1', agentId: 'agentA' });
-    const pB = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, sessionId: 's1', agentId: 'agentB' });
+    const pA = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, sessionId: 's1', agentId: 'agentA' });
+    const pB = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, sessionId: 's1', agentId: 'agentB' });
     await new Promise((res) => setImmediate(res));
     expect(r.cancel({ key: '/w', toolName: 'Bash', sessionId: 's1', matchAgent: 'agentA' })).toBe(1);
     expect((await pA).decision).toBe('local');
@@ -160,8 +180,8 @@ describe('PermissionRouter web-only gate + cancel + per-request timeout', () => 
 
   it('matchAgent tri-state: null = main-session only, undefined = any, string = that agent', async () => {
     const r = new PermissionRouter(base({ configuredChats: () => [], hasWebClients: () => true }));
-    const pMain = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {} }); // 主会话卡
-    const pSub = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, agentId: 'agentA' }); // 子 agent 卡
+    const pMain = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {} }); // 主会话卡
+    const pSub = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, agentId: 'agentA' }); // 子 agent 卡
     await new Promise((res) => setImmediate(res));
     // 子 agent 的本地回答不得释放主会话卡;主会话回答不得释放子 agent 卡
     expect(r.cancel({ key: '/w', toolName: 'Bash', matchAgent: 'agentB' })).toBe(0);
@@ -174,7 +194,7 @@ describe('PermissionRouter web-only gate + cancel + per-request timeout', () => 
 
   it('different sessionId on the same cwd does not cancel', async () => {
     const r = new PermissionRouter(base({ configuredChats: () => [], hasWebClients: () => true }));
-    const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, sessionId: 's1' });
+    const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, sessionId: 's1' });
     await new Promise((res) => setImmediate(res));
     expect(r.cancel({ key: '/w', toolName: 'Bash', sessionId: 's2' })).toBe(0);
     r.cancel({ key: '/w' });
@@ -185,7 +205,7 @@ describe('PermissionRouter web-only gate + cancel + per-request timeout', () => 
     vi.useFakeTimers();
     try {
       const r = new PermissionRouter(base({ configuredChats: () => [], hasWebClients: () => true }));
-      const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 5 });
+      const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 5 });
       let settled = false;
       void p.then(() => { settled = true; });
       await vi.advanceTimersByTimeAsync(4_000);
@@ -200,7 +220,7 @@ describe('PermissionRouter answer message passthrough', () => {
   it('carries the answer message through to the decision', async () => {
     let pendingId = '';
     const r = new PermissionRouter(base({ onPending: (p: { requestId: string }) => { pendingId = p.requestId; } }));
-    const p = r.requestPermission({ cwd: '/w', toolName: 'AskUserQuestion', input: {}, timeoutSec: 60 });
+    const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'AskUserQuestion', input: {}, timeoutSec: 60 });
     await new Promise((res) => setTimeout(res, 10));
     r.answer(pendingId, false, 'User answered: Blue');
     expect(await p).toEqual({ decision: 'deny', message: 'User answered: Blue' });
@@ -209,7 +229,7 @@ describe('PermissionRouter answer message passthrough', () => {
   it('omits message when none was given', async () => {
     let pendingId = '';
     const r = new PermissionRouter(base({ onPending: (p: { requestId: string }) => { pendingId = p.requestId; } }));
-    const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
+    const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
     await new Promise((res) => setTimeout(res, 10));
     r.answer(pendingId, true);
     expect(await p).toEqual({ decision: 'allow' });
@@ -224,7 +244,7 @@ describe('PermissionRouter askMulti passthrough (Task 10)', () => {
       renderCard: () => ({ title: 'T', body: 'B', askMulti: true }),
       sendToChat: async (_t: unknown, c: { requestId: string; askMulti?: boolean }) => { pendingId = c.requestId; sentCard = c; },
     }));
-    const p = r.requestPermission({ cwd: '/w', toolName: 'AskUserQuestion', input: {} });
+    const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'AskUserQuestion', input: {} });
     await new Promise((res) => setTimeout(res, 0));
     expect(sentCard?.askMulti).toBe(true);
     r.answer(pendingId, true);
@@ -238,7 +258,7 @@ describe('PermissionRouter askMulti passthrough (Task 10)', () => {
       renderCard: () => ({ title: 'T', body: 'B' }),
       sendToChat: async (_t: unknown, c: { requestId: string; askMulti?: boolean }) => { pendingId = c.requestId; sentCard = c; },
     }));
-    const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {} });
+    const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {} });
     await new Promise((res) => setTimeout(res, 0));
     expect(sentCard?.askMulti).toBeUndefined();
     r.answer(pendingId, true);
@@ -251,7 +271,7 @@ describe("Decision 'gone' — caller died", () => {
     let abandon: (() => void) | undefined;
     const r = new PermissionRouter(base());
     const p = r.requestPermission({
-      cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60,
+      key: '/w', cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60,
       onAbandoned: (cb) => { abandon = cb; },
     });
     await new Promise((res) => setTimeout(res, 10));
@@ -264,7 +284,7 @@ describe("Decision 'gone' — caller died", () => {
     let pendingId = '';
     const r = new PermissionRouter({ ...base(), onPending: (p) => { pendingId = p.requestId; } });
     const p = r.requestPermission({
-      cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60,
+      key: '/w', cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60,
       onAbandoned: (cb) => { abandon = cb; },
     });
     await new Promise((res) => setTimeout(res, 10));
@@ -282,7 +302,7 @@ describe("Decision 'gone' — caller died", () => {
       sendToChat: async (_t: unknown, c: { requestId: string }) => { sent.push(c.requestId); },
     });
     const p = r.requestPermission({
-      cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60,
+      key: '/w', cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60,
       onAbandoned: (cb) => { abandon = cb; },
     });
     await new Promise((res) => setTimeout(res, 30));
@@ -297,7 +317,7 @@ describe('answer() reports whether it hit', () => {
   it('returns true when it resolves a live pending', async () => {
     let pendingId = '';
     const r = new PermissionRouter({ ...base(), onPending: (p) => { pendingId = p.requestId; } });
-    const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
+    const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
     await new Promise((res) => setTimeout(res, 10));
     expect(r.answer(pendingId, true)).toBe(true);
     await p;
@@ -323,7 +343,7 @@ describe('approval grace gating', () => {
   it('never sends the card when the local terminal answers within grace', async () => {
     const sent: string[] = [];
     const r = new PermissionRouter(mkDeps(sent, 200));
-    const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
+    const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
     await new Promise((res) => setTimeout(res, 50));
     expect(r.cancel({ key: '/w' })).toBe(1);
     expect(await p).toEqual({ decision: 'local' });
@@ -336,7 +356,7 @@ describe('approval grace gating', () => {
     let pendingId = '';
     const deps = { ...mkDeps(sent, 200), onPending: (p: { requestId: string }) => { pendingId = p.requestId; } };
     const r = new PermissionRouter(deps);
-    const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
+    const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
     await new Promise((res) => setTimeout(res, 50));
     r.answer(pendingId, true);
     expect(await p).toEqual({ decision: 'allow' });
@@ -347,7 +367,7 @@ describe('approval grace gating', () => {
   it('sends the card once grace elapses with nobody answering', async () => {
     const sent: string[] = [];
     const r = new PermissionRouter(mkDeps(sent, 100));
-    const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
+    const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
     await new Promise((res) => setTimeout(res, 250));
     expect(sent.length).toBe(1);
     r.cancel({ key: '/w' });
@@ -360,7 +380,7 @@ describe('approval grace gating', () => {
     const t0 = Date.now();
     const deps = { ...mkDeps(sent, 500), onPending: () => { pendingAt = Date.now() - t0; } };
     const r = new PermissionRouter(deps);
-    const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
+    const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
     await new Promise((res) => setTimeout(res, 50));
     expect(pendingAt).toBeLessThan(50);
     r.cancel({ key: '/w' });
@@ -371,7 +391,7 @@ describe('approval grace gating', () => {
     const sent: string[] = [];
     let muted = false;
     const r = new PermissionRouter({ ...mkDeps(sent, 150), isMuted: () => muted });
-    const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
+    const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
     muted = true;
     await new Promise((res) => setTimeout(res, 250));
     expect(sent).toEqual([]);

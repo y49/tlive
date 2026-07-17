@@ -1,7 +1,14 @@
 //
 // In-memory rich registry of AI-coding sessions.
 // Keying: wrapped sessions (`tlive run`) key by their run uuid — several may
-// share one cwd; hook-only sessions key by cwd (hooks carry nothing better).
+// share one cwd. Hook-only sessions key by the vendor's own session id (CC
+// session_id / Codex codex:<threadId>) — falling back to cwd only when no
+// session id is available at all (see resolveKey in bootstrap.ts). Keying by
+// cwd would let two sessions in the same directory share one registry entry,
+// clobbering each other's state — that bug is exactly why key and cwd are
+// two separate fields here: cwd is carried on its own (immutable after the
+// session's first write — see upsert()) purely for display (label =
+// basename(cwd)), never for identity.
 // Hook traffic from INSIDE a wrapped pty carries TLIVE_SESSION and is routed
 // to that exact card by the daemon. Vendor-neutral; stores only current state
 // per session — never history/timelines. Staleness ("stuck Nm") is computed
@@ -21,7 +28,7 @@ export interface PendingApproval {
 }
 
 export interface SessionView {
-  id: string; // wrapped: run uuid; hook-only: cwd
+  id: string; // wrapped: run uuid; hook-only: vendor session id (falls back to cwd only if absent — see resolveKey in bootstrap.ts)
   label: string;
   cwd: string;
   kind: SessionKind;
