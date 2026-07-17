@@ -144,15 +144,19 @@ describe('InboundHandler', () => {
     expect(message).toContain('Selected: Blue');
   });
 
-  it('ask:<id>:<idx> is a no-op when the context is gone (already answered/stale)', async () => {
+  it('ask:<id>:<idx> replies with the stale-card notice when the context is gone (already answered/stale) — not a silent no-op', async () => {
     const permAnswer = vi.fn();
+    const msgs: Array<{ kind: string; text?: string }> = [];
     const h = new InboundHandler(baseDeps({
+      imBy: () => makeAdapter(msgs),
       peekAskContext: () => undefined,
       takeAskContext: () => undefined,
       permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
     }));
     await h.handle(envelope({ text: 'ask:req-9:1' }));
     expect(permAnswer).not.toHaveBeenCalled();
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].text).toMatch(/no longer active/i);
   });
 
   it('an out-of-range index does not consume the context — a later legit index still answers (review Minor 1)', async () => {
@@ -223,17 +227,21 @@ describe('InboundHandler', () => {
     expect(askSelection.selected('req-9')).toEqual([]);
   });
 
-  it('askskip:<id> is a no-op when the context is gone — symmetric with ask:/asktoggle:/asksubmit: peek-before-consume hardening (opus review)', async () => {
+  it('askskip:<id> replies with the stale-card notice when the context is gone — symmetric with ask:/asktoggle:/asksubmit: peek-before-consume hardening (opus review); never touches answer() for the unconfirmed rid', async () => {
     const permAnswer = vi.fn();
     const takeAskContext = vi.fn();
+    const msgs: Array<{ kind: string; text?: string }> = [];
     const h = new InboundHandler(baseDeps({
+      imBy: () => makeAdapter(msgs),
       peekAskContext: () => undefined,
       takeAskContext,
       permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
     }));
     await h.handle(envelope({ text: 'askskip:req-9' }));
-    expect(permAnswer).not.toHaveBeenCalled();
+    expect(permAnswer).not.toHaveBeenCalled(); // hardening intact: unconfirmed rid never reaches answer(rid, true)
     expect(takeAskContext).not.toHaveBeenCalled();
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].text).toMatch(/no longer active/i);
   });
 
   it('asktoggle:<id>:<idx> flips the selection and edits every sent card with refreshed checkboxes + Submit(N) (Task 10)', async () => {
@@ -332,16 +340,20 @@ describe('InboundHandler', () => {
     expect(store.peekAskContext('req-1')).toBeUndefined(); // consumed
   });
 
-  it('asksubmit: for an unknown/expired requestId is a no-op', async () => {
+  it('asksubmit: for an unknown/expired requestId replies with the stale-card notice — not a silent no-op', async () => {
     const permAnswer = vi.fn();
     const askSelection = new AskSelection();
     askSelection.toggle('gone', 0); // stale selection with no matching context
+    const msgs: Array<{ kind: string; text?: string }> = [];
     const h = new InboundHandler(baseDeps({
+      imBy: () => makeAdapter(msgs),
       askSelection,
       permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
     }));
     await h.handle(envelope({ text: 'asksubmit:gone' }));
     expect(permAnswer).not.toHaveBeenCalled();
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].text).toMatch(/no longer active/i);
   });
 
   it('tells the user when a stale card button is tapped instead of silently ignoring it', async () => {
