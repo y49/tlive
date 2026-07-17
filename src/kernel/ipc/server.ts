@@ -7,6 +7,11 @@ import type { IpcRequest, IpcResponse } from './protocol.js';
 
 export interface IpcCallContext {
   callerPid?: number;
+  /** 注册"调用方断开连接时叫我"。用于感知 shim 异常死亡(会话被 Ctrl+C /
+   *  终端关闭):正常流程下 shim 是拿到决策才关连接,那时 pending 已被
+   *  answer()/cancel() 删除 —— 所以"close 时 pending 尚存"零误判地等于
+   *  异常死亡,不需要任何超时/探活/心跳。 */
+  onDisconnect?: (cb: () => void) => void;
 }
 
 export interface IpcServer {
@@ -47,6 +52,12 @@ export async function startIpcServer(opts: {
   const server: Server = createServer((sock: Socket) => {
     // Suppress EPIPE / ECONNRESET from writes to a disconnected socket.
     sock.on('error', () => {});
+    const disconnectCbs: Array<() => void> = [];
+    sock.on('close', () => {
+      for (const cb of disconnectCbs.splice(0)) {
+        try { cb(); } catch { /* 一个回调抛出不得影响其它 */ }
+      }
+    });
     let buf = '';
     sock.on('data', (chunk) => {
       buf += chunk.toString('utf-8');
@@ -57,7 +68,7 @@ export async function startIpcServer(opts: {
         if (!line.trim()) continue;
         try {
           const req = JSON.parse(line) as IpcRequest;
-          const ctx: IpcCallContext = {};
+          const ctx: IpcCallContext = { onDisconnect: (cb) => { disconnectCbs.push(cb); } };
           // Best-effort SO_PEERCRED via raw socket. Linux only.
           // (Skipped here for portability; daemon can read /proc/<pid>/comm later.)
           const reply = (r: IpcResponse) => {
