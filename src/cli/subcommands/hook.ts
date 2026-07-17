@@ -19,6 +19,7 @@ import {
 } from '../../kernel/hook/normalizer.js';
 import { loadConfig } from '../../kernel/config/loader.js';
 import { spawnDaemonDetached } from '../../kernel/daemon/spawn.js';
+import { approvalWindow } from '../../kernel/config/window.js';
 
 /** session-start 时 daemon 不在 → 自动拉起(fire-and-forget,绝不阻塞 shim)。
  *  config daemon.autoStart !== false 才启用(默认开:装了 hooks 即想让 tlive 活着)。 */
@@ -45,17 +46,9 @@ async function readStdin(): Promise<unknown> {
 
 const USAGE = 'Usage: tlive hook [--codex] <permission-request|permission-denied|post-tool-use|stop|notification|user-prompt-submit|session-start|session-end|post-tool-use-failure|stop-failure>\n';
 
-/** 远程审批窗口(秒)+ 对应 shim IPC 死线(毫秒)。clamp 上限对齐插件
- *  hooks.json 的 vendor timeout(claude 86400),保证 vendor 超时永远在
- *  shim IPC 之后才触发:窗口 < ipc(+100s)< vendor。claude-only —— Codex
- *  不再靠 hook 审批(app-server companion 是唯一集成方式)。 */
-export function approvalWindow(
-  approvals?: { claudeWindowSec?: number },
-): { timeoutSec: number; ipcMs: number } {
-  const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi);
-  const timeoutSec = clamp(approvals?.claudeWindowSec ?? 1800, 60, 86_200); // 并行:默认 30min,可配到 ~24h
-  return { timeoutSec, ipcMs: (timeoutSec + 100) * 1000 };
-}
+// 窗口计算已下沉到 config 层(三方共用,见 kernel/config/window.ts);
+// 保留 re-export 以免动既有调用点。
+export { approvalWindow };
 
 /** 续跑窗口(秒):async Stop hook 在后台等回复的时长。默认 1800(30min);
  *  async 不占终端,所以窗口可以很长。clamp [30, 86400]。 */

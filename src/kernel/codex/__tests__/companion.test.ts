@@ -21,6 +21,7 @@ function harness() {
     permissionRouter: router as any,
     onMonitor,
     onResumePrompt: vi.fn(),
+    windowSec: () => 86_400,
   });
   return { rpc, router, onMonitor, comp, calls, getEvents: () => events, setEvents: (e: any) => { events = e; } };
 }
@@ -63,6 +64,7 @@ describe('companion', () => {
       permissionRouter: router as any,
       onMonitor: vi.fn(),
       onResumePrompt: vi.fn(),
+      windowSec: () => 86_400,
     });
     await Promise.resolve();
     await Promise.resolve();
@@ -147,6 +149,7 @@ describe('companion', () => {
       permissionRouter: router as any,
       onMonitor: vi.fn(),
       onResumePrompt: vi.fn(),
+      windowSec: () => 86_400,
     });
     await Promise.resolve();
     await Promise.resolve();
@@ -219,6 +222,7 @@ describe('companion', () => {
       permissionRouter: router as any,
       onMonitor,
       onResumePrompt,
+      windowSec: () => 86_400,
     });
     calls.length = 0;
     await vi.runOnlyPendingTimersAsync();
@@ -299,6 +303,7 @@ describe('companion', () => {
       permissionRouter: router as any,
       onMonitor: vi.fn(),
       onResumePrompt: vi.fn(),
+      windowSec: () => 86_400,
     });
     await vi.runOnlyPendingTimersAsync();
     await Promise.resolve();
@@ -333,6 +338,7 @@ describe('companion', () => {
       permissionRouter: router as any,
       onMonitor: vi.fn(),
       onResumePrompt: vi.fn(),
+      windowSec: () => 86_400,
     });
     await vi.runOnlyPendingTimersAsync();
     await Promise.resolve();
@@ -403,6 +409,7 @@ describe('companion', () => {
       permissionRouter: router as any,
       onMonitor: vi.fn(),
       onResumePrompt: vi.fn(),
+      windowSec: () => 86_400,
     });
     await Promise.resolve();
     await Promise.resolve();

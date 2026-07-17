@@ -1,7 +1,8 @@
 // src/kernel/codex/companion.ts
 //
 // Codex app-server 陪跑模块:连上后订阅所有线程(list+resume,含 no-rollout
-// 重试)、把 commandExecution 审批转发给 PermissionRouter(无超时,86400s 顶格,
+// 重试)、把 commandExecution 审批转发给 PermissionRouter(超时取自
+// deps.windowSec(),与 CC 共用 approvals.windowSec,默认 86200s 顶格,
 // 本地答案通过 item/completed / turn/completed 释放挂起卡)、requestUserInput
 // 只广播 attention 不代答(留给原生终端)。掉线自动重连(1s..30s 退避),纯编排
 // 层不直接碰 ws/net —— 一切通过注入的 connect。
@@ -14,6 +15,8 @@ export interface CompanionDeps {
   permissionRouter: Pick<PermissionRouter, 'requestPermission' | 'cancel'>;
   onMonitor: (ev: MonitorEvent, key: string) => void;
   onResumePrompt: (p: { threadId: string; key: string; lastMessage?: string }) => void;
+  /** 远程审批窗口(秒),与 CC 共用 approvals.windowSec —— 消除"一家可配一家硬编码"的不对称。 */
+  windowSec: () => number;
   log?: (msg: string) => void;
 }
 
@@ -173,7 +176,7 @@ export function startCompanion(deps: CompanionDeps): Companion {
           cwd: threadKey(threadId),
           toolName: 'Bash',
           input: { command, cwd, reason },
-          timeoutSec: 86_400,
+          timeoutSec: deps.windowSec(),
           sessionId: threadId,
         })
         .then((r) => {

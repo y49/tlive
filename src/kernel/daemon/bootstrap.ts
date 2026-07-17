@@ -12,6 +12,7 @@ import { createEditQueue } from './edit-queue.js';
 import { ContinueBroker } from '../permission/continue-broker.js';
 import { SenderGuard } from './sender-guard.js';
 import { loadConfig } from '../config/loader.js';
+import { approvalWindow } from '../config/window.js';
 import type { IMAdapter } from '../contracts/im-adapter.js';
 import { SessionRegistry } from '../web/session-registry.js';
 import { startWebServer, type WebServerHandle } from '../web/server.js';
@@ -367,6 +368,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       permissionRouter,
       onMonitor: (ev, key) => events.broadcast(applyMonitorEvent(sessions, ev, key)),
       onResumePrompt: onCodexResumePrompt,
+      windowSec: () => approvalWindow(cfg.approvals).timeoutSec,
       log: (m) => console.log(`[codex] ${m}`),
     });
     codexResume = (threadId, input) => codexCompanion!.resume(threadId, input);
