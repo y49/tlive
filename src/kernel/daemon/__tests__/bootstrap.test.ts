@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { bootstrapDaemon, shouldFastNullContinue, clampPermissionTimeout, makeCodexResumeHandler, shouldDropNotify, type DaemonHandle } from '../bootstrap';
+import { bootstrapDaemon, shouldFastNullContinue, clampPermissionTimeout, makeCodexResumeHandler, shouldDropNotify, resolveKey, type DaemonHandle } from '../bootstrap';
 import { request } from '../../ipc/client';
 import type { IMAdapter, IMChannel, OutgoingMessage, IncomingEnvelope } from '../../contracts/im-adapter';
 import { SessionRegistry } from '../../web/session-registry';
@@ -37,6 +37,22 @@ describe('dual-channel wiring helpers', () => {
     expect(clampPermissionTimeout(undefined)).toBe(580);
     expect(clampPermissionTimeout(86_000)).toBe(86_000);
     expect(clampPermissionTimeout(999_999)).toBe(86_400);
+  });
+});
+
+describe('resolveKey — one key per session, not per directory', () => {
+  it('prefers the wrapped run id (already unique)', () => {
+    expect(resolveKey('sess-1', '/w', 'run-uuid')).toBe('run-uuid');
+  });
+
+  it('uses the session id so two sessions in ONE directory never collide', () => {
+    expect(resolveKey('sess-A', '/same/dir')).toBe('sess-A');
+    expect(resolveKey('sess-B', '/same/dir')).toBe('sess-B');
+    expect(resolveKey('sess-A', '/same/dir')).not.toBe(resolveKey('sess-B', '/same/dir'));
+  });
+
+  it('falls back to cwd when the session id is missing (normalizer yields "")', () => {
+    expect(resolveKey('', '/w')).toBe('/w');
   });
 });
 

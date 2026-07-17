@@ -102,6 +102,15 @@ export function clampPermissionTimeout(timeoutSec: number | undefined): number {
   return Math.min(timeoutSec ?? 580, 86_400);
 }
 
+/** Hook 流量 → registry key。**每个会话一个 key,不是每个目录一个**:
+ *  wrapped 用 `tlive run` 的 uuid;hook-only 用 vendor 的会话 id
+ *  (CC 的 session_id / Codex 的 codex:<threadId>)。sessionId 缺失才落回 cwd。
+ *  用 cwd 当 key 会让同目录的两个会话共享一条记录 —— 后者的 continueId
+ *  会覆盖前者,前者的续跑卡就此失联(真 bug)。
+ *  cwd 仍作为 registry 的字段传入,label = basename(cwd) 因此仍是项目名。 */
+export const resolveKey = (sessionId: string, cwd: string, wrappedId?: string): string =>
+  wrappedId ?? (sessionId || cwd);
+
 /** stale 卡点击的告知文案。救不回来是物理事实(shim 已死),让用户以为点成功
  *  了才是产品在撒谎。覆盖:daemon 重启 / 已超时 / 会话已结束。 */
 export const STALE_CARD_NOTICE =
@@ -145,21 +154,14 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const sessions = new SessionRegistry();
   const events = new EventHub();
 
-  /** Hook traffic → registry key: the wrapped session's uuid when the hook ran
-   *  inside `tlive run` (TLIVE_SESSION), else cwd. We trust wrappedId even before
-   *  session.register arrives — the shim only ever sets it inside `tlive run`, so
-   *  keying by it (rather than falling back to cwd) avoids a phantom cwd-keyed
-   *  card during the register race; register merges into the same uuid key. */
-  const resolveKey = (cwd: string, wrappedId?: string): string => wrappedId ?? cwd;
-
-  // IM messageId → session cwd, for reply-to routing (bounded; daemon-lifetime only).
-  const msgToCwd = new Map<string, string>();
-  const rememberMsg = (channel: string, messageId: string, cwd: string): void => {
-    if (msgToCwd.size >= 500) {
-      const oldest = msgToCwd.keys().next().value;
-      if (oldest !== undefined) msgToCwd.delete(oldest);
+  // IM messageId → registry key, for reply-to routing (bounded; daemon-lifetime only).
+  const msgToKey = new Map<string, string>();
+  const rememberMsg = (channel: string, messageId: string, key: string): void => {
+    if (msgToKey.size >= 500) {
+      const oldest = msgToKey.keys().next().value;
+      if (oldest !== undefined) msgToKey.delete(oldest);
     }
-    msgToCwd.set(`${channel}:${messageId}`, cwd);
+    msgToKey.set(`${channel}:${messageId}`, key);
   };
 
   // Approval cards sent per requestId — edited to their outcome on resolve (no zombie buttons).
@@ -450,7 +452,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           setTimeout(() => { void shutdown(); }, 10).unref?.();
           return;
         case 'hook.permission.request': {
-          const key = resolveKey(req.cwd, req.wrappedId);
+          const key = resolveKey(req.sessionId, req.cwd, req.wrappedId);
           const r = await permissionRouter.requestPermission({
             cwd: key, toolName: req.toolName, input: req.input,
             permissionMode: req.permissionMode,
@@ -477,7 +479,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           reply({ kind: 'ack' });
           return;
         case 'hook.continue.request': {
-          const key = resolveKey(req.cwd, req.wrappedId);
+          const key = resolveKey(req.sessionId, req.cwd, req.wrappedId);
           // Stop = the turn ended; any still-pending approval card is stale.
           permissionRouter.cancel({ key });
           if (shouldFastNullContinue(configuredChats().length, events.size())) {
@@ -511,7 +513,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           return;
         }
         case 'hook.notify': {
-          const key = resolveKey(req.cwd, req.wrappedId);
+          const key = resolveKey(req.sessionId, req.cwd, req.wrappedId);
           const s = sessions.get(key);
           // droppable(normalizer 判定"无实际错误内容",如 Bash 非零退出但
           // stderr 为空)只压 IM——dashboard 广播(下面的 events.broadcast)
@@ -534,7 +536,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           return;
         }
         case 'hook.event': {
-          const key = resolveKey(req.event.cwd, req.wrappedId);
+          const key = resolveKey(req.event.sessionId, req.event.cwd, req.wrappedId);
           const ev = req.event;
           // Local terminal answered a permission dialog → release the parallel
           // remote card (CC dual-channel: PostToolUse = approved locally,
@@ -605,7 +607,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     askSelection,
     getAskCards: (rid: string) => sentCards.get(rid) ?? [],
     queueEdit: (rid, fn) => editQueue.enqueue(rid, fn),
-    resolveReply: (channel, messageId) => msgToCwd.get(`${channel}:${messageId}`),
+    resolveReply: (channel, messageId) => msgToKey.get(`${channel}:${messageId}`),
     sessionInfo: (cwd) => {
       const s = sessions.get(cwd);
       if (!s) return undefined;

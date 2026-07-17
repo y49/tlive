@@ -60,12 +60,15 @@ describe('daemon → /ws/events downstream broadcast', () => {
     h = await bootstrapDaemon({ home: tmp });
     const frames = await openEvents();
     await request({ kind: 'hook.event', event: { event: 'activity', cwd: '/repo/a', sessionId: 's', toolName: 'Bash', result: {} } }, { socketPath: sock, timeoutMs: 2000 });
-    const f = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/repo/a');
+    // Registry key is the session id, not the cwd (two sessions in one directory
+    // must not collide) — the cwd is still carried as a separate field.
+    const f = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's');
     expect(f.session.status).toBe('active');
+    expect(f.session.cwd).toBe('/repo/a');
     const url = new URL(h.webUrl!);
     const api = await fetch(`${url.origin}/api/sessions${url.search}`);
     const arr = (await api.json()) as Array<Record<string, any>>;
-    expect(arr.find((s) => s.id === '/repo/a')?.status).toBe('active');
+    expect(arr.find((s) => s.id === 's')?.status).toBe('active');
   });
 
   it('broadcasts session.register (upsert) and session.unregister (remove)', async () => {
@@ -99,15 +102,16 @@ describe('daemon → /ws/events downstream broadcast', () => {
       { socketPath: sock, timeoutMs: 8000 },
     );
 
-    // Effect 1: broadcast waiting-input with lastMessage.
-    const f = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/stop/cwd' && x.session.status === 'waiting-input');
+    // Effect 1: broadcast waiting-input with lastMessage. Keyed by session id
+    // ('s'), not by cwd — two sessions in '/stop/cwd' would otherwise collide.
+    const f = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's' && x.session.status === 'waiting-input');
     expect(f.session.lastMessage).toBe('last_msg');
 
     // Effect 2: ContinueBroker received the request → IM message sent containing requestId.
     await new Promise((r) => setTimeout(r, 100));
     expect(capturedMsg).toMatch(/last_msg/); // excerpt = 真正的最后一句
     // requestId no longer appears in the display text — take it from the registry
-    const continueId = h.sessions.get('/stop/cwd')!.continueId!;
+    const continueId = h.sessions.get('s')!.continueId!;
     expect(continueId).toMatch(/[a-f0-9-]{36}/);
 
     // Unblock the IPC handler by answering the broker.
@@ -121,12 +125,12 @@ describe('daemon → /ws/events downstream broadcast', () => {
     const frames = await openEvents();
     // fire the blocking permission request in the background
     const p = request({ kind: 'hook.permission.request', cwd: '/repo/c', sessionId: 's', toolName: 'Bash', input: { command: 'ls' } }, { socketPath: sock, timeoutMs: 5000 });
-    const ask = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/repo/c' && x.session.status === 'waiting-approval');
+    const ask = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's' && x.session.status === 'waiting-approval');
     expect(ask.session.pending?.title).toContain('Bash');
     const reqId = ask.session.pending.requestId as string;
     await request({ kind: 'hook.permission.answer', requestId: reqId, approved: true }, { socketPath: sock, timeoutMs: 2000 });
     await p;
-    const cleared = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/repo/c' && x.session.status === 'active');
+    const cleared = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's' && x.session.status === 'active');
     expect(cleared.session.pending).toBeUndefined();
   });
 
@@ -173,7 +177,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
     h = await bootstrapDaemon({ home: tmp, imAdapters: [makeFakeAdapter('telegram')] });
     const { frames, ws } = await openEventsWs();
     const p = request({ kind: 'hook.permission.request', cwd: '/repo/act', sessionId: 's', toolName: 'Bash', input: { command: 'ls' } }, { socketPath: sock, timeoutMs: 5000 });
-    const ask = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/repo/act' && x.session.status === 'waiting-approval');
+    const ask = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's' && x.session.status === 'waiting-approval');
     ws.send(JSON.stringify({ type: 'approve', requestId: ask.session.pending.requestId, approved: false }));
     const res = (await p) as { decision: string };
     expect(res.decision).toBe('deny');
@@ -184,12 +188,12 @@ describe('daemon → /ws/events downstream broadcast', () => {
     h = await bootstrapDaemon({ home: tmp });
     const { frames, ws } = await openEventsWs();
     const p = request({ kind: 'hook.continue.request', cwd: '/stop/x', sessionId: 's', context: 'ctx', lastMessage: 'lm' }, { socketPath: sock, timeoutMs: 8000 });
-    const wait = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/stop/x' && x.session.continueId);
+    const wait = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's' && x.session.continueId);
     ws.send(JSON.stringify({ type: 'reply', requestId: wait.session.continueId, text: 'keep going' }));
     const res = (await p) as { reply: string | null };
     expect(res.reply).toBe('keep going');
     // continueId cleared, status back to active
-    const done = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/stop/x' && x.session.status === 'active');
+    const done = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's' && x.session.status === 'active');
     expect(done.session.continueId).toBeUndefined();
   });
 
@@ -216,9 +220,9 @@ describe('daemon → /ws/events downstream broadcast', () => {
     const { frames, ws } = await openEventsWs();
     // create the session first
     await request({ kind: 'hook.event', event: { event: 'activity', cwd: '/repo/m', sessionId: 's', toolName: 'Bash', result: {} } }, { socketPath: sock, timeoutMs: 2000 });
-    await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/repo/m');
-    ws.send(JSON.stringify({ type: 'mute', id: '/repo/m', muted: true }));
-    const muted = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/repo/m' && x.session.muted === true);
+    await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's');
+    ws.send(JSON.stringify({ type: 'mute', id: 's', muted: true }));
+    const muted = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's' && x.session.muted === true);
     expect(muted.session.muted).toBe(true);
   });
 
@@ -241,9 +245,9 @@ describe('daemon → /ws/events downstream broadcast', () => {
     const p = request({ kind: 'hook.permission.request', cwd: '/tag/repo', sessionId: 's', toolName: 'Edit', input: { file_path: '/x', old_string: 'a', new_string: 'b' } }, { socketPath: sock, timeoutMs: 5000 });
     await new Promise((r) => setTimeout(r, 150));
     const card = sent.find((s) => s.kind === 'card');
-    expect(card?.title).toContain('repo · '); // session tag prefix
-    // answer → card edited to outcome
-    const reqId = h.sessions.get('/tag/repo')!.pending!.requestId;
+    expect(card?.title).toContain('repo · '); // session tag prefix (still basename(cwd) — label is unaffected by the key change)
+    // answer → card edited to outcome. Keyed by session id ('s'), not cwd.
+    const reqId = h.sessions.get('s')!.pending!.requestId;
     await request({ kind: 'hook.permission.answer', requestId: reqId, approved: false }, { socketPath: sock, timeoutMs: 2000 });
     await p;
     await new Promise((r) => setTimeout(r, 100));
@@ -256,7 +260,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
     h = await bootstrapDaemon({ home: tmp, imAdapters: [makeFakeAdapter('telegram')] });
     const { frames, ws } = await openEventsWs();
     const p = request({ kind: 'hook.permission.request', cwd: '/aa', sessionId: 's', toolName: 'Edit', input: {} }, { socketPath: sock, timeoutMs: 5000 });
-    const ask = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/aa' && x.session.status === 'waiting-approval');
+    const ask = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's' && x.session.status === 'waiting-approval');
     expect(ask.session.pending.toolName).toBe('Edit');
     ws.send(JSON.stringify({ type: 'approve', requestId: ask.session.pending.requestId, approved: true, alwaysAllowTool: 'Edit' }));
     expect(((await p) as { decision: string }).decision).toBe('allow');
@@ -280,9 +284,10 @@ describe('daemon → /ws/events downstream broadcast', () => {
     const api = await fetch(`${new URL(h.webUrl!).origin}/api/sessions${new URL(h.webUrl!).search}`);
     const arr = (await api.json()) as Array<Record<string, any>>;
     expect(arr).toHaveLength(2); // still exactly two cards
-    // hook event WITHOUT wrappedId (bare claude in the same dir) → its own hook card
-    await request({ kind: 'hook.event', event: { event: 'activity', cwd: '/same', sessionId: 's', toolName: 'Read', result: {} } }, { socketPath: sock, timeoutMs: 2000 });
-    await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/same' && x.session.kind === 'hook');
+    // hook event WITHOUT wrappedId (bare claude in the same dir) → its own hook
+    // card, keyed by its OWN session id ('s2'), not by the shared cwd '/same'.
+    await request({ kind: 'hook.event', event: { event: 'activity', cwd: '/same', sessionId: 's2', toolName: 'Read', result: {} } }, { socketPath: sock, timeoutMs: 2000 });
+    await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's2' && x.session.kind === 'hook');
   });
 
 
@@ -308,16 +313,16 @@ describe('daemon → /ws/events downstream broadcast', () => {
     h = await bootstrapDaemon({ home: tmp, imAdapters: [makeFakeAdapter('telegram')] });
     const frames = await openEvents();
     const pA = request({ kind: 'hook.permission.request', cwd: '/cc', sessionId: 's', toolName: 'Bash', input: { command: 'a' } }, { socketPath: sock, timeoutMs: 5000 });
-    const fa = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/cc' && x.session.pending);
+    const fa = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's' && x.session.pending);
     const reqA = fa.session.pending.requestId as string;
     const pB = request({ kind: 'hook.permission.request', cwd: '/cc', sessionId: 's', toolName: 'Write', input: {} }, { socketPath: sock, timeoutMs: 5000 });
-    const fb = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/cc' && x.session.pending && x.session.pending.requestId !== reqA);
+    const fb = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's' && x.session.pending && x.session.pending.requestId !== reqA);
     const reqB = fb.session.pending.requestId as string;
     // resolve A (deny) — must NOT wipe B's pending indicator
     await request({ kind: 'hook.permission.answer', requestId: reqA, approved: false }, { socketPath: sock, timeoutMs: 2000 });
     expect(((await pA) as { decision: string }).decision).toBe('deny');
     await new Promise((r) => setTimeout(r, 80));
-    expect(h.sessions.get('/cc')?.pending?.requestId).toBe(reqB);
+    expect(h.sessions.get('s')?.pending?.requestId).toBe(reqB);
     // cleanup
     await request({ kind: 'hook.permission.answer', requestId: reqB, approved: false }, { socketPath: sock, timeoutMs: 2000 });
     await pB;
@@ -367,7 +372,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
 
       // Effect 1 (must hold): dashboard still gets the attention — this event is
       // its only view of the failed tool call.
-      const f = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/drop/repo' && x.session.status === 'waiting-input');
+      const f = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's' && x.session.status === 'waiting-input');
       expect(f.session.lastMessage).toBe('Bash failed (no error output)');
 
       // Effect 2 (must hold): IM adapter.send was never invoked for this notify.
@@ -388,7 +393,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
         { socketPath: sock, timeoutMs: 2000 },
       );
 
-      await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/real/repo' && x.session.lastMessage === 'Bash failed: permission denied');
+      await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's' && x.session.lastMessage === 'Bash failed: permission denied');
       await new Promise((r) => setTimeout(r, 100));
       expect(sent).toHaveLength(1);
       expect(sent[0]).toContain('permission denied');
@@ -407,7 +412,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
         { socketPath: sock, timeoutMs: 2000 },
       );
 
-      await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === '/notif/repo');
+      await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's');
       await new Promise((r) => setTimeout(r, 100));
       expect(sent).toHaveLength(1);
     });
