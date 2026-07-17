@@ -2,9 +2,11 @@
 import { randomUUID } from 'node:crypto';
 import type { AskOption } from '../permission/ask-renderer.js';
 
-/** 'local' = the user answered in the local terminal; the IPC layer maps it to
- *  'defer' on the wire (shim outputs pass-through {}) — never an auto-allow. */
-export type Decision = 'allow' | 'deny' | 'defer' | 'local';
+/** 'local' = 用户在本地终端答的;IPC 层映射成 'defer'(shim 输出 pass-through {})—— 绝不 auto-allow。
+ *  'gone'  = 调用方(shim)在等待中异常死亡(会话被 Ctrl+C / 终端关闭)。终态,
+ *           **不产生任何 wire 输出**(shim 已死,本就送不出去),仅用于把卡
+ *           改写成 "Session ended" —— 卡必须说真话。 */
+export type Decision = 'allow' | 'deny' | 'defer' | 'local' | 'gone';
 export interface PermChat { channel: string; chatId: string }
 
 export interface PermissionRouterDeps {
@@ -56,7 +58,7 @@ export class PermissionRouter {
   private pending = new Map<string, PendingEntry>();
   constructor(private deps: PermissionRouterDeps) {}
 
-  async requestPermission(opts: { cwd: string; toolName: string; input: unknown; permissionMode?: string; timeoutSec?: number; sessionId?: string; agentId?: string }): Promise<{ decision: Decision; message?: string }> {
+  async requestPermission(opts: { cwd: string; toolName: string; input: unknown; permissionMode?: string; timeoutSec?: number; sessionId?: string; agentId?: string; onAbandoned?: (cb: () => void) => void }): Promise<{ decision: Decision; message?: string }> {
     // Policy first: an auto-allow (read-only / trust switch) skips the card even when muted.
     const pd = this.deps.policyDecide({ toolName: opts.toolName, input: opts.input, permissionMode: opts.permissionMode });
     if (pd.decision === 'allow') return { decision: 'allow' };
@@ -79,6 +81,14 @@ export class PermissionRouter {
       setTimeout(() => {
         if (this.pending.has(requestId)) { this.pending.delete(requestId); resolve({ decision: 'defer' }); }
       }, (opts.timeoutSec ?? PERMISSION_TIMEOUT_SEC) * 1000).unref();
+      // 调用方死亡 → 放弃该 pending。判据零误判:answer()/cancel() 都先
+      // pending.delete() 再 resolve,所以此时 has() 为真 ⟺ 真的没人答过。
+      opts.onAbandoned?.(() => {
+        if (this.pending.has(requestId)) {
+          this.pending.delete(requestId);
+          resolve({ decision: 'gone' });
+        }
+      });
       // web 立即 —— dashboard 是 pull 视图,不该等 grace。
       this.deps.onPending?.({
         cwd: opts.cwd, requestId, title, body, toolName: opts.toolName,

@@ -246,6 +246,53 @@ describe('PermissionRouter askMulti passthrough (Task 10)', () => {
   });
 });
 
+describe("Decision 'gone' — caller died", () => {
+  it('resolves gone when the caller disconnects while pending', async () => {
+    let abandon: (() => void) | undefined;
+    const r = new PermissionRouter(base());
+    const p = r.requestPermission({
+      cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60,
+      onAbandoned: (cb) => { abandon = cb; },
+    });
+    await new Promise((res) => setTimeout(res, 10));
+    abandon!();
+    expect(await p).toEqual({ decision: 'gone' });
+  });
+
+  it('a disconnect AFTER the answer is a no-op (normal flow, zero false positives)', async () => {
+    let abandon: (() => void) | undefined;
+    let pendingId = '';
+    const r = new PermissionRouter({ ...base(), onPending: (p) => { pendingId = p.requestId; } });
+    const p = r.requestPermission({
+      cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60,
+      onAbandoned: (cb) => { abandon = cb; },
+    });
+    await new Promise((res) => setTimeout(res, 10));
+    r.answer(pendingId, true);
+    expect(await p).toEqual({ decision: 'allow' }); // answer 先到,gone 不得覆盖
+    abandon!(); // shim 拿到决策后关连接 —— 必须无害
+  });
+
+  it('a disconnect inside the grace window sends no card at all', async () => {
+    const sent: string[] = [];
+    let abandon: (() => void) | undefined;
+    const r = new PermissionRouter({
+      ...base(),
+      graceSec: () => 0.15,
+      sendToChat: async (_t: unknown, c: { requestId: string }) => { sent.push(c.requestId); },
+    });
+    const p = r.requestPermission({
+      cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60,
+      onAbandoned: (cb) => { abandon = cb; },
+    });
+    await new Promise((res) => setTimeout(res, 30));
+    abandon!();
+    expect(await p).toEqual({ decision: 'gone' });
+    await new Promise((res) => setTimeout(res, 250));
+    expect(sent).toEqual([]); // grace 未到就断了 → 卡根本不该诞生
+  });
+});
+
 describe('approval grace gating', () => {
   const mkDeps = (sent: string[], graceMs: number) => ({
     configuredChats: () => [{ channel: 'telegram', chatId: 'c1' }],

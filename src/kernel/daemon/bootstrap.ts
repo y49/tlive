@@ -247,7 +247,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   }, 30_000);
   sweeper.unref();
 
-  const OUTCOME: Record<string, string> = { allow: 'Allowed', deny: 'Denied', defer: 'Timed out', local: 'Answered in terminal' };
+  const OUTCOME: Record<string, string> = { allow: 'Allowed', deny: 'Denied', defer: 'Timed out', local: 'Answered in terminal', gone: 'Session ended' };
 
   const permissionRouter = new PermissionRouter({
     configuredChats,
@@ -443,7 +443,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             timeoutSec: clampPermissionTimeout(req.timeoutSec),
             ...(req.sessionId ? { sessionId: req.sessionId } : {}),
             ...(req.agentId ? { agentId: req.agentId } : {}),
+            ...(ctx.onDisconnect ? { onAbandoned: ctx.onDisconnect } : {}),
           });
+          // 'gone' = the shim already died — the socket is gone, there is
+          // nothing to reply to, and inventing a decision would itself be an
+          // auto-allow path. No wire output at all.
+          if (r.decision === 'gone') return;
           // 'local' (answered in the terminal) maps to 'defer' on the wire: the shim
           // outputs pass-through {} — a no-op for a dialog that is already gone.
           reply({
