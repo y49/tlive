@@ -43,6 +43,15 @@ export function startCompanion(deps: CompanionDeps): Companion {
   // Threads we've already (attempted to) resume on the current connection.
   // Cleared on disconnect — a reconnect doesn't preserve app-server subscriptions.
   let resumed = new Set<string>();
+  /** threadId → 该 thread 的真实工作目录。来自 thread/resume 响应的 cwd
+   *  (ThreadResumeResponse.cwd,见 app-server-protocol .../v2/thread.rs)。
+   *  key 仍是 codex:<threadId>(唯一),cwd 才是真目录 —— registry 据此把
+   *  label 算成 basename(cwd) = 项目名,与 CC 一致。
+   *  时序保证:resume 成功才订阅、订阅了才有事件 ⟹ cwd 一定先于事件到手
+   *  (registry 的 cwd 首次创建后不可变,所以这点很关键)。 */
+  const threadCwds = new Map<string, string>();
+  /** 没拿到真 cwd 时退回 key —— 不崩,只是 label 退化成 codex:<id>。 */
+  const cwdOf = (threadId: string): string => threadCwds.get(threadId) ?? threadKey(threadId);
 
   const log = deps.log ?? (() => undefined);
 
@@ -53,7 +62,11 @@ export function startCompanion(deps: CompanionDeps): Companion {
       resumed.add(threadId);
     }
     rpc.call('thread/resume', { threadId }).then(
-      () => { reconnectDelay = RECONNECT_MIN_MS; },
+      (res) => {
+        reconnectDelay = RECONNECT_MIN_MS;
+        const cwd = (res as { cwd?: unknown } | undefined)?.cwd;
+        if (typeof cwd === 'string' && cwd) threadCwds.set(threadId, cwd);
+      },
       (err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         if (/no rollout/i.test(msg) && attempt < RESUME_RETRY_MAX) {
@@ -111,12 +124,13 @@ export function startCompanion(deps: CompanionDeps): Companion {
       if (!threadId) return;
       const item = (p.item ?? {}) as Record<string, unknown>;
       const key = threadKey(threadId);
+      const cwd = cwdOf(threadId);
       if (item.type === 'userMessage') {
         const content = item.content as Array<{ text?: string }> | undefined;
         const prompt = content?.[0]?.text ?? '';
-        deps.onMonitor({ event: 'prompt', cwd: key, sessionId: threadId, prompt }, key);
+        deps.onMonitor({ event: 'prompt', cwd, sessionId: threadId, prompt }, key);
       } else if (item.type === 'commandExecution') {
-        deps.onMonitor({ event: 'activity', cwd: key, sessionId: threadId, toolName: 'Bash', result: {} }, key);
+        deps.onMonitor({ event: 'activity', cwd, sessionId: threadId, toolName: 'Bash', result: {} }, key);
       }
       return;
     }
@@ -124,7 +138,7 @@ export function startCompanion(deps: CompanionDeps): Companion {
       const threadId = (p.threadId as string | undefined) ?? '';
       if (!threadId) return;
       const key = threadKey(threadId);
-      deps.onMonitor({ event: 'activity', cwd: key, sessionId: threadId, toolName: '(turn)', result: {} }, key);
+      deps.onMonitor({ event: 'activity', cwd: cwdOf(threadId), sessionId: threadId, toolName: '(turn)', result: {} }, key);
       return;
     }
     if (method === 'item/completed') {
@@ -145,7 +159,7 @@ export function startCompanion(deps: CompanionDeps): Companion {
         const key = threadKey(threadId);
         const lastMessage = lastMessages.get(threadId);
         deps.onMonitor(
-          { event: 'attention', cwd: key, sessionId: threadId, message: TURN_FINISHED_SENTINEL, ...(lastMessage !== undefined ? { lastMessage } : {}) },
+          { event: 'attention', cwd: cwdOf(threadId), sessionId: threadId, message: TURN_FINISHED_SENTINEL, ...(lastMessage !== undefined ? { lastMessage } : {}) },
           key,
         );
         deps.onResumePrompt({ threadId, key, ...(lastMessage !== undefined ? { lastMessage } : {}) });
@@ -157,8 +171,12 @@ export function startCompanion(deps: CompanionDeps): Companion {
       const status = (p.status ?? {}) as Record<string, unknown>;
       if (threadId && status.type === 'archived') {
         const key = threadKey(threadId);
+        const cwd = cwdOf(threadId);
         lastMessages.delete(threadId);
-        deps.onMonitor({ event: 'session-end', cwd: key, sessionId: threadId }, key);
+        deps.onMonitor({ event: 'session-end', cwd, sessionId: threadId }, key);
+        // Thread is done — drop the cached cwd so it can't leak into a stray
+        // later event for the same (now-archived) threadId.
+        threadCwds.delete(threadId);
       }
       return;
     }
@@ -174,14 +192,13 @@ export function startCompanion(deps: CompanionDeps): Companion {
       void deps.permissionRouter
         .requestPermission({
           key: threadKey(threadId),
-          // TODO(Task 6): thread the real `cwd` (from `p.cwd`, already
-          // extracted above) instead of the thread key once the registry's
-          // cwd threading is verified end-to-end for Codex. Safe to change
-          // in isolation now — the router matches pending requests on `key`
+          // Session cwd, from thread/resume (see threadCwds/cwdOf above) —
+          // NOT `p.cwd` (that's the command-execution cwd, kept below in
+          // `input.cwd` only). The router matches pending requests on `key`
           // only, never on `cwd` (see permission-router.ts's requestPermission
-          // doc comment), so this will no longer collide the way it used to
-          // before the key/cwd split.
-          cwd: threadKey(threadId),
+          // doc comment), so cwd here is purely a display value for the
+          // registry's label = basename(cwd).
+          cwd: cwdOf(threadId),
           toolName: 'Bash',
           input: { command, cwd, reason },
           timeoutSec: deps.windowSec(),
@@ -202,7 +219,7 @@ export function startCompanion(deps: CompanionDeps): Companion {
     if (method === 'tool/requestUserInput') {
       const threadId = (p.threadId as string | undefined) ?? '';
       deps.onMonitor(
-        { event: 'attention', cwd: threadKey(threadId), sessionId: threadId, message: 'Codex is asking a question in the terminal' },
+        { event: 'attention', cwd: cwdOf(threadId), sessionId: threadId, message: 'Codex is asking a question in the terminal' },
         threadKey(threadId),
       );
       return;

@@ -87,8 +87,10 @@ describe('companion', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(router.requestPermission).toHaveBeenCalledWith(expect.objectContaining({
-      // key/cwd are still the same value here (Task 6 will thread the real
-      // `/w` as cwd; today's fix only makes that change safe, see companion.ts).
+      // This harness's thread/resume mock never returns a `cwd`, so the
+      // session cwd falls back to the thread key (see cwdOf in companion.ts).
+      // The payload's own `/w` (command-execution cwd) stays confined to
+      // `input.cwd` below — it is never promoted to the session cwd.
       key: 'codex:t1',
       cwd: 'codex:t1',
       toolName: 'Bash',
@@ -439,6 +441,135 @@ describe('companion', () => {
     await Promise.resolve();
     // At time 30s, poll should trigger and make attempt 11
     expect(resumeAttempts).toBe(11);
+
+    comp.stop();
+  });
+
+  it('reports the real cwd (from thread/resume) so the session label becomes the project name', async () => {
+    let events: any;
+    const rpc = {
+      call: vi.fn(async (method: string, params: any) => {
+        if (method === 'thread/loaded/list') return { data: ['t1'] };
+        if (method === 'thread/resume') return { thread: { id: params.threadId }, cwd: '/home/y/Project/mihomo-gui' };
+        return {};
+      }),
+      notify: vi.fn(),
+      close: vi.fn(),
+    };
+    const router = { requestPermission: vi.fn(async () => ({ decision: 'allow' })), cancel: vi.fn(() => 0) };
+    const onMonitor = vi.fn();
+    const comp = startCompanion({
+      connect: async (e: any) => { events = e; return rpc as any; },
+      permissionRouter: router as any,
+      onMonitor,
+      onResumePrompt: vi.fn(),
+      windowSec: () => 86_400,
+    });
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    events.onNotify('item/started', { threadId: 't1', item: { type: 'userMessage', content: [{ text: 'hi' }] } });
+    // key stays the unique thread id; cwd becomes the real directory so
+    // registry's label = basename(cwd) = "mihomo-gui" instead of "codex:t1".
+    expect(onMonitor).toHaveBeenCalledWith(
+      { event: 'prompt', cwd: '/home/y/Project/mihomo-gui', sessionId: 't1', prompt: 'hi' },
+      'codex:t1',
+    );
+    comp.stop();
+  });
+
+  it('falls back to the thread key when resume yields no cwd (never crashes)', async () => {
+    // harness()'s thread/resume mock returns no `cwd` — this documents the
+    // fallback explicitly, as the safety net for Step 3's cwdOf().
+    const { comp, onMonitor, getEvents } = harness();
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+    const events = getEvents();
+    events.onNotify('item/started', { threadId: 't1', item: { type: 'userMessage', content: [{ text: 'hi' }] } });
+    expect(onMonitor).toHaveBeenCalledWith(
+      { event: 'prompt', cwd: 'codex:t1', sessionId: 't1', prompt: 'hi' },
+      'codex:t1',
+    );
+    comp.stop();
+  });
+
+  it('requestPermission gets the real session cwd while input.cwd keeps the command-execution cwd and key stays codex:<id>', async () => {
+    let events: any;
+    const rpc = {
+      call: vi.fn(async (method: string, params: any) => {
+        if (method === 'thread/loaded/list') return { data: ['t1'] };
+        if (method === 'thread/resume') return { thread: { id: params.threadId }, cwd: '/home/y/Project/mihomo-gui' };
+        return {};
+      }),
+      notify: vi.fn(),
+      close: vi.fn(),
+    };
+    const router = { requestPermission: vi.fn(async () => ({ decision: 'allow' })), cancel: vi.fn(() => 0) };
+    const comp = startCompanion({
+      connect: async (e: any) => { events = e; return rpc as any; },
+      permissionRouter: router as any,
+      onMonitor: vi.fn(),
+      onResumePrompt: vi.fn(),
+      windowSec: () => 86_400,
+    });
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const respond = vi.fn();
+    events.onServerRequest(5, 'item/commandExecution/requestApproval', { threadId: 't1', itemId: 'i1', command: 'rm -rf /', cwd: '/w' }, respond);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(router.requestPermission).toHaveBeenCalledWith(expect.objectContaining({
+      key: 'codex:t1',
+      cwd: '/home/y/Project/mihomo-gui', // session cwd, from thread/resume — NOT the payload's '/w'
+      input: expect.objectContaining({ command: 'rm -rf /', cwd: '/w' }), // command-execution cwd, untouched
+    }));
+    comp.stop();
+  });
+
+  it('clears the cached cwd when a thread is archived, so a stray later event for the same id falls back instead of leaking a stale value', async () => {
+    let events: any;
+    const rpc = {
+      call: vi.fn(async (method: string, params: any) => {
+        if (method === 'thread/loaded/list') return { data: ['t1'] };
+        if (method === 'thread/resume') return { thread: { id: params.threadId }, cwd: '/home/y/Project/demo' };
+        return {};
+      }),
+      notify: vi.fn(),
+      close: vi.fn(),
+    };
+    const router = { requestPermission: vi.fn(async () => ({ decision: 'allow' })), cancel: vi.fn(() => 0) };
+    const onMonitor = vi.fn();
+    const comp = startCompanion({
+      connect: async (e: any) => { events = e; return rpc as any; },
+      permissionRouter: router as any,
+      onMonitor,
+      onResumePrompt: vi.fn(),
+      windowSec: () => 86_400,
+    });
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    events.onNotify('item/started', { threadId: 't1', item: { type: 'userMessage', content: [{ text: 'hi' }] } });
+    expect(onMonitor).toHaveBeenLastCalledWith(
+      { event: 'prompt', cwd: '/home/y/Project/demo', sessionId: 't1', prompt: 'hi' },
+      'codex:t1',
+    );
+
+    events.onNotify('thread/status/changed', { threadId: 't1', status: { type: 'archived' } });
+
+    // A stray notification for the same (now-archived) threadId must not
+    // resurrect the stale cached cwd — the map entry must be gone.
+    events.onNotify('item/started', { threadId: 't1', item: { type: 'userMessage', content: [{ text: 'again' }] } });
+    expect(onMonitor).toHaveBeenLastCalledWith(
+      { event: 'prompt', cwd: 'codex:t1', sessionId: 't1', prompt: 'again' },
+      'codex:t1',
+    );
 
     comp.stop();
   });
