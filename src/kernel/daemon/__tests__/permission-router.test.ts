@@ -234,6 +234,37 @@ describe('PermissionRouter answer message passthrough', () => {
     r.answer(pendingId, true);
     expect(await p).toEqual({ decision: 'allow' });
   });
+
+  it('forwards the deny message to onResolved (Task 7 — deny with guidance) without losing key/cwd', async () => {
+    let pendingId = '';
+    const done: Array<{ key: string; cwd: string; requestId: string; decision: string; message?: string }> = [];
+    const r = new PermissionRouter(base({
+      onPending: (p: { requestId: string }) => { pendingId = p.requestId; },
+      onResolved: (p: { key: string; cwd: string; requestId: string; decision: string; message?: string }) => done.push(p),
+    }));
+    const p = r.requestPermission({ key: 'sess-xyz', cwd: '/real/project/dir', toolName: 'Bash', input: {}, timeoutSec: 60 });
+    await new Promise((res) => setTimeout(res, 10));
+    r.answer(pendingId, false, 'Do not use rm -rf, move it to /tmp instead');
+    await p;
+    expect(done).toEqual([{
+      key: 'sess-xyz', cwd: '/real/project/dir', requestId: pendingId,
+      decision: 'deny', message: 'Do not use rm -rf, move it to /tmp instead',
+    }]);
+  });
+
+  it('onResolved carries no message key at all for a plain allow (not message: undefined)', async () => {
+    let pendingId = '';
+    const done: Array<Record<string, unknown>> = [];
+    const r = new PermissionRouter(base({
+      onPending: (p: { requestId: string }) => { pendingId = p.requestId; },
+      onResolved: (p: Record<string, unknown>) => done.push(p),
+    }));
+    const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
+    await new Promise((res) => setTimeout(res, 10));
+    r.answer(pendingId, true);
+    await p;
+    expect('message' in done[0]).toBe(false);
+  });
 });
 
 describe('PermissionRouter askMulti passthrough (Task 10)', () => {

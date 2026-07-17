@@ -61,6 +61,11 @@ export interface InboundHandlerDeps {
   listSessions: () => Array<{ cwd: string; kind: 'wrapped' | 'hook'; label: string; sockPath?: string }>;
   /** Inject text into a wrapped session's pty (bracketed paste + Enter). */
   inject: (sockPath: string, text: string) => Promise<void>;
+  /** IM messageId → still-live approval requestId, or null if that card has
+   *  already settled (or was never a card). Backed by bootstrap.ts's sentCards,
+   *  which is deleted the instant a request resolves — "findable" IS "live",
+   *  same judgment-free philosophy as pending.has() (Task 7). */
+  findLiveCard: (channel: string, messageId: string) => string | null;
 }
 
 function parseCallback(text: string): { requestId: string; approved: boolean } | null {
@@ -253,8 +258,20 @@ export class InboundHandler {
     });
   }
 
-  /** Quoted-message routing: live continue answer > wrapped pty injection > guidance. */
+  /** Quoted-message routing: live approval card > live continue answer > wrapped pty injection > guidance. */
   private async routeReply(env: IncomingEnvelope): Promise<void> {
+    // 引用一张仍然活跃的审批卡 = 对那次审批的答复,而不是给会话发消息。
+    // 带上文字 = 带理由的拒绝:CC 会把 message 原样送进 agent 的对话流,
+    // agent 据此换方案继续,而不是撞上一句干巴巴的 "Denied via tlive" 后停摆。
+    // (wire 事实:只有 deny 能带话,allow 不带 message —— 引用回复因此在构造上
+    // 就是 deny-only,绝不可能被这条路径用来批准任何东西。)
+    const rid = env.text ? this.deps.findLiveCard(env.channel, env.replyToMessageId!) : null;
+    if (rid) {
+      if (!this.deps.permissionRouter.answer(rid, false, env.text)) {
+        await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
+      }
+      return;
+    }
     const cwd = this.deps.resolveReply(env.channel, env.replyToMessageId!);
     if (!cwd) {
       await this.reply(env, { kind: 'text', text: '找不到该消息对应的会话(daemon 可能重启过),请引用较新的消息。' });

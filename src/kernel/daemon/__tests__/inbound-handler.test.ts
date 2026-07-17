@@ -38,6 +38,7 @@ const baseDeps = (over: Partial<InboundHandlerDeps> = {}): InboundHandlerDeps =>
     sessionInfo: () => undefined,
     listSessions: () => [],
     inject: vi.fn().mockResolvedValue(undefined),
+    findLiveCard: () => null,
     peekAskContext: () => undefined,
     takeAskContext: () => undefined,
     askSelection: new AskSelection(),
@@ -461,6 +462,80 @@ describe('reply-to routing & injection', () => {
     await h.handle(envelope({ text: 'allowtool:rid-1:Edit' }));
     expect(addAllowTool).toHaveBeenCalledWith('Edit');
     expect(permAnswer).toHaveBeenCalledWith('rid-1', true);
+  });
+});
+
+describe('quoting a live approval card = deny with guidance', () => {
+  it('sends the quoted text to the agent as the denial reason', async () => {
+    const answers: Array<{ rid: string; approved: boolean; message?: string }> = [];
+    const h = new InboundHandler(baseDeps({
+      findLiveCard: (_ch: string, mid: string) => (mid === 'card-msg-1' ? 'req-1' : null),
+      permissionRouter: {
+        answer: (rid: string, approved: boolean, message?: string) => { answers.push({ rid, approved, message }); return true; },
+        requestPermission: vi.fn(),
+      } as unknown as PermissionRouter,
+    }));
+    await h.handle(envelope({ text: 'Do not use rm -rf, move it to /tmp instead', replyToMessageId: 'card-msg-1' }));
+    expect(answers).toEqual([{ rid: 'req-1', approved: false, message: 'Do not use rm -rf, move it to /tmp instead' }]);
+  });
+
+  it('takes priority over continue/inject routing', async () => {
+    const answers: string[] = [];
+    const continued: string[] = [];
+    const injected = vi.fn();
+    const h = new InboundHandler(baseDeps({
+      findLiveCard: () => 'req-1',
+      permissionRouter: {
+        answer: (rid: string) => { answers.push(rid); return true; },
+        requestPermission: vi.fn(),
+      } as unknown as PermissionRouter,
+      continueBroker: { answer: (id: string) => { continued.push(id); return true; }, request: vi.fn(), onRequest: vi.fn() } as unknown as ContinueBroker,
+      // Even if reply-routing WOULD resolve to a wrapped session, the live-card
+      // check must short-circuit before any of that is consulted.
+      resolveReply: () => '/repo',
+      sessionInfo: () => ({ kind: 'wrapped' as const, label: 'l', sockPath: '/s.sock', continueId: 'c9' }),
+      inject: injected,
+    }));
+    await h.handle(envelope({ text: 'use mv', replyToMessageId: 'card-msg-1' }));
+    expect(answers).toEqual(['req-1']);
+    expect(continued).toEqual([]); // 引用审批卡 = 答那次审批,不是给会话发闲话
+    expect(injected).not.toHaveBeenCalled();
+  });
+
+  it('quoting a card that is no longer live falls through to the stale/not-found notice', async () => {
+    const msgs: Array<{ kind: string; text?: string }> = [];
+    const h = new InboundHandler(baseDeps({
+      imBy: () => makeAdapter(msgs),
+      findLiveCard: () => null, // 已结算/已 stale
+      resolveReply: () => undefined,
+    }));
+    await h.handle(envelope({ text: 'use mv', replyToMessageId: 'dead-card' }));
+    expect(msgs.some((m) => m.text && /no longer active|引用/i.test(m.text))).toBe(true);
+  });
+
+  it('a live-card hit that the router reports as stale (race) replies with the shared STALE_CARD_NOTICE, not a second wording', async () => {
+    const msgs: Array<{ kind: string; text?: string }> = [];
+    const h = new InboundHandler(baseDeps({
+      imBy: () => makeAdapter(msgs),
+      findLiveCard: () => 'req-1',
+      permissionRouter: { answer: () => false, requestPermission: vi.fn() } as unknown as PermissionRouter,
+    }));
+    await h.handle(envelope({ text: 'use mv', replyToMessageId: 'card-msg-1' }));
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].text).toMatch(/no longer active/i);
+  });
+
+  it('never approves via the quoted-reply path — findLiveCard hit always answers with approved:false', async () => {
+    const calls: Array<{ approved: boolean }> = [];
+    const h = new InboundHandler(baseDeps({
+      findLiveCard: () => 'req-1',
+      permissionRouter: {
+        answer: (_rid: string, approved: boolean) => { calls.push({ approved }); return true; },
+        requestPermission: vi.fn(),
+      } as unknown as PermissionRouter,
+    }));
+    await h.handle(envelope({ text: 'please allow this', replyToMessageId: 'card-msg-1' }));
+    expect(calls).toEqual([{ approved: false }]);
   });
 });
 

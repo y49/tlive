@@ -179,25 +179,28 @@ describe('local-answer cancel + Stop fast-null (integration)', () => {
   });
 });
 
-describe('AskUserQuestion remote card (Task 9)', () => {
-  function interactiveAdapter(
-    channel: IMChannel,
-    sent: OutgoingMessage[],
-    edits: Array<{ messageId: string; msg: OutgoingMessage }> = [],
-  ): IMAdapter & { fire: (env: IncomingEnvelope) => void } {
-    let handler: ((e: IncomingEnvelope) => void) | undefined;
-    return {
-      channel,
-      async start() { /* noop */ },
-      async stop() { /* noop */ },
-      async send(out: OutgoingMessage) { sent.push(out); return { messageId: `m${sent.length}` }; },
-      async edit(messageId, msg) { edits.push({ messageId, msg }); },
-      onInbound(h) { handler = h; },
-      isConnected() { return 'connected' as const; },
-      fire(env) { handler?.(env); },
-    };
-  }
+// Shared by every describe below that needs a fake IM channel capable of both
+// sending/editing cards AND firing a simulated inbound reply (button tap or
+// quoted-text reply) back through the daemon's onInbound wiring.
+function interactiveAdapter(
+  channel: IMChannel,
+  sent: OutgoingMessage[],
+  edits: Array<{ messageId: string; msg: OutgoingMessage }> = [],
+): IMAdapter & { fire: (env: IncomingEnvelope) => void } {
+  let handler: ((e: IncomingEnvelope) => void) | undefined;
+  return {
+    channel,
+    async start() { /* noop */ },
+    async stop() { /* noop */ },
+    async send(out: OutgoingMessage) { sent.push(out); return { messageId: `m${sent.length}` }; },
+    async edit(messageId, msg) { edits.push({ messageId, msg }); },
+    onInbound(h) { handler = h; },
+    isConnected() { return 'connected' as const; },
+    fire(env) { handler?.(env); },
+  };
+}
 
+describe('AskUserQuestion remote card (Task 9)', () => {
   it('sends option buttons (not Allow/Deny) and picking one answers deny+message with the selection', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },
@@ -576,6 +579,68 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       expect(title).toContain('Answered');
       expect(title).not.toContain('Denied');
     });
+  });
+});
+
+describe('quoting a live approval card = deny with guidance (Task 7)', () => {
+  it('routes the quoted reply to the pending permission request as a deny+message, and rewrites the card "Denied with guidance"', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      approvals: { approvalGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
+    const adapter = interactiveAdapter('telegram', sent, edits);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const sock = join(tmp, 'daemon.sock');
+    const pending = request(
+      { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'rm -rf /tmp/x' }, timeoutSec: 60 },
+      { socketPath: sock, timeoutMs: 10_000 },
+    );
+    await new Promise((r) => setTimeout(r, 100)); // let the card go pending + send
+    expect(sent).toHaveLength(1); // sanity: the card really was sent, its messageId is `m1`
+    adapter.fire({
+      channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1',
+      replyToMessageId: 'm1', text: 'Do not use rm -rf, move it to /tmp/.trash instead', ts: 0,
+    });
+
+    const r = await pending as { kind: string; decision?: string; message?: string };
+    expect(r.decision).toBe('deny');
+    expect(r.message).toBe('Do not use rm -rf, move it to /tmp/.trash instead');
+
+    await new Promise((res) => setTimeout(res, 50)); // let the queued settlement edit land
+    expect(edits).toHaveLength(1);
+    const editedTitle = (edits[0].msg as { title?: string }).title ?? '';
+    expect(editedTitle).toContain('Denied with guidance');
+  });
+
+  it('a plain button Deny (no quoted text) still edits the card to the bare "Denied" — guidance label only when a message rode along', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      approvals: { approvalGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
+    const adapter = interactiveAdapter('telegram', sent, edits);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const sock = join(tmp, 'daemon.sock');
+    const pending = request(
+      { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'rm -rf /tmp/x' }, timeoutSec: 60 },
+      { socketPath: sock, timeoutMs: 10_000 },
+    );
+    await new Promise((r) => setTimeout(r, 100));
+    const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+    const denyBtn = card.buttons!.find((b) => b.id.startsWith('deny:'))!;
+    adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: denyBtn.id, ts: 0 });
+    await pending;
+
+    await new Promise((res) => setTimeout(res, 50));
+    expect(edits).toHaveLength(1);
+    const editedTitle = (edits[0].msg as { title?: string }).title ?? '';
+    expect(editedTitle).toContain('Denied');
+    expect(editedTitle).not.toContain('Denied with guidance');
   });
 });
 

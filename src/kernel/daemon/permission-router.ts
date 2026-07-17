@@ -36,8 +36,10 @@ export interface PermissionRouterDeps {
    *  (label = basename(cwd)). Conflating them here is exactly the bug this
    *  split fixes (see resolveKey in bootstrap.ts). */
   onPending?: (p: { key: string; cwd: string; requestId: string; title: string; body: string; toolName: string; askOptions?: AskOption[]; askQuestion?: string }) => void;
-  /** Fired when the request resolves (answered / timed out / deferred after a card). Same key/cwd split as onPending. */
-  onResolved?: (p: { key: string; cwd: string; requestId: string; decision: Decision }) => void;
+  /** Fired when the request resolves (answered / timed out / deferred after a card). Same key/cwd split as onPending.
+   *  message:带理由的拒绝所携带的文本(引用回复而来)—— 供回写区分
+   *  `Denied` 与 `Denied with guidance`。 */
+  onResolved?: (p: { key: string; cwd: string; requestId: string; decision: Decision; message?: string }) => void;
   /** 发 IM 卡前的静默期(秒)。本地秒答的审批在此窗口内 cancel → 卡永不发出
    *  (键盘前零刷屏)。0 = 立即发。web 广播(onPending)不受影响。 */
   graceSec: () => number;
@@ -127,7 +129,7 @@ export class PermissionRouter {
       if (grace > 0) setTimeout(push, grace * 1000).unref();
       else push();
     });
-    this.deps.onResolved?.({ key: opts.key, cwd: opts.cwd, requestId, decision: result.decision });
+    this.deps.onResolved?.({ key: opts.key, cwd: opts.cwd, requestId, decision: result.decision, ...(result.message ? { message: result.message } : {}) });
     return result;
   }
 

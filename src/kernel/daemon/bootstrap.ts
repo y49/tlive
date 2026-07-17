@@ -167,6 +167,17 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // Approval cards sent per requestId — edited to their outcome on resolve (no zombie buttons).
   const sentCards = new Map<string, Array<{ channel: string; messageId: string; title: string; body: string }>>();
 
+  /** IM messageId → still-live approval requestId, or null. sentCards is deleted
+   *  the instant onResolved fires (see below), so "findable" IS "still live" —
+   *  same judgment-free philosophy as pending.has() in permission-router.ts,
+   *  zero new state needed (Task 7). */
+  const findLiveCard = (channel: string, messageId: string): string | null => {
+    for (const [rid, cards] of sentCards) {
+      if (cards.some((c) => c.channel === channel && c.messageId === messageId)) return rid;
+    }
+    return null;
+  };
+
   // Task 10 review Important fix: a multi-select card's toggle edit and its
   // eventual onResolved settlement edit both hit adapter.edit() (real network
   // I/O) for the same rid — nothing guarantees the settlement edit (always
@@ -301,7 +312,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // id and cwd, permanently, when both arrived as one field).
       events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd, status: 'waiting-approval', pending: { requestId, title, body, toolName } }) });
     },
-    onResolved: ({ key, cwd, requestId, decision }) => {
+    onResolved: ({ key, cwd, requestId, decision, message }) => {
       askContexts.delete(requestId); // no leak whether consumed by a button click or resolved another way
       askSelection.clear(requestId); // no leak — covers defer/timeout/local-answer paths that skip asksubmit:/askskip: entirely (Task 10)
       const isAsk = askRequestIds.delete(requestId); // true only for an AskUserQuestion card (Minor 4)
@@ -323,7 +334,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // An ask card's wire mechanism IS a deny (see ask-renderer.ts file
           // header) even when the user picked an answer — label it "Answered"
           // so the user isn't scared into thinking their pick failed (Minor 4).
-          const label = isAsk && decision === 'deny' ? 'Answered' : (OUTCOME[decision] ?? decision);
+          // 带理由的拒绝(引用回复而来)vs 点按钮的光秃秃拒绝 —— 回写卡要看得出
+          // 区别,所以用户知道这次拒绝是"说了理由"还是"就是不批"(Task 7)。
+          const label = isAsk && decision === 'deny' ? 'Answered'
+            : decision === 'deny' && message ? 'Denied with guidance'
+            : (OUTCOME[decision] ?? decision);
           // Queued (not a bare fire-and-forget edit) — this settlement edit is
           // always enqueued LAST for requestId, so it always lands last too,
           // even if an earlier toggle edit for the same rid is still in flight.
@@ -618,6 +633,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     },
     listSessions: () => sessions.list().map((s) => ({ cwd: s.cwd, kind: s.kind, label: s.label, ...(s.sockPath ? { sockPath: s.sockPath } : {}) })),
     inject: (sockPath, text) => injectInput(sockPath, text),
+    findLiveCard,
   });
   for (const a of opts.imAdapters ?? []) {
     await a.start();
