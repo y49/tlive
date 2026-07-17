@@ -102,6 +102,11 @@ export function clampPermissionTimeout(timeoutSec: number | undefined): number {
   return Math.min(timeoutSec ?? 580, 86_400);
 }
 
+/** stale 卡点击的告知文案。救不回来是物理事实(shim 已死),让用户以为点成功
+ *  了才是产品在撒谎。覆盖:daemon 重启 / 已超时 / 会话已结束。 */
+export const STALE_CARD_NOTICE =
+  'This request is no longer active — the session ended, timed out, or tlive restarted. Answer at the keyboard.';
+
 /** 续跑卡 body:摘录进 expandable 引用块,前后空行分段(B1)。
  *  body 前导 \n 是有意的 —— renderCard 只在 title 后放一个换行,这一个
  *  额外换行就是标题与正文之间的那道留白。 */
@@ -377,10 +382,19 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // Upstream actions from a dashboard client (/ws/events): approve/reply/mute.
   const onAction = (action: import('../web/event-hub.js').EventAction): void => {
     switch (action.type) {
-      case 'approve':
+      case 'approve': {
         if (action.approved && action.alwaysAllowTool) policyState.allowTools?.add(action.alwaysAllowTool);
-        permissionRouter.answer(action.requestId, action.approved);
+        const hit = permissionRouter.answer(action.requestId, action.approved);
+        if (!hit) {
+          // 同 IM 卡:daemon 重启后 dashboard 也可能残留旧的 pending 按钮
+          // (reconcile() 通常会先一步清掉,但重连竞态下点击仍可能先到达)。
+          // /ws/events 目前没有单播回发起 client 的通道(EventHub 只广播,
+          // onAction 不携带发起方引用)——补这条通道是比本任务大的改动,
+          // 留给后续(见 task-4 报告)。这里先落一条服务端日志,不静默吞掉。
+          console.log(`[web] stale approve tapped: requestId=${action.requestId} (already resolved / daemon restarted)`);
+        }
         return;
+      }
       case 'reply':
         continueBroker.answer(action.requestId, action.text);
         return;

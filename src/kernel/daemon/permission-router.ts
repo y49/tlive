@@ -112,11 +112,14 @@ export class PermissionRouter {
     return result;
   }
 
-  answer(requestId: string, approved: boolean, message?: string): void {
+  /** 返回 true = 命中并已 resolve;false = 无此 pending(卡已 stale:daemon
+   *  重启 / 已超时 / 会话已结束)。调用方据此告知用户,而非静默丢弃。 */
+  answer(requestId: string, approved: boolean, message?: string): boolean {
     const e = this.pending.get(requestId);
-    if (!e) return;
+    if (!e) return false;
     this.pending.delete(requestId);
     e.resolve({ decision: approved ? 'allow' : 'deny', ...(message ? { message } : {}) });
+    return true;
   }
 
   /** The user answered in the local terminal (PostToolUse / PermissionDenied /

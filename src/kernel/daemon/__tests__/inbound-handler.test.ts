@@ -66,7 +66,7 @@ function makeAskStore(entries: Record<string, { question: string; options: Array
 
 describe('InboundHandler', () => {
   it('approve:<id> answers true, sends no reply', async () => {
-    const permAnswer = vi.fn();
+    const permAnswer = vi.fn().mockReturnValue(true); // hit — a live pending
     const msgs: Array<{ kind: string; text?: string }> = [];
     const h = new InboundHandler(baseDeps({
       imBy: () => makeAdapter(msgs),
@@ -131,7 +131,7 @@ describe('InboundHandler', () => {
   });
 
   it('ask:<id>:<idx> answers with a deny+message wire carrying the picked option', async () => {
-    const permAnswer = vi.fn();
+    const permAnswer = vi.fn().mockReturnValue(true); // hit — a live pending
     const h = new InboundHandler(baseDeps({
       ...makeAskStore({ 'req-9': { question: 'Pick a color?', options: [{ label: 'Red' }, { label: 'Blue' }] } }),
       permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
@@ -156,7 +156,7 @@ describe('InboundHandler', () => {
   });
 
   it('an out-of-range index does not consume the context — a later legit index still answers (review Minor 1)', async () => {
-    const permAnswer = vi.fn();
+    const permAnswer = vi.fn().mockReturnValue(true); // hit — a live pending
     const store = makeAskStore({ 'req-9': { question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] } });
     const h = new InboundHandler(baseDeps({
       ...store,
@@ -198,7 +198,7 @@ describe('InboundHandler', () => {
   });
 
   it('askskip:<id> passes through with answer(rid, true) — not an auto-approve', async () => {
-    const permAnswer = vi.fn();
+    const permAnswer = vi.fn().mockReturnValue(true); // hit — a live pending
     const takeAskContext = vi.fn().mockReturnValue({ question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] });
     const h = new InboundHandler(baseDeps({
       peekAskContext: () => ({ question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] }),
@@ -312,7 +312,7 @@ describe('InboundHandler', () => {
   });
 
   it('asksubmit:<id> answers deny+message with every picked label, consumes the context, and frees the selection', async () => {
-    const permAnswer = vi.fn();
+    const permAnswer = vi.fn().mockReturnValue(true); // hit — a live pending
     const askSelection = new AskSelection();
     askSelection.toggle('req-1', 0);
     askSelection.toggle('req-1', 1);
@@ -344,9 +344,20 @@ describe('InboundHandler', () => {
     expect(permAnswer).not.toHaveBeenCalled();
   });
 
+  it('tells the user when a stale card button is tapped instead of silently ignoring it', async () => {
+    const msgs: Array<{ kind: string; text?: string }> = [];
+    const h = new InboundHandler(baseDeps({
+      imBy: () => makeAdapter(msgs),
+      permissionRouter: { answer: () => false, requestPermission: vi.fn() } as unknown as PermissionRouter,
+    }));
+    await h.handle(envelope({ text: 'approve:dead-request-id' }));
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].text).toMatch(/no longer active/i);
+  });
+
   it('"pause:<id>" approves the in-hand request and sets trust', async () => {
     const setTrust = vi.fn();
-    const permAnswer = vi.fn();
+    const permAnswer = vi.fn().mockReturnValue(true); // hit — a live pending
     const h = new InboundHandler(baseDeps({
       imBy: () => makeAdapter([]),
       setTrust,
@@ -428,7 +439,7 @@ describe('reply-to routing & injection', () => {
 
   it('allowtool:<rid>:<tool> grants the tool and approves the request', async () => {
     const addAllowTool = vi.fn();
-    const permAnswer = vi.fn();
+    const permAnswer = vi.fn().mockReturnValue(true); // hit — a live pending
     const msgs: Array<{ kind: string; text?: string }> = [];
     const h = new InboundHandler(baseDeps({
       imBy: () => makeAdapter(msgs),

@@ -9,6 +9,7 @@ import type { SenderGuard } from './sender-guard.js';
 import type { AskSelection } from './ask-state.js';
 import { parseImCommand } from './im-commands.js';
 import { buildAskAnswerMessage, askMultiButtons, type AskOption } from '../permission/ask-renderer.js';
+import { STALE_CARD_NOTICE } from './bootstrap.js';
 
 export interface InboundHandlerDeps {
   senderGuard: SenderGuard;
@@ -77,9 +78,14 @@ export class InboundHandler {
 
     if (env.text.startsWith('pause:')) {
       const requestId = env.text.slice('pause:'.length);
+      // setTrust 是全局开关,不管这条 in-hand 请求是否还活着都要生效——只有
+      // "批了这一条"这半句可能是假的,分开告知。
       this.deps.setTrust(true);
-      this.deps.permissionRouter.answer(requestId, true); // approve the in-hand op too
-      await this.reply(env, { kind: 'text', text: '已暂停审批:当前操作已放行,后续自动放行,发送 /trust off 恢复。' });
+      if (this.deps.permissionRouter.answer(requestId, true)) {
+        await this.reply(env, { kind: 'text', text: '已暂停审批:当前操作已放行,后续自动放行,发送 /trust off 恢复。' });
+      } else {
+        await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
+      }
       return;
     }
 
@@ -90,9 +96,13 @@ export class InboundHandler {
       if (sep > 0) {
         const requestId = rest.slice(0, sep);
         const tool = rest.slice(sep + 1);
+        // addAllowTool 同样是全局、与这条具体请求是否还活着无关——先落地。
         this.deps.addAllowTool(tool);
-        this.deps.permissionRouter.answer(requestId, true);
-        await this.reply(env, { kind: 'text', text: `Approved. ${tool} will be auto-allowed from now on (until daemon restart; unaffected by /trust off).` });
+        if (this.deps.permissionRouter.answer(requestId, true)) {
+          await this.reply(env, { kind: 'text', text: `Approved. ${tool} will be auto-allowed from now on (until daemon restart; unaffected by /trust off).` });
+        } else {
+          await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
+        }
       }
       return;
     }
@@ -106,12 +116,18 @@ export class InboundHandler {
       // and non-numeric input; `Number('')` is 0, which would otherwise
       // silently pick option 0 (review Minor 2).
       const ctx = this.deps.peekAskContext(rid);
+      if (!ctx) {
+        // ctx 缺失 = 卡已 stale(daemon 重启 / 已 resolve)——告知,而非静默丢弃。
+        await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
+        return;
+      }
       const idx = /^\d+$/.test(idxRaw) ? Number(idxRaw) : NaN;
-      if (ctx && Number.isInteger(idx) && ctx.options[idx]) {
-        this.deps.takeAskContext(rid); // valid pick — now consume (single-use)
-        // deny + message = 答案(见 ask-renderer 文件头):CC 跳过内置问题框,
-        // message 送进 agent 对话流当答案。
-        this.deps.permissionRouter.answer(rid, false, buildAskAnswerMessage(ctx.question, [ctx.options[idx].label]));
+      if (!Number.isInteger(idx) || !ctx.options[idx]) return; // 畸形 index,非 stale,维持静默
+      this.deps.takeAskContext(rid); // valid pick — now consume (single-use)
+      // deny + message = 答案(见 ask-renderer 文件头):CC 跳过内置问题框,
+      // message 送进 agent 对话流当答案。
+      if (!this.deps.permissionRouter.answer(rid, false, buildAskAnswerMessage(ctx.question, [ctx.options[idx].label]))) {
+        await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
       }
       return;
     }
@@ -156,11 +172,19 @@ export class InboundHandler {
       // NOT answer with an empty selection.
       const rid = env.text.slice('asksubmit:'.length);
       const ctx = this.deps.peekAskContext(rid);
+      if (!ctx) {
+        // ctx 缺失 = 卡已 stale ——告知,而非静默丢弃。picked.length===0(有
+        // ctx 但没勾选)不是 stale,是正常"啥都没选就点提交",维持静默。
+        await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
+        return;
+      }
       const picked = this.deps.askSelection.selected(rid);
-      if (!ctx || !picked.length) return;
+      if (!picked.length) return;
       this.deps.takeAskContext(rid); // valid submit — now consume (single-use)
       this.deps.askSelection.clear(rid); // free the selection, no leak
-      this.deps.permissionRouter.answer(rid, false, buildAskAnswerMessage(ctx.question, picked.map((i) => ctx.options[i].label)));
+      if (!this.deps.permissionRouter.answer(rid, false, buildAskAnswerMessage(ctx.question, picked.map((i) => ctx.options[i].label)))) {
+        await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
+      }
       return;
     }
     if (env.text.startsWith('askskip:')) {
@@ -169,18 +193,28 @@ export class InboundHandler {
       // peek 校验(只读,不消费)context 还在才往下动。实际不可达(没有非
       // ask 卡渲染 askskip 按钮,普通卡 rid 不进文本),但纵深防御——防止
       // 未知/过期 rid 被当场 answer(rid, true) 放行。
-      if (!this.deps.peekAskContext(rid)) return;
+      // 告知不冲突这条 hardening:下面这条回复只是文案,并不调用 answer(),
+      // 所以"未知 rid 绝不能被当场放行"这条底线原样保留;只是不再对着一次
+      // 真实无效的点击装聋作哑。
+      if (!this.deps.peekAskContext(rid)) {
+        await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
+        return;
+      }
       this.deps.takeAskContext(rid); // clear, avoid leak — the answer itself is discarded
       this.deps.askSelection.clear(rid); // free any multi-select picks too (Task 10, no leak)
       // Skip = allow = pass-through:本地问题框归你在电脑前答(等同 defer 语义),
       // 不是自动批准执行工具。
-      this.deps.permissionRouter.answer(rid, true);
+      if (!this.deps.permissionRouter.answer(rid, true)) {
+        await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
+      }
       return;
     }
 
     const cb = parseCallback(env.text);
     if (cb) {
-      this.deps.permissionRouter.answer(cb.requestId, cb.approved);
+      if (!this.deps.permissionRouter.answer(cb.requestId, cb.approved)) {
+        await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
+      }
       return;
     }
 

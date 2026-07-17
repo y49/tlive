@@ -293,6 +293,22 @@ describe("Decision 'gone' — caller died", () => {
   });
 });
 
+describe('answer() reports whether it hit', () => {
+  it('returns true when it resolves a live pending', async () => {
+    let pendingId = '';
+    const r = new PermissionRouter({ ...base(), onPending: (p) => { pendingId = p.requestId; } });
+    const p = r.requestPermission({ cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
+    await new Promise((res) => setTimeout(res, 10));
+    expect(r.answer(pendingId, true)).toBe(true);
+    await p;
+  });
+
+  it('returns false for an unknown/stale requestId (daemon restarted, card outlived it)', () => {
+    const r = new PermissionRouter(base());
+    expect(r.answer('no-such-request', true)).toBe(false);
+  });
+});
+
 describe('approval grace gating', () => {
   const mkDeps = (sent: string[], graceMs: number) => ({
     configuredChats: () => [{ channel: 'telegram', chatId: 'c1' }],
