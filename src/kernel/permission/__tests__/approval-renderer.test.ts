@@ -64,9 +64,20 @@ describe('emoji allowlist', () => {
     expect(body).toContain('⚠️ **Risky** — rm -rf');
   });
 
-  it('separates description from the command block with a blank line', () => {
+  it('B spacing: leading blank line (title breathes) + blank line after description', () => {
     const { body } = renderApprovalCard({ toolName: 'Bash', input: { command: 'ls', description: 'List' } });
-    expect(body).toBe('*List*\n\n```bash\nls\n```');
+    // 前导 \n → 标题后空行;desc 后 \n\n → 描述后空行(经 mdToTelegramHtml 成 B 布局)
+    expect(body).toBe('\n*List*\n\n```bash\nls\n```');
+  });
+
+  it('B spacing: no description still breathes below the title (leading \\n\\n)', () => {
+    const { body } = renderApprovalCard({ toolName: 'Bash', input: { command: 'ls' } });
+    expect(body).toBe('\n\n```bash\nls\n```');
+  });
+
+  it('B spacing: Edit puts a blank line after the file path', () => {
+    const { body } = renderApprovalCard({ toolName: 'Edit', input: { file_path: '/a.ts', old_string: 'x', new_string: 'y' } });
+    expect(body).toBe('\n`/a.ts`\n\n```diff\n- x\n+ y\n```');
   });
 });
 

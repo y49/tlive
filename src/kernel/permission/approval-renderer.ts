@@ -75,27 +75,28 @@ export function renderApprovalCard(req: RenderRequest): { title: string; body: s
         ...oldS.split('\n').map((l) => `- ${l}`),
         ...newS.split('\n').map((l) => `+ ${l}`),
       ].join('\n')).slice(0, 1500);
-      return { title, body: `\`${fp}\`\n\`\`\`diff\n${diff}\n\`\`\`` };
+      return { title, body: `\n\`${fp}\`\n\n\`\`\`diff\n${diff}\n\`\`\`` };
     }
     case 'Write': {
       const fp = inlineSafe(str(input, 'file_path') ?? '(unknown)');
       const content = fenceSafe(maskSecrets(str(input, 'content') ?? '')).slice(0, 800);
-      return { title, body: `Write to \`${fp}\`\n\`\`\`\n${content}\n\`\`\`` };
+      return { title, body: `\nWrite to \`${fp}\`\n\n\`\`\`\n${content}\n\`\`\`` };
     }
     case 'NotebookEdit': {
       const fp = inlineSafe(str(input, 'notebook_path') ?? '(unknown)');
       const src = fenceSafe(maskSecrets(str(input, 'new_source') ?? '')).slice(0, 800);
-      return { title, body: `Notebook \`${fp}\`\n\`\`\`\n${src}\n\`\`\`` };
+      return { title, body: `\nNotebook \`${fp}\`\n\n\`\`\`\n${src}\n\`\`\`` };
     }
     case 'Bash': {
       const cmd = str(input, 'command') ?? '';
       const desc = str(input, 'description');
-      // 描述斜体、与命令块空一行分层;命中的高危模式点名列出
-      return { title, body: `${desc ? `*${inlineSafe(desc)}*\n\n` : ''}\`\`\`bash\n${fenceSafe(maskSecrets(cmd))}\n\`\`\`${riskFlag(cmd)}` };
+      // B 全留白:标题后空行(前导 \n) + 描述后空行 + 风险行空开。
+      // 无 desc 时前导 \n\n(否则单 \n 被 fence 前 trim 吃掉,标题后无空行)。
+      return { title, body: `${desc ? `\n*${inlineSafe(desc)}*\n\n` : '\n\n'}\`\`\`bash\n${fenceSafe(maskSecrets(cmd))}\n\`\`\`${riskFlag(cmd)}` };
     }
     case 'apply_patch': {
       const patch = fenceSafe(maskSecrets(str(input, 'command') ?? '')).slice(0, 1500);
-      return { title, body: `\`\`\`diff\n${patch}\n\`\`\`` };
+      return { title, body: `\n\n\`\`\`diff\n${patch}\n\`\`\`` };
     }
     default: {
       // 未知/MCP 工具:键值摘要比裸 JSON 可读得多;值截断,防长文淹没卡片
@@ -110,7 +111,7 @@ export function renderApprovalCard(req: RenderRequest): { title: string; body: s
           return `${inlineSafe(k)}: ${val}`;
         });
       const body = lines.length ? fenceSafe(lines.join('\n')).slice(0, 500) : '(no input)';
-      return { title, body: `\`\`\`\n${body}\n\`\`\`` };
+      return { title, body: `\n\n\`\`\`\n${body}\n\`\`\`` };
     }
   }
 }
