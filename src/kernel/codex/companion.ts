@@ -166,10 +166,16 @@ export function startCompanion(deps: CompanionDeps): Companion {
       }
       return;
     }
-    if (method === 'thread/status/changed') {
-      const threadId = (p.threadId as string | undefined) ?? readThreadId(p) ?? '';
-      const status = (p.status ?? {}) as Record<string, unknown>;
-      if (threadId && status.type === 'archived') {
+    if (method === 'thread/archived') {
+      // Real archival notification: ThreadArchivedNotification { threadId }
+      // (app-server-protocol .../v2/common.rs:1323-1328, camelCase on the wire
+      // per #[serde(rename_all = "camelCase")]), sent as method "thread/archived"
+      // (server_notification_definitions!, common.rs:1485). NOT
+      // thread/status/changed: ThreadStatus (v2/thread.rs:1131-1144) has exactly
+      // four variants — notLoaded / idle / systemError / active — no `archived`
+      // member exists, so that method can never carry archival.
+      const threadId = (p.threadId as string | undefined) ?? '';
+      if (threadId) {
         const key = threadKey(threadId);
         const cwd = cwdOf(threadId);
         lastMessages.delete(threadId);

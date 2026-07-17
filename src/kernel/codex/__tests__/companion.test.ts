@@ -245,24 +245,35 @@ describe('companion', () => {
     comp.stop();
   });
 
-  it('thread/status/changed archived -> session-end monitor event', async () => {
+  it('thread/archived -> session-end monitor event', async () => {
+    // Real archival notification: ThreadArchivedNotification { threadId }
+    // (app-server-protocol .../v2/common.rs:1323-1328, camelCase on the wire),
+    // delivered as method "thread/archived" (common.rs:1485). This is a
+    // *separate* notification from thread/status/changed — see the next test.
     const { comp, onMonitor, getEvents } = harness();
     await vi.runOnlyPendingTimersAsync();
     await Promise.resolve();
     await Promise.resolve();
     const events = getEvents();
-    events.onNotify('thread/status/changed', { threadId: 't1', status: { type: 'archived' } });
+    events.onNotify('thread/archived', { threadId: 't1' });
     expect(onMonitor).toHaveBeenCalledWith({ event: 'session-end', cwd: 'codex:t1', sessionId: 't1' }, 'codex:t1');
     comp.stop();
   });
 
-  it('thread/status/changed non-archived -> no session-end', async () => {
+  it('thread/status/changed (any real ThreadStatus shape) never fires session-end', async () => {
+    // ThreadStatus (app-server-protocol .../v2/thread.rs:1131-1144) has exactly
+    // four variants — notLoaded / idle / systemError / active — with #[serde(tag
+    // = "type")]. There is no `archived` variant, so this notification can never
+    // carry archival; session-end must come only from thread/archived (above).
     const { comp, onMonitor, getEvents } = harness();
     await vi.runOnlyPendingTimersAsync();
     await Promise.resolve();
     await Promise.resolve();
     const events = getEvents();
-    events.onNotify('thread/status/changed', { threadId: 't1', status: { type: 'active' } });
+    events.onNotify('thread/status/changed', { threadId: 't1', status: { type: 'notLoaded' } });
+    events.onNotify('thread/status/changed', { threadId: 't1', status: { type: 'idle' } });
+    events.onNotify('thread/status/changed', { threadId: 't1', status: { type: 'systemError' } });
+    events.onNotify('thread/status/changed', { threadId: 't1', status: { type: 'active', activeFlags: [] } });
     expect(onMonitor).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'session-end' }), expect.anything());
     comp.stop();
   });
@@ -531,7 +542,7 @@ describe('companion', () => {
     comp.stop();
   });
 
-  it('clears the cached cwd when a thread is archived, so a stray later event for the same id falls back instead of leaking a stale value', async () => {
+  it('clears the cached cwd on thread/archived, so a stray later event for the same id falls back instead of leaking a stale value', async () => {
     let events: any;
     const rpc = {
       call: vi.fn(async (method: string, params: any) => {
@@ -561,7 +572,7 @@ describe('companion', () => {
       'codex:t1',
     );
 
-    events.onNotify('thread/status/changed', { threadId: 't1', status: { type: 'archived' } });
+    events.onNotify('thread/archived', { threadId: 't1' });
 
     // A stray notification for the same (now-archived) threadId must not
     // resurrect the stale cached cwd — the map entry must be gone.
