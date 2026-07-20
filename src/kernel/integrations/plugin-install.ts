@@ -3,7 +3,20 @@
 // Orchestrate the VENDOR's own plugin manager to register tlive's bundled
 // marketplaces — tlive no longer hand-edits user config files. Old vendors
 // without a plugin CLI: manual setup documented in the README appendix.
+//
+// Update semantics differ per vendor (both source-verified):
+//  - claude: `marketplace add` does NOT refresh an already-registered source
+//    and `install` skips an already-installed plugin — updating requires the
+//    explicit `marketplace update` + `plugin update` pair, and a stale cache
+//    is silent. So we VERIFY afterwards: `plugin list --json` must show the
+//    bundled version, otherwise setup fails loudly instead of shipping stale
+//    hooks/skills (the "stuck at 2.0.0" class of bug).
+//  - codex: `plugin add` is an upsert — it re-materializes from the live
+//    local marketplace dir and atomically replaces the cache root
+//    (core-plugins/src/manager.rs install_resolved_plugin), so running it is
+//    the refresh. Verified the same way afterwards.
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { commandOnPath } from './hooks-cleanup.js';
@@ -24,7 +37,62 @@ function pkgRoot(): string {
 export function claudePluginDir(): string { return join(pkgRoot(), 'plugins', 'claude'); }
 export function codexPluginDir(): string { return join(pkgRoot(), 'plugins', 'codex'); }
 
+/** The version shipped in this build's bundled plugin manifest, or null if
+ *  unreadable (never throws — version verification then degrades to a
+ *  best-effort "refreshed" message). */
+export function bundledPluginVersion(vendor: 'claude' | 'codex'): string | null {
+  const tail = vendor === 'claude'
+    ? join('plugins', 'claude', 'plugins', 'tlive', '.claude-plugin', 'plugin.json')
+    : join('plugins', 'codex', 'plugins', 'tlive', '.codex-plugin', 'plugin.json');
+  // bundled: dist/src/../../plugins;从源码跑(测试)差一级 → 再退一级。
+  for (const root of [pkgRoot(), join(pkgRoot(), '..')]) {
+    try {
+      const v = (JSON.parse(readFileSync(join(root, tail), 'utf-8')) as { version?: unknown }).version;
+      if (typeof v === 'string') return v;
+    } catch { /* try next root */ }
+  }
+  return null;
+}
+
+/** Installed tlive@tlive version per `<vendor> plugin list --json`, or null if
+ *  the CLI/flag/shape is unavailable (old versions degrade gracefully). */
+export function installedPluginVersion(run: Runner, vendor: 'claude' | 'codex'): string | null {
+  const r = run(vendor, ['plugin', 'list', '--json']);
+  if (!r.ok) return null;
+  try {
+    const parsed = JSON.parse(r.output) as unknown;
+    // claude: top-level array of {id, version}; codex: {installed:[{pluginId, version}]}
+    const entries = Array.isArray(parsed)
+      ? parsed
+      : (parsed as { installed?: unknown[] }).installed ?? [];
+    for (const e of entries as Array<{ id?: string; pluginId?: string; version?: string }>) {
+      if ((e.id ?? e.pluginId) === 'tlive@tlive' && typeof e.version === 'string') return e.version;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 const alreadyOk = (r: { ok: boolean; output: string }): boolean => r.ok || /already/i.test(r.output);
+
+/** Post-install verification shared by both vendors. Only a *provable*
+ *  mismatch fails — when either side of the comparison is unreadable we
+ *  can't tell, and failing setup on a missing --json flag would break every
+ *  older vendor CLI for zero safety. */
+function verifyInstalled(run: Runner, vendor: 'claude' | 'codex', freshInstall: boolean): { ok: boolean; detail: string } {
+  const verb = freshInstall ? 'installed' : 'refreshed';
+  const expected = bundledPluginVersion(vendor);
+  const actual = installedPluginVersion(run, vendor);
+  if (expected && actual && actual !== expected) {
+    return {
+      ok: false,
+      detail: `plugin cache is still at ${actual}, expected ${expected} — run \`${vendor} plugin update tlive@tlive\` manually, then re-run setup`,
+    };
+  }
+  if (expected && actual) return { ok: true, detail: `tlive@tlive ${verb} at ${actual}` };
+  return { ok: true, detail: `tlive@tlive ${verb}${expected ? ` (expected ${expected}, cache version unverifiable on this CLI)` : ''}` };
+}
 
 export function installClaudePlugin(run: Runner): { ok: boolean; detail: string } {
   if (!run('claude', ['plugin', 'list']).ok) {
@@ -34,25 +102,33 @@ export function installClaudePlugin(run: Runner): { ok: boolean; detail: string 
   if (!alreadyOk(mk)) return { ok: false, detail: `marketplace add failed: ${mk.output.slice(0, 200)}` };
   // marketplace add 对已注册的 marketplace 不刷新 source —— 必须 update 才会从
   // bundled 目录重读最新 version;否则升级 tlive 后插件永远停在旧版(实测坑)。
-  run('claude', ['plugin', 'marketplace', 'update', 'tlive']);
+  // update 失败不能吞:后面的 plugin update 会"成功"地更到旧 source 上。
+  const mkUp = run('claude', ['plugin', 'marketplace', 'update', 'tlive']);
+  if (!alreadyOk(mkUp) && !/up.to.date|latest/i.test(mkUp.output)) {
+    return { ok: false, detail: `marketplace update failed: ${mkUp.output.slice(0, 200)}` };
+  }
   const inst = run('claude', ['plugin', 'install', 'tlive@tlive', '--scope', 'user']);
   if (!alreadyOk(inst)) return { ok: false, detail: `plugin install failed: ${inst.output.slice(0, 200)}` };
   // install 对已装插件跳过 —— 已装则 update 到刷新后的 version。
-  if (/already/i.test(inst.output)) {
+  const fresh = !/already/i.test(inst.output);
+  if (!fresh) {
     const up = run('claude', ['plugin', 'update', 'tlive@tlive']);
-    if (!up.ok && !/already|up to date|latest/i.test(up.output)) {
+    if (!up.ok && !/already|up.to.date|latest/i.test(up.output)) {
       return { ok: false, detail: `plugin update failed: ${up.output.slice(0, 200)}` };
     }
-    return { ok: true, detail: 'tlive@tlive updated to latest (user scope)' };
   }
-  return { ok: true, detail: 'tlive@tlive installed (user scope)' };
+  return verifyInstalled(run, 'claude', fresh);
 }
 
 export function installCodexPlugin(run: Runner, hasCodex: () => boolean = () => commandOnPath('codex')): { ok: boolean; detail: string } {
   if (!hasCodex()) return { ok: false, detail: 'codex not on PATH' };
   const mk = run('codex', ['plugin', 'marketplace', 'add', codexPluginDir()]);
   if (!alreadyOk(mk)) return { ok: false, detail: `marketplace add failed: ${mk.output.slice(0, 200)}` };
+  // codex 的 `plugin add` 是 upsert(源码:install_resolved_plugin 从活目录
+  // 重新物化 + 原子替换 cache root)—— 重跑即刷新,没有单独的 update 命令。
   const inst = run('codex', ['plugin', 'add', 'tlive@tlive']);
   if (!alreadyOk(inst)) return { ok: false, detail: `plugin add failed: ${inst.output.slice(0, 200)}` };
-  return { ok: true, detail: 'tlive@tlive installed' };
+  // fresh marketplace registration ⟹ first install; a pre-registered one
+  // means the add above acted as a refresh.
+  return verifyInstalled(run, 'codex', mk.ok && !/already/i.test(mk.output));
 }

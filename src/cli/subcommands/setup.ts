@@ -50,7 +50,12 @@ async function registerPlugins(sel: VendorSelection): Promise<string> {
 
 export async function runSetup(argv: string[]): Promise<void> {
   if (argv.includes('--hooks-only')) {
-    process.stdout.write((await registerPlugins(hooksOnlySelection(argv))) + 'Restart claude/codex for changes to take effect.\n');
+    process.stdout.write(
+      (await registerPlugins(hooksOnlySelection(argv)))
+      + 'Running sessions keep the old plugin — start a NEW claude/codex session (or /reload-plugins).\n'
+      + 'If you upgraded tlive itself, also restart the daemon: tlive stop; sleep 2; tlive start\n'
+      + '(stop takes ~2s to fully exit; back-to-back stop/start trips the singleton guard).\n',
+    );
     return;
   }
 
@@ -77,16 +82,16 @@ export async function runSetup(argv: string[]): Promise<void> {
   const detected: VendorSelection = { claude: commandOnPath('claude'), codex: commandOnPath('codex') };
   let sel: VendorSelection = detected;
   if (detected.claude && detected.codex) {
-    const ans = await question('装到哪 [1]Claude [2]Codex [3]都装(默认): ');
+    const ans = await question('Install for [1] Claude [2] Codex [3] both (default): ');
     sel = resolveVendorSelection(detected, ans);
   } else if (detected.claude || detected.codex) {
-    process.stdout.write(`检测到 ${detected.claude ? 'Claude' : 'Codex'},直接安装插件。\n`);
+    process.stdout.write(`Detected ${detected.claude ? 'Claude' : 'Codex'} — installing its plugin.\n`);
   }
   const pluginLines = await registerPlugins(sel);
   process.stdout.write(`\n${pluginLines}`);
 
   process.stdout.write(
-    '\nIM 现在配或直接回车全跳过 — 稍后在 Claude/Codex 里说“帮我配置 tlive”(或 /tlive:setup),AI 会引导你完成。\n\n',
+    '\nConfigure IM now, or press Enter to skip it all — later, just tell Claude/Codex\n"help me set up tlive" (or run /tlive:setup) and the AI walks you through it.\n\n',
   );
 
   const cfg = { ...existing };
