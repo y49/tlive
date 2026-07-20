@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Changed — Feishu cards get channel-aware rendering
+
+- **Feishu cards no longer leak Telegram-isms.** The shared markdown body
+  used to be dumped raw into a `lark_md` div, so Feishu showed literal
+  backticks, `> ` markers and the `>! ` expandable marker. Card bodies now
+  render through a Feishu-specific converter: fenced code keeps its own
+  markdown element (syntax highlighting on client V7.6+), inline code
+  degrades to bold, expandable quotes become a collapsible panel with a
+  first-line preview (V7.9+), and agent-controlled content is entity-escaped
+  so it cannot inject `<at>`/`<text_tag>`. Buttons style by intent (Allow
+  primary, Deny danger, the rest default); the header is blue only while the
+  card is still actionable. Doc-derived — the Feishu link itself is still
+  pending live verification.
+
 ### Breaking — approval window unified at ~24h
 
 - **`approvals.claudeWindowSec` → `approvals.windowSec`**, now shared by both
