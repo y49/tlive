@@ -330,19 +330,26 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         for (const c of cards) {
           const adapter = (opts.imAdapters ?? []).find((a) => a.channel === c.channel);
           if (!adapter) continue;
-          // 紧凑回写:结果 + 标题一行足够,不再重挂全 body(高卡变短讯)。
+          // 结算卡保留正文 —— 回头要能看到"当时批/拒的是什么"(真机反馈:
+          // 一行 `Allowed · tlive · Bash` 把命令本身丢了)。去激活靠按钮消失,
+          // 不靠抹正文。
           // An ask card's wire mechanism IS a deny (see ask-renderer.ts file
           // header) even when the user picked an answer — label it "Answered"
           // so the user isn't scared into thinking their pick failed (Minor 4).
           // 带理由的拒绝(引用回复而来)vs 点按钮的光秃秃拒绝 —— 回写卡要看得出
           // 区别,所以用户知道这次拒绝是"说了理由"还是"就是不批"(Task 7)。
+          // 理由本身也写回卡上(用户自己的话,卡自成完整记录);ask 的 message
+          // 是合成 JSON 答案,不适合展示,不附。
           const label = isAsk && decision === 'deny' ? 'Answered'
             : decision === 'deny' && message ? 'Denied with guidance'
             : (OUTCOME[decision] ?? decision);
+          const settledBody = decision === 'deny' && message && !isAsk
+            ? `${c.body}\n\n> ${message.split('\n').join('\n> ')}`
+            : c.body;
           // Queued (not a bare fire-and-forget edit) — this settlement edit is
           // always enqueued LAST for requestId, so it always lands last too,
           // even if an earlier toggle edit for the same rid is still in flight.
-          void editQueue.enqueue(requestId, () => adapter.edit(c.messageId, { kind: 'card', title: `${label} · ${c.title}`, body: '' }));
+          void editQueue.enqueue(requestId, () => adapter.edit(c.messageId, { kind: 'card', title: `${label} · ${c.title}`, body: settledBody }));
         }
       }
     },

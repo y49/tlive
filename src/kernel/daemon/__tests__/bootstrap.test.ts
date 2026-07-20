@@ -298,6 +298,70 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     expect(editedTitle).not.toContain('Denied');
   });
 
+  it('the settled card keeps its body — you can still see WHAT was approved (live feedback)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      approvals: { approvalGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
+    const adapter = interactiveAdapter('telegram', sent, edits);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const sock = join(tmp, 'daemon.sock');
+    const pending = request(
+      {
+        kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash',
+        input: { command: 'touch /tmp/probe', description: 'probe file' },
+        timeoutSec: 60,
+      },
+      { socketPath: sock, timeoutMs: 10_000 },
+    );
+    await new Promise((r) => setTimeout(r, 100));
+    const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+    const approveBtn = card.buttons!.find((b) => b.id.startsWith('approve:'))!;
+    adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: approveBtn.id, ts: 0 });
+    await pending;
+
+    expect(edits).toHaveLength(1);
+    const edited = edits[0].msg as { title?: string; body?: string; buttons?: unknown[] };
+    expect(edited.title).toContain('Allowed');
+    expect(edited.body).toContain('touch /tmp/probe');   // the command survives settlement
+    expect(edited.buttons ?? []).toHaveLength(0);        // deactivation is button removal, not body erasure
+  });
+
+  it('deny-with-guidance writes the reason back onto the settled card', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      approvals: { approvalGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
+    const adapter = interactiveAdapter('telegram', sent, edits);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const sock = join(tmp, 'daemon.sock');
+    const pending = request(
+      {
+        kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash',
+        input: { command: 'rm -rf /tmp/x' },
+        timeoutSec: 60,
+      },
+      { socketPath: sock, timeoutMs: 10_000 },
+    );
+    await new Promise((r) => setTimeout(r, 100));
+    const cardMsgId = 'm1'; // interactiveAdapter assigns sequential ids m1, m2, …
+    adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x2', text: 'use mv to the scratchpad instead', replyToMessageId: cardMsgId, ts: 0 });
+    const r = await pending as { decision?: string; message?: string };
+    expect(r.decision).toBe('deny');
+
+    expect(edits).toHaveLength(1);
+    const edited = edits[0].msg as { title?: string; body?: string };
+    expect(edited.title).toContain('Denied with guidance');
+    expect(edited.body).toContain('rm -rf /tmp/x');                      // original command kept
+    expect(edited.body).toContain('> use mv to the scratchpad instead'); // the reason, quoted
+  });
+
   it('malformed AskUserQuestion input falls through to the normal approval card (Allow/Deny)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },
