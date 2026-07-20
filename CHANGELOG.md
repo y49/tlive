@@ -4,6 +4,50 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Breaking — approval window unified at ~24h
+
+- **`approvals.claudeWindowSec` → `approvals.windowSec`**, now shared by both
+  vendors and defaulting to 86200 (~24h, up from 30min; clamp 60–86200).
+  Timing out does not mean denied — the local prompt keeps waiting — so a
+  short window only forces you back to the keyboard, which is the exact
+  failure tlive exists to prevent. Codex already ran a hardcoded 24h with no
+  vendor ceiling and no trouble; it now reads the same config key.
+
+### Added — deny with guidance
+
+- **Quote a live approval card with your reason** and the agent receives it
+  (`deny` + message on the wire) and switches approach, instead of stalling
+  on a bare `Denied via tlive`. The Deny button stays for quick vetoes. Only
+  deny can carry a message — the allow wire has no message field, and
+  approving needs no explanation anyway.
+
+### Fixed — cards stop lying
+
+- **Cards no longer stay clickable when the session dies.** Closing a session
+  (Ctrl+C, closed terminal) left its card live while the answer vanished into
+  a dead socket. The daemon now notices the disconnect (pending still present
+  at socket close = abnormal death) and rewrites the card to `Session ended`.
+- **Tapping a stale card now tells you so** (`This request is no longer
+  active…`) instead of silently doing nothing — covers daemon restarts, which
+  the disconnect path can't see.
+- **The hook shim no longer hangs for the full window when the daemon dies
+  mid-request.** A graceful daemon shutdown sends FIN, which fired `'close'`
+  but not `'error'`, so the shim's promise never settled and Claude Code froze
+  with it (a background agent sat frozen for 3h+ in the wild). The shim now
+  exits within ~50ms with `{}` — no decision, never an approval — and the
+  local prompt takes over.
+- **One key per session, not per directory.** Two CC sessions in one directory
+  shared a registry entry, so the second one's continue card overwrote the
+  first — the first card lived on pointing at nothing. Sessions now key on
+  `session_id`; the working directory is just a field.
+- **Codex sessions show the project name** instead of `codex:<threadId>` —
+  the real cwd comes from the `thread/resume` response, and the thread key
+  stays the unique id.
+- **Codex archival is now observed via the real `thread/archived`
+  notification.** The old `status.type === 'archived'` branch matched nothing
+  the wire can send, so Codex session-end never fired and per-thread state
+  never got cleaned up.
+
 ### Breaking — `web.publicUrl` retired; cards never carry a link
 
 - **`web.publicUrl` removed.** Cards never contain URLs. The deep link carried
@@ -50,8 +94,9 @@ All notable changes to this project will be documented in this file.
   no trust step, nothing to approve in a `/hooks` review.
 - **`approvals.codexWindowSec` config key removed.** Codex has no
   approval window anymore — the companion never blocks the native
-  prompt, so there's nothing to time out. `approvals.claudeWindowSec`
-  is unaffected.
+  prompt, so there's nothing to time out. (The Claude-side window later
+  became `approvals.windowSec`, shared by both vendors — see the entry at
+  the top; the Codex companion now reads the same key for its card TTL.)
 - **Codex plugin no longer ships hooks**, only the `tlive` skill. Both
   plugins bump to `2.2.0`. Re-run `tlive setup --hooks-only --codex` to
   refresh the plugin — there's no trust step to redo.
@@ -73,10 +118,10 @@ All notable changes to this project will be documented in this file.
 - **Re-trust required**: the Codex plugin's hook set changed, so trust
   keys change — re-run `tlive setup --hooks-only --codex` (trust is
   granted automatically via `hooks/list`).
-- **Configurable approval windows** (`approvals.claudeWindowSec` /
-  `codexWindowSec`): defaults 86000s (~24h, parallel) / 590s (~10min,
-  serial), clamped at 86200s / 7200s (2h). The Codex plugin's vendor hook
-  timeout is 7320s so a configured 2h window still resolves inside it.
+- ~~**Configurable approval windows** (`approvals.claudeWindowSec` /
+  `codexWindowSec`)~~ — superseded: `codexWindowSec` died with the Codex
+  hooks retirement, and `claudeWindowSec` became the shared
+  `approvals.windowSec` (default 86200 ≈24h) — see the entry at the top.
 - **Precise local-answer cancellation**: pending approvals now carry
   sessionId/agentId; a local answer only releases the answering agent's
   own card (matchAgent tri-state: main-session / specific agent /
@@ -90,9 +135,10 @@ All notable changes to this project will be documented in this file.
   deleted rather than kept for old hand-written configs — replace any
   such config with the `PermissionRequest` blocks in
   `docs/manual-hooks.md`. Unknown shim events degrade to `{}`.
-- **Claude default window is now 30min** (user decision; was ~24h):
-  `approvals.claudeWindowSec` still configures up to 86200s (~24h) for
-  away-overnight use.
+- ~~**Claude default window is now 30min**~~ — superseded: real-world use
+  (an approval fired after leaving work, answered hours later) proved the
+  short default wrong; the window is back at ~24h as the shared
+  `approvals.windowSec` — see the entry at the top.
 
 ### Changed — Telegram card styling + English copy (Phase 2, TG-first)
 

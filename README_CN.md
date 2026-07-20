@@ -50,8 +50,8 @@ tlive run claude   # (可选)包装会话 → 实时 web 终端 + 预览卡
 - **审批** —— Claude Code 上是双通道:`PermissionRequest` hook 与本地权限
   对话**并行**——两边同时可答,先到先得。卡片不会立刻发出:
   `approvals.approvalGraceSec`(默认 10 秒,`0` 关闭)先静默这么久,你在键盘前
-  马上答掉的话,IM 卡就压根不会发出。IM 按钮 / web 卡默认 30 分钟内可答
-  (`approvals.claudeWindowSec` 可配至约 24 小时);
+  马上答掉的话,IM 卡就压根不会发出。IM 按钮 / web 卡默认约 24 小时内可答
+  (`approvals.windowSec`,两家共用);
   在键盘上答了,远程卡几秒内自动收尾("已在终端处理")。Codex 上是 tlive
   接管(adopt-or-spawn)一个 `codex app-server` companion 进程,Codex TUI
   自动连上它——远程卡和原生提示同样并行竞速,先答先得,没有窗口要配
@@ -221,9 +221,9 @@ IM 命令:`/perm on|off`(静音)、`/trust on|off`、`/help`。
     "autoStart": true         // 默认 true;设 false 关闭 session-start 懒启动
   },
   "approvals": {
-    // 远程审批窗口(秒),仅 Claude Code:它的 permission hook 与本地对话
-    // 并行,窗口开长也不费事。Codex 没有窗口概念——见 app-server companion。
-    "claudeWindowSec": 1800,  // 默认 30 分钟,最大 86200(约 24 小时)
+    // 远程审批窗口(秒),两家共用。远程通道与本地提示并行,窗口开长
+    // 也不费事——超时不批也不拒,只是把你逼回键盘而已。
+    "windowSec": 86200,       // 默认约 24 小时(同时是上限;最小 60)
     // 审批卡发出前的静默期——键盘前这段时间内答掉就永不发卡
     "approvalGraceSec": 10    // 默认 10 秒,0 = 关闭
   },

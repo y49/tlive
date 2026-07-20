@@ -261,10 +261,11 @@ Quote-reply any session message to type into that session.
     "autoStart": true         // default true; false disables session-start lazy-start
   },
   "approvals": {
-    // remote-approval window in seconds, Claude Code only: its permission
-    // hook runs parallel to the local dialog, so a long window costs
-    // nothing. Codex has no window — see the app-server companion section.
-    "claudeWindowSec": 1800,  // default 30min, max 86200 (~24h)
+    // remote-approval window in seconds, shared by both vendors. The remote
+    // channel runs parallel to the local prompt, so a long window costs
+    // nothing — timing out never approves or denies anything, it only
+    // forces you back to the keyboard.
+    "windowSec": 86200,       // default ~24h (also the max; min 60)
     // grace period before an approval card is sent — answering at the
     // keyboard within this window means it's never sent at all
     "approvalGraceSec": 10    // default 10s, 0 disables

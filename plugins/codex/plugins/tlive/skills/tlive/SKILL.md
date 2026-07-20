@@ -37,8 +37,8 @@ approve/deny/reply-to-continue. The daemon auto-starts with new sessions
    Codex still prompts locally; nothing is ever auto-run.
 3. Claude approval card unanswered: the local dialog stays live the whole time
    (parallel channels, first answer wins); answering locally resolves the remote
-   card as "answered in terminal". The remote window defaults to 30 minutes
-   (`approvals.claudeWindowSec`, up to ~24h).
+   card as "answered in terminal". The remote window defaults to ~24h
+   (`approvals.windowSec`, shared by both vendors).
 4. Web page unreachable: `tlive url` for the current link (token is in the URL);
    phones need the same LAN (or your own reverse proxy/VPN — tlive has no
    `publicUrl` config, and cards never carry the link).

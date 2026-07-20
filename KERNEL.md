@@ -93,9 +93,10 @@ Claude 的原始 hook JSON 在这里归一。加一个新 AI runtime = 把它的
 映射进这套归一模型(hook 式集成)或走 companion 式集成(见下),kernel 不变。
 
 **审批(Claude Code)**:gating 走 `PermissionRequest` hook——它与本地权限
-对话**并行**(先答先得),窗口可长(默认 30min,`approvals.claudeWindowSec`
-可配至 86200s≈24h;hooks.json `timeout: 86400`,shim IPC=窗+100s,daemon
-clamp 24h);本地答掉后 daemon 靠 PostToolUse(同 key+tool,本地点了允许)/
+对话**并行**(先答先得),窗口默认顶格(`approvals.windowSec`,默认 86200s
+≈24h,clamp 60~86200,**两家共用**;hooks.json `timeout: 86400`,shim
+IPC=窗+100s,daemon clamp 24h。超时 ≠ 拒绝——本地框永不超时仍在等,短窗口
+只是逼用户回电脑,恰是 tlive 要消灭的失效模式);本地答掉后 daemon 靠 PostToolUse(同 key+tool,本地点了允许)/
 UserPromptSubmit(同 key)/ Stop(同 key)cancel 挂起请求(resolve 为
 'local',wire 上映射回 'defer' → shim 输出 `{}` pass-through)。
 PermissionDenied(同 key+tool)只覆盖规则型拒绝——真机实测:用户在对话框点
@@ -141,6 +142,37 @@ agent does next.
   被彻底退役、换成 companion 架构(下方)的直接背景之一。
 - PreToolUse gating(`permissionDecisionOut` / `pre-tool-use` 事件)已整体
   删除(no-compat);shim 收到未知事件一律优雅输出 `{}`。
+
+**Hook 失败语义(CC,实测 claude 2.1.210/2.1.212)**:hook `exit 1` + 空
+stdout = **fail-safe** —— CC 干净地回落本地对话框,绝不放行(隔离探针:hook
+配 `exit 1` → 触发写文件命令 → 证据文件未创建 + 本地框正常弹出)。
+⚠ 但"daemon 死了"**不等于**"shim exit 1"——2026-07-17 真机证伪:shim 的
+`request()` 只监听 `'error'`,daemon 优雅关闭发 FIN 走 `'close'`,promise
+永不 settle,shim 连同 CC 一起僵死满整个 24h 窗(后台子 agent 冻死 3h+)。
+修复(`ipc/client.ts`:settled 守卫 + `'close'` reject + 清 timer)后,
+daemon 死 → shim ~56ms 退出、stdout `{}`(无决策,非放行)→ CC 回落本地框,
+fail-safe 才真正成立。**凡"进程消失时的行为",必须对每条 socket 生命周期
+路径('error'/'close'/FIN)分别验证,不能拿一个探针的结论套另一个场景。**
+
+**调用方死亡的判据(零误判)**:IPC `sock.on('close')` fire 时该连接的
+pending **还在** = shim 异常死亡(`Decision='gone'`,卡改写 `Session
+ended`,不产生任何 wire 输出)。正常流程下 shim 拿到决策才关连接,那时
+pending 已被 `answer()`/`cancel()` 删掉。不需要超时/探活/心跳。已知残余
+盲区:CC 死但 shim 被 systemd 收养、socket 仍连着 —— daemon 无从感知,
+兜底靠 stale 点击告知。
+
+**key 与 cwd 是两个概念,别搅在一起**:
+
+```
+key   = 会话唯一 id  (CC: session_id / Codex: codex:<threadId> / wrapped: TLIVE_SESSION uuid)
+cwd   = 真实工作目录  (registry 字段;首次创建后不可变)
+label = basename(cwd) → 项目名
+```
+
+曾经两边各犯一半:Codex 把唯一 id 当 cwd 用(label 显示 `codex:abc123`);
+CC hook-only 把 cwd 当唯一 id 用(同目录两会话共享一条 registry 记录,
+continueId 互相覆盖)。PermissionRouter/registry 现在显式带 key+cwd 两字段,
+由类型系统强制分离——重新合并会编译失败,不只是测试变红。
 
 **Codex 集成:app-server companion,不是 hook**(`src/kernel/codex/`)。
 Codex 的 hooks/trust 整套已退役(no-compat,2026-07-14)——`tlive hook
