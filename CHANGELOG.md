@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Fixed — `tlive stop; tlive start` just works
+
+- **`tlive stop` now waits for the daemon to actually exit** (up to 8s)
+  before reporting `stopped`. Returning early made back-to-back restarts a
+  trap: `start` probed the still-live socket, yielded to it, and the old
+  daemon then finished dying — leaving nothing running while the user
+  believed they had restarted. As a second line of defense, a starting
+  daemon that loses the singleton probe now waits up to 6s for the old
+  socket to free and takes over, instead of yielding immediately. The
+  documented `sleep 2` workaround is gone.
+
 ### Added — `tlive status` reports plugin health
 
 - **A silently missing plugin is now visible.** `tlive status` probes
@@ -34,7 +45,7 @@ All notable changes to this project will be documented in this file.
   `codex plugin add` re-materializes from the live marketplace dir — and is
   now verified the same way. Setup's closing guidance spells out the two
   deployment gotchas: running sessions keep the old plugin until a new
-  session, and the daemon needs `tlive stop; sleep 2; tlive start`.
+  session, and the daemon needs `tlive stop; tlive start`.
 
 ### Changed — Feishu cards get channel-aware rendering
 

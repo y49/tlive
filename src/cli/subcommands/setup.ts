@@ -53,8 +53,7 @@ export async function runSetup(argv: string[]): Promise<void> {
     process.stdout.write(
       (await registerPlugins(hooksOnlySelection(argv)))
       + 'Running sessions keep the old plugin — start a NEW claude/codex session (or /reload-plugins).\n'
-      + 'If you upgraded tlive itself, also restart the daemon: tlive stop; sleep 2; tlive start\n'
-      + '(stop takes ~2s to fully exit; back-to-back stop/start trips the singleton guard).\n',
+      + 'If you upgraded tlive itself, also restart the daemon: tlive stop; tlive start\n',
     );
     return;
   }

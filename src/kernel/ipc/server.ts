@@ -39,6 +39,20 @@ function isSocketAlive(path: string): Promise<boolean> {
   });
 }
 
+/** Wait until nothing accepts on the socket path (a dying daemon finished
+ *  exiting), up to timeoutMs. Returns true iff it freed within the window.
+ *  Exists for the stop;start collision: `tlive stop` takes ~2s to fully exit,
+ *  and a back-to-back `tlive start` used to lose the singleton probe and
+ *  silently yield — leaving NO daemon once the old one finished dying. */
+export async function waitUntilSocketFree(path: string, timeoutMs = 6000, intervalMs = 300): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (await isSocketAlive(path)) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return true;
+}
+
 export async function startIpcServer(opts: {
   path: string;
   handler: (req: IpcRequest, reply: (r: IpcResponse) => void, ctx: IpcCallContext) => void | Promise<void>;
