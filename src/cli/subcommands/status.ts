@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { request } from '../../kernel/ipc/client.js';
 import { loadConfig } from '../../kernel/config/loader.js';
 import { resolveWebUrls, printWebBanner } from '../web-url.js';
+import { pluginHealth, defaultRunner } from '../../kernel/integrations/plugin-install.js';
 
 export async function runStatus(_argv: string[]): Promise<void> {
   const home = process.env.TLIVE_HOME ?? join(homedir(), '.tlive');
@@ -24,6 +25,14 @@ export async function runStatus(_argv: string[]): Promise<void> {
     }
   } catch { /* not running */ }
   if (!daemonOk) process.stdout.write('daemon:   not running (run: tlive start)\n');
+
+  // Plugin health — the plugin silently vanishing is a lived failure mode
+  // (3 days of zero hook traffic before anyone noticed): make it visible here.
+  const run = defaultRunner();
+  for (const vendor of ['claude', 'codex'] as const) {
+    const line = pluginHealth(vendor, run);
+    if (line) process.stdout.write(`plugins:  ${line}\n`);
+  }
 
   const cfg = loadConfig(home);
   const dests: string[] = [];

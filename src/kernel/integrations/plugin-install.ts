@@ -54,11 +54,14 @@ export function bundledPluginVersion(vendor: 'claude' | 'codex'): string | null 
   return null;
 }
 
-/** Installed tlive@tlive version per `<vendor> plugin list --json`, or null if
- *  the CLI/flag/shape is unavailable (old versions degrade gracefully). */
-export function installedPluginVersion(run: Runner, vendor: 'claude' | 'codex'): string | null {
+/** Tri-state probe of the installed tlive@tlive plugin: `absent` is a real
+ *  "not installed" (the list parsed fine and tlive wasn't in it), `unknown`
+ *  means the CLI/flag/shape is unavailable (old versions) — callers must not
+ *  treat `unknown` as `absent` or every old CLI screams "NOT INSTALLED". */
+export function installedPluginProbe(run: Runner, vendor: 'claude' | 'codex'):
+  { state: 'ok'; version: string } | { state: 'absent' } | { state: 'unknown' } {
   const r = run(vendor, ['plugin', 'list', '--json']);
-  if (!r.ok) return null;
+  if (!r.ok) return { state: 'unknown' };
   try {
     const parsed = JSON.parse(r.output) as unknown;
     // claude: top-level array of {id, version}; codex: {installed:[{pluginId, version}]}
@@ -66,15 +69,42 @@ export function installedPluginVersion(run: Runner, vendor: 'claude' | 'codex'):
       ? parsed
       : (parsed as { installed?: unknown[] }).installed ?? [];
     for (const e of entries as Array<{ id?: string; pluginId?: string; version?: string }>) {
-      if ((e.id ?? e.pluginId) === 'tlive@tlive' && typeof e.version === 'string') return e.version;
+      if ((e.id ?? e.pluginId) === 'tlive@tlive' && typeof e.version === 'string') return { state: 'ok', version: e.version };
     }
-    return null;
+    return { state: 'absent' };
   } catch {
-    return null;
+    return { state: 'unknown' };
   }
 }
 
+/** Installed tlive@tlive version, or null when absent/unverifiable. */
+export function installedPluginVersion(run: Runner, vendor: 'claude' | 'codex'): string | null {
+  const p = installedPluginProbe(run, vendor);
+  return p.state === 'ok' ? p.version : null;
+}
+
 const alreadyOk = (r: { ok: boolean; output: string }): boolean => r.ok || /already/i.test(r.output);
+
+/** One status line describing a vendor's plugin health, or null when the
+ *  vendor CLI isn't there (nothing to report). Exists because the plugin
+ *  silently disappearing is a REAL failure mode we lived through (2026-07-20:
+ *  gone for 3 days, zero hook traffic, zero cards, nothing noticed) — and a
+ *  session started while it's missing runs without hooks until restarted. */
+export function pluginHealth(vendor: 'claude' | 'codex', run: Runner, hasVendor: () => boolean = () => commandOnPath(vendor)): string | null {
+  if (!hasVendor()) return null;
+  const bundled = bundledPluginVersion(vendor);
+  const probe = installedPluginProbe(run, vendor);
+  if (probe.state === 'absent') {
+    return `${vendor}: plugin NOT INSTALLED — hooks inactive, no cards. Run: tlive setup --hooks-only (then restart sessions)`;
+  }
+  if (probe.state === 'unknown') {
+    return `${vendor}: plugin state unverifiable on this CLI`;
+  }
+  if (bundled && probe.version !== bundled) {
+    return `${vendor}: plugin ${probe.version} (this build ships ${bundled}) — run: tlive setup --hooks-only`;
+  }
+  return `${vendor}: plugin ${probe.version} ✓`;
+}
 
 /** Post-install verification shared by both vendors. Only a *provable*
  *  mismatch fails — when either side of the comparison is unreadable we

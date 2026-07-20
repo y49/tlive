@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   installClaudePlugin, installCodexPlugin, claudePluginDir, codexPluginDir,
-  bundledPluginVersion, installedPluginVersion, type Runner,
+  bundledPluginVersion, installedPluginVersion, pluginHealth, type Runner,
 } from '../plugin-install';
 
 function scripted(responses: Array<{ match: RegExp; ok: boolean; output?: string }>): { run: Runner; calls: string[] } {
@@ -122,6 +122,39 @@ describe('installClaudePlugin', () => {
     const r = installClaudePlugin(run);
     expect(r.ok).toBe(true);
     expect(r.detail).toContain('unverifiable');
+  });
+});
+
+describe('pluginHealth', () => {
+  it('vendor missing → null (nothing to report)', () => {
+    expect(pluginHealth('claude', scripted([]).run, () => false)).toBeNull();
+  });
+  it('list parses fine but tlive absent → NOT INSTALLED warning (the 3-day silent-loss incident)', () => {
+    const { run } = scripted([
+      { match: /plugin list --json/, ok: true, output: JSON.stringify([{ id: 'other@x', version: '1.0.0' }]) },
+    ]);
+    const line = pluginHealth('claude', run, () => true)!;
+    expect(line).toContain('NOT INSTALLED');
+    expect(line).toContain('hooks inactive');
+  });
+  it('old CLI without --json → unverifiable, NOT a false "not installed" alarm', () => {
+    const line = pluginHealth('claude', scripted([]).run, () => true)!;
+    expect(line).toContain('unverifiable');
+    expect(line).not.toContain('NOT INSTALLED');
+  });
+  it('version mismatch → points at setup --hooks-only', () => {
+    const { run } = scripted([
+      { match: /plugin list --json/, ok: true, output: JSON.stringify([{ id: 'tlive@tlive', version: '0.0.1' }]) },
+    ]);
+    const line = pluginHealth('claude', run, () => true)!;
+    expect(line).toContain('0.0.1');
+    expect(line).toContain(CC_VERSION);
+  });
+  it('healthy → version with a checkmark', () => {
+    const { run } = scripted([
+      { match: /plugin list --json/, ok: true, output: JSON.stringify({ installed: [{ pluginId: 'tlive@tlive', version: CX_VERSION }] }) },
+    ]);
+    expect(pluginHealth('codex', run, () => true)).toBe(`codex: plugin ${CX_VERSION} ✓`);
   });
 });
 
