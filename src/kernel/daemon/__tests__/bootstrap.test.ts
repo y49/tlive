@@ -298,6 +298,29 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     expect(editedTitle).not.toContain('Denied');
   });
 
+  it('fires ONE desktop notification when the approval card goes out (the at-the-computer pointer)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      approvals: { approvalGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: (title, body) => notes.push({ title, body }) });
+    const sock = join(tmp, 'daemon.sock');
+    const pending = request(
+      { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'touch /x' }, timeoutSec: 60 },
+      { socketPath: sock, timeoutMs: 10_000 },
+    );
+    await new Promise((r) => setTimeout(r, 100));
+    expect(notes).toHaveLength(1); // exactly once — not once per configured channel
+    expect(notes[0].title).toContain('Bash');
+    const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+    adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: card.buttons!.find((b) => b.id.startsWith('approve:'))!.id, ts: 0 });
+    await pending;
+  });
+
   it('the settled card keeps its body — you can still see WHAT was approved (live feedback)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },

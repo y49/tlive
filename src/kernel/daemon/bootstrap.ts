@@ -9,6 +9,7 @@ import { renderApprovalCard } from '../permission/approval-renderer.js';
 import { renderAskCard, askMultiButtons, type AskOption } from '../permission/ask-renderer.js';
 import { AskSelection } from './ask-state.js';
 import { createEditQueue } from './edit-queue.js';
+import { createDesktopNotifier } from './desktop-notify.js';
 import { ContinueBroker } from '../permission/continue-broker.js';
 import { SenderGuard } from './sender-guard.js';
 import { loadConfig } from '../config/loader.js';
@@ -39,6 +40,8 @@ export interface BootstrapOpts {
   home: string;
   imAdapters?: IMAdapter[];
   ensureAppServer?: typeof ensureCodexAppServer;
+  /** Test seam for the desktop notifier; production uses createDesktopNotifier. */
+  desktopNotifier?: (title: string, body: string) => void;
 }
 
 /** A Stop hook should not sit waiting when nothing can answer: no IM chat
@@ -186,6 +189,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // "no zombie cards" invariant even under network reordering.
   const editQueue = createEditQueue();
 
+  // Desktop notification: the at-the-computer pointer to the phone card /
+  // dashboard, for background-launched tool calls that render no local dialog
+  // while the hook pends. Never carries a decision (never-auto-allow intact).
+  const desktopNotify = opts.desktopNotifier ?? createDesktopNotifier({ enabled: cfg.approvals?.desktopNotify ?? true });
+
   // AskUserQuestion (Task 9): raw question + options per pending requestId, so an
   // `ask:<rid>:<idx>` button click can build the deny+message answer. Written at
   // onPending, cleared at onResolved (or consumed once by the button click) —
@@ -251,6 +259,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         } : {}),
       });
       if (msg.requestId) {
+        // First card for this request → also ping the desktop (background-
+        // launched tool calls get NO local dialog while the hook pends, so a
+        // user at this machine needs a pointer to the phone card/dashboard).
+        if (!sentCards.has(msg.requestId)) {
+          desktopNotify(`${title ?? 'Approval pending'}`, 'Waiting for approval — answer on your phone or the tlive dashboard');
+        }
         const list = sentCards.get(msg.requestId) ?? [];
         list.push({ channel: target.channel, messageId: sent.messageId, title: title ?? '', body });
         sentCards.set(msg.requestId, list);

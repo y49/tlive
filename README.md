@@ -268,7 +268,11 @@ Quote-reply any session message to type into that session.
     "windowSec": 86200,       // default ~24h (also the max; min 60)
     // grace period before an approval card is sent — answering at the
     // keyboard within this window means it's never sent at all
-    "approvalGraceSec": 10    // default 10s, 0 disables
+    "approvalGraceSec": 10,   // default 10s, 0 disables
+    // desktop notification (Linux notify-send) when a card goes out —
+    // background tool calls render no local dialog while the hook pends, so
+    // this is the at-the-computer pointer to the phone card / dashboard
+    "desktopNotify": true     // default true; silent no-op without notify-send
   },
   "allowedSenders": [{ "channel": "telegram", "userId": "42" }]  // optional
 }

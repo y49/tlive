@@ -225,7 +225,10 @@ IM 命令:`/perm on|off`(静音)、`/trust on|off`、`/help`。
     // 也不费事——超时不批也不拒,只是把你逼回键盘而已。
     "windowSec": 86200,       // 默认约 24 小时(同时是上限;最小 60)
     // 审批卡发出前的静默期——键盘前这段时间内答掉就永不发卡
-    "approvalGraceSec": 10    // 默认 10 秒,0 = 关闭
+    "approvalGraceSec": 10,   // 默认 10 秒,0 = 关闭
+    // 审批卡发出时在 daemon 本机弹桌面通知(Linux notify-send)——后台命令
+    // hook 挂起期间 CC 不弹本地框,这是"人在电脑前"指向手机卡/dashboard 的入口
+    "desktopNotify": true     // 默认 true;无 notify-send 时静默降级
   },
   "allowedSenders": [{ "channel": "telegram", "userId": "42" }]  // 可选
 }

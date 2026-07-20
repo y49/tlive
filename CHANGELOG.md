@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Added — desktop notification when a card goes out
+
+- **A background-launched tool call gets no local approval dialog while the
+  hook pends** (measured on CC 2.1.212/2.1.215) — so a user sitting at the
+  computer had no answer surface there, only their phone. The daemon now
+  fires a desktop notification (Linux `notify-send`) when an approval card is
+  sent, pointing at the phone card / dashboard. `approvals.desktopNotify`
+  (default true; silent no-op off Linux or without `notify-send`). It never
+  carries a decision — never-auto-allow is untouched. Respects the grace
+  window (answer at the keyboard first and nothing fires).
+
 ### Fixed — `tlive stop; tlive start` just works
 
 - **`tlive stop` now waits for the daemon to actually exit** (up to 8s)
