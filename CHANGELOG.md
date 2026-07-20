@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Fixed — settled cards keep their body
+
+- **Answering a card no longer erases what it asked.** The settlement edit
+  used to collapse the card to one line (`Allowed · tlive · Bash`); the
+  command/diff now stays on the card as the audit record, and deactivation
+  is purely the buttons disappearing. A deny-with-guidance also quotes your
+  reason back onto the card.
+
 ### Fixed — plugin updates verify instead of trusting
 
 - **`tlive setup` now proves the plugin cache reached the bundled version.**
