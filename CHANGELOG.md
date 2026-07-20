@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Fixed — plugin updates verify instead of trusting
+
+- **`tlive setup` now proves the plugin cache reached the bundled version.**
+  After installing/updating it reads `<vendor> plugin list --json` and fails
+  loudly on a mismatch, instead of reporting success while claude/codex kept
+  serving a stale plugin. A failed `claude plugin marketplace update` is no
+  longer swallowed (it used to let the subsequent update "succeed" against
+  the old source). Older CLIs without `--json` degrade to an honest
+  "unverifiable" note. The Codex path needs no separate update command —
+  `codex plugin add` re-materializes from the live marketplace dir — and is
+  now verified the same way. Setup's closing guidance spells out the two
+  deployment gotchas: running sessions keep the old plugin until a new
+  session, and the daemon needs `tlive stop; sleep 2; tlive start`.
+
 ### Changed — Feishu cards get channel-aware rendering
 
 - **Feishu cards no longer leak Telegram-isms.** The shared markdown body
