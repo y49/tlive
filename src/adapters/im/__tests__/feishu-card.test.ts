@@ -54,6 +54,23 @@ describe('mdToFeishuElements', () => {
     expect(tail.content).toContain('*Reply to continue*');
   });
 
+  it('emits no empty element for the real continue-card shape (leading \\n before the quote)', () => {
+    // buildContinueCardBody produces `\n>! …\n>! …\n\n*Reply to continue*` —
+    // the leading blank line must not become a {content:""} element (content
+    // is required; an empty one may get the whole card rejected).
+    const md = '\n>! All done.\n>! Tests pass.\n\n*Reply to continue*';
+    const els = mdToFeishuElements(md) as Array<Md | Panel>;
+    expect(els[0].tag).toBe('collapsible_panel');
+    for (const e of els) {
+      if (e.tag === 'markdown') expect((e as Md).content.trim()).not.toBe('');
+    }
+  });
+
+  it('keeps a whitespace-only code span from becoming stray asterisks', () => {
+    const els = mdToFeishuElements('a ` ` b') as Md[];
+    expect(els[0].content).not.toContain('**');
+  });
+
   it('strips plain quote markers (1.0 would render "> " literally)', () => {
     const els = mdToFeishuElements('> quoted line\n> second') as Md[];
     expect(els[0].content).toBe('quoted line\nsecond');

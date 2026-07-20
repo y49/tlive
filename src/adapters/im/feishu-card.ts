@@ -36,9 +36,11 @@ function inline(md: string): string {
     return `${NUL}${codes.length - 1}${NUL}`;
   });
   s = s.replace(/\|\|([^|\n]+)\|\|/g, '$1');
+  // 已知 cosmetic:`**bold \`code\` tail**` 里降级出的 ** 与外层 ** 撞配对,
+  // 粗体范围会错乱(内容不丢)。共享 markdown 空间的固有代价,真机验收后再判。
   return s.replace(new RegExp(`${NUL}(\\d+)${NUL}`, 'g'), (_m, i: string) => {
     const body = codes[Number(i)].replace(/\*/g, '&#42;').replace(/~/g, '&#126;');
-    return body ? `**${body}**` : '';
+    return body.trim() ? `**${body}**` : body;
   });
 }
 
@@ -49,8 +51,12 @@ function plainPreview(line: string): string {
     .replace(/\*\*([^*\n]+)\*\*/g, '$1')
     .replace(/\*([^*\n]+)\*/g, '$1')
     .replace(/~~([^~\n]+)~~/g, '$1')
-    .replace(/\|\|([^|\n]+)\|\|/g, '$1')
-    .slice(0, 80);
+    .replace(/\|\|([^|\n]+)\|\|/g, '$1');
+}
+
+/** 80 个真字符截断(Array.from 走 code point,不切裂 emoji 代理对)。 */
+function clipPreview(s: string): string {
+  return Array.from(s).slice(0, 80).join('');
 }
 
 type FeishuElement = Record<string, unknown>;
@@ -62,7 +68,11 @@ function prose(text: string, out: FeishuElement[]): void {
   const lines = text.split('\n');
   let buf: string[] = [];
   const flush = (): void => {
-    if (buf.length) { out.push(mdEl(buf.join('\n'))); buf = []; }
+    // 按内容而非行数判空:真实 body 常以 \n 开头(标题留白),否则每张
+    // 续跑卡都会在面板前多出一个 content:"" 的元素(content 是必填,整卡可能被拒)。
+    const c = buf.join('\n');
+    buf = [];
+    if (c.trim()) out.push(mdEl(c));
   };
   let i = 0;
   while (i < lines.length) {
@@ -73,7 +83,7 @@ function prose(text: string, out: FeishuElement[]): void {
       out.push({
         tag: 'collapsible_panel',
         expanded: false,
-        header: { title: { tag: 'plain_text', content: plainPreview(q[0]) } },
+        header: { title: { tag: 'plain_text', content: clipPreview(plainPreview(q[0])) } },
         elements: [mdEl(q.map(inline).join('\n'))],
       });
     } else if (/^> /.test(lines[i])) {
