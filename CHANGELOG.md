@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Added — `tlive status` reports plugin health
+
+- **A silently missing plugin is now visible.** `tlive status` probes
+  `<vendor> plugin list --json` and prints one line per vendor: the healthy
+  version, a version mismatch (pointing at `tlive setup --hooks-only`), or
+  `NOT INSTALLED` with the consequence spelled out — hooks inactive, no
+  cards, and sessions started while it was missing need a restart. Motivated
+  by a real incident: the Claude plugin vanished unnoticed and every session
+  ran hookless for three days.
+
 ### Fixed — settled cards keep their body
 
 - **Answering a card no longer erases what it asked.** The settlement edit
