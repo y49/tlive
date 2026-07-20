@@ -15,6 +15,7 @@ import { join, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { IMAdapter, IncomingEnvelope, OutgoingMessage } from '../../kernel/contracts/im-adapter.js';
+import { mdToFeishuElements } from './feishu-card.js';
 
 export interface FeishuAdapterOpts {
   appId: string;
@@ -25,25 +26,42 @@ export interface FeishuAdapterOpts {
 
 type CardMessage = Extract<OutgoingMessage, { kind: 'card' }>;
 
-/** Build a Feishu interactive card; approval buttons carry their id via a callback behavior. */
+/** 按钮语义 → 飞书按钮样式:放行=primary、拒绝=danger,其余(Always allow /
+ *  Pause / ask 选项…)一律 default —— 满屏 primary 会淹没真正的主动作。 */
+function buttonType(id: string): 'primary' | 'danger' | 'default' {
+  if (id.startsWith('approve:') || id.startsWith('asksubmit:')) return 'primary';
+  if (id.startsWith('deny:')) return 'danger';
+  return 'default';
+}
+
+/** Build a Feishu interactive card; approval buttons carry their id via a callback behavior.
+ *  Body goes through the markdown converter (feishu-card.ts) — card 1.0 renders
+ *  inline code / `> ` quotes literally, so the shared markdown must be adapted.
+ *  Header gets the `blue` template only while the card is actionable, so a
+ *  settled (edited) card visually steps back. */
 export function buildCard(out: CardMessage): object {
-  const elements: object[] = [
-    { tag: 'div', text: { tag: 'lark_md', content: out.body } },
-  ];
+  const elements: object[] = [...mdToFeishuElements(out.body)];
   if (out.buttons?.length) {
     elements.push({
       tag: 'action',
       actions: out.buttons.map((b) => ({
         tag: 'button',
         text: { tag: 'plain_text', content: b.label },
-        type: b.id.startsWith('deny') ? 'danger' : 'primary',
+        type: buttonType(b.id),
         behaviors: [{ type: 'callback', value: { tlive: b.id } }],
       })),
     });
   }
   return {
     config: { wide_screen_mode: true },
-    ...(out.title ? { header: { title: { tag: 'plain_text', content: out.title } } } : {}),
+    ...(out.title
+      ? {
+          header: {
+            title: { tag: 'plain_text', content: out.title },
+            ...(out.buttons?.length ? { template: 'blue' } : {}),
+          },
+        }
+      : {}),
     elements,
   };
 }
@@ -132,7 +150,7 @@ export class FeishuAdapter implements IMAdapter {
           });
         }
         // Acknowledge so the card stops spinning.
-        return { toast: { type: 'success', content: '已收到' } };
+        return { toast: { type: 'success', content: 'Received' } };
       },
     });
     await this.ws.start({ eventDispatcher: dispatcher });
