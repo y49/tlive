@@ -102,11 +102,49 @@ describe('createDesktopNotifier', () => {
     expect(argsSeen[1].some((a) => a.startsWith('--replace-id='))).toBe(false);
   });
 
-  it('is a silent no-op when disabled / off linux / without notify-send', async () => {
+  it('is a silent no-op when disabled / on unsupported platforms / without notify-send', async () => {
     const { procs, ss } = fakeProcs();
-    await createDesktopNotifier({ ...linux, enabled: false, streamSpawner: ss }).ping('t', 'b');
-    await createDesktopNotifier({ platform: 'darwin', hasCmd: () => true, streamSpawner: ss }).ping('t', 'b');
-    await createDesktopNotifier({ platform: 'linux', hasCmd: () => false, streamSpawner: ss }).ping('t', 'b');
+    const sp = vi.fn(async () => '');
+    await createDesktopNotifier({ ...linux, enabled: false, streamSpawner: ss, spawner: sp }).ping('t', 'b');
+    await createDesktopNotifier({ platform: 'freebsd', hasCmd: () => true, streamSpawner: ss, spawner: sp }).ping('t', 'b');
+    await createDesktopNotifier({ platform: 'linux', hasCmd: () => false, streamSpawner: ss, spawner: sp }).ping('t', 'b');
     expect(procs).toHaveLength(0);
+    expect(sp).not.toHaveBeenCalled();
+  });
+});
+
+describe('darwin backend (osascript, ping-only)', () => {
+  it('pings via display notification with escaped quotes; clear is a no-op', async () => {
+    const calls: Array<[string, string[]]> = [];
+    const sp = async (cmd: string, args: string[]) => { calls.push([cmd, args]); return ''; };
+    const n = createDesktopNotifier({ platform: 'darwin', hasCmd: () => true, spawner: sp });
+    await n.ping('tlive · Bash', 'say "hi"');
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toBe('osascript');
+    expect(calls[0][1][1]).toBe('display notification "say \\"hi\\"" with title "tlive · Bash"');
+    await n.clear();
+    expect(calls).toHaveLength(1); // not scriptable on macOS
+  });
+});
+
+describe('win32 backend (PowerShell WinRT toast)', () => {
+  it('pings a tagged toast (single slot) and clears via History.Remove', async () => {
+    const calls: Array<[string, string[]]> = [];
+    const sp = async (cmd: string, args: string[]) => { calls.push([cmd, args]); return ''; };
+    const n = createDesktopNotifier({ platform: 'win32', hasCmd: () => true, spawner: sp });
+    await n.ping('tlive · Bash', 'a<b>&"c"');
+    expect(calls[0][0]).toBe('powershell');
+    const script = calls[0][1][calls[0][1].length - 1];
+    expect(script).toContain("$t.Tag = 'tlive'");
+    expect(script).toContain('a&lt;b&gt;&amp;&quot;c&quot;'); // XML-escaped body
+    await n.clear();
+    const clearScript = calls[1][1][calls[1][1].length - 1];
+    expect(clearScript).toContain("History.Remove('tlive', 'tlive'");
+  });
+
+  it('degrades to a no-op without powershell on PATH', async () => {
+    const sp = vi.fn(async () => '');
+    await createDesktopNotifier({ platform: 'win32', hasCmd: () => false, spawner: sp }).ping('t', 'b');
+    expect(sp).not.toHaveBeenCalled();
   });
 });

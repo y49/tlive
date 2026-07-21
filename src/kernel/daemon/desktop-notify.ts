@@ -28,9 +28,16 @@
 //   into parallel slots. A replaced ping's waiter is killed and its callbacks
 //   ignored, so a click can never fire twice through a superseded process.
 //
-// Linux `notify-send` only for now; anywhere else (or when the binary is
-// missing) this degrades to a silent no-op — the card and dashboard remain
-// the canonical channels.
+// Platform coverage (the notification's core value is calling the user BACK
+// to the terminal — click-to-answer is a Linux bonus, not the bar):
+// - linux: notify-send — full model (single slot, transient, close, action).
+// - win32: PowerShell WinRT toast — single slot via Tag replace + active
+//   clear via ToastNotificationManager History. No click action (v1).
+// - darwin: osascript `display notification` — ping only; banners
+//   auto-dismiss, Notification Center accumulation is macOS-managed.
+// Missing binary anywhere → silent no-op — the card and dashboard remain
+// the canonical channels. win32/darwin paths are spec-derived, not yet
+// verified on real hardware.
 
 import { spawn } from 'node:child_process';
 import { commandOnPath } from '../integrations/hooks-cleanup.js';
@@ -106,7 +113,10 @@ export function createDesktopNotifier(opts?: {
   const enabled = opts?.enabled ?? true;
   const platform = opts?.platform ?? process.platform;
   const hasCmd = opts?.hasCmd ?? commandOnPath;
-  if (!enabled || platform !== 'linux' || !hasCmd('notify-send')) return NOOP;
+  if (!enabled) return NOOP;
+  if (platform === 'darwin') return hasCmd('osascript') ? darwinNotifier(opts?.spawner ?? defaultSpawner) : NOOP;
+  if (platform === 'win32') return hasCmd('powershell') ? win32Notifier(opts?.spawner ?? defaultSpawner) : NOOP;
+  if (platform !== 'linux' || !hasCmd('notify-send')) return NOOP;
   const sp = opts?.spawner ?? defaultSpawner;
   const ss = opts?.streamSpawner ?? defaultStreamSpawner;
   const action = opts?.action;
@@ -163,5 +173,53 @@ export function createDesktopNotifier(opts?: {
         id,
       ]);
     }),
+  };
+}
+
+/** macOS: built-in osascript. Ping-only — banners auto-dismiss; there is no
+ *  scriptable replace/close for Notification Center entries. */
+function darwinNotifier(sp: Spawner): DesktopNotifier {
+  const esc = (v: string): string => v.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return {
+    ping: async (title, body) => {
+      await sp('osascript', ['-e', `display notification "${esc(body)}" with title "${esc(title)}"`]);
+    },
+    clear: async () => { /* not scriptable on macOS */ },
+  };
+}
+
+/** Windows 10/11: WinRT toast via PowerShell (no modules needed). Tag+Group
+ *  give the single-slot replace; History.Remove gives the active clear. The
+ *  well-known PowerShell AppId is used because unregistered AppIds may not
+ *  render toasts. Spec-derived — pending real-hardware verification. */
+const WIN_APP_ID = String.raw`{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe`;
+
+export function win32ToastScript(title: string, body: string): string {
+  const esc = (v: string): string =>
+    v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+  return [
+    `[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null`,
+    `$xml = New-Object Windows.Data.Xml.Dom.XmlDocument`,
+    `$xml.LoadXml('<toast><visual><binding template="ToastGeneric"><text>${esc(title)}</text><text>${esc(body)}</text></binding></visual></toast>')`,
+    `$t = [Windows.UI.Notifications.ToastNotification]::new($xml)`,
+    `$t.Tag = 'tlive'`,
+    `$t.Group = 'tlive'`,
+    `[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('${WIN_APP_ID}').Show($t)`,
+  ].join('; ');
+}
+
+export function win32ClearScript(): string {
+  return [
+    `[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null`,
+    `[Windows.UI.Notifications.ToastNotificationManager]::History.Remove('tlive', 'tlive', '${WIN_APP_ID}')`,
+  ].join('; ');
+}
+
+function win32Notifier(sp: Spawner): DesktopNotifier {
+  const run = (script: string): Promise<string | null> =>
+    sp('powershell', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script]);
+  return {
+    ping: async (title, body) => { await run(win32ToastScript(title, body)); },
+    clear: async () => { await run(win32ClearScript()); },
   };
 }

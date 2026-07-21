@@ -88,6 +88,12 @@ All notable changes to this project will be documented in this file.
   (`3 approvals waiting — …`). A multi-agent burst used to pile up dozens of
   separate toasts (measured: 23). Old notify-send without `--print-id`
   degrades to the previous stacking behavior rather than breaking.
+- **Windows and macOS get the notification too** — the core value is calling
+  you back to the terminal, and that needs no click support. win32: PowerShell
+  WinRT toast (built into Win10/11; Tag replace keeps the single slot,
+  `History.Remove` gives the active clear). macOS: built-in `osascript`
+  `display notification` (ping-only; banners auto-dismiss). Both spec-derived,
+  pending real-hardware verification; missing binary → silent no-op.
 - **Click to answer** (Warp-style "notification as entrance"): the toast now
   carries an **Open dashboard** button (freedesktop notification actions) —
   get pinged while the terminal runs in the background, click, approve on the
