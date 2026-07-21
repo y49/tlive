@@ -39,6 +39,16 @@ All notable changes to this project will be documented in this file.
   keyboard first.
 - Command replies (`/perm`, `/trust`, `/safe`, `/help`, unknown) are now English.
 
+### Fixed — desktop notifications no longer stack
+
+- tlive now occupies exactly **one** notification slot: each approval ping
+  replaces the previous toast (`notify-send --print-id`/`--replace-id`,
+  sends serialized so bursts can't fork into parallel slots), and when more
+  than one approval is pending the body says how many are waiting
+  (`3 approvals waiting — …`). A multi-agent burst used to pile up dozens of
+  separate toasts (measured: 23). Old notify-send without `--print-id`
+  degrades to the previous stacking behavior rather than breaking.
+
 ### Added — desktop notification when a card goes out
 
 - **A background-launched tool call gets no local approval dialog while the

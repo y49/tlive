@@ -133,6 +133,11 @@ export class PermissionRouter {
     return result;
   }
 
+  /** Approvals currently waiting for an answer (desktop notification count). */
+  pendingCount(): number {
+    return this.pending.size;
+  }
+
   /** 返回 true = 命中并已 resolve;false = 无此 pending(卡已 stale:daemon
    *  重启 / 已超时 / 会话已结束)。调用方据此告知用户,而非静默丢弃。 */
   answer(requestId: string, approved: boolean, message?: string): boolean {

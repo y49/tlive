@@ -267,7 +267,15 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         // launched tool calls get NO local dialog while the hook pends, so a
         // user at this machine needs a pointer to the phone card/dashboard).
         if (!sentCards.has(msg.requestId)) {
-          desktopNotify(`${title ?? 'Approval pending'}`, 'Waiting for approval — answer on your phone or the tlive dashboard');
+          // One notification slot total (notifier replaces the previous toast);
+          // a burst shows the latest card's title + how many are waiting.
+          const waiting = permissionRouter.pendingCount();
+          desktopNotify(
+            `${title ?? 'Approval pending'}`,
+            waiting > 1
+              ? `${waiting} approvals waiting — answer on your phone or the tlive dashboard`
+              : 'Waiting for approval — answer on your phone or the tlive dashboard',
+          );
         }
         const list = sentCards.get(msg.requestId) ?? [];
         list.push({ channel: target.channel, messageId: sent.messageId, title: title ?? '', body });
