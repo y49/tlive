@@ -88,6 +88,12 @@ All notable changes to this project will be documented in this file.
   (`3 approvals waiting — …`). A multi-agent burst used to pile up dozens of
   separate toasts (measured: 23). Old notify-send without `--print-id`
   degrades to the previous stacking behavior rather than breaking.
+- **Click to answer** (Warp-style "notification as entrance"): the toast now
+  carries an **Open dashboard** button (freedesktop notification actions) —
+  get pinged while the terminal runs in the background, click, approve on the
+  dashboard, done. No more keeping an eye on the terminal. A superseded
+  toast's click can never double-fire (replaced waiters are killed and their
+  callbacks ignored); with web disabled the button is a silent no-op.
 - **Immediate and IM-independent**: the desktop ping now fires the moment an
   approval goes pending (`onPending`), not when the IM card is sent — it no
   longer waits out the 10s card grace delay (that delay exists to spare your

@@ -1,5 +1,6 @@
 // src/kernel/daemon/bootstrap.ts
 import { join, dirname } from 'node:path';
+import { spawn as spawnChild } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { startIpcServer, type IpcServer } from '../ipc/server.js';
@@ -197,7 +198,22 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // Desktop notification: the at-the-computer pointer to the phone card /
   // dashboard, for background-launched tool calls that render no local dialog
   // while the hook pends. Never carries a decision (never-auto-allow intact).
-  const desktop = opts.desktopNotifier ?? createDesktopNotifier({ enabled: cfg.approvals?.desktopNotify ?? true });
+  // Click-to-answer: the toast carries an "Open dashboard" button — the
+  // notification is an entrance, not just a pointer (background terminal
+  // workflow: get pinged, click, approve, back to whatever you were doing).
+  // webUrl is assigned when the web server starts below; clicks only happen
+  // after bootstrap completes, so the lazy read is safe. Web disabled → no
+  // URL to open; the click is a silent no-op (toast still informs).
+  const desktop = opts.desktopNotifier ?? createDesktopNotifier({
+    enabled: cfg.approvals?.desktopNotify ?? true,
+    action: {
+      label: 'Open dashboard',
+      run: () => {
+        if (!webUrl) return;
+        try { spawnChild('xdg-open', [webUrl], { detached: true, stdio: 'ignore' }).unref(); } catch { /* best-effort */ }
+      },
+    },
+  });
 
   // AskUserQuestion (Task 9): raw question + options per pending requestId, so an
   // `ask:<rid>:<idx>` button click can build the deny+message answer. Written at

@@ -18,8 +18,15 @@
 //   cannot touch a toast that already expired into the tray).
 // - clear(): when the last pending approval resolves, the live toast is
 //   actively closed over DBus (CloseNotification) — answered means gone.
+// - CLICK TO ANSWER: an optional `action` renders a button on the toast
+//   (freedesktop actions via `notify-send --action`); clicking it runs the
+//   callback — bootstrap wires it to open the tlive dashboard, so the toast
+//   is an entrance, not just a pointer. Timing pinned live on this machine:
+//   with --action, --print-id emits the id IMMEDIATELY (~4ms), then the
+//   process waits and prints the action name on click / exits on expiry.
 // - Sends are serialized so a burst can't race past the id capture and fork
-//   into parallel slots.
+//   into parallel slots. A replaced ping's waiter is killed and its callbacks
+//   ignored, so a click can never fire twice through a superseded process.
 //
 // Linux `notify-send` only for now; anywhere else (or when the binary is
 // missing) this degrades to a silent no-op — the card and dashboard remain
@@ -42,6 +49,42 @@ const defaultSpawner: Spawner = (cmd, args) =>
     } catch { resolve(null); }
   });
 
+/** A long-lived notify-send holding an actionable toast: first stdout line is
+ *  the notification id (immediate), later lines are invoked action names. */
+export interface PingProc {
+  firstLine: Promise<string | null>;
+  onLine(cb: (line: string) => void): void;
+  kill(): void;
+}
+export type StreamSpawner = (cmd: string, args: string[]) => PingProc;
+
+const defaultStreamSpawner: StreamSpawner = (cmd, args) => {
+  const lineCbs: Array<(l: string) => void> = [];
+  let resolveFirst: (v: string | null) => void;
+  const firstLine = new Promise<string | null>((r) => { resolveFirst = r; });
+  let first = true;
+  try {
+    const c = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+    let buf = '';
+    c.stdout.on('data', (d: Buffer) => {
+      buf += d.toString();
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 1);
+        if (first) { first = false; resolveFirst(line); }
+        else for (const cb of lineCbs) cb(line);
+      }
+    });
+    c.on('error', () => { if (first) { first = false; resolveFirst(null); } });
+    c.on('close', () => { if (first) { first = false; resolveFirst(null); } });
+    c.unref();
+    return { firstLine, onLine: (cb) => lineCbs.push(cb), kill: () => { try { c.kill(); } catch { /* already gone */ } } };
+  } catch {
+    resolveFirst!(null);
+    return { firstLine, onLine: () => undefined, kill: () => undefined };
+  }
+};
+
 export interface DesktopNotifier {
   /** Show (or replace) THE tlive notification. */
   ping(title: string, body: string): Promise<void>;
@@ -56,20 +99,34 @@ export function createDesktopNotifier(opts?: {
   platform?: NodeJS.Platform;
   hasCmd?: (cmd: string) => boolean;
   spawner?: Spawner;
+  streamSpawner?: StreamSpawner;
+  /** Toast button; clicking runs `run` (bootstrap: open the dashboard). */
+  action?: { label: string; run: () => void };
 }): DesktopNotifier {
   const enabled = opts?.enabled ?? true;
   const platform = opts?.platform ?? process.platform;
   const hasCmd = opts?.hasCmd ?? commandOnPath;
   if (!enabled || platform !== 'linux' || !hasCmd('notify-send')) return NOOP;
   const sp = opts?.spawner ?? defaultSpawner;
+  const ss = opts?.streamSpawner ?? defaultStreamSpawner;
+  const action = opts?.action;
   let lastId: string | null = null;
+  let liveProc: PingProc | null = null;
+  let generation = 0;
   let chain: Promise<void> = Promise.resolve();
   const enqueue = (task: () => Promise<void>): Promise<void> => {
     chain = chain.then(task).catch(() => { /* best-effort, never throws */ });
     return chain;
   };
+  const dropLiveProc = (): void => {
+    generation++; // callbacks from the superseded waiter are ignored from here
+    liveProc?.kill();
+    liveProc = null;
+  };
   return {
     ping: (title, body) => enqueue(async () => {
+      dropLiveProc();
+      const gen = generation;
       const args = [
         '--app-name=tlive',
         // 15s expiry: long enough to notice; transient → expiry means GONE,
@@ -78,15 +135,20 @@ export function createDesktopNotifier(opts?: {
         '--hint=int:transient:1',
         '--print-id',
         ...(lastId ? [`--replace-id=${lastId}`] : []),
+        ...(action ? [`--action=answer=${action.label}`] : []),
         title,
         body,
       ];
-      const id = (await sp('notify-send', args))?.trim();
+      const proc = ss('notify-send', args);
+      liveProc = proc;
+      if (action) proc.onLine((line) => { if (generation === gen && line.trim() === 'answer') action.run(); });
+      const id = (await proc.firstLine)?.trim();
       // Old notify-send without --print-id prints nothing → keep stacking
       // behavior rather than passing garbage to --replace-id.
       if (id && /^\d+$/.test(id)) lastId = id;
     }),
     clear: () => enqueue(async () => {
+      dropLiveProc();
       if (!lastId) return;
       const id = lastId;
       lastId = null;
