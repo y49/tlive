@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   installClaudePlugin, installCodexPlugin, claudePluginDir, codexPluginDir,
-  bundledPluginVersion, installedPluginVersion, pluginHealth, type Runner,
+  bundledPluginVersion, installedPluginVersion, pluginHealth, winQuote, type Runner,
 } from '../plugin-install';
 
 function scripted(responses: Array<{ match: RegExp; ok: boolean; output?: string }>): { run: Runner; calls: string[] } {
@@ -193,5 +193,18 @@ describe('installCodexPlugin', () => {
     const r = installCodexPlugin(run, () => true);
     expect(r.ok).toBe(true);
     expect(r.detail).toContain(`refreshed at ${CX_VERSION}`);
+  });
+});
+
+describe('winQuote (cmd.exe argument quoting for the win32 shell runner)', () => {
+  it('leaves plain args untouched', () => {
+    expect(winQuote('plugin')).toBe('plugin');
+    expect(winQuote('tlive@tlive')).toBe('tlive@tlive');
+  });
+  it('quotes paths with spaces', () => {
+    expect(winQuote('C:\\Users\\John Doe\\.tlive')).toBe('"C:\\Users\\John Doe\\.tlive"');
+  });
+  it('doubles embedded double quotes (cmd escape)', () => {
+    expect(winQuote('a "b" c')).toBe('"a ""b"" c"');
   });
 });

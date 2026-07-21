@@ -39,6 +39,26 @@ All notable changes to this project will be documented in this file.
   keyboard first.
 - Command replies (`/perm`, `/trust`, `/safe`, `/help`, unknown) are now English.
 
+### Fixed — Windows groundwork (static audit; no Windows hardware yet)
+
+- **`tlive setup` could never have worked on Windows**: `claude`/`codex` are
+  npm `.cmd` shims there, and `spawnSync` without a shell refuses to execute
+  them (ENOENT/EINVAL since Node's CVE-2024-27980 hardening). The plugin
+  runner now uses `shell: true` on win32 with explicit cmd.exe argument
+  quoting (paths with spaces survive).
+- **Named pipe is now scoped per tlive home** (`\\.\pipe\tlive-daemon-<hash>`
+  via the new `daemonSocketPath(home)`): Windows pipes live in one global
+  namespace, so the old fixed name meant two users on one machine — or an
+  isolated `TLIVE_HOME` — silently shared a daemon endpoint. Also collapses
+  three copies of the pipe literal (client/daemon-main/bootstrap) into one
+  helper; daemon tests now dial the same endpoint the daemon listens on,
+  whatever the platform.
+- **CI now runs the full suite on `windows-latest`** (the old workflow still
+  referenced the long-deleted Go core/bridge layout and was rewritten). This
+  is the project's only Windows coverage until real hardware shows up —
+  named-pipe IPC, PATHEXT resolution, the win32 shell runner, and node-pty's
+  native build all get exercised on push.
+
 ### Changed — Codex companion: approval blind window shrunk and shown to self-heal
 
 - **Discovery poll 15s → 5s.** The poll is the upper bound on the "approval

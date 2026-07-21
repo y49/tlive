@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { daemonSocketPath } from '../../ipc/client';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -12,7 +13,7 @@ let h: DaemonHandle;
 let sock: string;
 const sockets: WebSocket[] = [];
 
-beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'tlive-evt-')); sock = join(tmp, 'daemon.sock'); });
+beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'tlive-evt-')); sock = daemonSocketPath(tmp); });
 afterEach(async () => { for (const ws of sockets.splice(0)) ws.close(); await h?.shutdown(); });
 
 function makeFakeAdapter(channel: IMChannel): IMAdapter {

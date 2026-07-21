@@ -1,47 +1,35 @@
 name: CI
 on:
   push:
-    branches: [main]
+    branches: [main, 'feat/**']
   pull_request:
     branches: [main]
 
 jobs:
-  go-test:
-    runs-on: ubuntu-latest
+  test:
+    # windows-latest is the project's only Windows coverage: the named-pipe
+    # IPC branches, PATHEXT command resolution, and the win32 shell runner
+    # have never been exercised on real Windows hardware. Runners ship VS
+    # Build Tools, so node-pty's native build is validated too.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: pnpm/action-setup@v4
         with:
-          go-version: '1.24'
-          cache-dependency-path: core/go.sum
-      - name: Run Go tests
-        run: cd core && go test ./... -v -timeout 60s
-
-  bridge-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: pnpm
       - name: Install dependencies
-        run: cd bridge && npm ci
-      - name: Run Bridge tests
-        run: cd bridge && npm test
-
-  build:
-    runs-on: ubuntu-latest
-    needs: [go-test, bridge-test]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-          cache-dependency-path: core/go.sum
-      - name: Build Go Core
-        run: cd core && go build -o tlive ./cmd/tlive/
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Build Bridge
-        run: cd bridge && npm ci && npm run build
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm run typecheck
+      - name: Test
+        run: pnpm test
+      - name: Build
+        run: pnpm run build

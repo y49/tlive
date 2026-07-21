@@ -7,6 +7,7 @@ import { TelegramAdapter } from '../../adapters/im/telegram.js';
 import { FeishuAdapter } from '../../adapters/im/feishu.js';
 import { loadConfig } from '../config/loader.js';
 import { AlreadyRunningError, waitUntilSocketFree } from '../ipc/server.js';
+import { daemonSocketPath } from '../ipc/client.js';
 
 export async function runDaemonMain(): Promise<void> {
   const home = process.env.TLIVE_HOME ?? join(homedir(), '.tlive');
@@ -24,7 +25,7 @@ export async function runDaemonMain(): Promise<void> {
     // stop;start 连敲:旧 daemon 要 ~2s 才退完,start 曾在这里让位走人 →
     // 旧的随后退掉,没人活着,用户以为重启成功(真机两次踩坑)。改成:
     // 等旧 socket 释放再接管;等满窗口还活着 = 真·已在运行,照旧干净退出。
-    const sockPath = process.platform === 'win32' ? '\\\\.\\pipe\\tlive-daemon' : join(home, 'daemon.sock');
+    const sockPath = daemonSocketPath(home);
     if (!(await waitUntilSocketFree(sockPath))) throw e;
     handle = await bootstrapDaemon({ home, imAdapters: ims });
   }

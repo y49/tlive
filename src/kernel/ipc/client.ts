@@ -1,13 +1,27 @@
 // src/kernel/ipc/client.ts
 
 import { createConnection } from 'node:net';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { IpcRequest, IpcResponse } from './protocol.js';
 
+/** Daemon IPC endpoint for a given tlive home. Windows named pipes live in a
+ *  single GLOBAL namespace (no per-user filesystem scoping like ~/.tlive), so
+ *  the pipe name is scoped by a hash of `home` — two users on one machine, or
+ *  an isolated TLIVE_HOME test env, must never collide on one pipe. The shim
+ *  (via defaultSocketPath) and the daemon (via bootstrap's opts.home) both
+ *  resolve home as TLIVE_HOME ?? ~/.tlive, so they derive the same name. */
+export function daemonSocketPath(home: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'win32') {
+    const tag = createHash('sha256').update(home).digest('hex').slice(0, 12);
+    return `\\\\.\\pipe\\tlive-daemon-${tag}`;
+  }
+  return join(home, 'daemon.sock');
+}
+
 export function defaultSocketPath(): string {
-  if (process.platform === 'win32') return '\\\\.\\pipe\\tlive-daemon';
-  return join(process.env.TLIVE_HOME ?? join(homedir(), '.tlive'), 'daemon.sock');
+  return daemonSocketPath(process.env.TLIVE_HOME ?? join(homedir(), '.tlive'));
 }
 
 /** Per-session pty socket endpoint. Windows has no unix sockets — use a named

@@ -23,9 +23,21 @@ import { commandOnPath } from './hooks-cleanup.js';
 
 export type Runner = (cmd: string, args: string[]) => { ok: boolean; output: string };
 
+/** cmd.exe quoting for one argument (paths with spaces, e.g. C:\Users\John
+ *  Doe\...). Embedded double quotes are doubled — cmd's own escape. */
+export function winQuote(a: string): string {
+  return /[\s"^&|<>()]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a;
+}
+
 export function defaultRunner(): Runner {
   return (cmd, args) => {
-    const r = spawnSync(cmd, args, { encoding: 'utf-8', timeout: 15_000, windowsHide: true });
+    // win32: `claude`/`codex` are npm .cmd shims — spawnSync without a shell
+    // can't execute them (ENOENT/EINVAL since the CVE-2024-27980 hardening).
+    // shell:true concatenates argv with NO quoting of its own, so quote here.
+    const win = process.platform === 'win32';
+    const r = win
+      ? spawnSync(cmd, args.map(winQuote), { encoding: 'utf-8', timeout: 15_000, windowsHide: true, shell: true })
+      : spawnSync(cmd, args, { encoding: 'utf-8', timeout: 15_000, windowsHide: true });
     return { ok: r.status === 0, output: `${r.stdout ?? ''}${r.stderr ?? ''}` };
   };
 }

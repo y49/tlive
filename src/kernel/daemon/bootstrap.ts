@@ -3,6 +3,7 @@ import { join, dirname } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { startIpcServer, type IpcServer } from '../ipc/server.js';
+import { daemonSocketPath } from '../ipc/client.js';
 import { PermissionRouter, type PermChat } from './permission-router.js';
 import { decide as policyDecide, type PolicyState } from '../permission/policy-engine.js';
 import { renderApprovalCard } from '../permission/approval-renderer.js';
@@ -498,7 +499,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
 
   // Windows: the CLI/hook clients dial the named pipe (defaultSocketPath) —
   // the server must listen on the SAME endpoint, not a filesystem path.
-  const sockPath = process.platform === 'win32' ? '\\\\.\\pipe\\tlive-daemon' : join(opts.home, 'daemon.sock');
+  const sockPath = daemonSocketPath(opts.home);
   const ipc: IpcServer = await startIpcServer({
     path: sockPath,
     handler: async (req, reply, ctx) => {

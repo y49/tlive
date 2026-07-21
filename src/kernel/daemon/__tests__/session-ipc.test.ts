@@ -4,14 +4,14 @@ import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { bootstrapDaemon, type DaemonHandle } from '../bootstrap';
-import { request } from '../../ipc/client';
+import { request, daemonSocketPath } from '../../ipc/client';
 import type { SessionMeta } from '../../ipc/protocol';
 
 let tmp: string;
 let h: DaemonHandle;
 let sock: string;
 
-beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'tlive-sess-')); sock = join(tmp, 'daemon.sock'); });
+beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'tlive-sess-')); sock = daemonSocketPath(tmp); });
 afterEach(async () => { await h?.shutdown(); });
 
 const meta: SessionMeta = { id: 's1', label: 'cat @ tmp', cmd: 'cat', cwd: '/tmp', pid: 123, sockPath: '/tmp/s1.sock' };

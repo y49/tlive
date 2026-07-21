@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { bootstrapDaemon, shouldFastNullContinue, clampPermissionTimeout, makeCodexResumeHandler, shouldDropNotify, resolveKey, type DaemonHandle } from '../bootstrap';
-import { request } from '../../ipc/client';
+import { request, daemonSocketPath } from '../../ipc/client';
 import type { IMAdapter, IMChannel, OutgoingMessage, IncomingEnvelope } from '../../contracts/im-adapter';
 import { SessionRegistry } from '../../web/session-registry';
 
@@ -16,13 +16,13 @@ afterEach(async () => { await h?.shutdown(); });
 describe('daemon bootstrap', () => {
   it('starts and answers daemon.status', async () => {
     h = await bootstrapDaemon({ home: tmp });
-    const r = await request({ kind: 'daemon.status' }, { socketPath: join(tmp, 'daemon.sock'), timeoutMs: 2000 });
+    const r = await request({ kind: 'daemon.status' }, { socketPath: daemonSocketPath(tmp), timeoutMs: 2000 });
     expect(r.kind).toBe('daemon.status');
   });
 
   it('reports codex: off when the app-server custody cannot be established', async () => {
     h = await bootstrapDaemon({ home: tmp, ensureAppServer: async () => null });
-    const r = await request({ kind: 'daemon.status' }, { socketPath: join(tmp, 'daemon.sock'), timeoutMs: 2000 });
+    const r = await request({ kind: 'daemon.status' }, { socketPath: daemonSocketPath(tmp), timeoutMs: 2000 });
     expect(r).toMatchObject({ kind: 'daemon.status', codex: 'off' });
   });
 });
@@ -152,7 +152,7 @@ describe('local-answer cancel + Stop fast-null (integration)', () => {
       adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
     }));
     h = await bootstrapDaemon({ home: tmp, imAdapters: [fakeAdapter('telegram')] });
-    const sock = join(tmp, 'daemon.sock');
+    const sock = daemonSocketPath(tmp);
     const pending = request(
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
       { socketPath: sock, timeoutMs: 10_000 },
@@ -172,7 +172,7 @@ describe('local-answer cancel + Stop fast-null (integration)', () => {
     const t0 = Date.now();
     const r = await request(
       { kind: 'hook.continue.request', cwd: '/w', sessionId: 's1', context: 'done' },
-      { socketPath: join(tmp, 'daemon.sock'), timeoutMs: 5_000 },
+      { socketPath: daemonSocketPath(tmp), timeoutMs: 5_000 },
     );
     expect(r).toEqual({ kind: 'hook.continue.result', reply: null });
     expect(Date.now() - t0).toBeLessThan(2_000);
@@ -210,7 +210,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
-    const sock = join(tmp, 'daemon.sock');
+    const sock = daemonSocketPath(tmp);
     const pending = request(
       {
         kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'AskUserQuestion',
@@ -249,7 +249,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
-    const sock = join(tmp, 'daemon.sock');
+    const sock = daemonSocketPath(tmp);
     const pending = request(
       {
         kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'AskUserQuestion',
@@ -277,7 +277,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
     const adapter = interactiveAdapter('telegram', sent, edits);
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
-    const sock = join(tmp, 'daemon.sock');
+    const sock = daemonSocketPath(tmp);
     const pending = request(
       {
         kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'AskUserQuestion',
@@ -308,7 +308,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: (title, body) => notes.push({ title, body }) });
-    const sock = join(tmp, 'daemon.sock');
+    const sock = daemonSocketPath(tmp);
     const pending = request(
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'touch /x' }, timeoutSec: 60 },
       { socketPath: sock, timeoutMs: 10_000 },
@@ -338,7 +338,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     }
     const notes: Array<{ title: string; body: string }> = [];
     h = await bootstrapDaemon({ home: tmp, imAdapters: [tg, fs], desktopNotifier: (title, body) => notes.push({ title, body }) });
-    const sock = join(tmp, 'daemon.sock');
+    const sock = daemonSocketPath(tmp);
     const pending = request(
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'touch /x' }, timeoutSec: 60 },
       { socketPath: sock, timeoutMs: 10_000 },
@@ -361,7 +361,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
     const adapter = interactiveAdapter('telegram', sent, edits);
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
-    const sock = join(tmp, 'daemon.sock');
+    const sock = daemonSocketPath(tmp);
     const pending = request(
       {
         kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash',
@@ -393,7 +393,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
     const adapter = interactiveAdapter('telegram', sent, edits);
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
-    const sock = join(tmp, 'daemon.sock');
+    const sock = daemonSocketPath(tmp);
     const pending = request(
       {
         kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash',
@@ -424,7 +424,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
-    const sock = join(tmp, 'daemon.sock');
+    const sock = daemonSocketPath(tmp);
     const pending = request(
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'AskUserQuestion', input: { questions: [] }, timeoutSec: 60 },
       { socketPath: sock, timeoutMs: 10_000 },
@@ -463,7 +463,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       const sent: OutgoingMessage[] = [];
       const adapter = interactiveAdapter('telegram', sent);
       h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
-      const sock = join(tmp, 'daemon.sock');
+      const sock = daemonSocketPath(tmp);
       const pending = fireMultiSelectRequest(sock);
       await new Promise((r) => setTimeout(r, 100));
       const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
@@ -489,7 +489,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
       const adapter = interactiveAdapter('telegram', sent, edits);
       h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
-      const sock = join(tmp, 'daemon.sock');
+      const sock = daemonSocketPath(tmp);
       const pending = fireMultiSelectRequest(sock);
       await new Promise((r) => setTimeout(r, 100));
       const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
@@ -521,7 +521,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       const sent: OutgoingMessage[] = [];
       const adapter = interactiveAdapter('telegram', sent);
       h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
-      const sock = join(tmp, 'daemon.sock');
+      const sock = daemonSocketPath(tmp);
       const pending = fireMultiSelectRequest(sock);
       await new Promise((r) => setTimeout(r, 100));
       const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
@@ -561,7 +561,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
         fire(env) { handler?.(env); },
       };
       h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
-      const sock = join(tmp, 'daemon.sock');
+      const sock = daemonSocketPath(tmp);
       const pending = fireMultiSelectRequest(sock);
       await new Promise((r) => setTimeout(r, 100));
       const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
@@ -639,7 +639,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       const tg = delayedChannelAdapter('telegram', 80, sentTg, edits); // channel 1: slow
       const fs = delayedChannelAdapter('feishu', 5, sentFs, edits); // channel 2: fast
       h = await bootstrapDaemon({ home: tmp, imAdapters: [tg, fs] });
-      const sock = join(tmp, 'daemon.sock');
+      const sock = daemonSocketPath(tmp);
       const pending = fireMultiSelectRequest(sock);
       await new Promise((r) => setTimeout(r, 100)); // grace=0, let both cards go out
       expect(sentTg).toHaveLength(1);
@@ -676,7 +676,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
       const adapter = interactiveAdapter('telegram', sent, edits);
       h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
-      const sock = join(tmp, 'daemon.sock');
+      const sock = daemonSocketPath(tmp);
       const pending = fireMultiSelectRequest(sock);
       await new Promise((r) => setTimeout(r, 100));
       const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
@@ -710,7 +710,7 @@ describe('quoting a live approval card = deny with guidance (Task 7)', () => {
     const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
     const adapter = interactiveAdapter('telegram', sent, edits);
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
-    const sock = join(tmp, 'daemon.sock');
+    const sock = daemonSocketPath(tmp);
     const pending = request(
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'rm -rf /tmp/x' }, timeoutSec: 60 },
       { socketPath: sock, timeoutMs: 10_000 },
@@ -742,7 +742,7 @@ describe('quoting a live approval card = deny with guidance (Task 7)', () => {
     const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
     const adapter = interactiveAdapter('telegram', sent, edits);
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
-    const sock = join(tmp, 'daemon.sock');
+    const sock = daemonSocketPath(tmp);
     const pending = request(
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'rm -rf /tmp/x' }, timeoutSec: 60 },
       { socketPath: sock, timeoutMs: 10_000 },
