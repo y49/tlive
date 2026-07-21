@@ -272,6 +272,21 @@ export class InboundHandler {
     // 就是 deny-only,绝不可能被这条路径用来批准任何东西。)
     const rid = env.text ? this.deps.findLiveCard(env.channel, env.replyToMessageId!) : null;
     if (rid) {
+      // Quoting a live ASK card with text = the free-form answer (the remote
+      // twin of the local dialog's "Type something"). Multi-select: any boxes
+      // already ticked ride along with the typed text. The wire is the same
+      // deny+message, but the message must be the ask three-parter — a bare
+      // deny reason reads as a refusal, not an answer.
+      const askCtx = this.deps.peekAskContext(rid);
+      if (askCtx) {
+        const picked = this.deps.askSelection.selected(rid).map((i) => askCtx.options[i]?.label).filter((l): l is string => Boolean(l));
+        const answer = buildAskAnswerMessage(askCtx.question, [...picked, env.text!]);
+        this.deps.takeAskContext(rid); // consume (single-use), same as a button pick
+        if (!this.deps.permissionRouter.answer(rid, false, answer)) {
+          await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
+        }
+        return;
+      }
       if (!this.deps.permissionRouter.answer(rid, false, env.text)) {
         await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
       }

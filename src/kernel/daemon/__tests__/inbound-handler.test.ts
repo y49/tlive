@@ -152,7 +152,7 @@ describe('InboundHandler', () => {
     const [rid, approved, message] = permAnswer.mock.calls[0];
     expect(rid).toBe('req-9');
     expect(approved).toBe(false);
-    expect(message).toContain('Selected: Blue');
+    expect(message).toContain('Answer: Blue');
   });
 
   it('ask:<id>:<idx> replies with the stale-card notice when the context is gone (already answered/stale) — not a silent no-op', async () => {
@@ -186,7 +186,7 @@ describe('InboundHandler', () => {
     const [rid, approved, message] = permAnswer.mock.calls[0];
     expect(rid).toBe('req-9');
     expect(approved).toBe(false);
-    expect(message).toContain('Selected: Blue');
+    expect(message).toContain('Answer: Blue');
   });
 
   it('ask:<id>: (empty index) is a no-op, not a silent pick of option 0 — Number("") === 0 (review Minor 2)', async () => {
@@ -346,7 +346,7 @@ describe('InboundHandler', () => {
     const [rid, approved, message] = permAnswer.mock.calls[0];
     expect(rid).toBe('req-1');
     expect(approved).toBe(false);
-    expect(message).toContain('Selected: Red, Blue');
+    expect(message).toContain('Answer: Red, Blue');
     expect(askSelection.selected('req-1')).toEqual([]); // freed, no leak
     expect(store.peekAskContext('req-1')).toBeUndefined(); // consumed
   });
@@ -474,6 +474,55 @@ describe('reply-to routing & injection', () => {
     expect(permAnswer).toHaveBeenCalledWith('rid-1', true);
   });
 });
+
+describe('quoting a live ASK card = free-form answer (the remote "Type something")', () => {
+  it('single-select: quoted text becomes the ask answer (three-part message, not a bare deny reason)', async () => {
+    const answers: Array<{ rid: string; approved: boolean; message?: string }> = [];
+    const store = askStore('req-1', { question: 'Pick a color?', options: [{ label: 'Red' }, { label: 'Blue' }] });
+    const h = new InboundHandler(baseDeps({
+      findLiveCard: () => 'req-1',
+      ...store.deps,
+      permissionRouter: {
+        answer: (rid: string, approved: boolean, message?: string) => { answers.push({ rid, approved, message }); return true; },
+        requestPermission: vi.fn(),
+      } as unknown as PermissionRouter,
+    }));
+    await h.handle(envelope({ text: 'a warm orange, actually', replyToMessageId: 'card-msg-1' }));
+    expect(answers).toHaveLength(1);
+    expect(answers[0].approved).toBe(false);
+    expect(answers[0].message).toContain('Answer: a warm orange, actually');
+    expect(answers[0].message).toContain('Nothing failed');
+    expect(store.peekAskContext('req-1')).toBeUndefined(); // consumed, single-use
+  });
+
+  it('multi-select: ticked boxes ride along with the typed text', async () => {
+    const answers: Array<{ message?: string }> = [];
+    const store = askStore('req-1', { question: 'Channels?', options: [{ label: 'Feishu' }, { label: 'Telegram' }] });
+    const deps = baseDeps({
+      findLiveCard: () => 'req-1',
+      ...store.deps,
+      permissionRouter: {
+        answer: (_r: string, _a: boolean, message?: string) => { answers.push({ message }); return true; },
+        requestPermission: vi.fn(),
+      } as unknown as PermissionRouter,
+    });
+    deps.askSelection.toggle('req-1', 1); // Telegram ticked
+    const h = new InboundHandler(deps);
+    await h.handle(envelope({ text: 'and email please', replyToMessageId: 'card-msg-1' }));
+    expect(answers[0].message).toContain('Answer: Telegram, and email please');
+  });
+});
+
+function askStore(rid: string, ctx: { question: string; options: Array<{ label: string }> }) {
+  const map = new Map([[rid, ctx]]);
+  return {
+    peekAskContext: (r: string) => map.get(r),
+    deps: {
+      peekAskContext: (r: string) => map.get(r),
+      takeAskContext: (r: string) => { const v = map.get(r); map.delete(r); return v; },
+    },
+  };
+}
 
 describe('quoting a live approval card = deny with guidance', () => {
   it('sends the quoted text to the agent as the denial reason', async () => {

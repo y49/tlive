@@ -236,7 +236,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const r = await pending as { kind: string; decision?: string; message?: string };
     expect(r.kind).toBe('hook.permission.result');
     expect(r.decision).toBe('deny');
-    expect(r.message).toContain('Selected: Blue');
+    expect(r.message).toContain('Answer: Blue');
     expect(r.message).toContain('"Pick a color?": "Blue"');
   });
 
@@ -750,7 +750,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
 
       const r = await pending as { kind: string; decision?: string; message?: string };
       expect(r.decision).toBe('deny');
-      expect(r.message).toContain('Selected: Red, Blue');
+      expect(r.message).toContain('Answer: Red, Blue');
 
       const lastEdit = edits.at(-1)!;
       const title = (lastEdit.msg as { title?: string }).title ?? '';

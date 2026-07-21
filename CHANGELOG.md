@@ -39,6 +39,23 @@ All notable changes to this project will be documented in this file.
   keyboard first.
 - Command replies (`/perm`, `/trust`, `/safe`, `/help`, unknown) are now English.
 
+### Changed — AskUserQuestion remote answering, round 2 (live feedback batch)
+
+- **Answer-first wording**: CC surfaces the deny message inside an
+  `Error:`/"Denied by PermissionRequest hook" shell, and the old
+  explanation-first message read as a failure (seen live: agent treated the
+  answer as an error). Now the first line self-certifies "Nothing failed —
+  the user ANSWERED…", the answer follows immediately, and the JSON is
+  labeled `Equivalent AskUserQuestionOutput`.
+- **Free-form answers advertised and supported**: the card now says you can
+  reply to it in your own words (the remote twin of the local dialog's "Type
+  something"); a quote-reply to a live ask card builds the proper three-part
+  answer message. Multi-select: any ticked boxes ride along with the typed
+  text.
+- **Settled ask cards show WHAT was answered**: `Answered · …` cards now
+  append `> Answered: <picks/text>` (live feedback: after answering you could
+  no longer tell what was chosen).
+
 ### Fixed — Feishu inbound had never actually worked
 
 - The lark SDK's `EventDispatcher.parse` **flattens** the event payload to

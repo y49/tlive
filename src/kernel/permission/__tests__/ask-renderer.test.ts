@@ -20,7 +20,8 @@ describe('renderAskCard', () => {
     expect(card.body).toBe(
       '*Color*\n\nWhat is your favorite color?\n\n' +
       '**1.** Red — Warm, bold, energetic.\n' +
-      '**2.** Blue — Cool, calm, classic.',
+      '**2.** Blue — Cool, calm, classic.\n\n' +
+      '*Tap a button — or reply to this card to answer in your own words.*',
     );
     expect(card.options.map((o) => o.label)).toEqual(['Red', 'Blue']);
     expect(card.multiSelect).toBe(false);
@@ -57,14 +58,15 @@ describe('renderAskCard', () => {
 describe('buildAskAnswerMessage', () => {
   it('states the source, the selection, and a synthetic tool output', () => {
     const msg = buildAskAnswerMessage(INPUT.questions[0].question, ['Blue']);
-    expect(msg).toContain('User answered via tlive');
-    expect(msg).toContain('Selected: Blue');
+    expect(msg).toContain('Nothing failed');
+    expect(msg).toContain('ANSWERED this question remotely');
+    expect(msg).toContain('Answer: Blue');
     expect(msg).toContain('"What is your favorite color?": "Blue"');
-    expect(msg).toContain('do NOT call AskUserQuestion again');
+    expect(msg).toContain('Do not call AskUserQuestion again');
   });
 
   it('joins multiple selections', () => {
-    expect(buildAskAnswerMessage('Q?', ['A', 'B'])).toContain('Selected: A, B');
+    expect(buildAskAnswerMessage('Q?', ['A', 'B'])).toContain('Answer: A, B');
   });
 });
 

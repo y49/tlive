@@ -8,7 +8,7 @@ import { daemonSocketPath } from '../ipc/client.js';
 import { PermissionRouter, type PermChat } from './permission-router.js';
 import { decide as policyDecide, type PolicyState } from '../permission/policy-engine.js';
 import { renderApprovalCard } from '../permission/approval-renderer.js';
-import { renderAskCard, askMultiButtons, type AskOption } from '../permission/ask-renderer.js';
+import { renderAskCard, askMultiButtons, extractAskAnswer, type AskOption } from '../permission/ask-renderer.js';
 import { AskSelection } from './ask-state.js';
 import { createEditQueue } from './edit-queue.js';
 import { createDesktopNotifier } from './desktop-notify.js';
@@ -389,12 +389,17 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // so the user isn't scared into thinking their pick failed (Minor 4).
           // 带理由的拒绝(引用回复而来)vs 点按钮的光秃秃拒绝 —— 回写卡要看得出
           // 区别,所以用户知道这次拒绝是"说了理由"还是"就是不批"(Task 7)。
-          // 理由本身也写回卡上(用户自己的话,卡自成完整记录);ask 的 message
-          // 是合成 JSON 答案,不适合展示,不附。
+          // 理由本身也写回卡上(用户自己的话,卡自成完整记录)。ask 的 message
+          // 是合成 JSON 答案不适合整段展示 —— 但答案那一行必须写回卡上
+          // (真机反馈:答完"不知道当时选择的什么了"),extractAskAnswer 从
+          // deny message 里取 Answer 行,单一事实来源。
           const label = isAsk && decision === 'deny' ? 'Answered'
             : decision === 'deny' && message ? 'Denied with guidance'
             : (OUTCOME[decision] ?? decision);
-          const settledBody = decision === 'deny' && message && !isAsk
+          const askAnswer = isAsk && decision === 'deny' && message ? extractAskAnswer(message) : null;
+          const settledBody = askAnswer
+            ? `${c.body}\n\n> Answered: ${askAnswer}`
+            : decision === 'deny' && message && !isAsk
             ? `${c.body}\n\n> ${message.split('\n').join('\n> ')}`
             : c.body;
           // Queued (not a bare fire-and-forget edit) — this settlement edit is
