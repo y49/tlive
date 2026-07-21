@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const setMyCommands = vi.fn(async () => true);
 vi.mock('grammy', () => ({
-  Bot: class { start = vi.fn(); stop = vi.fn(); on = vi.fn(); api = {}; },
+  Bot: class { start = vi.fn(); stop = vi.fn(); on = vi.fn(); api = { setMyCommands }; },
 }));
 
 import { TelegramAdapter } from '../telegram.js';
@@ -13,6 +14,16 @@ describe('TelegramAdapter', () => {
     expect(a.isConnected()).toBe('connected');
     await a.stop();
     expect(a.isConnected()).toBe('idle');
+  });
+
+  it('start refreshes the SERVER-side bot command menu (stale v1 menu outlived every upgrade)', async () => {
+    setMyCommands.mockClear();
+    const a = new TelegramAdapter({ token: 'T' });
+    await a.start();
+    expect(setMyCommands).toHaveBeenCalledOnce();
+    const cmds = (setMyCommands.mock.calls[0] as any[])[0] as Array<{ command: string }>;
+    expect(cmds.map((c) => c.command)).toEqual(['perm', 'trust', 'safe', 'desktop', 'help']);
+    await a.stop();
   });
 
   it('stop is idempotent', async () => {

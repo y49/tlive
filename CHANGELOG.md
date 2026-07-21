@@ -88,6 +88,11 @@ All notable changes to this project will be documented in this file.
   (`3 approvals waiting — …`). A multi-agent burst used to pile up dozens of
   separate toasts (measured: 23). Old notify-send without `--print-id`
   degrades to the previous stacking behavior rather than breaking.
+- **Telegram bot menu refreshed on every daemon start** — the command menu
+  lives server-side at Telegram (`setMyCommands`), so the v1-era registration
+  (`/sessions`, `/workspace`…) had outlived every tlive upgrade. It now always
+  reflects the current set: /perm /trust /safe /desktop /help. Best-effort —
+  a menu is cosmetic and never blocks the adapter.
 - **CLI toggles: `tlive perm|trust|safe|desktop on|off`** — the at-the-terminal
   entrance to the exact same runtime switches the IM commands flip (one shared
   setter behind a new additive `daemon.set` IPC). Rationale: CC's plugin slash
