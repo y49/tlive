@@ -88,6 +88,12 @@ All notable changes to this project will be documented in this file.
   (`3 approvals waiting — …`). A multi-agent burst used to pile up dozens of
   separate toasts (measured: 23). Old notify-send without `--print-id`
   degrades to the previous stacking behavior rather than breaking.
+- **CLI toggles: `tlive perm|trust|safe|desktop on|off`** — the at-the-terminal
+  entrance to the exact same runtime switches the IM commands flip (one shared
+  setter behind a new additive `daemon.set` IPC). Rationale: CC's plugin slash
+  commands are prompts by design (an AI call is inherent), and the daemon's
+  runtime state was otherwise reachable only from the phone. A daemon
+  predating the command answers with a clear "restart it" pointer.
 - **`/desktop on|off`** — runtime toggle for the desktop toasts, fully
   independent of IM cards (the toast is the at-the-computer surface, the card
   is the phone; `/perm` still mutes the whole remote layer). Config

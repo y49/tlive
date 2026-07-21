@@ -514,6 +514,16 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // Windows: the CLI/hook clients dial the named pipe (defaultSocketPath) —
   // the server must listen on the SAME endpoint, not a filesystem path.
   const sockPath = daemonSocketPath(opts.home);
+  /** One set of runtime toggles for every entrance — IM commands
+   *  (/perm|/trust|/safe|/desktop) and the CLI (`tlive perm on` … via
+   *  daemon.set IPC) flip the SAME state. */
+  const runtimeSet = (key: 'perm' | 'trust' | 'safe' | 'desktop', enabled: boolean): void => {
+    if (key === 'perm') muted = !enabled; // /perm on ⇒ notifications on ⇒ not muted
+    else if (key === 'trust') policyState.trustUntilRevoked = enabled;
+    else if (key === 'safe') policyState.autoApprove = enabled ? 'safe' : 'readonly';
+    else { desktopOn = enabled; if (!enabled) void desktop.clear(); }
+  };
+
   const ipc: IpcServer = await startIpcServer({
     path: sockPath,
     handler: async (req, reply, ctx) => {
@@ -526,6 +536,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         case 'daemon.stop':
           reply({ kind: 'daemon.stopped' });
           setTimeout(() => { void shutdown(); }, 10).unref?.();
+          return;
+        case 'daemon.set':
+          runtimeSet(req.key, req.enabled);
+          reply({ kind: 'ack' });
           return;
         case 'hook.permission.request': {
           const key = resolveKey(req.sessionId, req.cwd, req.wrappedId);
@@ -671,10 +685,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     permissionRouter,
     continueBroker,
     takeLatestContinueId: () => { const id = latestContinueId; latestContinueId = null; return id; },
-    setMuted: (m: boolean) => { muted = m; },
-    setTrust: (t: boolean) => { policyState.trustUntilRevoked = t; },
-    setAutoApprove: (safe: boolean) => { policyState.autoApprove = safe ? 'safe' : 'readonly'; },
-    setDesktopNotify: (enabled: boolean) => { desktopOn = enabled; if (!enabled) void desktop.clear(); },
+    setMuted: (m: boolean) => runtimeSet('perm', !m),
+    setTrust: (t: boolean) => runtimeSet('trust', t),
+    setAutoApprove: (safe: boolean) => runtimeSet('safe', safe),
+    setDesktopNotify: (enabled: boolean) => runtimeSet('desktop', enabled),
     addAllowTool: (tool: string) => { policyState.allowTools?.add(tool); },
     peekAskContext: (rid: string) => askContexts.get(rid),
     takeAskContext: (rid: string) => {

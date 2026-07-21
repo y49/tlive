@@ -354,6 +354,33 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     expect(sent).toHaveLength(0);
   });
 
+  it('daemon.set desktop off (the `tlive desktop off` CLI wire) silences the toast and clears the live one', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      approvals: { approvalGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const notes: Array<{ title: string; body: string }> = [];
+    const clears: number[] = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
+    const sock = daemonSocketPath(tmp);
+    const off = await request({ kind: 'daemon.set', key: 'desktop', enabled: false }, { socketPath: sock, timeoutMs: 2000 });
+    expect(off.kind).toBe('ack');
+    expect(clears.length).toBeGreaterThan(0); // turning off clears any live toast
+    const pending = request(
+      { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
+      { socketPath: sock, timeoutMs: 10_000 },
+    );
+    await new Promise((r) => setTimeout(r, 100));
+    expect(notes).toHaveLength(0); // toast gated off; the IM card still went out
+    expect(sent).toHaveLength(1);
+    const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+    adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: card.buttons!.find((b) => b.id.startsWith('approve:'))!.id, ts: 0 });
+    await pending;
+  });
+
   it('two configured chats with a slow adapter still get ONE desktop ping per request (regression: per-chat concurrent pushes each fired a toast)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },

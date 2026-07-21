@@ -16,6 +16,10 @@ export interface SessionMeta {
 export type IpcRequest =
   | { kind: 'daemon.status' }
   | { kind: 'daemon.stop' }
+  // Runtime toggle, shared with the IM /perm|/trust|/safe|/desktop commands —
+  // the CLI (`tlive perm on` …) is the at-the-terminal entrance to the same
+  // setters (additive, 2026-07-21).
+  | { kind: 'daemon.set'; key: 'perm' | 'trust' | 'safe' | 'desktop'; enabled: boolean }
   // wrappedId: TLIVE_SESSION inherited by the hook process when the agent runs
   // inside `tlive run` — routes hook traffic to that EXACT session card (so
   // several wrapped sessions can share one cwd).

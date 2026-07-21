@@ -17,6 +17,10 @@ Usage: tlive <subcommand> [args]   |   tlive --version
   run <cmd> [args]   wrap a process: local terminal + web terminal
   url                print the web dashboard URL + a QR code (for scanning)
   hook [--codex] <event>  hook shim (invoked by Claude/Codex hooks; --codex = Codex decision wire)
+  perm on|off        remote notifications on / mute (same switch as IM /perm)
+  trust on|off       pause approvals (auto-allow ALL) / resume (IM /trust)
+  safe on|off        auto-allow routine ops, still ask for dangerous (IM /safe)
+  desktop on|off     desktop toasts on this computer (IM /desktop)
 `;
 
 function printVersion(): void {
@@ -54,6 +58,10 @@ export async function runCli(argv: string[]): Promise<void> {
     case 'run': { const { runRun } = await import('./subcommands/run.js'); return runRun(rest); }
     case 'url': { const { runUrl } = await import('./subcommands/url.js'); return runUrl(rest); }
     case 'hook': { const { runHook } = await import('./subcommands/hook.js'); return runHook(rest); }
+    case 'perm': case 'trust': case 'safe': case 'desktop': {
+      const { runToggle } = await import('./subcommands/toggle.js');
+      return runToggle(name, rest);
+    }
   }
 }
 
