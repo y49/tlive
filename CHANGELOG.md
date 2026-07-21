@@ -39,6 +39,20 @@ All notable changes to this project will be documented in this file.
   keyboard first.
 - Command replies (`/perm`, `/trust`, `/safe`, `/help`, unknown) are now English.
 
+### Fixed — Feishu typography: paragraph-per-element, inert code spans, clipped quotes
+
+- **"没有排版" root cause**: the whole body went into ONE markdown element and
+  Feishu gives no paragraph spacing inside an element. Prose now splits at
+  blank lines — one element per paragraph — and the element gaps are the
+  typography (quote blocks are their own element too).
+- **Code content is verbatim now**: live evidence (entities like `&#60;`
+  rendered literally inside code chips) proves 2.0 code spans/fences are
+  inert — neither entities nor tags are parsed there. Escaping inside code
+  only fed users entity soup; prose escaping (the actual injection surface)
+  is unchanged.
+- **Long quotes clip at 8 lines** with a "+N more — open the dashboard"
+  notice (Feishu has no working collapsible; TG keeps its expandable).
+
 ### Changed — AskUserQuestion round 3 (live feedback): native answer format, one Submit, layout
 
 - **The answer message now mimics CC's NATIVE feedback format** — mined from

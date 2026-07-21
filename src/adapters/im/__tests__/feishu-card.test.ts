@@ -30,19 +30,34 @@ describe('mdToFeishuElements (card JSON 2.0 — markdown is near-passthrough)', 
     expect(els[0].content).toContain('&#60;at id=all&#62;');
   });
 
-  it('escapes tag-like content inside fences too (tag-inside-code parsing is unverified — never gamble on injection)', () => {
+  it('keeps code content verbatim — live evidence: 2.0 code is inert (entities rendered literally ⟹ tags not parsed either)', () => {
     const els = mdToFeishuElements('```\na <at id=all></at> b\n```') as Md[];
-    expect(els[0].content).not.toContain('<at');
-    expect(els[0].content).toContain('&#60;at id=all&#62;');
+    expect(els[0].content).toContain('<at id=all></at>'); // verbatim, not entity soup
+    const inlineEls = mdToFeishuElements('run `a <at></at> b` now') as Md[];
+    expect(inlineEls[0].content).toContain('`a <at></at> b`');
   });
 
-  it('renders an expandable quote block as a native 2.0 quote (collapsible_panel retired — it never rendered on real clients)', () => {
+  it('renders an expandable quote block as a native 2.0 quote, in its OWN element (paragraph spacing)', () => {
     const md = '>! **Done.** All tests pass.\n>! Next: run `build`.\n\n*Reply to continue*';
     const els = mdToFeishuElements(md) as Md[];
     expect(els.some((e) => e.tag === 'collapsible_panel')).toBe(false);
     expect(els[0].content).toContain('> **Done.** All tests pass.');
     expect(els[0].content).toContain('> Next: run `build`.');
-    expect(els[0].content).toContain('*Reply to continue*');
+    // trailing prose is a SEPARATE element — element gaps are the typography
+    expect(els[1].content).toContain('*Reply to continue*');
+  });
+
+  it('splits paragraphs into separate elements (blank line = element boundary = visual gap)', () => {
+    const els = mdToFeishuElements('para one\nstill one\n\npara two\n\npara three') as Md[];
+    expect(els.map((e) => e.content)).toEqual(['para one\nstill one', 'para two', 'para three']);
+  });
+
+  it('clips a long quote block and points at the dashboard', () => {
+    const q = Array.from({ length: 12 }, (_, i) => `>! line ${i + 1}`).join('\n');
+    const els = mdToFeishuElements(q) as Md[];
+    const lines = els[0].content.split('\n');
+    expect(lines).toHaveLength(9); // 8 kept + clip notice
+    expect(lines[8]).toContain('+4 more lines');
   });
 
   it('emits no empty element for the real continue-card shape (leading \\n before the quote)', () => {
