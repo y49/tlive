@@ -46,8 +46,13 @@ approve/deny/reply-to-continue. The daemon auto-starts with new sessions
 ## Security model in one breath
 - Never auto-allow: unanswered → Claude's local dialog governs / Codex's native
   prompt governs. Deny always carries a reason.
-- Read-only tools (Read/Glob/Grep) pass by default; `/trust on` pauses approvals
-  entirely (high risk — pair with allowedSenders).
+- Read-only tools (Read/Glob/Grep) pass by default. `/safe on` also auto-allows
+  routine ops (non-dangerous Bash, non-sensitive edits) — the danger floor
+  (rm -rf, sudo, .env/.ssh writes…) still asks and no config can lower it.
+  `/trust on` pauses approvals entirely (high risk — pair with allowedSenders).
+- Every runtime switch has two entrances flipping the same state: IM commands
+  (/perm /trust /safe /desktop) and the CLI (`tlive perm|trust|safe|desktop
+  on|off`). `/desktop` governs the local toast on the daemon's machine only.
 - Vendor-side `permissions.deny` always wins; tlive never overrides it.
 
 ## First-time onboarding

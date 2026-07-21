@@ -88,6 +88,11 @@ All notable changes to this project will be documented in this file.
   (`3 approvals waiting — …`). A multi-agent burst used to pile up dozens of
   separate toasts (measured: 23). Old notify-send without `--print-id`
   degrades to the previous stacking behavior rather than breaking.
+- **`/tlive:setup` on an already-configured machine now runs a verification
+  tour** instead of "all set": plugin versions ✓, live inbound test message,
+  bot menu check, desktop-toast explainer, dashboard link — then offers adding
+  a channel. Both skills document `/safe`, `/desktop`, and the CLI toggle
+  entrances. Plugins 2.4.0 → 2.5.0.
 - **Telegram bot menu refreshed on every daemon start** — the command menu
   lives server-side at Telegram (`setMyCommands`), so the v1-era registration
   (`/sessions`, `/workspace`…) had outlived every tlive upgrade. It now always
