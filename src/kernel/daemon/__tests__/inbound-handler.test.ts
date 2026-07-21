@@ -524,6 +524,44 @@ function askStore(rid: string, ctx: { question: string; options: Array<{ label: 
   };
 }
 
+describe('native input box submits (Feishu form → formText)', () => {
+  it('askinput:<rid> + formText answers the ask with picks merged in', async () => {
+    const answers: Array<{ message?: string }> = [];
+    const store = askStore('req-1', { question: 'Channels?', options: [{ label: 'Feishu' }, { label: 'Telegram' }] });
+    const deps = baseDeps({
+      ...store.deps,
+      permissionRouter: {
+        answer: (_r: string, _a: boolean, message?: string) => { answers.push({ message }); return true; },
+        requestPermission: vi.fn(),
+      } as unknown as PermissionRouter,
+    });
+    deps.askSelection.toggle('req-1', 0);
+    const h = new InboundHandler(deps);
+    await h.handle(envelope({ text: 'askinput:req-1', formText: 'and email' }));
+    expect(answers[0].message).toContain('Answer: Feishu, and email');
+    expect(store.peekAskContext('req-1')).toBeUndefined(); // consumed
+  });
+
+  it('continueinput:<cid> + formText answers the continue broker', async () => {
+    const continued: Array<[string, string]> = [];
+    const h = new InboundHandler(baseDeps({
+      continueBroker: { answer: (id: string, text: string) => { continued.push([id, text]); return true; }, request: vi.fn(), onRequest: vi.fn() } as unknown as ContinueBroker,
+    }));
+    await h.handle(envelope({ text: 'continueinput:c1', formText: 'keep going' }));
+    expect(continued).toEqual([['c1', 'keep going']]);
+  });
+
+  it('stale ids get the stale notice instead of silence', async () => {
+    const msgs: Array<{ kind: string; text?: string }> = [];
+    const h = new InboundHandler(baseDeps({
+      imBy: () => makeAdapter(msgs),
+      continueBroker: { answer: () => false, request: vi.fn(), onRequest: vi.fn() } as unknown as ContinueBroker,
+    }));
+    await h.handle(envelope({ text: 'continueinput:dead', formText: 'x' }));
+    expect((msgs[0] as { text: string }).text).toContain('no longer active');
+  });
+});
+
 describe('quoting a live approval card = deny with guidance', () => {
   it('sends the quoted text to the agent as the denial reason', async () => {
     const answers: Array<{ rid: string; approved: boolean; message?: string }> = [];

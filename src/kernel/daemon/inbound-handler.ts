@@ -234,6 +234,34 @@ export class InboundHandler {
       return;
     }
 
+    // Native input box submits (Feishu form): text = the routing id, typed
+    // content rides as formText. The remote twin of "Type something".
+    if (env.formText) {
+      const askIn = /^askinput:(.+)$/.exec(env.text);
+      if (askIn) {
+        const rid = askIn[1];
+        const askCtx = this.deps.peekAskContext(rid);
+        if (askCtx) {
+          const picked = this.deps.askSelection.selected(rid).map((i) => askCtx.options[i]?.label).filter((l): l is string => Boolean(l));
+          const answer = buildAskAnswerMessage(askCtx.question, [...picked, env.formText]);
+          this.deps.takeAskContext(rid);
+          if (!this.deps.permissionRouter.answer(rid, false, answer)) {
+            await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
+          }
+        } else {
+          await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
+        }
+        return;
+      }
+      const contIn = /^continueinput:(.+)$/.exec(env.text);
+      if (contIn) {
+        if (!this.deps.continueBroker.answer(contIn[1], env.formText)) {
+          await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
+        }
+        return;
+      }
+    }
+
     // Reply-to routing: quoting a tlive message targets that message's session.
     if (env.replyToMessageId) {
       await this.routeReply(env);

@@ -39,6 +39,27 @@ All notable changes to this project will be documented in this file.
   keyboard first.
 - Command replies (`/perm`, `/trust`, `/safe`, `/help`, unknown) are now English.
 
+### Changed — Feishu cards move to JSON schema 2.0 (live-verified) + on-card reply box
+
+- **Schema 2.0** (client 7.20+; older clients see an upgrade prompt, not a
+  garbled card): markdown now renders inline `code`, `> ` blockquotes, and
+  fenced code blocks natively — the 1.0-era downgrades (inline code→bold,
+  quote-stripping) are retired, so cards stop losing formatting.
+  `collapsible_panel` is retired too (it never rendered on real clients —
+  the "content missing" gap in continue cards); excerpts are native quotes
+  now, visible instead of invisible.
+- **Buttons two-per-row via `column_set`** instead of a full-width stack.
+- **On-card reply box (Feishu only)**: ask cards and Turn-finished cards
+  carry a multiline input + submit (`form` container) — answer a question in
+  your own words (ticked boxes ride along) or continue a session **without
+  quote-replying**. Telegram has no input primitive; quote-reply remains its
+  path there.
+- All of it **verified against the live API**: 2.0 send + PATCH accepted;
+  strict validation caught that 2.0 rejects 1.0's `action_type:
+  "form_submit"` — the working shape is `form_action_type: "submit"`
+  (error 300123 otherwise). Two probe cards were sent to the configured chat
+  during verification.
+
 ### Changed — AskUserQuestion remote answering, round 2 (live feedback batch)
 
 - **Answer-first wording**: CC surfaces the deny message inside an

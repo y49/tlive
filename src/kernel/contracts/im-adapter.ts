@@ -11,6 +11,9 @@ export interface IncomingEnvelope {
   userId: string;
   messageId: string;
   text: string;
+  /** Text typed into a card's native input box (Feishu form submit) — rides
+   *  alongside text (= the inputAction id that routes it). */
+  formText?: string;
   replyToMessageId?: string;
   /** Inbound photos/files, already downloaded by the adapter to a local path
    *  (e.g. ~/.tlive/inbox/). Consumers see filesystem paths only. */
@@ -20,7 +23,11 @@ export interface IncomingEnvelope {
 
 export type OutgoingMessage =
   | { kind: 'text'; text: string }
-  | { kind: 'card'; title?: string; body: string; buttons?: Array<{ id: string; label: string }> };
+  // inputAction: channels with native text inputs (Feishu form) render an
+  // inline reply box; submitting delivers the typed text as formText on the
+  // inbound envelope with text = inputAction.id. Channels without inputs (TG)
+  // ignore it — quote-reply remains their path.
+  | { kind: 'card'; title?: string; body: string; buttons?: Array<{ id: string; label: string }>; inputAction?: { id: string; placeholder: string; submitLabel: string } };
 
 export interface IMAdapter {
   readonly channel: IMChannel;

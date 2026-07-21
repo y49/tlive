@@ -246,7 +246,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
 
   const sendToChat = async (
     target: PermChat,
-    msg: { title?: string; body?: string; text?: string; requestId?: string; toolName?: string; cwd?: string; askOptions?: AskOption[]; askMulti?: boolean },
+    msg: { title?: string; body?: string; text?: string; requestId?: string; toolName?: string; cwd?: string; askOptions?: AskOption[]; askMulti?: boolean; inputAction?: { id: string; placeholder: string; submitLabel: string } },
   ): Promise<void> => {
     const adapter = (opts.imAdapters ?? []).find((a) => a.channel === target.channel);
     if (!adapter) return;
@@ -281,6 +281,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               { id: `pause:${msg.requestId}`, label: 'Pause approvals' },
             ],
         } : {}),
+        ...(msg.inputAction ? { inputAction: msg.inputAction } : {}),
       });
       if (msg.requestId) {
         const list = sentCards.get(msg.requestId) ?? [];
@@ -301,7 +302,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
 
   const permissionRouter = new PermissionRouter({
     configuredChats,
-    sendToChat: (t, card) => sendToChat(t, card),
+    sendToChat: (t, card) => sendToChat(t, {
+      ...card,
+      // Ask cards get the native reply box on channels that have one (Feishu
+      // form) — the on-card twin of the local dialog's "Type something".
+      ...(card.askOptions ? { inputAction: { id: `askinput:${card.requestId}`, placeholder: 'Answer in your own words (ticked boxes are included)', submitLabel: 'Send' } } : {}),
+    }),
     isMuted: (key) => muted || (sessions.get(key)?.muted ?? false),
     hasWebClients: () => events.size() > 0,
     policyDecide: (req) => {
@@ -425,7 +431,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     for (const t of configuredChats()) {
       // requestId 不进显示文本:回复路由走 replyToMessageId,不解析正文。
       const raw = req.context === TURN_FINISHED_SENTINEL ? '' : req.context;
-      void sendToChat(t, { title: 'Turn finished', body: buildContinueCardBody(raw), cwd: req.cwd });
+      void sendToChat(t, {
+        title: 'Turn finished',
+        body: buildContinueCardBody(raw),
+        cwd: req.cwd,
+        inputAction: { id: `continueinput:${req.requestId}`, placeholder: 'Reply to continue the session', submitLabel: 'Continue' },
+      });
     }
   });
 

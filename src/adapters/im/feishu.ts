@@ -34,35 +34,78 @@ function buttonType(id: string): 'primary' | 'danger' | 'default' {
   return 'default';
 }
 
-/** Build a Feishu interactive card; approval buttons carry their id via a callback behavior.
- *  Body goes through the markdown converter (feishu-card.ts) — card 1.0 renders
- *  inline code / `> ` quotes literally, so the shared markdown must be adapted.
+/** Build a Feishu interactive card — JSON schema 2.0 (client 7.20+, older
+ *  clients degrade to an upgrade prompt; doc-verified 2026-07-21). 2.0 buys:
+ *  native inline code / `> ` quote / fences in markdown (feishu-card.ts is
+ *  near-passthrough now), and strict validation (unknown attrs REJECT the
+ *  send — keep this builder minimal). Buttons live directly in body.elements
+ *  (2.0 shape), two per column_set row to mirror the TG layout. An
+ *  `inputAction` renders a form with a multiline input + submit — the native
+ *  "answer in your own words" box (V6.8+, works in 1.0 and 2.0).
  *  Header gets the `blue` template only while the card is actionable, so a
  *  settled (edited) card visually steps back. */
 export function buildCard(out: CardMessage): object {
   const elements: object[] = [...mdToFeishuElements(out.body)];
   if (out.buttons?.length) {
+    const btn = (b: { id: string; label: string }): object => ({
+      tag: 'button',
+      text: { tag: 'plain_text', content: b.label },
+      type: buttonType(b.id),
+      behaviors: [{ type: 'callback', value: { tlive: b.id } }],
+    });
+    // Two buttons per row via column_set — a flat stack of full-width buttons
+    // reads like a wall for ask cards with many options.
+    for (let i = 0; i < out.buttons.length; i += 2) {
+      const pair = out.buttons.slice(i, i + 2);
+      elements.push({
+        tag: 'column_set',
+        columns: pair.map((b) => ({
+          tag: 'column',
+          width: 'weighted',
+          weight: 1,
+          elements: [btn(b)],
+        })),
+      });
+    }
+  }
+  if (out.inputAction) {
     elements.push({
-      tag: 'action',
-      actions: out.buttons.map((b) => ({
-        tag: 'button',
-        text: { tag: 'plain_text', content: b.label },
-        type: buttonType(b.id),
-        behaviors: [{ type: 'callback', value: { tlive: b.id } }],
-      })),
+      tag: 'form',
+      name: 'tlive_form',
+      elements: [
+        {
+          tag: 'input',
+          name: 'reply',
+          required: true,
+          input_type: 'multiline_text',
+          placeholder: { tag: 'plain_text', content: out.inputAction.placeholder },
+        },
+        {
+          tag: 'button',
+          // 2.0 shape, probed live 2026-07-21: 1.0's action_type:'form_submit'
+          // is REJECTED (300123 "no submit button in the form container");
+          // form_action_type:'submit' sends + patches clean.
+          form_action_type: 'submit',
+          name: 'send',
+          text: { tag: 'plain_text', content: out.inputAction.submitLabel },
+          type: 'primary',
+          behaviors: [{ type: 'callback', value: { tlive: out.inputAction.id } }],
+        },
+      ],
     });
   }
   return {
-    config: { wide_screen_mode: true },
+    schema: '2.0',
+    config: { update_multi: true },
     ...(out.title
       ? {
           header: {
             title: { tag: 'plain_text', content: out.title },
-            ...(out.buttons?.length ? { template: 'blue' } : {}),
+            ...(out.buttons?.length || out.inputAction ? { template: 'blue' } : {}),
           },
         }
       : {}),
-    elements,
+    body: { elements },
   };
 }
 
@@ -145,13 +188,18 @@ export class FeishuAdapter implements IMAdapter {
         // Same flattening as above — operator/action/context sit at the top
         // level (the `.event` read was a silent no-op thanks to `?.`, so card
         // buttons never worked either). Tolerate both shapes.
-        type FeishuCardEvent = { operator?: { user_id?: string; open_id?: string }; action?: { value?: { tlive?: string } }; context?: { open_chat_id?: string; open_message_id?: string } };
+        type FeishuCardEvent = { operator?: { user_id?: string; open_id?: string }; action?: { value?: { tlive?: string }; form_value?: Record<string, unknown>; input_value?: unknown }; context?: { open_chat_id?: string; open_message_id?: string } };
         const raw = data as FeishuCardEvent & { event?: FeishuCardEvent };
         const d = raw.action || raw.context ? raw : (raw.event ?? {});
         const chatId = d.context?.open_chat_id ?? '';
         // Fail-closed: only forward callbacks from the configured chat.
         if (!this.opts.chatId || chatId !== this.opts.chatId) return;
         const val = d.action?.value?.tlive;
+        // Form submit → typed text arrives as form_value {name: value};
+        // standalone input → input_value. Either way it rides as formText.
+        const act = d.action as { form_value?: Record<string, unknown>; input_value?: unknown } | undefined;
+        const typedRaw = act?.form_value ? act.form_value['reply'] : act?.input_value;
+        const typed = typeof typedRaw === 'string' && typedRaw.trim() ? typedRaw : undefined;
         if (val && this.inboundHandler) {
           this.inboundHandler({
             channel: 'feishu',
@@ -159,6 +207,7 @@ export class FeishuAdapter implements IMAdapter {
             userId: d.operator?.user_id ?? d.operator?.open_id ?? '',
             messageId: d.context?.open_message_id ?? '',
             text: val,
+            ...(typed ? { formText: typed } : {}),
             ts: Date.now(),
           });
         }

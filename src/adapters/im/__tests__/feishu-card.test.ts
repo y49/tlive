@@ -3,9 +3,14 @@ import { buildCard } from '../feishu.js';
 import { mdToFeishuElements } from '../feishu-card.js';
 
 type Md = { tag: 'markdown'; content: string };
-type Panel = { tag: 'collapsible_panel'; expanded: boolean; header: { title: { tag: 'plain_text'; content: string } }; elements: Md[] };
+type Card2 = {
+  schema: string;
+  config: { update_multi: boolean };
+  header?: { title: { tag: string; content: string }; template?: string };
+  body: { elements: Array<Record<string, unknown>> };
+};
 
-describe('mdToFeishuElements', () => {
+describe('mdToFeishuElements (card JSON 2.0 — markdown is near-passthrough)', () => {
   it('keeps a fenced code block verbatim in its own markdown element', () => {
     const els = mdToFeishuElements('\n\n```bash\nrm -rf /tmp/x\n```') as Md[];
     const fence = els.find((e) => e.content.startsWith('```bash'));
@@ -13,16 +18,9 @@ describe('mdToFeishuElements', () => {
     expect(fence!.content).toBe('```bash\nrm -rf /tmp/x\n```');
   });
 
-  it('degrades inline code to bold (card 1.0 renders backticks literally)', () => {
+  it('keeps inline code as-is (2.0 markdown renders backticks natively)', () => {
     const els = mdToFeishuElements('Write to `/etc/hosts`') as Md[];
-    expect(els[0].content).toContain('**/etc/hosts**');
-    expect(els[0].content).not.toContain('`');
-  });
-
-  it('does not let code-span content toggle bold/italic after degradation', () => {
-    const els = mdToFeishuElements('run `a*b*c`') as Md[];
-    // the * inside the span must be entity-escaped, not become italic
-    expect(els[0].content).toContain('**a&#42;b&#42;c**');
+    expect(els[0].content).toContain('`/etc/hosts`');
   });
 
   it('escapes tag-like agent content in prose (no <at>/<text_tag> injection)', () => {
@@ -32,48 +30,30 @@ describe('mdToFeishuElements', () => {
     expect(els[0].content).toContain('&#60;at id=all&#62;');
   });
 
-  it('does not escape inside fences (code shown verbatim)', () => {
-    const els = mdToFeishuElements('```\na < b && c > d\n```') as Md[];
-    expect(els[0].content).toBe('```\na < b && c > d\n```');
+  it('escapes tag-like content inside fences too (tag-inside-code parsing is unverified — never gamble on injection)', () => {
+    const els = mdToFeishuElements('```\na <at id=all></at> b\n```') as Md[];
+    expect(els[0].content).not.toContain('<at');
+    expect(els[0].content).toContain('&#60;at id=all&#62;');
   });
 
-  it('turns an expandable quote block into a collapsible panel with a first-line preview header', () => {
+  it('renders an expandable quote block as a native 2.0 quote (collapsible_panel retired — it never rendered on real clients)', () => {
     const md = '>! **Done.** All tests pass.\n>! Next: run `build`.\n\n*Reply to continue*';
-    const els = mdToFeishuElements(md) as Array<Md | Panel>;
-    const panel = els.find((e) => e.tag === 'collapsible_panel') as Panel;
-    expect(panel).toBeTruthy();
-    expect(panel.expanded).toBe(false);
-    // header preview is plain text: markers stripped
-    expect(panel.header.title.content).toBe('Done. All tests pass.');
-    expect(panel.header.title.tag).toBe('plain_text');
-    // full content inside, markers converted not leaked
-    expect(panel.elements[0].content).toContain('**Done.**');
-    expect(panel.elements[0].content).toContain('**build**');
-    // trailing prose still renders after the panel
-    const tail = els[els.length - 1] as Md;
-    expect(tail.content).toContain('*Reply to continue*');
+    const els = mdToFeishuElements(md) as Md[];
+    expect(els.some((e) => e.tag === 'collapsible_panel')).toBe(false);
+    expect(els[0].content).toContain('> **Done.** All tests pass.');
+    expect(els[0].content).toContain('> Next: run `build`.');
+    expect(els[0].content).toContain('*Reply to continue*');
   });
 
   it('emits no empty element for the real continue-card shape (leading \\n before the quote)', () => {
-    // buildContinueCardBody produces `\n>! …\n>! …\n\n*Reply to continue*` —
-    // the leading blank line must not become a {content:""} element (content
-    // is required; an empty one may get the whole card rejected).
     const md = '\n>! All done.\n>! Tests pass.\n\n*Reply to continue*';
-    const els = mdToFeishuElements(md) as Array<Md | Panel>;
-    expect(els[0].tag).toBe('collapsible_panel');
-    for (const e of els) {
-      if (e.tag === 'markdown') expect((e as Md).content.trim()).not.toBe('');
-    }
+    const els = mdToFeishuElements(md) as Md[];
+    for (const e of els) expect(e.content.trim()).not.toBe('');
   });
 
-  it('keeps a whitespace-only code span from becoming stray asterisks', () => {
-    const els = mdToFeishuElements('a ` ` b') as Md[];
-    expect(els[0].content).not.toContain('**');
-  });
-
-  it('strips plain quote markers (1.0 would render "> " literally)', () => {
+  it('keeps plain quote markers (2.0 renders "> " as a real blockquote)', () => {
     const els = mdToFeishuElements('> quoted line\n> second') as Md[];
-    expect(els[0].content).toBe('quoted line\nsecond');
+    expect(els[0].content).toBe('> quoted line\n> second');
   });
 
   it('strips spoiler markers', () => {
@@ -87,70 +67,72 @@ describe('mdToFeishuElements', () => {
   });
 });
 
-describe('feishu buildCard', () => {
-  it('renders approval buttons as callback behaviors carrying the button id', () => {
+describe('feishu buildCard (schema 2.0)', () => {
+  it('declares schema 2.0 with update_multi and puts elements under body', () => {
+    const card = buildCard({ kind: 'card', body: 'hi' }) as Card2;
+    expect(card.schema).toBe('2.0');
+    expect(card.config.update_multi).toBe(true);
+    expect(card.body.elements[0]).toMatchObject({ tag: 'markdown', content: 'hi' });
+  });
+
+  it('renders buttons two per column_set row, as callback behaviors carrying the button id', () => {
     const card = buildCard({
       kind: 'card',
-      title: '权限请求: Edit',
+      title: 'tlive · Edit',
       body: 'tool input: {...}',
       buttons: [
-        { id: 'approve:abc', label: '✅ 允许' },
-        { id: 'deny:abc', label: '❌ 拒绝' },
+        { id: 'approve:abc', label: 'Allow' },
+        { id: 'deny:abc', label: 'Deny' },
+        { id: 'pause:abc', label: 'Pause approvals' },
       ],
-    }) as { header?: unknown; elements: Array<Record<string, unknown>> };
-
+    }) as Card2;
     expect(card.header).toBeTruthy();
-    const action = card.elements.find((e) => e.tag === 'action') as
-      | { actions: Array<{ tag: string; type: string; behaviors: Array<{ type: string; value: { tlive: string } }> }> }
-      | undefined;
-    expect(action).toBeTruthy();
-    expect(action!.actions).toHaveLength(2);
-    expect(action!.actions[0]).toMatchObject({
-      tag: 'button',
-      type: 'primary',
-      behaviors: [{ type: 'callback', value: { tlive: 'approve:abc' } }],
-    });
-    expect(action!.actions[1].type).toBe('danger');
-    expect(action!.actions[1].behaviors[0].value.tlive).toBe('deny:abc');
+    expect(card.header!.template).toBe('blue');
+    const rows = card.body.elements.filter((e) => e.tag === 'column_set') as Array<{ columns: Array<{ elements: Array<Record<string, unknown>> }> }>;
+    expect(rows).toHaveLength(2); // 3 buttons → row of 2 + row of 1
+    const first = rows[0].columns.map((c) => c.elements[0]);
+    expect(first[0]).toMatchObject({ tag: 'button', type: 'primary', behaviors: [{ type: 'callback', value: { tlive: 'approve:abc' } }] });
+    expect(first[1]).toMatchObject({ type: 'danger', behaviors: [{ type: 'callback', value: { tlive: 'deny:abc' } }] });
+    expect(rows[1].columns).toHaveLength(1);
   });
 
-  it('omits the action element when there are no buttons', () => {
-    const card = buildCard({ kind: 'card', body: 'hi' }) as { elements: Array<Record<string, unknown>> };
-    expect(card.elements.some((e) => e.tag === 'action')).toBe(false);
-    expect(card.elements[0]).toMatchObject({ tag: 'markdown', content: 'hi' });
-  });
-
-  it('renders the body through the markdown converter (fence survives, inline code degrades)', () => {
+  it('renders a form with a multiline input + submit when inputAction is set (the native reply box)', () => {
     const card = buildCard({
       kind: 'card',
-      title: 'tlive · Bash',
-      body: '\n*list files*\n\n```bash\nls -la\n```',
-      buttons: [{ id: 'approve:r1', label: 'Allow' }],
-    }) as { elements: Array<{ tag: string; content?: string }> };
-    const md = card.elements.filter((e) => e.tag === 'markdown');
-    expect(md.some((e) => e.content === '```bash\nls -la\n```')).toBe(true);
-    expect(md.some((e) => e.content?.includes('*list files*'))).toBe(true);
+      title: 'y · Question',
+      body: 'Pick one',
+      buttons: [{ id: 'ask:r1:0', label: '1. Red' }],
+      inputAction: { id: 'askinput:r1', placeholder: 'Answer in your own words', submitLabel: 'Send' },
+    }) as Card2;
+    const form = card.body.elements.find((e) => e.tag === 'form') as { name: string; elements: Array<Record<string, unknown>> };
+    expect(form).toBeTruthy();
+    expect(form.elements[0]).toMatchObject({ tag: 'input', name: 'reply', input_type: 'multiline_text' });
+    expect(form.elements[1]).toMatchObject({
+      tag: 'button',
+      form_action_type: 'submit', // probed live: 2.0 rejects 1.0's action_type:'form_submit'
+      behaviors: [{ type: 'callback', value: { tlive: 'askinput:r1' } }],
+    });
   });
 
-  it('colors the header only when the card is actionable (has buttons)', () => {
-    const actionable = buildCard({ kind: 'card', title: 't', body: 'b', buttons: [{ id: 'approve:x', label: 'Allow' }] }) as { header?: { template?: string } };
-    const settled = buildCard({ kind: 'card', title: 't', body: 'b' }) as { header?: { template?: string } };
-    expect(actionable.header?.template).toBe('blue');
-    expect(settled.header?.template).toBeUndefined();
+  it('omits buttons/form when the card has neither (settled card)', () => {
+    const card = buildCard({ kind: 'card', title: 'Allowed · tlive · Bash', body: 'ls' }) as Card2;
+    expect(card.body.elements.some((e) => e.tag === 'column_set' || e.tag === 'form')).toBe(false);
+    expect(card.header!.template).toBeUndefined(); // settled card steps back visually
   });
 
   it('maps button style by intent: approve primary, deny danger, everything else default', () => {
     const card = buildCard({
       kind: 'card',
-      body: 'b',
+      body: 'x',
       buttons: [
-        { id: 'approve:r', label: 'Allow' },
-        { id: 'deny:r', label: 'Deny' },
-        { id: 'allowtool:r:Bash', label: 'Always allow Bash' },
-        { id: 'pause:r', label: 'Pause approvals' },
+        { id: 'approve:1', label: 'a' },
+        { id: 'deny:1', label: 'd' },
+        { id: 'allowtool:1:Bash', label: 't' },
+        { id: 'pause:1', label: 'p' },
       ],
-    }) as { elements: Array<{ tag: string; actions?: Array<{ type: string }> }> };
-    const action = card.elements.find((e) => e.tag === 'action')!;
-    expect(action.actions!.map((a) => a.type)).toEqual(['primary', 'danger', 'default', 'default']);
+    }) as Card2;
+    const btns = (card.body.elements.filter((e) => e.tag === 'column_set') as Array<{ columns: Array<{ elements: Array<{ type?: string }> }> }>)
+      .flatMap((r) => r.columns.map((c) => c.elements[0]));
+    expect(btns.map((b) => b.type)).toEqual(['primary', 'danger', 'default', 'default']);
   });
 });
