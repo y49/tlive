@@ -42,7 +42,7 @@ export interface BootstrapOpts {
   imAdapters?: IMAdapter[];
   ensureAppServer?: typeof ensureCodexAppServer;
   /** Test seam for the desktop notifier; production uses createDesktopNotifier. */
-  desktopNotifier?: (title: string, body: string) => void;
+  desktopNotifier?: import('./desktop-notify.js').DesktopNotifier;
 }
 
 /** A Stop hook should not sit waiting when nothing can answer: no IM chat
@@ -204,7 +204,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // Desktop notification: the at-the-computer pointer to the phone card /
   // dashboard, for background-launched tool calls that render no local dialog
   // while the hook pends. Never carries a decision (never-auto-allow intact).
-  const desktopNotify = opts.desktopNotifier ?? createDesktopNotifier({ enabled: cfg.approvals?.desktopNotify ?? true });
+  const desktop = opts.desktopNotifier ?? createDesktopNotifier({ enabled: cfg.approvals?.desktopNotify ?? true });
 
   // AskUserQuestion (Task 9): raw question + options per pending requestId, so an
   // `ask:<rid>:<idx>` button click can build the deny+message answer. Written at
@@ -255,7 +255,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         // previous toast); a burst shows how many are waiting.
         desktopPinged.add(msg.requestId);
         const waiting = permissionRouter.pendingCount();
-        desktopNotify(
+        void desktop.ping(
           `${title ?? 'Approval pending'}`,
           waiting > 1
             ? `${waiting} approvals waiting — answer on your phone or the tlive dashboard`
@@ -351,6 +351,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     onResolved: ({ key, cwd, requestId, decision, message }) => {
       askContexts.delete(requestId); // no leak whether consumed by a button click or resolved another way
       desktopPinged.delete(requestId); // outside the cards guard — a failed send still claimed the ping
+      // Warp-style lifecycle: the desktop notification exists exactly while
+      // something waits. Last pending approval just resolved → close it
+      // (answered means gone; the tray must never hold a stale "Waiting").
+      if (permissionRouter.pendingCount() === 0) void desktop.clear();
       askSelection.clear(requestId); // no leak — covers defer/timeout/local-answer paths that skip asksubmit:/askskip: entirely (Task 10)
       const isAsk = askRequestIds.delete(requestId); // true only for an AskUserQuestion card (Minor 4)
       // Only touch the session view if THIS request still owns the pending slot —

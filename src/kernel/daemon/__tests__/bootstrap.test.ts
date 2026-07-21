@@ -307,7 +307,8 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: (title, body) => notes.push({ title, body }) });
+    const clears: number[] = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
     const sock = daemonSocketPath(tmp);
     const pending = request(
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'touch /x' }, timeoutSec: 60 },
@@ -319,6 +320,9 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
     adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: card.buttons!.find((b) => b.id.startsWith('approve:'))!.id, ts: 0 });
     await pending;
+    // Warp-style lifecycle: the answer resolved the LAST pending approval →
+    // the desktop notification is actively cleared, never left as a zombie.
+    expect(clears.length).toBeGreaterThan(0);
   });
 
   it('two configured chats with a slow adapter still get ONE desktop ping per request (regression: per-chat concurrent pushes each fired a toast)', async () => {
@@ -337,7 +341,8 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       a.send = async (out) => { await new Promise((r) => setTimeout(r, 20)); return base(out); };
     }
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [tg, fs], desktopNotifier: (title, body) => notes.push({ title, body }) });
+    const clears: number[] = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [tg, fs], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
     const sock = daemonSocketPath(tmp);
     const pending = request(
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'touch /x' }, timeoutSec: 60 },

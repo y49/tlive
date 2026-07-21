@@ -88,6 +88,13 @@ All notable changes to this project will be documented in this file.
   (`3 approvals waiting — …`). A multi-agent burst used to pile up dozens of
   separate toasts (measured: 23). Old notify-send without `--print-id`
   degrades to the previous stacking behavior rather than breaking.
+- **Warp-style lifecycle — the notification exists exactly while something
+  waits.** `--replace-id` can only replace a *live* toast; after the 15s
+  expiry GNOME archives it into the notification tray, where every past
+  approval piled up as a stale "Waiting for approval" even with nothing
+  pending. Now: the `transient` hint makes an expired toast evaporate instead
+  of archiving, and when the last pending approval resolves the live toast is
+  actively closed over DBus (`CloseNotification`) — answered means gone.
 - **One ping per request, not per channel**: with Telegram *and* Feishu (or
   any multi-channel setup) configured, the router pushes one concurrent card
   send per channel and each used to fire its own desktop toast for the same

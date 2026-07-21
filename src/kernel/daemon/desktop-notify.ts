@@ -8,10 +8,18 @@
 // dashboard has buttons; this notification is the at-the-computer pointer to
 // them. It never carries a decision itself — never-auto-allow untouched.
 //
-// tlive occupies exactly ONE notification slot: every send replaces the
-// previous one via --print-id/--replace-id (a multi-agent burst used to stack
-// dozens of separate toasts). Sends are serialized so a burst can't race past
-// the id capture and fork into parallel slots.
+// Lifecycle model (Warp-style): the notification exists exactly while
+// something is waiting for the user, and disappears when nothing is.
+// - ONE notification slot total: every ping replaces the previous toast via
+//   --print-id/--replace-id (a burst used to stack dozens of toasts).
+// - `transient` hint: an expired toast EVAPORATES instead of falling into the
+//   desktop's notification tray/history — the tray is where "answered long
+//   ago, still shows Waiting for approval" zombies came from (replace-id
+//   cannot touch a toast that already expired into the tray).
+// - clear(): when the last pending approval resolves, the live toast is
+//   actively closed over DBus (CloseNotification) — answered means gone.
+// - Sends are serialized so a burst can't race past the id capture and fork
+//   into parallel slots.
 //
 // Linux `notify-send` only for now; anywhere else (or when the binary is
 // missing) this degrades to a silent no-op — the card and dashboard remain
@@ -34,25 +42,40 @@ const defaultSpawner: Spawner = (cmd, args) =>
     } catch { resolve(null); }
   });
 
+export interface DesktopNotifier {
+  /** Show (or replace) THE tlive notification. */
+  ping(title: string, body: string): Promise<void>;
+  /** Close the live notification — nothing is waiting anymore. */
+  clear(): Promise<void>;
+}
+
+const NOOP: DesktopNotifier = { ping: async () => {}, clear: async () => {} };
+
 export function createDesktopNotifier(opts?: {
   enabled?: boolean;
   platform?: NodeJS.Platform;
   hasCmd?: (cmd: string) => boolean;
   spawner?: Spawner;
-}): (title: string, body: string) => Promise<void> {
+}): DesktopNotifier {
   const enabled = opts?.enabled ?? true;
   const platform = opts?.platform ?? process.platform;
   const hasCmd = opts?.hasCmd ?? commandOnPath;
-  if (!enabled || platform !== 'linux' || !hasCmd('notify-send')) return async () => {};
+  if (!enabled || platform !== 'linux' || !hasCmd('notify-send')) return NOOP;
   const sp = opts?.spawner ?? defaultSpawner;
   let lastId: string | null = null;
   let chain: Promise<void> = Promise.resolve();
-  return (title, body) => {
-    chain = chain.then(async () => {
+  const enqueue = (task: () => Promise<void>): Promise<void> => {
+    chain = chain.then(task).catch(() => { /* best-effort, never throws */ });
+    return chain;
+  };
+  return {
+    ping: (title, body) => enqueue(async () => {
       const args = [
         '--app-name=tlive',
-        // 15s expiry: long enough to notice, short enough not to linger.
+        // 15s expiry: long enough to notice; transient → expiry means GONE,
+        // not "archived into the tray as a stale Waiting-for-approval".
         '--expire-time=15000',
+        '--hint=int:transient:1',
         '--print-id',
         ...(lastId ? [`--replace-id=${lastId}`] : []),
         title,
@@ -62,7 +85,21 @@ export function createDesktopNotifier(opts?: {
       // Old notify-send without --print-id prints nothing → keep stacking
       // behavior rather than passing garbage to --replace-id.
       if (id && /^\d+$/.test(id)) lastId = id;
-    }).catch(() => { /* best-effort, never throws */ });
-    return chain;
+    }),
+    clear: () => enqueue(async () => {
+      if (!lastId) return;
+      const id = lastId;
+      lastId = null;
+      // notify-send cannot close; go straight to the DBus spec method. If
+      // gdbus is absent the toast still self-expires (transient) — degraded,
+      // not broken.
+      await sp('gdbus', [
+        'call', '--session',
+        '--dest', 'org.freedesktop.Notifications',
+        '--object-path', '/org/freedesktop/Notifications',
+        '--method', 'org.freedesktop.Notifications.CloseNotification',
+        id,
+      ]);
+    }),
   };
 }
