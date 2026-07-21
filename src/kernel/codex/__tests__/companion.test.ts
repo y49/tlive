@@ -242,6 +242,12 @@ describe('companion', () => {
       'codex:t1',
     );
     expect(onResumePrompt).toHaveBeenCalledWith({ threadId: 't1', key: 'codex:t1', lastMessage: 'final answer' });
+
+    // An empty agentMessage must not clobber the real last message — the
+    // continue card's excerpt would collapse to a bare "Reply to continue".
+    events.onNotify('item/completed', { threadId: 't1', item: { type: 'agentMessage', text: '' } });
+    events.onNotify('turn/completed', { threadId: 't1' });
+    expect(onResumePrompt).toHaveBeenLastCalledWith({ threadId: 't1', key: 'codex:t1', lastMessage: 'final answer' });
     comp.stop();
   });
 
@@ -327,12 +333,12 @@ describe('companion', () => {
     expect(calls.filter((c) => c.method === 'thread/resume').length).toBe(0);
 
     listResult = { data: ['t9'] };
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(5_000);
     await Promise.resolve();
     await Promise.resolve();
     expect(calls.filter((c) => c.method === 'thread/resume' && c.params.threadId === 't9').length).toBe(1);
 
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(5_000);
     await Promise.resolve();
     await Promise.resolve();
     expect(calls.filter((c) => c.method === 'thread/resume' && c.params.threadId === 't9').length).toBe(1);
@@ -445,7 +451,7 @@ describe('companion', () => {
     // Now allow resume to succeed
     shouldSucceed = true;
 
-    // Advance to the next poll cycle (at 30s: initial poll at 0s, then 15s, 30s, 45s, ...)
+    // Advance to the next poll cycle (polls run every 5s; retries ended at 27s, next poll at 30s)
     // This poll will call resumeThread again since we deleted from resumed set on final failure
     await vi.advanceTimersByTimeAsync(3000);
     await Promise.resolve();

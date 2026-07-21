@@ -31,7 +31,15 @@ const RESUME_RETRY_MS = 3000;
 const RESUME_RETRY_MAX = 10;
 const RECONNECT_MIN_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
-const POLL_MS = 15_000;
+// Discovery poll = the upper bound on the "approval fired before we
+// subscribed" blind window. Keep it tight: thread/loaded/list is a local
+// unix-socket call, and the app-server REPLAYS still-pending approval
+// ServerRequests to a freshly subscribed connection
+// (outgoing_message.rs replay_requests_to_connection_for_thread, called from
+// the running-thread resume path; feature string verified in the installed
+// 0.144.4 binary) — so an approval raised inside the window is answerable
+// the moment the next poll subscribes us, not lost to native-only.
+const POLL_MS = 5_000;
 
 export function startCompanion(deps: CompanionDeps): Companion {
   let stopped = false;
@@ -63,7 +71,6 @@ export function startCompanion(deps: CompanionDeps): Companion {
     }
     rpc.call('thread/resume', { threadId }).then(
       (res) => {
-        reconnectDelay = RECONNECT_MIN_MS;
         const cwd = (res as { cwd?: unknown } | undefined)?.cwd;
         if (typeof cwd === 'string' && cwd) threadCwds.set(threadId, cwd);
       },
@@ -148,7 +155,11 @@ export function startCompanion(deps: CompanionDeps): Companion {
         deps.permissionRouter.cancel({ key: threadKey(threadId), toolName: 'Bash', sessionId: threadId });
       }
       if (threadId && item.type === 'agentMessage') {
-        lastMessages.set(threadId, (item.text as string | undefined) ?? '');
+        // An empty agentMessage must not clobber the previous real one — the
+        // continue card's excerpt comes from here, and '' renders as a bare
+        // "Reply to continue" with the actual last words lost.
+        const text = (item.text as string | undefined) ?? '';
+        if (text.trim()) lastMessages.set(threadId, text);
       }
       return;
     }

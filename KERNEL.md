@@ -192,6 +192,16 @@ hooks are retired; tlive integrates via app-server`,不再触碰任何决策逻�
   Codex 发起权限请求时以 `ServerRequest` 广播给 IM/web **和**原生 TUI 提示
   ——**先答先得**,与 Claude Code 并行通道同一语义。没有窗口可配置:原生
   提示永远不会被 tlive 卡住,因此没有超时概念。
+- **发现盲区自愈(2026-07-21 源码+二进制实锤)**:活线程首 turn 未落盘时
+  `thread/resume` 报 "no rollout"(app-server 对**已加载**线程也强制读
+  rollout store,`resume_running_thread` → `read_stored_thread_for_resume?`,
+  thread_processor.rs)——这是 codex 侧结构,tlive 只能重试。但 app-server
+  会把**仍挂起的审批 ServerRequest 重发给新订阅的连接**
+  (`replay_requests_to_connection_for_thread`,outgoing_message.rs,resume
+  活线程路径调用;特征串在装机 0.144.4 二进制命中)——所以盲区内错过的
+  审批不是永久丢失:下一个发现轮询(5s)订阅成功后会补送,卡照发。
+  rollout 在**首条用户消息**时物化,而审批只可能发生在首条消息之后的 turn
+  里 ⟹ 实际盲区上界 ≈ 一个轮询周期。
 - **降级语义**:companion 连不上(未装 Codex、respawn 耗尽 backoff、
   win32 尚未接好)时,`tlive status` 报告 `codex: app-server companion
   unreachable — approvals local-only`,Codex 照常走自己的本地审批流——

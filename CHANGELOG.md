@@ -39,6 +39,26 @@ All notable changes to this project will be documented in this file.
   keyboard first.
 - Command replies (`/perm`, `/trust`, `/safe`, `/help`, unknown) are now English.
 
+### Changed — Codex companion: approval blind window shrunk and shown to self-heal
+
+- **Discovery poll 15s → 5s.** The poll is the upper bound on the "approval
+  fired before the companion subscribed" window for a fresh TUI thread
+  (`thread/resume` fails with "no rollout" until the first user message
+  materializes the rollout — codex forces a rollout-store read even for
+  loaded threads, verified in 0.144 source). `thread/loaded/list` is a local
+  unix-socket call, so polling 3× as often costs nothing.
+- **The window self-heals — verified in source and the installed binary:**
+  the app-server *replays still-pending approval ServerRequests* to a newly
+  subscribed connection (`replay_requests_to_connection_for_thread`, called
+  from the running-thread resume path; feature string present in the shipped
+  0.144.4 binary). An approval raised inside the blind window is answerable
+  the moment the next poll subscribes us — not lost to native-only, as
+  previously assumed. Documented in KERNEL.md.
+- An empty `agentMessage` no longer clobbers the thread's real last message
+  (the continue card's excerpt would collapse to a bare "Reply to continue").
+- Dropped a misplaced reconnect-backoff reset in the resume path (connect
+  success is what resets the backoff).
+
 ### Fixed — desktop notifications no longer stack
 
 - tlive now occupies exactly **one** notification slot: each approval ping
