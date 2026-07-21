@@ -88,6 +88,14 @@ All notable changes to this project will be documented in this file.
   (`3 approvals waiting — …`). A multi-agent burst used to pile up dozens of
   separate toasts (measured: 23). Old notify-send without `--print-id`
   degrades to the previous stacking behavior rather than breaking.
+- **Immediate and IM-independent**: the desktop ping now fires the moment an
+  approval goes pending (`onPending`), not when the IM card is sent — it no
+  longer waits out the 10s card grace delay (that delay exists to spare your
+  phone when you answer at the keyboard; delaying the *local* pointer by the
+  same 10s was backwards) and no longer requires an IM channel to be
+  configured at all. Wording adapts: with no IM configured it points at the
+  dashboard only. Answering anywhere — including locally within grace —
+  clears the toast. `approvals.desktopNotify` remains its own switch.
 - **Warp-style lifecycle — the notification exists exactly while something
   waits.** `--replace-id` can only replace a *live* toast; after the 15s
   expiry GNOME archives it into the notification tray, where every past

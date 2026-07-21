@@ -174,13 +174,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
 
   // Approval cards sent per requestId — edited to their outcome on resolve (no zombie buttons).
   const sentCards = new Map<string, Array<{ channel: string; messageId: string; title: string; body: string }>>();
-  // Desktop notification dedup — one ping per requestId, claimed SYNCHRONOUSLY
-  // before any await. sentCards can't serve this role: the router pushes one
-  // concurrent sendToChat per configured channel, and every call is still past
-  // its adapter.send await when it consults sentCards — all of them see it
-  // empty and each fired its own toast (user screenshot: every card × number
-  // of channels). Cleared alongside the ask state in onResolved.
-  const desktopPinged = new Set<string>();
 
   /** IM messageId → still-live approval requestId, or null. sentCards is deleted
    *  the instant onResolved fires (see below), so "findable" IS "still live" —
@@ -246,22 +239,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     } else {
       const title = msg.title ? `${tag}${msg.title}` : undefined;
       const body = msg.body ?? '';
-      if (msg.requestId && !desktopPinged.has(msg.requestId)) {
-        // Claim BEFORE the send await — concurrent per-channel pushes for the
-        // same request must collapse to one desktop ping (see desktopPinged).
-        // The ping is the at-the-computer pointer to the phone card/dashboard:
-        // background-launched tool calls get NO local dialog while the hook
-        // pends. One notification slot total (the notifier replaces the
-        // previous toast); a burst shows how many are waiting.
-        desktopPinged.add(msg.requestId);
-        const waiting = permissionRouter.pendingCount();
-        void desktop.ping(
-          `${title ?? 'Approval pending'}`,
-          waiting > 1
-            ? `${waiting} approvals waiting — answer on your phone or the tlive dashboard`
-            : 'Waiting for approval — answer on your phone or the tlive dashboard',
-        );
-      }
       sent = await adapter.send({
         kind: 'card',
         ...(title ? { title } : {}),
@@ -327,6 +304,21 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     },
     graceSec: () => Math.max(cfg.approvals?.approvalGraceSec ?? 10, 0),
     onPending: ({ key, cwd, requestId, title, body, toolName, askOptions, askQuestion }) => {
+      // Desktop ping FIRST — this notification is for the person AT this
+      // machine, so it must be immediate (the IM card's grace delay exists to
+      // spare the phone when you answer at the keyboard — delaying the local
+      // pointer by the same 10s was backwards) and must not depend on any IM
+      // channel being configured. onPending fires exactly once per request =
+      // dedup by construction. Answering (any channel, incl. locally within
+      // grace) drops pendingCount to 0 → onResolved clears the toast.
+      {
+        const waiting = permissionRouter.pendingCount();
+        const where = configuredChats().length > 0 ? 'answer on your phone or the tlive dashboard' : 'answer on the tlive dashboard';
+        void desktop.ping(
+          `${sessionTag(key)}${title}`,
+          waiting > 1 ? `${waiting} approvals waiting — ${where}` : `Waiting for approval — ${where}`,
+        );
+      }
       if (askOptions && askQuestion) {
         askContexts.set(requestId, { question: askQuestion, options: askOptions });
         askRequestIds.add(requestId); // Task 9 review Minor 4: survives the button-click's askContexts consumption, so onResolved can still tell this was an ask card
@@ -350,7 +342,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     },
     onResolved: ({ key, cwd, requestId, decision, message }) => {
       askContexts.delete(requestId); // no leak whether consumed by a button click or resolved another way
-      desktopPinged.delete(requestId); // outside the cards guard — a failed send still claimed the ping
       // Warp-style lifecycle: the desktop notification exists exactly while
       // something waits. Last pending approval just resolved → close it
       // (answered means gone; the tray must never hold a stale "Waiting").

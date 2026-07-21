@@ -325,6 +325,35 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     expect(clears.length).toBeGreaterThan(0);
   });
 
+  it('desktop ping is immediate — it does NOT wait out the IM card grace delay (the local user is the whole point)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      approvals: { approvalGraceSec: 30 }, // IM card held back 30s…
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const notes: Array<{ title: string; body: string }> = [];
+    const clears: number[] = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
+    const sock = daemonSocketPath(tmp);
+    const pending = request(
+      { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
+      { socketPath: sock, timeoutMs: 10_000 },
+    );
+    await new Promise((r) => setTimeout(r, 150));
+    expect(sent).toHaveLength(0); // …but the desktop already knows
+    expect(notes).toHaveLength(1);
+    // Local answer within grace (PostToolUse cancel) → card never sent, toast cleared.
+    await request(
+      { kind: 'hook.event', event: { event: 'activity', cwd: '/w', sessionId: 's1', toolName: 'Bash', result: {} } },
+      { socketPath: sock, timeoutMs: 2000 },
+    );
+    await pending;
+    expect(clears.length).toBeGreaterThan(0);
+    expect(sent).toHaveLength(0);
+  });
+
   it('two configured chats with a slow adapter still get ONE desktop ping per request (regression: per-chat concurrent pushes each fired a toast)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },
