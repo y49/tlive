@@ -27,7 +27,9 @@ export type OutgoingMessage =
   // inline reply box; submitting delivers the typed text as formText on the
   // inbound envelope with text = inputAction.id. Channels without inputs (TG)
   // ignore it — quote-reply remains their path.
-  | { kind: 'card'; title?: string; body: string; buttons?: Array<{ id: string; label: string }>; inputAction?: { id: string; placeholder: string; submitLabel: string } };
+  // ask: structured AskUserQuestion payload — adapters with richer layout
+  // primitives (Feishu) render it themselves instead of the generic body.
+  | { kind: 'card'; title?: string; body: string; buttons?: Array<{ id: string; label: string }>; ask?: { question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect: boolean }; inputAction?: { id: string; placeholder: string; submitLabel: string } };
 
 export interface IMAdapter {
   readonly channel: IMChannel;

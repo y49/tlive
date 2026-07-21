@@ -39,6 +39,25 @@ All notable changes to this project will be documented in this file.
   keyboard first.
 - Command replies (`/perm`, `/trust`, `/safe`, `/help`, unknown) are now English.
 
+### Changed — AskUserQuestion round 3 (live feedback): native answer format, one Submit, layout
+
+- **The answer message now mimics CC's NATIVE feedback format** — mined from
+  the installed 2.1.216 binary: `The user answered: [Answered <question>]:
+  <answer>` + "You can now continue with these answers in mind." The invented
+  `Equivalent AskUserQuestionOutput` JSON was the actual bug (user-diagnosed):
+  CC has never produced that shape, so the agent had nothing to pattern-match.
+- **One Submit, not Submit + Send** (Feishu): the multi-select form submit IS
+  the Submit — typed text and ticked boxes travel together in a single action;
+  the duplicate plain button is filtered out. Empty ticks + empty text stays a
+  no-op. Single-select keeps direct option buttons plus a Send box for
+  free-form answers.
+- **Toggling no longer eats the input box** (live bug): checkbox edits now
+  carry the ask layout + input form through the card edit.
+- **Feishu ask layout** (terminal-style): bold question, options as
+  "label — description" lines (numbered only for single-select where buttons
+  reference numbers) — no more duplicated numbered list + generic hint. The
+  channel hint moved into the Telegram adapter (quote-reply is TG's input).
+
 ### Changed — Feishu cards move to JSON schema 2.0 (live-verified) + on-card reply box
 
 - **Schema 2.0** (client 7.20+; older clients see an upgrade prompt, not a

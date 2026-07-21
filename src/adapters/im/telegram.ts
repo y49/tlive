@@ -23,7 +23,13 @@ type Keyboard = Array<Array<{ text: string; callback_data: string }>>;
 
 /** card → Telegram HTML 文本 + 两钮一行的 inline keyboard。 */
 function renderCard(out: Extract<OutgoingMessage, { kind: 'card' }>): { text: string; keyboard: Keyboard } {
-  const text = (out.title ? `<b>${escapeHtml(out.title)}</b>\n` : '') + mdToTelegramHtml(out.body);
+  // Ask cards: TG has no input primitive — advertise the quote-reply path
+  // (its "Type something"). Channels with a real input box (Feishu) render
+  // their own layout and skip this hint.
+  const hint = out.ask
+    ? `\n\n<i>${out.ask.multiSelect ? 'Or reply to this card to answer in your own words — ticked boxes are included.' : 'Or reply to this card to answer in your own words.'}</i>`
+    : '';
+  const text = (out.title ? `<b>${escapeHtml(out.title)}</b>\n` : '') + mdToTelegramHtml(out.body) + hint;
   const keyboard: Keyboard = [];
   const btns = out.buttons ?? [];
   for (let i = 0; i < btns.length; i += 2) {

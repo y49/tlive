@@ -222,7 +222,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // `ask:<rid>:<idx>` button click can build the deny+message answer. Written at
   // onPending, cleared at onResolved (or consumed once by the button click) —
   // never leaks across the request's lifetime.
-  const askContexts = new Map<string, { question: string; options: AskOption[] }>();
+  const askContexts = new Map<string, { question: string; header?: string; options: AskOption[]; multiSelect: boolean }>();
   // Same lifetime as askContexts' *pending* window, but never consumed by the
   // button-click handler (askContexts is get-and-clear there) — lets onResolved
   // still know "this requestId was an ask card" after the answer already
@@ -246,7 +246,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
 
   const sendToChat = async (
     target: PermChat,
-    msg: { title?: string; body?: string; text?: string; requestId?: string; toolName?: string; cwd?: string; askOptions?: AskOption[]; askMulti?: boolean; inputAction?: { id: string; placeholder: string; submitLabel: string } },
+    msg: { title?: string; body?: string; text?: string; requestId?: string; toolName?: string; cwd?: string; askOptions?: AskOption[]; askMulti?: boolean; ask?: { question: string; header?: string; options: AskOption[]; multiSelect: boolean }; inputAction?: { id: string; placeholder: string; submitLabel: string } },
   ): Promise<void> => {
     const adapter = (opts.imAdapters ?? []).find((a) => a.channel === target.channel);
     if (!adapter) return;
@@ -281,6 +281,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               { id: `pause:${msg.requestId}`, label: 'Pause approvals' },
             ],
         } : {}),
+        ...(msg.ask ? { ask: msg.ask } : {}),
         ...(msg.inputAction ? { inputAction: msg.inputAction } : {}),
       });
       if (msg.requestId) {
@@ -304,9 +305,17 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     configuredChats,
     sendToChat: (t, card) => sendToChat(t, {
       ...card,
-      // Ask cards get the native reply box on channels that have one (Feishu
-      // form) — the on-card twin of the local dialog's "Type something".
-      ...(card.askOptions ? { inputAction: { id: `askinput:${card.requestId}`, placeholder: 'Answer in your own words (ticked boxes are included)', submitLabel: 'Send' } } : {}),
+      // Ask cards: channels with a native input (Feishu form) get ONE submit.
+      // multi → the form submit IS the Submit (id = asksubmit:<rid>): typed
+      // text and ticked boxes travel together, no second button (live
+      // feedback: Submit + Send side by side read as two competing actions).
+      // single → typed text answers directly (askinput:<rid>).
+      ...(card.askOptions ? {
+        ask: { question: (askContexts.get(card.requestId)?.question) ?? '', ...(askContexts.get(card.requestId)?.header ? { header: askContexts.get(card.requestId)!.header } : {}), options: card.askOptions, multiSelect: Boolean(card.askMulti) },
+        inputAction: card.askMulti
+          ? { id: `asksubmit:${card.requestId}`, placeholder: 'Type something (optional — sent with your ticks)', submitLabel: 'Submit' }
+          : { id: `askinput:${card.requestId}`, placeholder: 'Type your own answer', submitLabel: 'Send' },
+      } : {}),
     }),
     isMuted: (key) => muted || (sessions.get(key)?.muted ?? false),
     hasWebClients: () => events.size() > 0,
@@ -323,12 +332,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         const ask = renderAskCard(req.input);
         // ask.question (not a re-extraction from req.input) — renderAskCard
         // already validated it; a single source of truth (review Minor 5).
-        if (ask) return { title: ask.title, body: ask.body, askOptions: ask.options, askQuestion: ask.question, askMulti: ask.multiSelect };
+        if (ask) return { title: ask.title, body: ask.body, askOptions: ask.options, askQuestion: ask.question, ...(ask.header ? { askHeader: ask.header } : {}), askMulti: ask.multiSelect };
       }
       return renderApprovalCard({ toolName: req.toolName, input: req.input });
     },
     graceSec: () => Math.max(cfg.approvals?.approvalGraceSec ?? 10, 0),
-    onPending: ({ key, cwd, requestId, title, body, toolName, askOptions, askQuestion }) => {
+    onPending: ({ key, cwd, requestId, title, body, toolName, askOptions, askQuestion, askHeader, askMulti }) => {
       // Desktop ping FIRST — this notification is for the person AT this
       // machine, so it must be immediate (the IM card's grace delay exists to
       // spare the phone when you answer at the keyboard — delaying the local
@@ -345,7 +354,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         );
       }
       if (askOptions && askQuestion) {
-        askContexts.set(requestId, { question: askQuestion, options: askOptions });
+        askContexts.set(requestId, { question: askQuestion, ...(askHeader ? { header: askHeader } : {}), options: askOptions, multiSelect: Boolean(askMulti) });
         askRequestIds.add(requestId); // Task 9 review Minor 4: survives the button-click's askContexts consumption, so onResolved can still tell this was an ask card
         // Task 9 review Important: an AskUserQuestion card must NOT reach the
         // dashboard. /ws/events' onAction only understands generic approve/deny

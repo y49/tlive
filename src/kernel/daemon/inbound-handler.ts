@@ -33,12 +33,12 @@ export interface InboundHandlerDeps {
    *  no side effect. Used to validate an `ask:` click BEFORE consuming, so a
    *  malformed/out-of-range index doesn't eat the context out from under a
    *  legit follow-up click (review Minor 1/2). */
-  peekAskContext: (requestId: string) => { question: string; options: AskOption[] } | undefined;
+  peekAskContext: (requestId: string) => { question: string; header?: string; options: AskOption[]; multiSelect?: boolean } | undefined;
   /** Returns + clears the pending AskUserQuestion context for a requestId
    *  (single-use; Task 9). Populated by the permission router's onPending,
    *  consumed here once a click is validated (`ask:`/`asksubmit:`), or
    *  unconditionally on `askskip:` (discarded either way). */
-  takeAskContext: (requestId: string) => { question: string; options: AskOption[] } | undefined;
+  takeAskContext: (requestId: string) => { question: string; header?: string; options: AskOption[]; multiSelect?: boolean } | undefined;
   /** Multi-select checkbox state (Task 10) — per-requestId picks toggled by
    *  `asktoggle:`, read/cleared by `asksubmit:`, also freed on `askskip:` and
    *  (by the caller's onResolved) on any other resolution — never leaks past
@@ -169,10 +169,14 @@ export class InboundHandler {
       // yielding to the event loop guarantees this click's toggle edits are
       // all registered ahead of any settlement edit a later message could
       // trigger.
+      // Feishu 真机反馈:toggle 后输入框消失 —— edit 时必须带上 ask 布局 +
+      // inputAction,否则 adapter 按通用 body 重渲,form 就没了。
+      const askPayload = { question: ctx.question, ...(ctx.header ? { header: ctx.header } : {}), options: ctx.options, multiSelect: true };
+      const inputAction = { id: `asksubmit:${rid}`, placeholder: 'Type something (optional — sent with your ticks)', submitLabel: 'Submit' };
       for (const card of this.deps.getAskCards(rid)) {
         const adapter = this.deps.imBy(card.channel as IMChannel);
         if (!adapter) continue;
-        void this.deps.queueEdit(rid, () => adapter.edit(card.messageId, { kind: 'card', title: card.title, body: card.body, buttons }));
+        void this.deps.queueEdit(rid, () => adapter.edit(card.messageId, { kind: 'card', title: card.title, body: card.body, buttons, ask: askPayload, inputAction }));
       }
       return;
     }
@@ -189,10 +193,14 @@ export class InboundHandler {
         return;
       }
       const picked = this.deps.askSelection.selected(rid);
-      if (!picked.length) return;
+      // 单一 Submit:飞书 form 提交把输入框文本作为 formText 一并带来 ——
+      // 勾选 + 文本合并成一个答案;两者皆空才是无操作(不允许空答案)。
+      const typed = env.formText?.trim();
+      if (!picked.length && !typed) return;
       this.deps.takeAskContext(rid); // valid submit — now consume (single-use)
       this.deps.askSelection.clear(rid); // free the selection, no leak
-      if (!this.deps.permissionRouter.answer(rid, false, buildAskAnswerMessage(ctx.question, picked.map((i) => ctx.options[i].label)))) {
+      const labels = [...picked.map((i) => ctx.options[i].label), ...(typed ? [typed] : [])];
+      if (!this.deps.permissionRouter.answer(rid, false, buildAskAnswerMessage(ctx.question, labels))) {
         await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
       }
       return;

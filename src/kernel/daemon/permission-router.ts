@@ -27,7 +27,7 @@ export interface PermissionRouterDeps {
   /** Render the approval card body from the normalized request. askOptions/
    *  askQuestion/askMulti are the AskUserQuestion branch's extras (Task 9/10):
    *  absent for every other tool. */
-  renderCard: (req: { toolName: string; input: unknown }) => { title: string; body: string; askOptions?: AskOption[]; askQuestion?: string; askMulti?: boolean };
+  renderCard: (req: { toolName: string; input: unknown }) => { title: string; body: string; askOptions?: AskOption[]; askQuestion?: string; askHeader?: string; askMulti?: boolean };
   /** Fired when a card is created & sent (session enters waiting-approval).
    *  `key` and `cwd` are carried as two separate, explicit fields — never
    *  collapse them back into one. `key` is the session's registry identity
@@ -35,7 +35,7 @@ export interface PermissionRouterDeps {
    *  directory, threaded through only for the registry's display field
    *  (label = basename(cwd)). Conflating them here is exactly the bug this
    *  split fixes (see resolveKey in bootstrap.ts). */
-  onPending?: (p: { key: string; cwd: string; requestId: string; title: string; body: string; toolName: string; askOptions?: AskOption[]; askQuestion?: string }) => void;
+  onPending?: (p: { key: string; cwd: string; requestId: string; title: string; body: string; toolName: string; askOptions?: AskOption[]; askQuestion?: string; askHeader?: string; askMulti?: boolean }) => void;
   /** Fired when the request resolves (answered / timed out / deferred after a card). Same key/cwd split as onPending.
    *  message:带理由的拒绝所携带的文本(引用回复而来)—— 供回写区分
    *  `Denied` 与 `Denied with guidance`。 */
@@ -86,7 +86,7 @@ export class PermissionRouter {
     if (targets.length === 0 && !this.deps.hasWebClients()) return { decision: 'defer' };
 
     const requestId = randomUUID();
-    const { title, body, askOptions, askQuestion, askMulti } = this.deps.renderCard({ toolName: opts.toolName, input: opts.input });
+    const { title, body, askOptions, askQuestion, askHeader, askMulti } = this.deps.renderCard({ toolName: opts.toolName, input: opts.input });
     const result = await new Promise<{ decision: Decision; message?: string }>((resolve) => {
       this.pending.set(requestId, {
         resolve,
@@ -111,6 +111,8 @@ export class PermissionRouter {
         key: opts.key, cwd: opts.cwd, requestId, title, body, toolName: opts.toolName,
         ...(askOptions ? { askOptions } : {}),
         ...(askQuestion ? { askQuestion } : {}),
+        ...(askHeader ? { askHeader } : {}),
+        ...(askMulti ? { askMulti } : {}),
       });
       // IM 卡走 grace:开火时 pending 还在才发。cancel()/answer() 都先 delete
       // 再 resolve,所以这一句就是权威判据,不需要额外的取消令牌。

@@ -45,8 +45,15 @@ function buttonType(id: string): 'primary' | 'danger' | 'default' {
  *  Header gets the `blue` template only while the card is actionable, so a
  *  settled (edited) card visually steps back. */
 export function buildCard(out: CardMessage): object {
-  const elements: object[] = [...mdToFeishuElements(out.body)];
-  if (out.buttons?.length) {
+  // Ask cards get a dedicated layout (terminal-style: bold question, options
+  // with dim descriptions) instead of the generic numbered-list body — the
+  // buttons already carry the labels, so the generic list read as duplication
+  // (live feedback: "样式太丑,没有排版").
+  const elements: object[] = out.ask ? askElements(out.ask) : [...mdToFeishuElements(out.body)];
+  // The form submit replaces a same-id plain button (multi-select Submit):
+  // one submit total — typed text and ticked boxes travel together.
+  const buttons = out.inputAction ? out.buttons?.filter((b) => b.id !== out.inputAction!.id) : out.buttons;
+  if (buttons?.length) {
     const btn = (b: { id: string; label: string }): object => ({
       tag: 'button',
       text: { tag: 'plain_text', content: b.label },
@@ -55,8 +62,8 @@ export function buildCard(out: CardMessage): object {
     });
     // Two buttons per row via column_set — a flat stack of full-width buttons
     // reads like a wall for ask cards with many options.
-    for (let i = 0; i < out.buttons.length; i += 2) {
-      const pair = out.buttons.slice(i, i + 2);
+    for (let i = 0; i < buttons.length; i += 2) {
+      const pair = buttons.slice(i, i + 2);
       elements.push({
         tag: 'column_set',
         columns: pair.map((b) => ({
@@ -101,12 +108,26 @@ export function buildCard(out: CardMessage): object {
       ? {
           header: {
             title: { tag: 'plain_text', content: out.title },
-            ...(out.buttons?.length || out.inputAction ? { template: 'blue' } : {}),
+            ...(buttons?.length || out.inputAction ? { template: 'blue' } : {}),
           },
         }
       : {}),
     body: { elements },
   };
+}
+
+/** Terminal-style ask layout: bold question, options as "label — description"
+ *  lines. No numbers for multi (the checkbox buttons carry the labels);
+ *  numbered for single so the "1. label" buttons have an anchor. */
+function askElements(ask: NonNullable<CardMessage extends { kind: 'card' } ? CardMessage['ask'] : never>): object[] {
+  const els: object[] = [];
+  els.push(...mdToFeishuElements(`**${ask.question}**`));
+  const lines = ask.options.map((o, i) => {
+    const label = ask.multiSelect ? `**${o.label}**` : `**${i + 1}. ${o.label}**`;
+    return o.description ? `${label} — ${o.description}` : label;
+  });
+  els.push(...mdToFeishuElements(lines.join('\n')));
+  return els;
 }
 
 export class FeishuAdapter implements IMAdapter {

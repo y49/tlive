@@ -236,8 +236,8 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const r = await pending as { kind: string; decision?: string; message?: string };
     expect(r.kind).toBe('hook.permission.result');
     expect(r.decision).toBe('deny');
-    expect(r.message).toContain('Answer: Blue');
-    expect(r.message).toContain('"Pick a color?": "Blue"');
+    expect(r.message).toContain(']: Blue');
+    expect(r.message).toContain('[Answered Pick a color?]: Blue');
   });
 
   it('Skip passes through with an allow decision and no message (local terminal answers)', async () => {
@@ -750,7 +750,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
 
       const r = await pending as { kind: string; decision?: string; message?: string };
       expect(r.decision).toBe('deny');
-      expect(r.message).toContain('Answer: Red, Blue');
+      expect(r.message).toContain(']: Red, Blue');
 
       const lastEdit = edits.at(-1)!;
       const title = (lastEdit.msg as { title?: string }).title ?? '';

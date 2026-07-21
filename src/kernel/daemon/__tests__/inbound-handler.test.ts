@@ -152,7 +152,7 @@ describe('InboundHandler', () => {
     const [rid, approved, message] = permAnswer.mock.calls[0];
     expect(rid).toBe('req-9');
     expect(approved).toBe(false);
-    expect(message).toContain('Answer: Blue');
+    expect(message).toContain(']: Blue');
   });
 
   it('ask:<id>:<idx> replies with the stale-card notice when the context is gone (already answered/stale) — not a silent no-op', async () => {
@@ -186,7 +186,7 @@ describe('InboundHandler', () => {
     const [rid, approved, message] = permAnswer.mock.calls[0];
     expect(rid).toBe('req-9');
     expect(approved).toBe(false);
-    expect(message).toContain('Answer: Blue');
+    expect(message).toContain(']: Blue');
   });
 
   it('ask:<id>: (empty index) is a no-op, not a silent pick of option 0 — Number("") === 0 (review Minor 2)', async () => {
@@ -346,7 +346,7 @@ describe('InboundHandler', () => {
     const [rid, approved, message] = permAnswer.mock.calls[0];
     expect(rid).toBe('req-1');
     expect(approved).toBe(false);
-    expect(message).toContain('Answer: Red, Blue');
+    expect(message).toContain(']: Red, Blue');
     expect(askSelection.selected('req-1')).toEqual([]); // freed, no leak
     expect(store.peekAskContext('req-1')).toBeUndefined(); // consumed
   });
@@ -490,7 +490,7 @@ describe('quoting a live ASK card = free-form answer (the remote "Type something
     await h.handle(envelope({ text: 'a warm orange, actually', replyToMessageId: 'card-msg-1' }));
     expect(answers).toHaveLength(1);
     expect(answers[0].approved).toBe(false);
-    expect(answers[0].message).toContain('Answer: a warm orange, actually');
+    expect(answers[0].message).toContain(']: a warm orange, actually');
     expect(answers[0].message).toContain('Nothing failed');
     expect(store.peekAskContext('req-1')).toBeUndefined(); // consumed, single-use
   });
@@ -509,7 +509,7 @@ describe('quoting a live ASK card = free-form answer (the remote "Type something
     deps.askSelection.toggle('req-1', 1); // Telegram ticked
     const h = new InboundHandler(deps);
     await h.handle(envelope({ text: 'and email please', replyToMessageId: 'card-msg-1' }));
-    expect(answers[0].message).toContain('Answer: Telegram, and email please');
+    expect(answers[0].message).toContain(']: Telegram, and email please');
   });
 });
 
@@ -538,7 +538,7 @@ describe('native input box submits (Feishu form → formText)', () => {
     deps.askSelection.toggle('req-1', 0);
     const h = new InboundHandler(deps);
     await h.handle(envelope({ text: 'askinput:req-1', formText: 'and email' }));
-    expect(answers[0].message).toContain('Answer: Feishu, and email');
+    expect(answers[0].message).toContain(']: Feishu, and email');
     expect(store.peekAskContext('req-1')).toBeUndefined(); // consumed
   });
 

@@ -12,7 +12,7 @@
 // 的做法)。措辞是这套机制唯一的软肋 —— 措辞差 agent 就会重问一遍。
 
 export interface AskOption { label: string; description?: string }
-export interface AskCard { title: string; body: string; question: string; options: AskOption[]; multiSelect: boolean }
+export interface AskCard { title: string; body: string; question: string; header?: string; options: AskOption[]; multiSelect: boolean }
 
 interface RawAsk {
   questions?: Array<{
@@ -36,16 +36,13 @@ export function renderAskCard(input: unknown): AskCard | null {
   const header = q.header ? `*${q.header}*\n\n` : '';
   const lines = options.map((o, i) => `**${i + 1}.** ${o.label}${o.description ? ` — ${o.description}` : ''}`);
   const multiSelect = Boolean(q.multiSelect);
-  // The local CC dialog always offers a free-form "Type something" escape
-  // hatch — the remote card must advertise its equivalent (quote-reply) or
-  // remote users think the listed options are the whole universe.
-  const hint = multiSelect
-    ? '*Tap to toggle, Submit to send — or reply to this card to answer in your own words (any ticked boxes are included).*'
-    : '*Tap a button — or reply to this card to answer in your own words.*';
+  // No free-text hint here: channels advertise their own path (Feishu has an
+  // on-card input box; Telegram appends its quote-reply hint in the adapter).
   return {
     title: 'Question',
-    body: `${header}${q.question}\n\n${lines.join('\n')}\n\n${hint}`,
+    body: `${header}${q.question}\n\n${lines.join('\n')}`,
     question: q.question,
+    ...(q.header ? { header: q.header } : {}),
     options,
     multiSelect,
   };
@@ -73,14 +70,19 @@ export function askMultiButtons(requestId: string, options: AskOption[], selecte
  *  synthetic JSON 手拼(而非整体 JSON.stringify)是为了在 "key": "value" 之间
  *  留一个空格——像真实 AskUserQuestionOutput 的通常格式化,而非压缩 JSON。 */
 export function buildAskAnswerMessage(question: string, selected: string[]): string {
+  // v3 (2026-07-21): mimic CC's NATIVE answer feedback instead of inventing a
+  // synthetic JSON CC has never produced. Mined from the installed 2.1.216
+  // binary: local answers reach the agent as
+  //   `The user answered: [Answered <label>]: <answer>. You can now continue
+  //    with these answers in mind.`
+  // and CC's own system prompt says "[AskUserQuestion]: is the user's answer
+  // to a question the agent surfaced — treat it as direct user intent." The
+  // old invented AskUserQuestionOutput shape was the bug (user-reported).
   const answer = selected.join(', ');
-  const value = selected.length > 1 ? selected : selected[0];
-  const synthetic = `{${JSON.stringify(question)}: ${JSON.stringify(value)}}`;
   return (
-    `Nothing failed — the user ANSWERED this question remotely (tlive card); the deny is just the transport.\n` +
-    `Answer: ${answer}\n` +
-    `Equivalent AskUserQuestionOutput: ${synthetic}\n` +
-    `Continue the task using this answer. Do not call AskUserQuestion again for this question.`
+    `Nothing failed — the question was answered remotely via tlive; this deny is only the transport.\n` +
+    `The user answered: [Answered ${question}]: ${answer}\n` +
+    `You can now continue with these answers in mind. Do not call AskUserQuestion again for this question.`
   );
 }
 
@@ -88,6 +90,6 @@ export function buildAskAnswerMessage(question: string, selected: string[]): str
  *  picking, "不知道当时选择的什么了"). Extracts the Answer line back out of the
  *  deny message — single source of truth with buildAskAnswerMessage. */
 export function extractAskAnswer(message: string): string | null {
-  const m = /^Answer: (.*)$/m.exec(message);
+  const m = /\]: (.*)$/m.exec(message);
   return m ? m[1] : null;
 }
