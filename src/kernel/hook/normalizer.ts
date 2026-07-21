@@ -1,16 +1,22 @@
-export type HookEventName =
-  | 'post-tool-use'
-  | 'stop'
-  | 'notification'
-  | 'user-prompt-submit'
-  | 'session-start'
-  | 'session-end'
-  | 'post-tool-use-failure'
-  | 'stop-failure'
-  | 'subagent-start'
-  | 'subagent-stop'
-  | 'permission-request'
-  | 'permission-denied';
+/** Single source of truth for shim event names. The plugin's hooks.json, the
+ *  CLI usage line, and the docs are all checked against this list by the
+ *  consistency tests (plugin-consistency.test.ts) — extend it here first. */
+export const HOOK_EVENT_NAMES = [
+  'post-tool-use',
+  'stop',
+  'notification',
+  'user-prompt-submit',
+  'session-start',
+  'session-end',
+  'post-tool-use-failure',
+  'stop-failure',
+  'subagent-start',
+  'subagent-stop',
+  'permission-request',
+  'permission-denied',
+] as const;
+
+export type HookEventName = (typeof HOOK_EVENT_NAMES)[number];
 
 export type HookVendor = 'claude' | 'codex';
 

@@ -10,6 +10,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { request } from '../../kernel/ipc/client.js';
 import {
+  HOOK_EVENT_NAMES,
   parseHookInput,
   permissionRequestDecisionOut,
   sessionStartOut,
@@ -44,7 +45,9 @@ async function readStdin(): Promise<unknown> {
   try { return s ? JSON.parse(s) : {}; } catch { return {}; }
 }
 
-const USAGE = 'Usage: tlive hook [--codex] <permission-request|permission-denied|post-tool-use|stop|notification|user-prompt-submit|session-start|session-end|post-tool-use-failure|stop-failure>\n';
+// Generated from the canonical event list so it can never drift again
+// (the old hand-written line had already lost subagent-start/subagent-stop).
+const USAGE = `Usage: tlive hook [--codex] <${HOOK_EVENT_NAMES.join('|')}>\n`;
 
 // 窗口计算已下沉到 config 层(三方共用,见 kernel/config/window.ts);
 // 保留 re-export 以免动既有调用点。

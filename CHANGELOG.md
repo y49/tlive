@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Added — hook consistency checks (the "doctor", CI edition)
+
+- New consistency tests lock three surfaces together: the plugin's
+  `hooks.json` ↔ the shim's canonical event list (`HOOK_EVENT_NAMES` in
+  `normalizer.ts`, now the single runtime source of truth; handler coverage is
+  compile-time via the exhaustive switch) ↔ the config block shipped in
+  `docs/manual-hooks.md` (parsed and deep-compared, not just mentioned). A
+  guard also asserts every hook stays a **synchronous** command hook except
+  `Stop` — an accidental `async: true` on the gating hook would silently kill
+  remote approvals (only sync command hooks may return decisions, per CC docs).
+- **Plugin version discipline is now enforced**: both bundled `plugin.json`
+  files must be in lockstep, and any change under `plugins/**` fails the suite
+  until the version is bumped and `node scripts/plugin-lock.mjs --update`
+  refreshes `plugins/.content-lock.json` — closing the "changed the plugin,
+  forgot to bump, users stay on a stale cache" incident class for good.
+- The `tlive hook` usage line is now generated from the event list (the
+  hand-written one had already drifted: it was missing
+  `subagent-start`/`subagent-stop`).
+
 ### Added — `safe` auto-approve to cut card volume for autonomous runs
 
 - **`approvals.autoApprove: "safe"`** (default `"readonly"`, unchanged) auto-runs
