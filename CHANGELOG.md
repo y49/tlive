@@ -39,6 +39,20 @@ All notable changes to this project will be documented in this file.
   keyboard first.
 - Command replies (`/perm`, `/trust`, `/safe`, `/help`, unknown) are now English.
 
+### Fixed — Feishu inbound had never actually worked
+
+- The lark SDK's `EventDispatcher.parse` **flattens** the event payload to
+  `{...header, ...event}` before invoking handlers — `message`/`sender` (and
+  `action`/`context` for card callbacks) live at the top level. Both handlers
+  read a `.event` wrapper instead: every inbound text message crashed with
+  `Cannot read properties of undefined (reading 'message')` (visible as
+  "invoke event failed" in the daemon log) and card button taps were a silent
+  no-op behind optional chaining. Found live when a quote-reply to a continue
+  card did nothing. Both handlers now read the flattened shape (wrapped shape
+  still tolerated), and the test fixtures — which had encoded the wrong shape,
+  same lesson as Plan 14's excerpt corpus — now use the real producer shape,
+  plus a `parent_id → replyToMessageId` regression test.
+
 ### Fixed — Windows groundwork (static audit; no Windows hardware yet)
 
 - **`tlive setup` could never have worked on Windows**: `claude`/`codex` are

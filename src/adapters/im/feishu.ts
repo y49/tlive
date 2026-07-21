@@ -99,8 +99,16 @@ export class FeishuAdapter implements IMAdapter {
     dispatcher.register({
       'im.message.receive_v1': async (data: unknown) => {
         if (!this.inboundHandler) return;
-        const d = data as { event: { sender: { sender_id: { user_id: string } }; message: { message_id: string; chat_id: string; content: string; create_time: string; message_type?: string; parent_id?: string; root_id?: string } } };
-        const ev = d.event;
+        // The SDK's EventDispatcher.parse FLATTENS the payload before invoking
+        // handlers: v2 events arrive as {...header, ...event} — `message` and
+        // `sender` live at the TOP level, there is no `.event` wrapper (lib
+        // requestHandle.parse; the wrapped read crashed every inbound text with
+        // "Cannot read properties of undefined (reading 'message')" — feishu
+        // inbound had never actually worked). Tolerate both shapes anyway.
+        type FeishuMsgEvent = { sender: { sender_id: { user_id: string } }; message: { message_id: string; chat_id: string; content: string; create_time: string; message_type?: string; parent_id?: string; root_id?: string } };
+        const raw = data as FeishuMsgEvent & { event?: FeishuMsgEvent };
+        const ev = raw.message ? raw : raw.event;
+        if (!ev?.message) return;
         // Fail-closed: only forward inbound from the configured chat.
         if (!this.opts.chatId || ev.message.chat_id !== this.opts.chatId) return;
         // content is JSON: text → {"text"}; image → {"image_key"}; file → {"file_key","file_name"}
@@ -134,17 +142,22 @@ export class FeishuAdapter implements IMAdapter {
       },
       // Card button taps → synthesize envelope with text = button id ("approve:<id>"/"deny:<id>").
       'card.action.trigger': async (data: unknown) => {
-        const d = data as { event?: { operator?: { user_id?: string; open_id?: string }; action?: { value?: { tlive?: string } }; context?: { open_chat_id?: string; open_message_id?: string } } };
-        const chatId = d.event?.context?.open_chat_id ?? '';
+        // Same flattening as above — operator/action/context sit at the top
+        // level (the `.event` read was a silent no-op thanks to `?.`, so card
+        // buttons never worked either). Tolerate both shapes.
+        type FeishuCardEvent = { operator?: { user_id?: string; open_id?: string }; action?: { value?: { tlive?: string } }; context?: { open_chat_id?: string; open_message_id?: string } };
+        const raw = data as FeishuCardEvent & { event?: FeishuCardEvent };
+        const d = raw.action || raw.context ? raw : (raw.event ?? {});
+        const chatId = d.context?.open_chat_id ?? '';
         // Fail-closed: only forward callbacks from the configured chat.
         if (!this.opts.chatId || chatId !== this.opts.chatId) return;
-        const val = d.event?.action?.value?.tlive;
+        const val = d.action?.value?.tlive;
         if (val && this.inboundHandler) {
           this.inboundHandler({
             channel: 'feishu',
             chatId,
-            userId: d.event?.operator?.user_id ?? d.event?.operator?.open_id ?? '',
-            messageId: d.event?.context?.open_message_id ?? '',
+            userId: d.operator?.user_id ?? d.operator?.open_id ?? '',
+            messageId: d.context?.open_message_id ?? '',
             text: val,
             ts: Date.now(),
           });
