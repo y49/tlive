@@ -48,6 +48,12 @@ All notable changes to this project will be documented in this file.
   (`3 approvals waiting — …`). A multi-agent burst used to pile up dozens of
   separate toasts (measured: 23). Old notify-send without `--print-id`
   degrades to the previous stacking behavior rather than breaking.
+- **One ping per request, not per channel**: with Telegram *and* Feishu (or
+  any multi-channel setup) configured, the router pushes one concurrent card
+  send per channel and each used to fire its own desktop toast for the same
+  request — the dedup is now claimed synchronously before the send await, so
+  a request pings the desktop exactly once no matter how many channels carry
+  its card.
 
 ### Added — desktop notification when a card goes out
 

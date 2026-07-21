@@ -173,6 +173,13 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
 
   // Approval cards sent per requestId — edited to their outcome on resolve (no zombie buttons).
   const sentCards = new Map<string, Array<{ channel: string; messageId: string; title: string; body: string }>>();
+  // Desktop notification dedup — one ping per requestId, claimed SYNCHRONOUSLY
+  // before any await. sentCards can't serve this role: the router pushes one
+  // concurrent sendToChat per configured channel, and every call is still past
+  // its adapter.send await when it consults sentCards — all of them see it
+  // empty and each fired its own toast (user screenshot: every card × number
+  // of channels). Cleared alongside the ask state in onResolved.
+  const desktopPinged = new Set<string>();
 
   /** IM messageId → still-live approval requestId, or null. sentCards is deleted
    *  the instant onResolved fires (see below), so "findable" IS "still live" —
@@ -238,6 +245,22 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     } else {
       const title = msg.title ? `${tag}${msg.title}` : undefined;
       const body = msg.body ?? '';
+      if (msg.requestId && !desktopPinged.has(msg.requestId)) {
+        // Claim BEFORE the send await — concurrent per-channel pushes for the
+        // same request must collapse to one desktop ping (see desktopPinged).
+        // The ping is the at-the-computer pointer to the phone card/dashboard:
+        // background-launched tool calls get NO local dialog while the hook
+        // pends. One notification slot total (the notifier replaces the
+        // previous toast); a burst shows how many are waiting.
+        desktopPinged.add(msg.requestId);
+        const waiting = permissionRouter.pendingCount();
+        desktopNotify(
+          `${title ?? 'Approval pending'}`,
+          waiting > 1
+            ? `${waiting} approvals waiting — answer on your phone or the tlive dashboard`
+            : 'Waiting for approval — answer on your phone or the tlive dashboard',
+        );
+      }
       sent = await adapter.send({
         kind: 'card',
         ...(title ? { title } : {}),
@@ -263,20 +286,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         } : {}),
       });
       if (msg.requestId) {
-        // First card for this request → also ping the desktop (background-
-        // launched tool calls get NO local dialog while the hook pends, so a
-        // user at this machine needs a pointer to the phone card/dashboard).
-        if (!sentCards.has(msg.requestId)) {
-          // One notification slot total (notifier replaces the previous toast);
-          // a burst shows the latest card's title + how many are waiting.
-          const waiting = permissionRouter.pendingCount();
-          desktopNotify(
-            `${title ?? 'Approval pending'}`,
-            waiting > 1
-              ? `${waiting} approvals waiting — answer on your phone or the tlive dashboard`
-              : 'Waiting for approval — answer on your phone or the tlive dashboard',
-          );
-        }
         const list = sentCards.get(msg.requestId) ?? [];
         list.push({ channel: target.channel, messageId: sent.messageId, title: title ?? '', body });
         sentCards.set(msg.requestId, list);
@@ -340,6 +349,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     },
     onResolved: ({ key, cwd, requestId, decision, message }) => {
       askContexts.delete(requestId); // no leak whether consumed by a button click or resolved another way
+      desktopPinged.delete(requestId); // outside the cards guard — a failed send still claimed the ping
       askSelection.clear(requestId); // no leak — covers defer/timeout/local-answer paths that skip asksubmit:/askskip: entirely (Task 10)
       const isAsk = askRequestIds.delete(requestId); // true only for an AskUserQuestion card (Minor 4)
       // Only touch the session view if THIS request still owns the pending slot —

@@ -321,6 +321,36 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     await pending;
   });
 
+  it('two configured chats with a slow adapter still get ONE desktop ping per request (regression: per-chat concurrent pushes each fired a toast)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      approvals: { approvalGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] }, feishu: { appId: 'a', appSecret: 's', chatId: 'f1' } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    const tg = interactiveAdapter('telegram', sent);
+    const fs = interactiveAdapter('feishu', sent);
+    // Slow sends: both per-channel pushes are in flight past their await when
+    // the first completes — the old post-send sentCards guard let both notify.
+    for (const a of [tg, fs]) {
+      const base = a.send.bind(a);
+      a.send = async (out) => { await new Promise((r) => setTimeout(r, 20)); return base(out); };
+    }
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [tg, fs], desktopNotifier: (title, body) => notes.push({ title, body }) });
+    const sock = join(tmp, 'daemon.sock');
+    const pending = request(
+      { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'touch /x' }, timeoutSec: 60 },
+      { socketPath: sock, timeoutMs: 10_000 },
+    );
+    await new Promise((r) => setTimeout(r, 150));
+    expect(sent).toHaveLength(2); // one card per channel…
+    expect(notes).toHaveLength(1); // …but a single desktop ping
+    const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+    tg.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: card.buttons!.find((b) => b.id.startsWith('approve:'))!.id, ts: 0 });
+    await pending;
+  });
+
   it('the settled card keeps its body — you can still see WHAT was approved (live feedback)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },
