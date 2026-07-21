@@ -33,6 +33,7 @@ const baseDeps = (over: Partial<InboundHandlerDeps> = {}): InboundHandlerDeps =>
     takeLatestContinueId: () => null,
     setMuted: vi.fn(),
     setTrust: vi.fn(),
+    setAutoApprove: vi.fn(),
     addAllowTool: vi.fn(),
     resolveReply: () => undefined,
     sessionInfo: () => undefined,
@@ -120,6 +121,15 @@ describe('InboundHandler', () => {
     const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter([]), setMuted }));
     await h.handle(envelope({ text: '/perm off' }));
     expect(setMuted).toHaveBeenCalledWith(true);
+  });
+
+  it('/safe on|off toggles auto-approve', async () => {
+    const setAutoApprove = vi.fn();
+    const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter([]), setAutoApprove }));
+    await h.handle({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'm1', text: '/safe on', ts: 0 });
+    expect(setAutoApprove).toHaveBeenCalledWith(true);
+    await h.handle({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'm2', text: '/safe off', ts: 0 });
+    expect(setAutoApprove).toHaveBeenCalledWith(false);
   });
 
   it('/trust on calls setTrust(true), /trust off calls setTrust(false)', async () => {

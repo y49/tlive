@@ -10,6 +10,8 @@
 // Sensitive-path flagging (.env/.ssh/*.key) and high-entropy long-string masking are
 // deliberately out of scope (trusted-user audience).
 
+import { riskHits } from './risk.js';
+
 export interface RenderRequest {
   toolName: string;
   input: unknown;
@@ -26,24 +28,11 @@ export function maskSecrets(s: string): string {
     .replace(/("(?:\w*(?:token|key|secret|password|auth)\w*)"\s*:\s*")[^"]+/gi, '$1***');
 }
 
-const RISKY: Array<{ re: RegExp; name: string }> = [
-  { re: /\brm\s+-[rf]/, name: 'rm -rf' },
-  { re: /\bsudo\b/, name: 'sudo' },
-  { re: /\bcurl\b[^\n]*\|\s*(?:sh|bash)/, name: 'curl | sh' },
-  { re: /\bwget\b[^\n]*\|\s*(?:sh|bash)/, name: 'wget | sh' },
-  { re: /:\(\)\s*\{/, name: 'fork bomb' },
-  { re: /\bmkfs\b/, name: 'mkfs' },
-  { re: /\bdd\s+if=/, name: 'dd' },
-  { re: /\bchmod\s+(?:-R\s+)?[0-7]*7{2,}/, name: 'chmod 777' },
-  { re: /authorized_keys/, name: 'authorized_keys' },
-  { re: /\bgit\s+push\b[^\n]*(?:--force|-f)\b/, name: 'git push --force' },
-  { re: /\beval\b/, name: 'eval' },
-  { re: />\s*\/dev\/sd/, name: 'write to disk' },
-];
-
-/** 命中的高危模式点名(而非笼统"risky"),让审批者一眼看到危险在哪。 */
+/** 命中的高危模式点名(而非笼统"risky"),让审批者一眼看到危险在哪。
+ *  模式清单在 risk.ts —— 与 PolicyEngine 的 never-auto-allow 守卫共用一份,
+ *  确保"卡上标红的"和"任何模式都拒绝自动放行的"永远是同一个集合。 */
 function riskFlag(command: string): string {
-  const hits = RISKY.filter((r) => r.re.test(command)).map((r) => r.name);
+  const hits = riskHits(command);
   return hits.length ? `\n⚠️ **Risky** — ${hits.join(', ')}` : '';
 }
 

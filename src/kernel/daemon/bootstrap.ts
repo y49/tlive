@@ -142,7 +142,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   inboxSweeper.unref();
 
   let muted = false;
-  const policyState: PolicyState = { trustUntilRevoked: false, allowTools: new Set<string>() };
+  const policyState: PolicyState = {
+    trustUntilRevoked: false,
+    allowTools: new Set<string>(),
+    autoApprove: cfg.approvals?.autoApprove === 'safe' ? 'safe' : 'readonly',
+  };
 
   const configuredChats = (): PermChat[] => {
     const out: PermChat[] = [];
@@ -287,7 +291,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     isMuted: (key) => muted || (sessions.get(key)?.muted ?? false),
     hasWebClients: () => events.size() > 0,
     policyDecide: (req) => {
-      const d = policyDecide({ toolName: req.toolName, permissionMode: req.permissionMode }, policyState);
+      const d = policyDecide({ toolName: req.toolName, input: req.input, permissionMode: req.permissionMode }, policyState);
       if (d.decision === 'allow') console.log(`[policy] auto-allow ${req.toolName} (${d.reason})`); // 审计
       return d;
     },
@@ -636,6 +640,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     takeLatestContinueId: () => { const id = latestContinueId; latestContinueId = null; return id; },
     setMuted: (m: boolean) => { muted = m; },
     setTrust: (t: boolean) => { policyState.trustUntilRevoked = t; },
+    setAutoApprove: (safe: boolean) => { policyState.autoApprove = safe ? 'safe' : 'readonly'; },
     addAllowTool: (tool: string) => { policyState.allowTools?.add(tool); },
     peekAskContext: (rid: string) => askContexts.get(rid),
     takeAskContext: (rid: string) => {

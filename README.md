@@ -272,7 +272,17 @@ Quote-reply any session message to type into that session.
     // desktop notification (Linux notify-send) when a card goes out —
     // background tool calls render no local dialog while the hook pends, so
     // this is the at-the-computer pointer to the phone card / dashboard
-    "desktopNotify": true     // default true; silent no-op without notify-send
+    "desktopNotify": true,    // default true; silent no-op without notify-send
+    // how much auto-approves without a card:
+    //  "readonly" (default) — only Read/Glob/Grep; everything else asks
+    //  "safe"               — also auto-allow routine ops (non-dangerous Bash,
+    //                         edits to non-sensitive paths); dangerous ops
+    //                         (rm -rf, sudo, curl|sh, sensitive-path writes…),
+    //                         MCP/unknown tools, and AskUserQuestion still ask.
+    // Cuts the card volume for autonomous / agent-driven runs where there's no
+    // local dialog. Toggle live with /safe on|off. Never crosses the danger
+    // floor — only /trust on auto-allows dangerous ops.
+    "autoApprove": "readonly"
   },
   "allowedSenders": [{ "channel": "telegram", "userId": "42" }]  // optional
 }

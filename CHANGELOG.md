@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Added — `safe` auto-approve to cut card volume for autonomous runs
+
+- **`approvals.autoApprove: "safe"`** (default `"readonly"`, unchanged) auto-runs
+  routine operations without a card — non-dangerous Bash, edits to
+  non-sensitive paths — while dangerous ops (`rm -rf`, `sudo`, `curl|sh`,
+  writes to `.env`/`.ssh`/`/etc`…), MCP/unknown tools, and `AskUserQuestion`
+  still ask. This matters for autonomous / agent-driven runs where CC renders
+  no local dialog and every tool call would otherwise card your phone. The
+  danger floor is a single shared list (`risk.ts`, also what stamps the ⚠️ on
+  cards) that **no config can lower** — only an explicit `/trust on` auto-allows
+  dangerous ops. Toggle live with **`/safe on|off`**. Where a local dialog does
+  render (attended / foreground), local-first is unchanged: dialog and card run
+  in parallel, first answer wins, grace suppresses the card if you answer at the
+  keyboard first.
+- Command replies (`/perm`, `/trust`, `/safe`, `/help`, unknown) are now English.
+
 ### Added — desktop notification when a card goes out
 
 - **A background-launched tool call gets no local approval dialog while the

@@ -228,7 +228,15 @@ IM 命令:`/perm on|off`(静音)、`/trust on|off`、`/help`。
     "approvalGraceSec": 10,   // 默认 10 秒,0 = 关闭
     // 审批卡发出时在 daemon 本机弹桌面通知(Linux notify-send)——后台命令
     // hook 挂起期间 CC 不弹本地框,这是"人在电脑前"指向手机卡/dashboard 的入口
-    "desktopNotify": true     // 默认 true;无 notify-send 时静默降级
+    "desktopNotify": true,    // 默认 true;无 notify-send 时静默降级
+    // 多少操作不发卡直接自动放行:
+    //  "readonly"(默认)—— 只放行 Read/Glob/Grep,其余都问
+    //  "safe"          —— 额外放行日常操作(非危险 Bash、非敏感路径的编辑);
+    //                     危险操作(rm -rf/sudo/curl|sh/敏感路径写入…)、
+    //                     MCP/未知工具、AskUserQuestion 仍然发卡
+    // 用于自主/agent 驱动、没有本地框的场景减少卡量。可用 /safe on|off 实时切换。
+    // 绝不越过危险地板——只有 /trust on 才会自动放行危险操作。
+    "autoApprove": "readonly"
   },
   "allowedSenders": [{ "channel": "telegram", "userId": "42" }]  // 可选
 }

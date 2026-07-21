@@ -22,6 +22,8 @@ export interface InboundHandlerDeps {
   setMuted: (muted: boolean) => void;
   /** Toggle the trust switch (auto-allow all until off). */
   setTrust: (trusted: boolean) => void;
+  /** Toggle `safe` auto-approve (auto-allow non-dangerous ops; `/safe on|off`). */
+  setAutoApprove: (safe: boolean) => void;
   /** Grant "always allow <tool>" (in-memory). */
   addAllowTool: (tool: string) => void;
   /** Read-only lookup of the pending AskUserQuestion context for a requestId —
@@ -310,19 +312,25 @@ export class InboundHandler {
   private async runCommand(env: IncomingEnvelope, cmd: NonNullable<ReturnType<typeof parseImCommand>>): Promise<void> {
     switch (cmd.kind) {
       case 'perm':
-        this.deps.setMuted(!cmd.enabled); // /perm on ⇒ 通知开 ⇒ 不静音
-        await this.reply(env, { kind: 'text', text: `通知已${cmd.enabled ? '开启' : '静音'}` });
+        this.deps.setMuted(!cmd.enabled); // /perm on ⇒ notifications on ⇒ not muted
+        await this.reply(env, { kind: 'text', text: `Notifications ${cmd.enabled ? 'on' : 'muted'}` });
         return;
       case 'trust':
         this.deps.setTrust(cmd.enabled);
-        await this.reply(env, { kind: 'text', text: `审批已${cmd.enabled ? '暂停(自动放行)' : '恢复'}` });
+        await this.reply(env, { kind: 'text', text: `Approvals ${cmd.enabled ? 'paused (everything auto-allowed)' : 'resumed'}` });
+        return;
+      case 'safe':
+        this.deps.setAutoApprove(cmd.enabled);
+        await this.reply(env, { kind: 'text', text: cmd.enabled
+          ? 'Safe auto-approve ON — routine ops run without a card; dangerous ops, MCP/unknown tools, and questions still ask.'
+          : 'Safe auto-approve OFF — back to asking for everything except read-only tools.' });
         return;
       case 'help':
-        await this.reply(env, { kind: 'text', text: '/perm on|off — 开启/静音通知\n/trust on|off — 暂停/恢复审批(自动放行)\n/help — 本帮助\n\n引用某条会话消息并回复文本 → 直接发入该终端(需 tlive run 包裹)\n单个活跃会话时,直接发文本即可' });
+        await this.reply(env, { kind: 'text', text: '/perm on|off — notifications on/mute\n/trust on|off — pause/resume approvals (auto-allow all)\n/safe on|off — auto-allow routine ops, still ask for dangerous/unknown ones\n/help — this help\n\nReply to a session message with text → injected into that terminal (needs a tlive run wrapper)\nWith a single active session, just send text' });
         return;
       case 'unknown':
       default:
-        await this.reply(env, { kind: 'text', text: '未知命令,试 /help。' });
+        await this.reply(env, { kind: 'text', text: 'Unknown command — try /help.' });
     }
   }
 
