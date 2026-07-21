@@ -24,4 +24,9 @@ describe('parseImCommand (v2.1: perm/help/trust)', () => {
     expect(parseImCommand('/trust off')).toEqual({ kind: 'trust', enabled: false });
     expect(parseImCommand('/trust')).toEqual({ kind: 'unknown', name: 'trust' });
   });
+  it('parses /desktop on|off — desktop toasts are switchable independently of IM cards', () => {
+    expect(parseImCommand('/desktop on')).toEqual({ kind: 'desktop', enabled: true });
+    expect(parseImCommand('/desktop off')).toEqual({ kind: 'desktop', enabled: false });
+    expect(parseImCommand('/desktop')).toEqual({ kind: 'unknown', name: 'desktop' });
+  });
 });

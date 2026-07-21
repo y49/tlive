@@ -88,6 +88,11 @@ All notable changes to this project will be documented in this file.
   (`3 approvals waiting — …`). A multi-agent burst used to pile up dozens of
   separate toasts (measured: 23). Old notify-send without `--print-id`
   degrades to the previous stacking behavior rather than breaking.
+- **`/desktop on|off`** — runtime toggle for the desktop toasts, fully
+  independent of IM cards (the toast is the at-the-computer surface, the card
+  is the phone; `/perm` still mutes the whole remote layer). Config
+  `approvals.desktopNotify` seeds the default; the command flips it live, no
+  restart. Turning it off also clears any live toast.
 - **Windows and macOS get the notification too** — the core value is calling
   you back to the terminal, and that needs no click support. win32: PowerShell
   WinRT toast (built into Win10/11; Tag replace keeps the single slot,

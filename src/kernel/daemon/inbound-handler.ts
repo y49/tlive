@@ -24,6 +24,9 @@ export interface InboundHandlerDeps {
   setTrust: (trusted: boolean) => void;
   /** Toggle `safe` auto-approve (auto-allow non-dangerous ops; `/safe on|off`). */
   setAutoApprove: (safe: boolean) => void;
+  /** Toggle desktop toasts at runtime (`/desktop on|off`) — independent of IM
+   *  cards: the toast is the at-the-computer surface, the card is the phone. */
+  setDesktopNotify: (enabled: boolean) => void;
   /** Grant "always allow <tool>" (in-memory). */
   addAllowTool: (tool: string) => void;
   /** Read-only lookup of the pending AskUserQuestion context for a requestId —
@@ -324,6 +327,10 @@ export class InboundHandler {
         await this.reply(env, { kind: 'text', text: cmd.enabled
           ? 'Safe auto-approve ON — routine ops run without a card; dangerous ops, MCP/unknown tools, and questions still ask.'
           : 'Safe auto-approve OFF — back to asking for everything except read-only tools.' });
+        return;
+      case 'desktop':
+        this.deps.setDesktopNotify(cmd.enabled);
+        await this.reply(env, { kind: 'text', text: `Desktop notifications ${cmd.enabled ? 'on' : 'off'} (IM cards unaffected)` });
         return;
       case 'help':
         await this.reply(env, { kind: 'text', text: '/perm on|off — notifications on/mute\n/trust on|off — pause/resume approvals (auto-allow all)\n/safe on|off — auto-allow routine ops, still ask for dangerous/unknown ones\n/help — this help\n\nReply to a session message with text → injected into that terminal (needs a tlive run wrapper)\nWith a single active session, just send text' });

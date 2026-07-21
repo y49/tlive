@@ -204,8 +204,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // webUrl is assigned when the web server starts below; clicks only happen
   // after bootstrap completes, so the lazy read is safe. Web disabled → no
   // URL to open; the click is a silent no-op (toast still informs).
+  // Runtime gate (config seeds it; /desktop on|off flips it live). The
+  // notifier itself is created enabled so a config-off start can still be
+  // switched on without a restart.
+  let desktopOn = cfg.approvals?.desktopNotify ?? true;
   const desktop = opts.desktopNotifier ?? createDesktopNotifier({
-    enabled: cfg.approvals?.desktopNotify ?? true,
     action: {
       label: 'Open dashboard',
       run: () => {
@@ -330,7 +333,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       {
         const waiting = permissionRouter.pendingCount();
         const where = configuredChats().length > 0 ? 'answer on your phone or the tlive dashboard' : 'answer on the tlive dashboard';
-        void desktop.ping(
+        if (desktopOn) void desktop.ping(
           `${sessionTag(key)}${title}`,
           waiting > 1 ? `${waiting} approvals waiting — ${where}` : `Waiting for approval — ${where}`,
         );
@@ -671,6 +674,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     setMuted: (m: boolean) => { muted = m; },
     setTrust: (t: boolean) => { policyState.trustUntilRevoked = t; },
     setAutoApprove: (safe: boolean) => { policyState.autoApprove = safe ? 'safe' : 'readonly'; },
+    setDesktopNotify: (enabled: boolean) => { desktopOn = enabled; if (!enabled) void desktop.clear(); },
     addAllowTool: (tool: string) => { policyState.allowTools?.add(tool); },
     peekAskContext: (rid: string) => askContexts.get(rid),
     takeAskContext: (rid: string) => {
