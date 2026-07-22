@@ -15,10 +15,13 @@ Guide the user through tlive setup. Execute in order, showing each result:
    b. Have the user send the bot a message and confirm the reply arrives
       (proves the inbound path, not just the config).
    c. Ask the user to check the bot's command menu shows
-      /perm /trust /safe /desktop /help (a stale client cache → close and
+      /perm /trust /safe /help (a stale client cache → close and
       reopen the chat).
-   d. Desktop notifications: explain they fire on pending approvals
-      (`tlive desktop on|off` toggles them live).
+   d. Desktop notifications: explain they fire on the computer only for things
+      that need you to act — a pending approval, or the idle "waiting for your
+      input" nudge. A finished turn and tool failures stay on IM (a per-turn
+      toast would flood the screen). Toggle with `tlive desktop on|off` — it's
+      a machine-local control, so there is no IM command for it.
    e. Hand out the dashboard via `tlive url`; suggest opening it once.
    f. Offer optional next steps: add another channel (continue below), or
       stop here.

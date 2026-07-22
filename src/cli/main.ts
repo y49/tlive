@@ -20,7 +20,7 @@ Usage: tlive <subcommand> [args]   |   tlive --version
   perm on|off        remote notifications on / mute (same switch as IM /perm)
   trust on|off       pause approvals (auto-allow ALL) / resume (IM /trust)
   safe on|off        auto-allow routine ops, still ask for dangerous (IM /safe)
-  desktop on|off     desktop toasts on this computer (IM /desktop)
+  desktop on|off     desktop toasts on this computer (no IM command — machine-local)
 `;
 
 function printVersion(): void {

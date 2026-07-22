@@ -116,6 +116,20 @@ describe('InboundHandler', () => {
     expect(msgs).toHaveLength(0);
   });
 
+  it('/help renders a styled card (inline-code command chips), not bare text, and never lists the retired /desktop', async () => {
+    const msgs: Array<{ kind: string; text?: string }> = [];
+    const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter(msgs) }));
+    await h.handle(envelope({ text: '/help' }));
+    expect(msgs).toHaveLength(1);
+    const card = msgs[0] as { kind: string; title?: string; body?: string };
+    expect(card.kind).toBe('card');
+    expect(card.title).toContain('commands');
+    expect(card.body).toContain('`/perm on|off`');
+    expect(card.body).toContain('`/trust on|off`');
+    expect(card.body).toContain('`/safe on|off`');
+    expect(card.body).not.toContain('/desktop'); // machine-local, dropped from IM
+  });
+
   it('/perm off mutes', async () => {
     const setMuted = vi.fn();
     const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter([]), setMuted }));

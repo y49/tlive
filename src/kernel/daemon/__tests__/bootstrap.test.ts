@@ -307,7 +307,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
     const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
     const pending = request(
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'touch /x' }, timeoutSec: 60 },
@@ -334,7 +334,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
     const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
     const pending = request(
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
@@ -363,7 +363,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
     const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
     const off = await request({ kind: 'daemon.set', key: 'desktop', enabled: false }, { socketPath: sock, timeoutMs: 2000 });
     expect(off.kind).toBe('ack');
@@ -397,7 +397,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     }
     const notes: Array<{ title: string; body: string }> = [];
     const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [tg, fs], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [tg, fs], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
     const pending = request(
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'touch /x' }, timeoutSec: 60 },
@@ -409,6 +409,37 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
     tg.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: card.buttons!.find((b) => b.id.startsWith('approve:'))!.id, ts: 0 });
     await pending;
+  });
+
+  it('a finished turn does NOT pop a desktop banner (per-turn completion would flood) — it stays on IM only', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const infos: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, clear: async () => {}, info: async (title, body) => { infos.push({ title, body }); } } });
+    // Drive the real, shared continueBroker directly (same instance the CC Stop
+    // and Codex turn/completed paths both funnel through). Floating request with
+    // a tiny window; we only assert the notification surfaces, not the reply.
+    void h.continueBroker.request({ cwd: '/w', context: 'Finished building the feature', timeoutSec: 1 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(infos).toHaveLength(0); // no desktop flood on completion…
+    expect(sent).toHaveLength(1);  // …still surfaced on IM
+    expect((sent[0] as { title?: string }).title).toContain('Turn finished');
+  });
+
+  it('info-level notify ("Claude is waiting for your input") fires a desktop banner; error-level (failures) does NOT', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    const infos: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { ping: async () => {}, clear: async () => {}, info: async (title, body) => { infos.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
+    expect(infos).toHaveLength(1);
+    expect(infos[0].body).toContain('waiting for your input');
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'error', message: 'Bash failed: boom' }, { socketPath: sock, timeoutMs: 2000 });
+    expect(infos).toHaveLength(1); // error-level stays on IM/dashboard, never the at-the-keyboard banner
   });
 
   it('the settled card keeps its body — you can still see WHAT was approved (live feedback)', async () => {

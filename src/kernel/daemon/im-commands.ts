@@ -1,12 +1,16 @@
 // src/kernel/daemon/im-commands.ts
 //
-// v2.1 command set: /perm, /trust, /safe, /desktop, /help. (/use removed — no workspace binding.)
+// IM command set: /perm, /trust, /safe, /help. Each earns its place by being
+// something you'd actually fire FROM the phone. /desktop was dropped: it toggles
+// a toast on the daemon's OWN machine, so you'd flip it AT that machine — it
+// lives on only as the CLI `tlive desktop on|off` (and the daemon.set 'desktop'
+// wire behind it), never as an IM command. (/use was removed earlier — no
+// workspace binding.)
 
 export type ImCommand =
   | { kind: 'perm'; enabled: boolean }
   | { kind: 'trust'; enabled: boolean }
   | { kind: 'safe'; enabled: boolean }
-  | { kind: 'desktop'; enabled: boolean }
   | { kind: 'help' }
   | { kind: 'unknown'; name: string };
 
@@ -26,10 +30,6 @@ export function parseImCommand(text: string): ImCommand | null {
     case 'safe':
       if (args[0] === 'on') return { kind: 'safe', enabled: true };
       if (args[0] === 'off') return { kind: 'safe', enabled: false };
-      return { kind: 'unknown', name: cmd };
-    case 'desktop':
-      if (args[0] === 'on') return { kind: 'desktop', enabled: true };
-      if (args[0] === 'off') return { kind: 'desktop', enabled: false };
       return { kind: 'unknown', name: cmd };
     case 'help':
       return { kind: 'help' };

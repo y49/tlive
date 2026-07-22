@@ -1,7 +1,8 @@
 // src/cli/subcommands/toggle.ts
 //
 // At-the-terminal entrance to the daemon's runtime toggles — the same state
-// the IM commands (/perm /trust /safe /desktop) flip. Direct IPC, no AI in
+// the IM commands (/perm /trust /safe) flip — plus `desktop`, which is
+// CLI-only (machine-local toast, no IM command). Direct IPC, no AI in
 // the loop (the CC plugin's slash commands are prompts by design; this is
 // the one-liner they can shell out to).
 import { request } from '../../kernel/ipc/client.js';

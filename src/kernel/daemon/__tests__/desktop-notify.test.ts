@@ -102,6 +102,43 @@ describe('createDesktopNotifier', () => {
     expect(argsSeen[1].some((a) => a.startsWith('--replace-id='))).toBe(false);
   });
 
+  it('info() fires a fresh one-shot banner (transient, --print-id, but NEVER --replace-id — it is not the waiting slot)', async () => {
+    const { procs, ss } = fakeProcs();
+    const n = createDesktopNotifier({ ...linux, streamSpawner: ss });
+    await n.info('myproj · Turn finished', 'Built the feature');
+    expect(procs).toHaveLength(1);
+    expect(procs[0].cmd).toBe('notify-send');
+    expect(procs[0].args).toContain('--hint=int:transient:1');
+    expect(procs[0].args).toContain('--print-id');
+    expect(procs[0].args).toContain('myproj · Turn finished');
+    expect(procs[0].args).toContain('Built the feature');
+    expect(procs[0].args.some((a) => a.startsWith('--replace-id='))).toBe(false);
+  });
+
+  it('info() lives outside the waiting slot: it neither replaces the pending toast nor gets closed by clear()', async () => {
+    const { procs, ss } = fakeProcs();
+    const gdbus = vi.fn(async () => '');
+    const n = createDesktopNotifier({ ...linux, streamSpawner: ss, spawner: gdbus });
+    await n.ping('a', 'b');            // waiting slot → id 42
+    await n.info('c', 'd');            // FYI banner → id 43, independent
+    expect(procs[1].args.some((a) => a.startsWith('--replace-id='))).toBe(false); // did NOT replace 42
+    expect(procs[0].killed).toBe(false); // the waiting waiter is untouched by an info banner
+    await n.clear();                   // closes the WAITING slot (42), not the banner
+    const [, args] = gdbus.mock.calls[0] as unknown as [string, string[]];
+    expect(args).toContain('42');
+    expect(args).not.toContain('43');
+  });
+
+  it('info() wires the click-to-open action just like ping()', async () => {
+    const { procs, ss } = fakeProcs();
+    const run = vi.fn();
+    const n = createDesktopNotifier({ ...linux, streamSpawner: ss, action: { label: 'Open dashboard', run } });
+    await n.info('myproj · Turn finished', 'done');
+    expect(procs[0].args).toContain('--action=answer=Open dashboard');
+    procs[0].emit('answer');
+    expect(run).toHaveBeenCalledOnce();
+  });
+
   it('is a silent no-op when disabled / on unsupported platforms / without notify-send', async () => {
     const { procs, ss } = fakeProcs();
     const sp = vi.fn(async () => '');
@@ -125,6 +162,15 @@ describe('darwin backend (osascript, ping-only)', () => {
     await n.clear();
     expect(calls).toHaveLength(1); // not scriptable on macOS
   });
+
+  it('info() is just another display notification (no slot on macOS)', async () => {
+    const calls: Array<[string, string[]]> = [];
+    const sp = async (cmd: string, args: string[]) => { calls.push([cmd, args]); return ''; };
+    const n = createDesktopNotifier({ platform: 'darwin', hasCmd: () => true, spawner: sp });
+    await n.info('myproj · Turn finished', 'done');
+    expect(calls[0][0]).toBe('osascript');
+    expect(calls[0][1][1]).toContain('display notification "done" with title "myproj · Turn finished"');
+  });
 });
 
 describe('win32 backend (PowerShell WinRT toast)', () => {
@@ -140,6 +186,16 @@ describe('win32 backend (PowerShell WinRT toast)', () => {
     await n.clear();
     const clearScript = calls[1][1][calls[1][1].length - 1];
     expect(clearScript).toContain("History.Remove('tlive', 'tlive'");
+  });
+
+  it('info() uses a distinct tag so clearing the waiting slot never nukes the FYI banner', async () => {
+    const calls: Array<[string, string[]]> = [];
+    const sp = async (cmd: string, args: string[]) => { calls.push([cmd, args]); return ''; };
+    const n = createDesktopNotifier({ platform: 'win32', hasCmd: () => true, spawner: sp });
+    await n.info('myproj · Turn finished', 'done');
+    const script = calls[0][1][calls[0][1].length - 1];
+    expect(script).toContain("$t.Tag = 'tlive-info'");
+    expect(script).not.toContain("$t.Tag = 'tlive'");
   });
 
   it('degrades to a no-op without powershell on PATH', async () => {

@@ -18,6 +18,12 @@
 //   cannot touch a toast that already expired into the tray).
 // - clear(): when the last pending approval resolves, the live toast is
 //   actively closed over DBus (CloseNotification) — answered means gone.
+// - info(): a SEPARATE one-shot banner for the idle "waiting for your input"
+//   nudge — low-frequency and actionable (a per-turn "finished" toast would
+//   flood, so completion stays on IM, not here). It lives outside the waiting
+//   slot entirely — never replaces or clears the approval toast, just
+//   self-expires. That's why the "exists exactly while you're needed"
+//   invariant above is about ping()/clear() only.
 // - CLICK TO ANSWER: an optional `action` renders a button on the toast
 //   (freedesktop actions via `notify-send --action`); clicking it runs the
 //   callback — bootstrap wires it to open the tlive dashboard, so the toast
@@ -93,13 +99,19 @@ const defaultStreamSpawner: StreamSpawner = (cmd, args) => {
 };
 
 export interface DesktopNotifier {
-  /** Show (or replace) THE tlive notification. */
+  /** Show (or replace) THE interactive waiting toast (a pending approval).
+   *  Single-slot + cleared by clear() — "exists exactly while you're needed". */
   ping(title: string, body: string): Promise<void>;
-  /** Close the live notification — nothing is waiting anymore. */
+  /** Close the waiting toast — nothing is waiting anymore. */
   clear(): Promise<void>;
+  /** Fire a one-shot banner for a low-frequency, genuinely-actionable poke —
+   *  the idle "waiting for your input" nudge (NOT per-turn completion, which
+   *  would flood). Independent of the waiting slot: a fresh toast every time,
+   *  never replaces or clears ping()'s slot, and self-expires (transient). */
+  info(title: string, body: string): Promise<void>;
 }
 
-const NOOP: DesktopNotifier = { ping: async () => {}, clear: async () => {} };
+const NOOP: DesktopNotifier = { ping: async () => {}, clear: async () => {}, info: async () => {} };
 
 export function createDesktopNotifier(opts?: {
   enabled?: boolean;
@@ -173,6 +185,24 @@ export function createDesktopNotifier(opts?: {
         id,
       ]);
     }),
+    // A fresh FYI toast: NOT enqueued and NOT tracked — it never touches
+    // lastId/liveProc, so it can't race the waiting slot's id capture and the
+    // waiting slot's clear() can't close it. No --replace-id (each is its own
+    // toast); transient + 15s expiry means it self-reaps. The action (open
+    // dashboard) is wired like ping's, but with no supersede/generation dance
+    // — each info toast is independent and short-lived.
+    info: async (title, body) => {
+      const proc = ss('notify-send', [
+        '--app-name=tlive',
+        '--expire-time=15000',
+        '--hint=int:transient:1',
+        '--print-id',
+        ...(action ? [`--action=answer=${action.label}`] : []),
+        title,
+        body,
+      ]);
+      if (action) proc.onLine((line) => { if (line.trim() === 'answer') action.run(); });
+    },
   };
 }
 
@@ -180,11 +210,13 @@ export function createDesktopNotifier(opts?: {
  *  scriptable replace/close for Notification Center entries. */
 function darwinNotifier(sp: Spawner): DesktopNotifier {
   const esc = (v: string): string => v.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const show = (title: string, body: string): Promise<string | null> =>
+    sp('osascript', ['-e', `display notification "${esc(body)}" with title "${esc(title)}"`]);
   return {
-    ping: async (title, body) => {
-      await sp('osascript', ['-e', `display notification "${esc(body)}" with title "${esc(title)}"`]);
-    },
+    ping: async (title, body) => { await show(title, body); },
     clear: async () => { /* not scriptable on macOS */ },
+    // No slot on macOS anyway — an FYI banner is just another display notification.
+    info: async (title, body) => { await show(title, body); },
   };
 }
 
@@ -194,7 +226,7 @@ function darwinNotifier(sp: Spawner): DesktopNotifier {
  *  render toasts. Spec-derived — pending real-hardware verification. */
 const WIN_APP_ID = String.raw`{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe`;
 
-export function win32ToastScript(title: string, body: string): string {
+export function win32ToastScript(title: string, body: string, tag = 'tlive'): string {
   const esc = (v: string): string =>
     v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
   return [
@@ -202,8 +234,8 @@ export function win32ToastScript(title: string, body: string): string {
     `$xml = New-Object Windows.Data.Xml.Dom.XmlDocument`,
     `$xml.LoadXml('<toast><visual><binding template="ToastGeneric"><text>${esc(title)}</text><text>${esc(body)}</text></binding></visual></toast>')`,
     `$t = [Windows.UI.Notifications.ToastNotification]::new($xml)`,
-    `$t.Tag = 'tlive'`,
-    `$t.Group = 'tlive'`,
+    `$t.Tag = '${tag}'`,
+    `$t.Group = '${tag}'`,
     `[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('${WIN_APP_ID}').Show($t)`,
   ].join('; ');
 }
@@ -221,5 +253,8 @@ function win32Notifier(sp: Spawner): DesktopNotifier {
   return {
     ping: async (title, body) => { await run(win32ToastScript(title, body)); },
     clear: async () => { await run(win32ClearScript()); },
+    // A distinct Tag/Group so clear() (which removes the 'tlive' waiting slot)
+    // never nukes an FYI banner; info toasts replace each other, not the slot.
+    info: async (title, body) => { await run(win32ToastScript(title, body, 'tlive-info')); },
   };
 }

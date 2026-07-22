@@ -50,9 +50,12 @@ approve/deny/reply-to-continue. The daemon auto-starts with new sessions
   routine ops (non-dangerous Bash, non-sensitive edits) — the danger floor
   (rm -rf, sudo, .env/.ssh writes…) still asks and no config can lower it.
   `/trust on` pauses approvals entirely (high risk — pair with allowedSenders).
-- Every runtime switch has two entrances flipping the same state: IM commands
-  (/perm /trust /safe /desktop) and the CLI (`tlive perm|trust|safe|desktop
-  on|off`). `/desktop` governs the local toast on the daemon's machine only.
+- Runtime switches flip the same state from either entrance: IM commands
+  (/perm /trust /safe) and the CLI (`tlive perm|trust|safe on|off`). The desktop
+  toast is CLI-only (`tlive desktop on|off`) — it lives on the daemon's own
+  machine, so it has no IM command. It fires only for things that need you to
+  act: a pending approval, or the idle "waiting for your input" nudge. A
+  finished turn stays on IM (a per-turn toast would flood the screen).
 - Vendor-side `permissions.deny` always wins; tlive never overrides it.
 
 ## First-time onboarding

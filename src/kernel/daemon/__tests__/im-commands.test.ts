@@ -24,9 +24,13 @@ describe('parseImCommand (v2.1: perm/help/trust)', () => {
     expect(parseImCommand('/trust off')).toEqual({ kind: 'trust', enabled: false });
     expect(parseImCommand('/trust')).toEqual({ kind: 'unknown', name: 'trust' });
   });
-  it('parses /desktop on|off — desktop toasts are switchable independently of IM cards', () => {
-    expect(parseImCommand('/desktop on')).toEqual({ kind: 'desktop', enabled: true });
-    expect(parseImCommand('/desktop off')).toEqual({ kind: 'desktop', enabled: false });
-    expect(parseImCommand('/desktop')).toEqual({ kind: 'unknown', name: 'desktop' });
+  it('parses /safe on|off', () => {
+    expect(parseImCommand('/safe on')).toEqual({ kind: 'safe', enabled: true });
+    expect(parseImCommand('/safe off')).toEqual({ kind: 'safe', enabled: false });
+    expect(parseImCommand('/safe')).toEqual({ kind: 'unknown', name: 'safe' });
+  });
+  it('/desktop is NOT an IM command — the toast is a machine-local control (CLI `tlive desktop` only)', () => {
+    expect(parseImCommand('/desktop on')).toEqual({ kind: 'unknown', name: 'desktop' });
+    expect(parseImCommand('/desktop off')).toEqual({ kind: 'unknown', name: 'desktop' });
   });
 });

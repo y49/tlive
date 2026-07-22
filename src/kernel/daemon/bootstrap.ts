@@ -348,11 +348,13 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // dedup by construction. Answering (any channel, incl. locally within
       // grace) drops pendingCount to 0 → onResolved clears the toast.
       {
+        // Body speaks to the person AT this machine (not "answer on your
+        // phone" — they're right here): the Linux toast carries an "Open
+        // dashboard" button, and the dashboard is the local answer surface.
         const waiting = permissionRouter.pendingCount();
-        const where = configuredChats().length > 0 ? 'answer on your phone or the tlive dashboard' : 'answer on the tlive dashboard';
         if (desktopOn) void desktop.ping(
           `${sessionTag(key)}${title}`,
-          waiting > 1 ? `${waiting} approvals waiting — ${where}` : `Waiting for approval — ${where}`,
+          waiting > 1 ? `${waiting} approvals waiting — click to open and answer` : 'Approval needed — click to open and answer',
         );
       }
       if (askOptions && askQuestion) {
@@ -438,6 +440,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     // Thread the continue requestId into the session so a dashboard client can reply to it.
     events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key: req.cwd, cwd: req.cwd, status: 'waiting-input', continueId: req.requestId }) });
     if (muted || sessions.get(req.cwd)?.muted) return;
+    // A finished turn is NOT desktop-notified: it fires on every turn and
+    // requires no action, so a per-turn toast just floods the screen (live
+    // feedback). Completion stays on IM only — a chat log stacks fine. The
+    // desktop toast is reserved for things that genuinely need you to act:
+    // pending approvals (ping) and the idle "waiting for your input" nudge.
     for (const t of configuredChats()) {
       // requestId 不进显示文本:回复路由走 replyToMessageId,不解析正文。
       const raw = req.context === TURN_FINISHED_SENTINEL ? '' : req.context;
@@ -544,8 +551,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // the server must listen on the SAME endpoint, not a filesystem path.
   const sockPath = daemonSocketPath(opts.home);
   /** One set of runtime toggles for every entrance — IM commands
-   *  (/perm|/trust|/safe|/desktop) and the CLI (`tlive perm on` … via
-   *  daemon.set IPC) flip the SAME state. */
+   *  (/perm|/trust|/safe) and the CLI (`tlive perm on` … via daemon.set IPC)
+   *  flip the SAME state. `desktop` is CLI-only (`tlive desktop on|off`): the
+   *  toast lives on the daemon's machine, so it has no IM command. */
   const runtimeSet = (key: 'perm' | 'trust' | 'safe' | 'desktop', enabled: boolean): void => {
     if (key === 'perm') muted = !enabled; // /perm on ⇒ notifications on ⇒ not muted
     else if (key === 'trust') policyState.trustUntilRevoked = enabled;
@@ -654,6 +662,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               ? req.message
               : req.level === 'error' ? `⚠️ ${req.message}` : req.message;
             await Promise.all(configuredChats().map((t) => sendToChat(t, { text, cwd: key })));
+            // "等待你" FYI banner on the machine, for info-level only. The only
+            // info-level notify CC produces (permission_prompt is dropped at the
+            // shim) is "Claude is waiting for your input" — exactly the case a
+            // desktop poke helps. error-level (tool/stop failures) is deliberately
+            // NOT banner'd here: it would be noise at the keyboard; it stays on IM.
+            if (desktopOn && req.level === 'info') void desktop.info(`${sessionTag(key)}Waiting`, req.message);
           }
           events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.message }, key));
           reply({ kind: 'ack' });
@@ -724,7 +738,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     setMuted: (m: boolean) => runtimeSet('perm', !m),
     setTrust: (t: boolean) => runtimeSet('trust', t),
     setAutoApprove: (safe: boolean) => runtimeSet('safe', safe),
-    setDesktopNotify: (enabled: boolean) => runtimeSet('desktop', enabled),
     addAllowTool: (tool: string) => { policyState.allowTools?.add(tool); },
     peekAskContext: (rid: string) => askContexts.get(rid),
     takeAskContext: (rid: string) => {
