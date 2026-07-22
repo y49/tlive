@@ -321,6 +321,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     }),
     isMuted: (key) => muted || (sessions.get(key)?.muted ?? false),
     hasWebClients: () => events.size() > 0,
+    // The desktop approval toast IS an answer path when it can open a dashboard
+    // (its "Open dashboard" button needs a web URL). So muting IM no longer
+    // forces a defer-to-terminal: with desktop on + web enabled, you answer via
+    // the toast → dashboard. (IM ⊥ desktop.)
+    hasLocalAnswerPath: () => desktopOn && webUrl != null,
     policyDecide: (req) => {
       const d = policyDecide({ toolName: req.toolName, input: req.input, permissionMode: req.permissionMode }, policyState);
       if (d.decision === 'allow') console.log(`[policy] auto-allow ${req.toolName} (${d.reason})`); // 审计
@@ -551,11 +556,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // the server must listen on the SAME endpoint, not a filesystem path.
   const sockPath = daemonSocketPath(opts.home);
   /** One set of runtime toggles for every entrance — IM commands
-   *  (/perm|/trust|/safe) and the CLI (`tlive perm on` … via daemon.set IPC)
-   *  flip the SAME state. `desktop` is CLI-only (`tlive desktop on|off`): the
-   *  toast lives on the daemon's machine, so it has no IM command. */
-  const runtimeSet = (key: 'perm' | 'trust' | 'safe' | 'desktop', enabled: boolean): void => {
-    if (key === 'perm') muted = !enabled; // /perm on ⇒ notifications on ⇒ not muted
+   *  (/mute|/trust|/safe) and the CLI (`tlive mute on` … via daemon.set IPC)
+   *  flip the SAME state. `enabled` = "this switch is ON": for `mute`, on = muted.
+   *  `desktop` is CLI-only (`tlive desktop on|off`): the toast lives on the
+   *  daemon's machine and is INDEPENDENT of `mute` (IM ⊥ desktop). */
+  const runtimeSet = (key: 'mute' | 'trust' | 'safe' | 'desktop', enabled: boolean): void => {
+    if (key === 'mute') muted = enabled; // /mute on ⇒ muted (quiet)
     else if (key === 'trust') policyState.trustUntilRevoked = enabled;
     else if (key === 'safe') policyState.autoApprove = enabled ? 'safe' : 'readonly';
     else { desktopOn = enabled; if (!enabled) void desktop.clear(); }
@@ -662,13 +668,14 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               ? req.message
               : req.level === 'error' ? `⚠️ ${req.message}` : req.message;
             await Promise.all(configuredChats().map((t) => sendToChat(t, { text, cwd: key })));
-            // "等待你" FYI banner on the machine, for info-level only. The only
-            // info-level notify CC produces (permission_prompt is dropped at the
-            // shim) is "Claude is waiting for your input" — exactly the case a
-            // desktop poke helps. error-level (tool/stop failures) is deliberately
-            // NOT banner'd here: it would be noise at the keyboard; it stays on IM.
-            if (desktopOn && req.level === 'info') void desktop.info(`${sessionTag(key)}Waiting`, req.message);
           }
+          // "等待你" FYI banner on the machine — INDEPENDENT of IM mute (IM ⊥
+          // desktop): it is gated only by its own `desktopOn` switch. Info-level
+          // only: the sole info-level notify CC produces (permission_prompt is
+          // dropped at the shim) is "Claude is waiting for your input", exactly
+          // the case a desktop poke helps. error-level (tool/stop failures) is
+          // deliberately NOT banner'd — it would be noise at the keyboard; IM only.
+          if (desktopOn && req.level === 'info') void desktop.info(`${sessionTag(key)}Waiting`, req.message);
           events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.message }, key));
           reply({ kind: 'ack' });
           return;
@@ -735,7 +742,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     permissionRouter,
     continueBroker,
     takeLatestContinueId: () => { const id = latestContinueId; latestContinueId = null; return id; },
-    setMuted: (m: boolean) => runtimeSet('perm', !m),
+    setMuted: (m: boolean) => runtimeSet('mute', m),
     setTrust: (t: boolean) => runtimeSet('trust', t),
     setAutoApprove: (safe: boolean) => runtimeSet('safe', safe),
     addAllowTool: (tool: string) => { policyState.allowTools?.add(tool); },

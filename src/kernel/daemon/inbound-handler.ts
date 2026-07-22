@@ -1,6 +1,6 @@
 // src/kernel/daemon/inbound-handler.ts
 //
-// v2.1: SenderGuard 鉴权 + 审批按钮回调 + /perm 静音 + 续跑自由文本。无 workspace/绑定。
+// v2.1: SenderGuard 鉴权 + 审批按钮回调 + /mute 静音(仅 IM)+ 续跑自由文本。无 workspace/绑定。
 
 import type { IncomingEnvelope, IMAdapter, IMChannel, OutgoingMessage } from '../contracts/im-adapter.js';
 import type { PermissionRouter } from './permission-router.js';
@@ -18,7 +18,8 @@ export interface InboundHandlerDeps {
   continueBroker: ContinueBroker;
   /** Returns + clears the most-recent pending continue requestId (single-chat). */
   takeLatestContinueId: () => string | null;
-  /** Toggle global notification mute (`/perm on|off`). */
+  /** Toggle IM notification mute (`/mute on|off`; on = muted). IM only —
+   *  desktop toasts have their own switch. */
   setMuted: (muted: boolean) => void;
   /** Toggle the trust switch (auto-allow all until off). */
   setTrust: (trusted: boolean) => void;
@@ -357,9 +358,9 @@ export class InboundHandler {
 
   private async runCommand(env: IncomingEnvelope, cmd: NonNullable<ReturnType<typeof parseImCommand>>): Promise<void> {
     switch (cmd.kind) {
-      case 'perm':
-        this.deps.setMuted(!cmd.enabled); // /perm on ⇒ notifications on ⇒ not muted
-        await this.reply(env, { kind: 'text', text: `Notifications ${cmd.enabled ? 'on' : 'muted'}` });
+      case 'mute':
+        this.deps.setMuted(cmd.muted); // /mute on ⇒ muted (quiet); /mute off ⇒ notifications on
+        await this.reply(env, { kind: 'text', text: `IM notifications ${cmd.muted ? 'muted' : 'on'}${cmd.muted ? ' (desktop toasts unaffected — toggle at the machine with `tlive desktop`)' : ''}` });
         return;
       case 'trust':
         this.deps.setTrust(cmd.enabled);
@@ -379,14 +380,14 @@ export class InboundHandler {
           kind: 'card',
           title: 'tlive · commands',
           body: [
-            '`/perm on|off` — all notifications on / mute (the master switch: mute silences IM *and* desktop, approvals fall back to the terminal)',
+            '`/mute on|off` — mute / unmute IM notifications (on = quiet)',
             '`/trust on|off` — pause / resume approvals (auto-allow all)',
             '`/safe on|off` — auto-allow routine ops, still ask for dangerous / unknown',
             '`/help` — this help',
             '',
             '**Reply to a session** — quote-reply its message and your text is injected into that terminal (needs a `tlive run` wrapper). With a single active session, just send text.',
             '',
-            'Desktop toasts have their own machine-local switch — `tlive desktop on|off` at the computer — not an IM command.',
+            'IM and desktop are separate: `/mute` only silences IM. Desktop toasts have their own machine-local switch, `tlive desktop on|off` (not an IM command).',
           ].join('\n'),
         });
         return;

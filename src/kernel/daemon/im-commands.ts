@@ -1,14 +1,15 @@
 // src/kernel/daemon/im-commands.ts
 //
-// IM command set: /perm, /trust, /safe, /help. Each earns its place by being
-// something you'd actually fire FROM the phone. /desktop was dropped: it toggles
-// a toast on the daemon's OWN machine, so you'd flip it AT that machine — it
-// lives on only as the CLI `tlive desktop on|off` (and the daemon.set 'desktop'
-// wire behind it), never as an IM command. (/use was removed earlier — no
-// workspace binding.)
+// IM command set: /mute, /trust, /safe, /help. Each earns its place by being
+// something you'd actually fire FROM the phone. `/mute on` = go quiet, `/mute
+// off` = notifications back on (polarity matches /trust /safe: "on" = that mode
+// engaged). It governs IM notifications ONLY — desktop toasts are independent,
+// with their own machine-local `tlive desktop on|off` (no IM command). /desktop
+// was dropped from IM for the same reason (you flip it AT the machine).
+// (/use was removed earlier — no workspace binding.)
 
 export type ImCommand =
-  | { kind: 'perm'; enabled: boolean }
+  | { kind: 'mute'; muted: boolean }
   | { kind: 'trust'; enabled: boolean }
   | { kind: 'safe'; enabled: boolean }
   | { kind: 'help' }
@@ -19,9 +20,9 @@ export function parseImCommand(text: string): ImCommand | null {
   const trimmed = text.trim();
   const [cmd, ...args] = trimmed.slice(1).split(/\s+/);
   switch (cmd) {
-    case 'perm':
-      if (args[0] === 'on') return { kind: 'perm', enabled: true };
-      if (args[0] === 'off') return { kind: 'perm', enabled: false };
+    case 'mute':
+      if (args[0] === 'on') return { kind: 'mute', muted: true };
+      if (args[0] === 'off') return { kind: 'mute', muted: false };
       return { kind: 'unknown', name: cmd };
     case 'trust':
       if (args[0] === 'on') return { kind: 'trust', enabled: true };

@@ -1,13 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { parseImCommand } from '../im-commands';
 
-describe('parseImCommand (v2.1: perm/help/trust)', () => {
-  it('recognizes /perm on|off', () => {
-    expect(parseImCommand('/perm on')).toEqual({ kind: 'perm', enabled: true });
-    expect(parseImCommand('/perm off')).toEqual({ kind: 'perm', enabled: false });
+describe('parseImCommand (mute/help/trust/safe)', () => {
+  it('recognizes /mute on|off — on = muted (quiet), off = notifications on', () => {
+    expect(parseImCommand('/mute on')).toEqual({ kind: 'mute', muted: true });
+    expect(parseImCommand('/mute off')).toEqual({ kind: 'mute', muted: false });
   });
-  it('/perm with bad arg → unknown', () => {
-    expect(parseImCommand('/perm maybe')).toEqual({ kind: 'unknown', name: 'perm' });
+  it('/mute with bad arg → unknown', () => {
+    expect(parseImCommand('/mute maybe')).toEqual({ kind: 'unknown', name: 'mute' });
+  });
+  it('/perm is retired (renamed to /mute) → unknown', () => {
+    expect(parseImCommand('/perm on')).toEqual({ kind: 'unknown', name: 'perm' });
   });
   it('recognizes /help', () => {
     expect(parseImCommand('/help')).toEqual({ kind: 'help' });

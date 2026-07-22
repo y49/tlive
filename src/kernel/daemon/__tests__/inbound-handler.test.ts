@@ -124,17 +124,19 @@ describe('InboundHandler', () => {
     const card = msgs[0] as { kind: string; title?: string; body?: string };
     expect(card.kind).toBe('card');
     expect(card.title).toContain('commands');
-    expect(card.body).toContain('`/perm on|off`');
+    expect(card.body).toContain('`/mute on|off`');
     expect(card.body).toContain('`/trust on|off`');
     expect(card.body).toContain('`/safe on|off`');
     expect(card.body).not.toContain('/desktop'); // machine-local, dropped from IM
   });
 
-  it('/perm off mutes', async () => {
+  it('/mute on mutes, /mute off unmutes (on = quiet)', async () => {
     const setMuted = vi.fn();
     const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter([]), setMuted }));
-    await h.handle(envelope({ text: '/perm off' }));
-    expect(setMuted).toHaveBeenCalledWith(true);
+    await h.handle(envelope({ text: '/mute on' }));
+    expect(setMuted).toHaveBeenLastCalledWith(true);
+    await h.handle(envelope({ text: '/mute off' }));
+    expect(setMuted).toHaveBeenLastCalledWith(false);
   });
 
   it('/safe on|off toggles auto-approve', async () => {

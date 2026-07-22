@@ -51,11 +51,12 @@ approve/deny/reply-to-continue. The daemon auto-starts with new sessions
   (rm -rf, sudo, .env/.ssh writes…) still asks and no config can lower it.
   `/trust on` pauses approvals entirely (high risk — pair with allowedSenders).
 - Runtime switches flip the same state from either entrance: IM commands
-  (/perm /trust /safe) and the CLI (`tlive perm|trust|safe on|off`). The desktop
-  toast is CLI-only (`tlive desktop on|off`) — it lives on the daemon's own
-  machine, so it has no IM command. It fires only for things that need you to
-  act: a pending approval, or the idle "waiting for your input" nudge. A
-  finished turn stays on IM (a per-turn toast would flood the screen).
+  (/mute /trust /safe) and the CLI (`tlive mute|trust|safe on|off`). `/mute on`
+  = go quiet; it silences IM notifications ONLY. The desktop toast is a separate,
+  independent surface (IM ⊥ desktop): CLI-only `tlive desktop on|off`, no IM
+  command, unaffected by `/mute`. It fires only for things that need you to act:
+  a pending approval, or the idle "waiting for your input" nudge. A finished turn
+  stays on IM (a per-turn toast would flood the screen).
 - Vendor-side `permissions.deny` always wins; tlive never overrides it.
 
 ## First-time onboarding

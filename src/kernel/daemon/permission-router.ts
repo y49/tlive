@@ -17,11 +17,17 @@ export interface PermissionRouterDeps {
    *  the single-pick numbered buttons — both are opaque booleans/arrays to
    *  this vendor-neutral layer, it never inspects toolName itself. */
   sendToChat: (target: PermChat, card: { title: string; body: string; requestId: string; toolName: string; cwd: string; askOptions?: AskOption[]; askMulti?: boolean }) => Promise<void>;
-  /** `key` — the session's registry identity (see requestPermission's `key` opt), NOT the real cwd. */
+  /** `key` — the session's registry identity (see requestPermission's `key` opt), NOT the real cwd.
+   *  Mutes the IM card ONLY (desktop toast / dashboard stay live) — it no longer
+   *  defers the whole approval on its own (see requestPermission). */
   isMuted: (key: string) => boolean;
   /** True when at least one dashboard client is connected on /ws/events —
    *  a card can be answered from the web even with zero IM chats. */
   hasWebClients: () => boolean;
+  /** True when the daemon's own machine can surface + answer a card without IM —
+   *  i.e. the desktop toast is on AND can open a dashboard. Lets a muted-IM
+   *  approval still be answered locally instead of deferring to the terminal. */
+  hasLocalAnswerPath: () => boolean;
   /** Vendor-neutral policy: allow (auto) vs ask (send card). Never auto-denies. */
   policyDecide: (req: { toolName: string; input: unknown; permissionMode?: string }) => { decision: 'allow' | 'ask'; reason?: string };
   /** Render the approval card body from the normalized request. askOptions/
@@ -82,10 +88,15 @@ export class PermissionRouter {
     const pd = this.deps.policyDecide({ toolName: opts.toolName, input: opts.input, permissionMode: opts.permissionMode });
     if (pd.decision === 'allow') return { decision: 'allow' };
 
-    if (this.deps.isMuted(opts.key)) return { decision: 'defer' };
+    // Answer-surface gate: fall back to the local terminal (defer) only when
+    // NOBODY can answer remotely. Muting IM (/mute) no longer defers on its own
+    // — it just silences the IM card (see push() below); the desktop toast and
+    // any live dashboard client remain independent answer paths (IM ⊥ desktop).
     const targets = this.deps.configuredChats();
-    // Web-only users still get the card via onPending → /ws/events broadcast.
-    if (targets.length === 0 && !this.deps.hasWebClients()) return { decision: 'defer' };
+    const imUsable = targets.length > 0 && !this.deps.isMuted(opts.key);
+    if (!imUsable && !this.deps.hasWebClients() && !this.deps.hasLocalAnswerPath()) {
+      return { decision: 'defer' };
+    }
 
     const requestId = randomUUID();
     const { title, body, askOptions, askQuestion, askHeader, askMulti } = this.deps.renderCard({ toolName: opts.toolName, input: opts.input });

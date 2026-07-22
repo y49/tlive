@@ -1,16 +1,16 @@
 // src/cli/subcommands/toggle.ts
 //
 // At-the-terminal entrance to the daemon's runtime toggles — the same state
-// the IM commands (/perm /trust /safe) flip — plus `desktop`, which is
+// the IM commands (/mute /trust /safe) flip — plus `desktop`, which is
 // CLI-only (machine-local toast, no IM command). Direct IPC, no AI in
 // the loop (the CC plugin's slash commands are prompts by design; this is
 // the one-liner they can shell out to).
 import { request } from '../../kernel/ipc/client.js';
 
-export type ToggleKey = 'perm' | 'trust' | 'safe' | 'desktop';
+export type ToggleKey = 'mute' | 'trust' | 'safe' | 'desktop';
 
 const CONFIRM: Record<ToggleKey, [on: string, off: string]> = {
-  perm: ['Notifications on', 'Notifications muted'],
+  mute: ['IM notifications muted', 'IM notifications on'],
   trust: ['Approvals paused (everything auto-allowed)', 'Approvals resumed'],
   safe: [
     'Safe auto-approve ON — routine ops run without a card; dangerous ops, MCP/unknown tools, and questions still ask.',

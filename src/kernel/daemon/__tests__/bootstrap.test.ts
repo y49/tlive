@@ -442,6 +442,22 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     expect(infos).toHaveLength(1); // error-level stays on IM/dashboard, never the at-the-keyboard banner
   });
 
+  it('desktop waiting banner is INDEPENDENT of IM mute (IM ⊥ desktop): /mute on silences IM but the desktop info still fires', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const infos: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, clear: async () => {}, info: async (t, b) => { infos.push({ title: t, body: b }); } } });
+    const sock = daemonSocketPath(tmp);
+    await request({ kind: 'daemon.set', key: 'mute', enabled: true }, { socketPath: sock, timeoutMs: 2000 }); // /mute on
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
+    expect(infos).toHaveLength(1); // desktop fires despite the IM mute…
+    expect(sent).toHaveLength(0);  // …IM stays silent
+  });
+
   it('the settled card keeps its body — you can still see WHAT was approved (live feedback)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },

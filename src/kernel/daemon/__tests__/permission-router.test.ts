@@ -8,6 +8,7 @@ const base = (over = {}) => ({
   configuredChats: chats, isMuted: () => false,
   sendToChat: vi.fn().mockResolvedValue(undefined),
   hasWebClients: () => false,
+  hasLocalAnswerPath: () => false,
   policyDecide: askAll, renderCard: card,
   graceSec: () => 0, // existing suites answer synchronously — keep them instant
   ...over,
@@ -69,11 +70,22 @@ describe('PermissionRouter pending lifecycle callbacks', () => {
     expect(done).toEqual([{ key: '/p/foo', cwd: '/p/foo', requestId: id, decision: 'allow' }]);
   });
 
-  it('does not fire onPending when muted (deferred before a card)', async () => {
+  it('muted with NO other answer surface still defers before a card (nothing can answer)', async () => {
     const pend: unknown[] = [];
     const r = new PermissionRouter(base({ isMuted: () => true, onPending: (p: unknown) => pend.push(p) }));
     await r.requestPermission({ key: '/x', cwd: '/x', toolName: 'Bash', input: {} });
     expect(pend).toEqual([]);
+  });
+
+  it('muted WITH a local (desktop) answer path still surfaces via onPending — mute silences the IM card only, not the whole approval (IM ⊥ desktop)', async () => {
+    const pend: unknown[] = [];
+    const send = vi.fn();
+    const r = new PermissionRouter(base({ isMuted: () => true, sendToChat: send, hasLocalAnswerPath: () => true, onPending: (p: unknown) => pend.push(p) }));
+    const p = r.requestPermission({ key: '/x', cwd: '/x', toolName: 'Bash', input: {}, timeoutSec: 0.05 });
+    await Promise.resolve(); await Promise.resolve();
+    expect(pend).toHaveLength(1);        // surfaced on desktop/dashboard, NOT deferred
+    expect(send).not.toHaveBeenCalled(); // …but the IM card is suppressed by mute
+    expect((await p).decision).toBe('defer'); // unanswered here → times out
   });
 
   it('carries key and cwd as two independent fields through onPending/onResolved — never collapses them (Task 5 review, Important)', async () => {
@@ -366,6 +378,7 @@ describe('approval grace gating', () => {
     sendToChat: async (_t: unknown, card: { requestId: string }) => { sent.push(card.requestId); },
     isMuted: () => false,
     hasWebClients: () => false,
+    hasLocalAnswerPath: () => false,
     policyDecide: () => ({ decision: 'ask' as const }),
     renderCard: () => ({ title: 'T', body: 'B' }),
     graceSec: () => graceMs / 1000,
