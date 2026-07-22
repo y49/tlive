@@ -42,8 +42,8 @@ function buttonType(id: string): 'primary' | 'danger' | 'default' {
  *  (2.0 shape), two per column_set row to mirror the TG layout. An
  *  `inputAction` renders a form with a multiline input + submit — the native
  *  "answer in your own words" box (V6.8+, works in 1.0 and 2.0).
- *  Header gets the `blue` template only while the card is actionable, so a
- *  settled (edited) card visually steps back. */
+ *  Header gets the `blue` template only while the card is actionable; an
+ *  informational/settled card steps back to the calmer `wathet` (soft blue). */
 export function buildCard(out: CardMessage): object {
   // Ask cards get a dedicated layout (terminal-style: bold question, options
   // with dim descriptions) instead of the generic numbered-list body — the
@@ -110,9 +110,11 @@ export function buildCard(out: CardMessage): object {
             title: { tag: 'plain_text', content: out.title },
             // Header colour = the card's demand on you at a glance: blue when
             // it needs an action (approval / question buttons or a reply box),
-            // grey when it's just informational (turn-finished, settled). An
-            // approval card going blue→grey on settlement reads as "done".
-            template: buttons?.length || out.inputAction ? 'blue' : 'grey',
+            // the calmer wathet (soft blue) when it's just informational
+            // (turn-finished, settled). An approval card going blue→wathet on
+            // settlement still steps back — wathet is lighter and lifeless-grey
+            // read badly (live feedback: "这个颜色不好看").
+            template: buttons?.length || out.inputAction ? 'blue' : 'wathet',
           },
         }
       : {}),

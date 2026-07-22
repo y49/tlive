@@ -153,10 +153,10 @@ describe('feishu buildCard (schema 2.0)', () => {
     });
   });
 
-  it('omits buttons/form when the card has neither, and uses a grey (informational) header (settled card)', () => {
+  it('omits buttons/form when the card has neither, and uses the calmer wathet (informational) header (settled card)', () => {
     const card = buildCard({ kind: 'card', title: 'Allowed · tlive · Bash', body: 'ls' }) as Card2;
     expect(card.body.elements.some((e) => e.tag === 'column_set' || e.tag === 'form')).toBe(false);
-    expect(card.header!.template).toBe('grey'); // non-actionable → grey (blue is reserved for "needs you")
+    expect(card.header!.template).toBe('wathet'); // non-actionable → wathet (blue is reserved for "needs you")
   });
 
   it('maps button style by intent: approve primary, deny danger, everything else default', () => {
