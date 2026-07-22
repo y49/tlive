@@ -43,7 +43,7 @@ function buttonType(id: string): 'primary' | 'danger' | 'default' {
  *  `inputAction` renders a form with a multiline input + submit — the native
  *  "answer in your own words" box (V6.8+, works in 1.0 and 2.0).
  *  Header gets the `blue` template only while the card is actionable; an
- *  informational/settled card steps back to the calmer `wathet` (soft blue). */
+ *  informational/settled card uses the plain white `default` (no colour bar). */
 export function buildCard(out: CardMessage): object {
   // Ask cards get a dedicated layout (terminal-style: bold question, options
   // with dim descriptions) instead of the generic numbered-list body — the
@@ -110,11 +110,12 @@ export function buildCard(out: CardMessage): object {
             title: { tag: 'plain_text', content: out.title },
             // Header colour = the card's demand on you at a glance: blue when
             // it needs an action (approval / question buttons or a reply box),
-            // the calmer wathet (soft blue) when it's just informational
-            // (turn-finished, settled). An approval card going blue→wathet on
-            // settlement still steps back — wathet is lighter and lifeless-grey
-            // read badly (live feedback: "这个颜色不好看").
-            template: buttons?.length || out.inputAction ? 'blue' : 'wathet',
+            // the plain white `default` when it's just informational
+            // (turn-finished, settled, help). Coloured header bars on info cards
+            // read badly (live feedback: grey and wathet both "不好看" — keep
+            // info cards white); an approval card going blue→default on
+            // settlement still steps back to a quiet white header.
+            template: buttons?.length || out.inputAction ? 'blue' : 'default',
           },
         }
       : {}),

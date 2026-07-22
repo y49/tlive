@@ -379,12 +379,14 @@ export class InboundHandler {
           kind: 'card',
           title: 'tlive · commands',
           body: [
-            '`/perm on|off` — notifications on / mute',
+            '`/perm on|off` — all notifications on / mute (the master switch: mute silences IM *and* desktop, approvals fall back to the terminal)',
             '`/trust on|off` — pause / resume approvals (auto-allow all)',
             '`/safe on|off` — auto-allow routine ops, still ask for dangerous / unknown',
             '`/help` — this help',
             '',
             '**Reply to a session** — quote-reply its message and your text is injected into that terminal (needs a `tlive run` wrapper). With a single active session, just send text.',
+            '',
+            'Desktop toasts have their own machine-local switch — `tlive desktop on|off` at the computer — not an IM command.',
           ].join('\n'),
         });
         return;

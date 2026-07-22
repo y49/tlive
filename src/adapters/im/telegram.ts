@@ -153,7 +153,7 @@ export class TelegramAdapter implements IMAdapter {
     // any number of tlive upgrades until someone overwrites it. Best-effort:
     // a menu is cosmetic, failing to set it must not block the adapter.
     void this.bot.api.setMyCommands([
-      { command: 'perm', description: 'on|off — remote notifications on / mute' },
+      { command: 'perm', description: 'on|off — all notifications on / mute (master switch: IM + desktop)' },
       { command: 'trust', description: 'on|off — pause approvals (auto-allow all) / resume' },
       { command: 'safe', description: 'on|off — auto-allow routine ops, still ask for dangerous' },
       { command: 'help', description: 'help and command list' },
