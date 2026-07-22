@@ -34,13 +34,19 @@ export function renderAskCard(input: unknown): AskCard | null {
   if (options.length < 2) return null;
 
   const header = q.header ? `*${q.header}*\n\n` : '';
-  const lines = options.map((o, i) => `**${i + 1}.** ${o.label}${o.description ? ` — ${o.description}` : ''}`);
   const multiSelect = Boolean(q.multiSelect);
+  // The option buttons already carry the labels, so the in-body list is pure
+  // duplication UNLESS an option has a description worth showing. List only
+  // when at least one description exists; otherwise the body is just the
+  // question (buttons speak for themselves).
+  const hasDesc = options.some((o) => o.description);
+  const lines = options.map((o, i) => `**${i + 1}.** ${o.label}${o.description ? ` — ${o.description}` : ''}`);
+  const body = hasDesc ? `${header}${q.question}\n\n${lines.join('\n')}` : `${header}${q.question}`;
   // No free-text hint here: channels advertise their own path (Feishu has an
   // on-card input box; Telegram appends its quote-reply hint in the adapter).
   return {
     title: 'Question',
-    body: `${header}${q.question}\n\n${lines.join('\n')}`,
+    body,
     question: q.question,
     ...(q.header ? { header: q.header } : {}),
     options,
@@ -63,33 +69,36 @@ export function askMultiButtons(requestId: string, options: AskOption[], selecte
   ];
 }
 
-/** deny 的 message —— agent 读它当答案。措辞要点(真机反馈迭代):CC 把它包进
- *  "Error: …" 甚至 "Stop hook feedback / Denied by PermissionRequest hook" 的
- *  外壳里展示,所以第一句必须自证「没有任何故障、这就是答案」,答案本身
- *  紧跟其后 —— 旧版把来源解释放最前,agent 见 Error+解释就当故障处理。
- *  synthetic JSON 手拼(而非整体 JSON.stringify)是为了在 "key": "value" 之间
- *  留一个空格——像真实 AskUserQuestionOutput 的通常格式化,而非压缩 JSON。 */
-export function buildAskAnswerMessage(question: string, selected: string[]): string {
-  // v3 (2026-07-21): mimic CC's NATIVE answer feedback instead of inventing a
-  // synthetic JSON CC has never produced. Mined from the installed 2.1.216
-  // binary: local answers reach the agent as
-  //   `The user answered: [Answered <label>]: <answer>. You can now continue
-  //    with these answers in mind.`
-  // and CC's own system prompt says "[AskUserQuestion]: is the user's answer
-  // to a question the agent surfaced — treat it as direct user intent." The
-  // old invented AskUserQuestionOutput shape was the bug (user-reported).
-  const answer = selected.join(', ');
-  return (
-    `Nothing failed — the question was answered remotely via tlive; this deny is only the transport.\n` +
-    `The user answered: [Answered ${question}]: ${answer}\n` +
-    `You can now continue with these answers in mind. Do not call AskUserQuestion again for this question.`
-  );
+/** ANSWER an AskUserQuestion the documented + native way: behavior:"allow" with
+ *  updatedInput. Mined from the installed 2.1.216 binary — CC's own submit path
+ *  (`oei`) returns `{behavior:"allow", updatedInput:{...input, answers}}`, then
+ *  the tool runs "without prompting" and CC emits its OWN clean feedback
+ *  (`The user answered: "q"="a". …`). This replaces the old deny+message hack,
+ *  which CC wrapped in an `Error: … Denied by PermissionRequest hook` shell
+ *  (user-reported). `answers` maps question text → answer string (multi-select
+ *  comma-separated). Only questions[0] is handled (renderAskCard flattens the
+ *  batch), so the questions array is reconstructed from the card context. */
+export function buildAskUpdatedInput(
+  ctx: { question: string; header?: string; options: AskOption[]; multiSelect?: boolean },
+  selected: string[],
+): { questions: unknown[]; answers: Record<string, string> } {
+  return {
+    questions: [{
+      question: ctx.question,
+      ...(ctx.header ? { header: ctx.header } : {}),
+      options: ctx.options,
+      multiSelect: Boolean(ctx.multiSelect),
+    }],
+    answers: { [ctx.question]: selected.join(', ') },
+  };
 }
 
 /** The settled card must still show WHAT was answered (user feedback: after
- *  picking, "不知道当时选择的什么了"). Extracts the Answer line back out of the
- *  deny message — single source of truth with buildAskAnswerMessage. */
-export function extractAskAnswer(message: string): string | null {
-  const m = /\]: (.*)$/m.exec(message);
-  return m ? m[1] : null;
+ *  picking, "不知道当时选择的什么了"). Reads the answer back out of the ask
+ *  updatedInput.answers — single source of truth with buildAskUpdatedInput. */
+export function extractAskAnswer(updatedInput: unknown): string | null {
+  const answers = (updatedInput as { answers?: Record<string, unknown> } | null)?.answers;
+  if (!answers || typeof answers !== 'object') return null;
+  const vals = Object.values(answers).filter((v): v is string => typeof v === 'string' && v.trim() !== '');
+  return vals.length ? vals.join('; ') : null;
 }

@@ -122,10 +122,11 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
 /** PermissionRequest decision wire — CC only now (Codex hooks are retired;
  *  app-server companion is the sole Codex integration).
  *  真机验证 allow/deny±message。与本地对话并行,先答先得;{} = 留给用户。
- *  绝不 auto-allow / auto-deny。别发 updatedInput/updatedPermissions/interrupt。 */
-export function permissionRequestDecisionOut(decision: 'allow' | 'deny' | 'defer', reason?: string): object {
+ *  绝不 auto-allow / auto-deny。updatedInput 仅用于 AskUserQuestion 作答
+ *  (allow + {questions, answers},让 CC 把工具当已回答正常跑 —— 见 ask-renderer)。 */
+export function permissionRequestDecisionOut(decision: 'allow' | 'deny' | 'defer', reason?: string, updatedInput?: unknown): object {
   if (decision === 'allow') {
-    return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } };
+    return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow', ...(updatedInput !== undefined ? { updatedInput } : {}) } } };
   }
   if (decision === 'deny') {
     return {

@@ -6,6 +6,17 @@ import { tmpdir } from 'node:os';
 import { bootstrapDaemon, type DaemonHandle } from '../bootstrap';
 import { request, daemonSocketPath } from '../../ipc/client';
 import type { SessionMeta } from '../../ipc/protocol';
+import type { IMAdapter, OutgoingMessage } from '../../contracts/im-adapter';
+
+const recordingAdapter = (sent: OutgoingMessage[]): IMAdapter => ({
+  channel: 'telegram',
+  start: async () => {},
+  stop: async () => {},
+  send: async (o) => { sent.push(o); return { messageId: `m${sent.length}` }; },
+  edit: async () => {},
+  onInbound: () => {},
+  isConnected: () => 'connected',
+});
 
 let tmp: string;
 let h: DaemonHandle;
@@ -103,5 +114,25 @@ describe('parent-session 清场 must be agent-scoped (backgrounded sub-agent app
 
     h.permissionRouter.cancel({ key: 'parent' });
     await Promise.all([sub, stop]);
+  });
+});
+
+describe('continuation card has no on-card input box (quote-reply is the entry)', () => {
+  it('the "Turn finished" card send carries no inputAction (form box removed)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+      approvals: { continueGraceSec: 0, continueWindowSec: 30 },
+    }));
+    const sent: OutgoingMessage[] = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [recordingAdapter(sent)] });
+
+    // Stop long-polls (continue window); fire-and-forget — the card is sent
+    // synchronously when continueBroker registers the request, before the wait.
+    request({ kind: 'hook.continue.request', cwd: '/proj', sessionId: 'sess', context: 'All green.' }, { socketPath: sock, timeoutMs: 300 }).catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 120));
+
+    const card = sent.find((m) => m.kind === 'card' && (m.title ?? '').includes('Turn finished'));
+    expect(card).toBeTruthy();
+    expect((card as { inputAction?: unknown }).inputAction).toBeUndefined();
   });
 });

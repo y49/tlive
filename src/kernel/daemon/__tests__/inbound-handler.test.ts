@@ -141,7 +141,7 @@ describe('InboundHandler', () => {
     expect(setTrust).toHaveBeenCalledWith(false);
   });
 
-  it('ask:<id>:<idx> answers with a deny+message wire carrying the picked option', async () => {
+  it('ask:<id>:<idx> answers with allow + updatedInput.answers carrying the picked option', async () => {
     const permAnswer = vi.fn().mockReturnValue(true); // hit — a live pending
     const h = new InboundHandler(baseDeps({
       ...makeAskStore({ 'req-9': { question: 'Pick a color?', options: [{ label: 'Red' }, { label: 'Blue' }] } }),
@@ -149,10 +149,11 @@ describe('InboundHandler', () => {
     }));
     await h.handle(envelope({ text: 'ask:req-9:1' }));
     expect(permAnswer).toHaveBeenCalledTimes(1);
-    const [rid, approved, message] = permAnswer.mock.calls[0];
+    const [rid, approved, message, updatedInput] = permAnswer.mock.calls[0];
     expect(rid).toBe('req-9');
-    expect(approved).toBe(false);
-    expect(message).toContain(']: Blue');
+    expect(approved).toBe(true); // allow, not deny
+    expect(message).toBeUndefined();
+    expect((updatedInput as { answers: Record<string, string> }).answers['Pick a color?']).toBe('Blue');
   });
 
   it('ask:<id>:<idx> replies with the stale-card notice when the context is gone (already answered/stale) — not a silent no-op', async () => {
@@ -183,10 +184,10 @@ describe('InboundHandler', () => {
 
     await h.handle(envelope({ text: 'ask:req-9:1' })); // the legit follow-up click
     expect(permAnswer).toHaveBeenCalledTimes(1);
-    const [rid, approved, message] = permAnswer.mock.calls[0];
+    const [rid, approved, , updatedInput] = permAnswer.mock.calls[0];
     expect(rid).toBe('req-9');
-    expect(approved).toBe(false);
-    expect(message).toContain(']: Blue');
+    expect(approved).toBe(true);
+    expect((updatedInput as { answers: Record<string, string> }).answers['Pick?']).toBe('Blue');
   });
 
   it('ask:<id>: (empty index) is a no-op, not a silent pick of option 0 — Number("") === 0 (review Minor 2)', async () => {
@@ -343,10 +344,10 @@ describe('InboundHandler', () => {
     }));
     await h.handle(envelope({ text: 'asksubmit:req-1' }));
     expect(permAnswer).toHaveBeenCalledTimes(1);
-    const [rid, approved, message] = permAnswer.mock.calls[0];
+    const [rid, approved, , updatedInput] = permAnswer.mock.calls[0];
     expect(rid).toBe('req-1');
-    expect(approved).toBe(false);
-    expect(message).toContain(']: Red, Blue');
+    expect(approved).toBe(true); // allow + updatedInput
+    expect((updatedInput as { answers: Record<string, string> }).answers['Pick colors?']).toBe('Red, Blue');
     expect(askSelection.selected('req-1')).toEqual([]); // freed, no leak
     expect(store.peekAskContext('req-1')).toBeUndefined(); // consumed
   });
@@ -476,40 +477,39 @@ describe('reply-to routing & injection', () => {
 });
 
 describe('quoting a live ASK card = free-form answer (the remote "Type something")', () => {
-  it('single-select: quoted text becomes the ask answer (three-part message, not a bare deny reason)', async () => {
-    const answers: Array<{ rid: string; approved: boolean; message?: string }> = [];
+  it('single-select: quoted text becomes the ask answer via allow + updatedInput (not a bare deny reason)', async () => {
+    const answers: Array<{ rid: string; approved: boolean; updatedInput?: unknown }> = [];
     const store = askStore('req-1', { question: 'Pick a color?', options: [{ label: 'Red' }, { label: 'Blue' }] });
     const h = new InboundHandler(baseDeps({
       findLiveCard: () => 'req-1',
       ...store.deps,
       permissionRouter: {
-        answer: (rid: string, approved: boolean, message?: string) => { answers.push({ rid, approved, message }); return true; },
+        answer: (rid: string, approved: boolean, _m?: string, updatedInput?: unknown) => { answers.push({ rid, approved, updatedInput }); return true; },
         requestPermission: vi.fn(),
       } as unknown as PermissionRouter,
     }));
     await h.handle(envelope({ text: 'a warm orange, actually', replyToMessageId: 'card-msg-1' }));
     expect(answers).toHaveLength(1);
-    expect(answers[0].approved).toBe(false);
-    expect(answers[0].message).toContain(']: a warm orange, actually');
-    expect(answers[0].message).toContain('Nothing failed');
+    expect(answers[0].approved).toBe(true); // allow, not deny
+    expect((answers[0].updatedInput as { answers: Record<string, string> }).answers['Pick a color?']).toBe('a warm orange, actually');
     expect(store.peekAskContext('req-1')).toBeUndefined(); // consumed, single-use
   });
 
   it('multi-select: ticked boxes ride along with the typed text', async () => {
-    const answers: Array<{ message?: string }> = [];
+    const answers: Array<{ updatedInput?: unknown }> = [];
     const store = askStore('req-1', { question: 'Channels?', options: [{ label: 'Feishu' }, { label: 'Telegram' }] });
     const deps = baseDeps({
       findLiveCard: () => 'req-1',
       ...store.deps,
       permissionRouter: {
-        answer: (_r: string, _a: boolean, message?: string) => { answers.push({ message }); return true; },
+        answer: (_r: string, _a: boolean, _m?: string, updatedInput?: unknown) => { answers.push({ updatedInput }); return true; },
         requestPermission: vi.fn(),
       } as unknown as PermissionRouter,
     });
     deps.askSelection.toggle('req-1', 1); // Telegram ticked
     const h = new InboundHandler(deps);
     await h.handle(envelope({ text: 'and email please', replyToMessageId: 'card-msg-1' }));
-    expect(answers[0].message).toContain(']: Telegram, and email please');
+    expect((answers[0].updatedInput as { answers: Record<string, string> }).answers['Channels?']).toBe('Telegram, and email please');
   });
 });
 
@@ -526,40 +526,22 @@ function askStore(rid: string, ctx: { question: string; options: Array<{ label: 
 
 describe('native input box submits (Feishu form → formText)', () => {
   it('askinput:<rid> + formText answers the ask with picks merged in', async () => {
-    const answers: Array<{ message?: string }> = [];
+    const answers: Array<{ updatedInput?: unknown }> = [];
     const store = askStore('req-1', { question: 'Channels?', options: [{ label: 'Feishu' }, { label: 'Telegram' }] });
     const deps = baseDeps({
       ...store.deps,
       permissionRouter: {
-        answer: (_r: string, _a: boolean, message?: string) => { answers.push({ message }); return true; },
+        answer: (_r: string, _a: boolean, _m?: string, updatedInput?: unknown) => { answers.push({ updatedInput }); return true; },
         requestPermission: vi.fn(),
       } as unknown as PermissionRouter,
     });
     deps.askSelection.toggle('req-1', 0);
     const h = new InboundHandler(deps);
     await h.handle(envelope({ text: 'askinput:req-1', formText: 'and email' }));
-    expect(answers[0].message).toContain(']: Feishu, and email');
+    expect((answers[0].updatedInput as { answers: Record<string, string> }).answers['Channels?']).toBe('Feishu, and email');
     expect(store.peekAskContext('req-1')).toBeUndefined(); // consumed
   });
 
-  it('continueinput:<cid> + formText answers the continue broker', async () => {
-    const continued: Array<[string, string]> = [];
-    const h = new InboundHandler(baseDeps({
-      continueBroker: { answer: (id: string, text: string) => { continued.push([id, text]); return true; }, request: vi.fn(), onRequest: vi.fn() } as unknown as ContinueBroker,
-    }));
-    await h.handle(envelope({ text: 'continueinput:c1', formText: 'keep going' }));
-    expect(continued).toEqual([['c1', 'keep going']]);
-  });
-
-  it('stale ids get the stale notice instead of silence', async () => {
-    const msgs: Array<{ kind: string; text?: string }> = [];
-    const h = new InboundHandler(baseDeps({
-      imBy: () => makeAdapter(msgs),
-      continueBroker: { answer: () => false, request: vi.fn(), onRequest: vi.fn() } as unknown as ContinueBroker,
-    }));
-    await h.handle(envelope({ text: 'continueinput:dead', formText: 'x' }));
-    expect((msgs[0] as { text: string }).text).toContain('no longer active');
-  });
 });
 
 describe('quoting a live approval card = deny with guidance', () => {

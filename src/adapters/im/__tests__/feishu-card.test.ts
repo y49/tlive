@@ -37,14 +37,20 @@ describe('mdToFeishuElements (card JSON 2.0 — markdown is near-passthrough)', 
     expect(inlineEls[0].content).toContain('`a <at></at> b`');
   });
 
-  it('renders an expandable quote block as a native 2.0 quote, in its OWN element (paragraph spacing)', () => {
-    const md = '>! **Done.** All tests pass.\n>! Next: run `build`.\n\n*Reply to continue*';
-    const els = mdToFeishuElements(md) as Md[];
-    expect(els.some((e) => e.tag === 'collapsible_panel')).toBe(false);
-    expect(els[0].content).toContain('> **Done.** All tests pass.');
-    expect(els[0].content).toContain('> Next: run `build`.');
-    // trailing prose is a SEPARATE element — element gaps are the typography
-    expect(els[1].content).toContain('*Reply to continue*');
+  it('wraps an expandable excerpt (>! ) in a collapsible_panel (JSON 2.0), full text inside, first line as preview', () => {
+    const md = '>! **Done.** All tests pass.\n>! Next: run `build`.\n\n*Reply to this message to continue.*';
+    const els = mdToFeishuElements(md) as Array<Record<string, unknown>>;
+    const panel = els.find((e) => e.tag === 'collapsible_panel') as { expanded: boolean; header: { title: { content: string } }; elements: Md[] };
+    expect(panel).toBeTruthy();
+    expect(panel.expanded).toBe(true); // read the last message without a tap
+    expect(panel.header.title.content).toContain('**Done.** All tests pass.'); // preview = first line
+    // the REST lives inside as flat markdown (first line is the header, not repeated in the body)
+    const inner = panel.elements.map((e) => e.content).join('\n');
+    expect(inner).toContain('Next: run `build`.');
+    expect(inner).not.toContain('All tests pass'); // no duplication of the header line
+    expect(inner).not.toContain('> ');
+    // the reply hint is a SEPARATE element OUTSIDE the panel
+    expect(els.some((e) => e.tag === 'markdown' && String(e.content).includes('*Reply to this message to continue.*'))).toBe(true);
   });
 
   it('splits paragraphs into separate elements (blank line = element boundary = visual gap)', () => {
@@ -52,18 +58,36 @@ describe('mdToFeishuElements (card JSON 2.0 — markdown is near-passthrough)', 
     expect(els.map((e) => e.content)).toEqual(['para one\nstill one', 'para two', 'para three']);
   });
 
-  it('clips a long quote block and points at the dashboard', () => {
-    const q = Array.from({ length: 12 }, (_, i) => `>! line ${i + 1}`).join('\n');
-    const els = mdToFeishuElements(q) as Md[];
+  it('does not clip a long excerpt — collapse handles length (full text inside the panel)', () => {
+    const md = Array.from({ length: 20 }, (_, i) => `>! line ${i + 1}`).join('\n');
+    const els = mdToFeishuElements(md) as Array<Record<string, unknown>>;
+    const panel = els.find((e) => e.tag === 'collapsible_panel') as { elements: Md[] };
+    expect(panel).toBeTruthy();
+    const inner = panel.elements.map((e) => e.content).join('\n');
+    expect(inner).toContain('line 20'); // nothing dropped
+    expect(inner).not.toContain('more lines'); // no clip note
+  });
+
+  it('clips a real "> " blockquote at 8 lines — quotes stay quotes', () => {
+    const md = Array.from({ length: 12 }, (_, i) => `> q ${i + 1}`).join('\n');
+    const els = mdToFeishuElements(md) as Md[];
     const lines = els[0].content.split('\n');
     expect(lines).toHaveLength(9); // 8 kept + clip notice
+    expect(lines[0]).toBe('> q 1');
     expect(lines[8]).toContain('+4 more lines');
   });
 
-  it('emits no empty element for the real continue-card shape (leading \\n before the quote)', () => {
-    const md = '\n>! All done.\n>! Tests pass.\n\n*Reply to continue*';
-    const els = mdToFeishuElements(md) as Md[];
-    for (const e of els) expect(e.content.trim()).not.toBe('');
+  it('emits no empty element for the real continue-card shape (leading \\n before the excerpt)', () => {
+    const md = '\n>! All done.\n>! Tests pass.\n\n*Reply to this message to continue.*';
+    const els = mdToFeishuElements(md) as Array<Record<string, unknown>>;
+    for (const e of els) {
+      if (e.tag === 'markdown') expect(String(e.content).trim()).not.toBe('');
+      if (e.tag === 'collapsible_panel') {
+        const inner = e.elements as Md[];
+        expect(inner.length).toBeGreaterThan(0);
+        for (const c of inner) expect(c.content.trim()).not.toBe('');
+      }
+    }
   });
 
   it('keeps plain quote markers (2.0 renders "> " as a real blockquote)', () => {
@@ -129,10 +153,10 @@ describe('feishu buildCard (schema 2.0)', () => {
     });
   });
 
-  it('omits buttons/form when the card has neither (settled card)', () => {
+  it('omits buttons/form when the card has neither, and uses a grey (informational) header (settled card)', () => {
     const card = buildCard({ kind: 'card', title: 'Allowed · tlive · Bash', body: 'ls' }) as Card2;
     expect(card.body.elements.some((e) => e.tag === 'column_set' || e.tag === 'form')).toBe(false);
-    expect(card.header!.template).toBeUndefined(); // settled card steps back visually
+    expect(card.header!.template).toBe('grey'); // non-actionable → grey (blue is reserved for "needs you")
   });
 
   it('maps button style by intent: approve primary, deny danger, everything else default', () => {

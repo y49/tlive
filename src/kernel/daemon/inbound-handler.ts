@@ -8,7 +8,7 @@ import type { ContinueBroker } from '../permission/continue-broker.js';
 import type { SenderGuard } from './sender-guard.js';
 import type { AskSelection } from './ask-state.js';
 import { parseImCommand } from './im-commands.js';
-import { buildAskAnswerMessage, askMultiButtons, type AskOption } from '../permission/ask-renderer.js';
+import { buildAskUpdatedInput, askMultiButtons, type AskOption } from '../permission/ask-renderer.js';
 import { STALE_CARD_NOTICE } from './bootstrap.js';
 
 export interface InboundHandlerDeps {
@@ -134,9 +134,9 @@ export class InboundHandler {
       const idx = /^\d+$/.test(idxRaw) ? Number(idxRaw) : NaN;
       if (!Number.isInteger(idx) || !ctx.options[idx]) return; // 畸形 index,非 stale,维持静默
       this.deps.takeAskContext(rid); // valid pick — now consume (single-use)
-      // deny + message = 答案(见 ask-renderer 文件头):CC 跳过内置问题框,
-      // message 送进 agent 对话流当答案。
-      if (!this.deps.permissionRouter.answer(rid, false, buildAskAnswerMessage(ctx.question, [ctx.options[idx].label]))) {
+      // allow + updatedInput.answers = 答案(见 ask-renderer 文件头):CC 把
+      // AskUserQuestion 当"已回答"正常跑,自己生成干净反馈,无 Error 外壳。
+      if (!this.deps.permissionRouter.answer(rid, true, undefined, buildAskUpdatedInput(ctx, [ctx.options[idx].label]))) {
         await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
       }
       return;
@@ -200,7 +200,7 @@ export class InboundHandler {
       this.deps.takeAskContext(rid); // valid submit — now consume (single-use)
       this.deps.askSelection.clear(rid); // free the selection, no leak
       const labels = [...picked.map((i) => ctx.options[i].label), ...(typed ? [typed] : [])];
-      if (!this.deps.permissionRouter.answer(rid, false, buildAskAnswerMessage(ctx.question, labels))) {
+      if (!this.deps.permissionRouter.answer(rid, true, undefined, buildAskUpdatedInput(ctx, labels))) {
         await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
       }
       return;
@@ -251,9 +251,9 @@ export class InboundHandler {
         const askCtx = this.deps.peekAskContext(rid);
         if (askCtx) {
           const picked = this.deps.askSelection.selected(rid).map((i) => askCtx.options[i]?.label).filter((l): l is string => Boolean(l));
-          const answer = buildAskAnswerMessage(askCtx.question, [...picked, env.formText]);
+          const updatedInput = buildAskUpdatedInput(askCtx, [...picked, env.formText]);
           this.deps.takeAskContext(rid);
-          if (!this.deps.permissionRouter.answer(rid, false, answer)) {
+          if (!this.deps.permissionRouter.answer(rid, true, undefined, updatedInput)) {
             await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
           }
         } else {
@@ -261,13 +261,8 @@ export class InboundHandler {
         }
         return;
       }
-      const contIn = /^continueinput:(.+)$/.exec(env.text);
-      if (contIn) {
-        if (!this.deps.continueBroker.answer(contIn[1], env.formText)) {
-          await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
-        }
-        return;
-      }
+      // (The continuation card has no on-card input box; continuing is done by
+      // quote-replying to the card — see routeReply below.)
     }
 
     // Reply-to routing: quoting a tlive message targets that message's session.
@@ -310,15 +305,15 @@ export class InboundHandler {
     if (rid) {
       // Quoting a live ASK card with text = the free-form answer (the remote
       // twin of the local dialog's "Type something"). Multi-select: any boxes
-      // already ticked ride along with the typed text. The wire is the same
-      // deny+message, but the message must be the ask three-parter — a bare
-      // deny reason reads as a refusal, not an answer.
+      // already ticked ride along with the typed text. Answered via allow +
+      // updatedInput.answers (same as a button pick) so CC treats it as the
+      // question's answer, not a refusal.
       const askCtx = this.deps.peekAskContext(rid);
       if (askCtx) {
         const picked = this.deps.askSelection.selected(rid).map((i) => askCtx.options[i]?.label).filter((l): l is string => Boolean(l));
-        const answer = buildAskAnswerMessage(askCtx.question, [...picked, env.text!]);
+        const updatedInput = buildAskUpdatedInput(askCtx, [...picked, env.text!]);
         this.deps.takeAskContext(rid); // consume (single-use), same as a button pick
-        if (!this.deps.permissionRouter.answer(rid, false, answer)) {
+        if (!this.deps.permissionRouter.answer(rid, true, undefined, updatedInput)) {
           await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
         }
         return;

@@ -127,7 +127,9 @@ export const STALE_CARD_NOTICE =
 export function buildContinueCardBody(lastMessage: string): string {
   const ex = excerptForCard(lastMessage ?? '');
   const quote = ex ? ex.split('\n').map((l) => `>! ${l}`).join('\n') + '\n\n' : '';
-  return `\n${quote}*Reply to continue*`;
+  // Quote-reply is the continue path (the on-card input box was removed) — the
+  // hint spells it out because quote-reply is not obvious, esp. on Feishu.
+  return `\n${quote}*Reply to this message to continue.*`;
 }
 
 export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle> {
@@ -374,7 +376,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // id and cwd, permanently, when both arrived as one field).
       events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd, status: 'waiting-approval', pending: { requestId, title, body, toolName } }) });
     },
-    onResolved: ({ key, cwd, requestId, decision, message }) => {
+    onResolved: ({ key, cwd, requestId, decision, message, updatedInput }) => {
       askContexts.delete(requestId); // no leak whether consumed by a button click or resolved another way
       // Warp-style lifecycle: the desktop notification exists exactly while
       // something waits. Last pending approval just resolved → close it
@@ -399,19 +401,18 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // 结算卡保留正文 —— 回头要能看到"当时批/拒的是什么"(真机反馈:
           // 一行 `Allowed · tlive · Bash` 把命令本身丢了)。去激活靠按钮消失,
           // 不靠抹正文。
-          // An ask card's wire mechanism IS a deny (see ask-renderer.ts file
-          // header) even when the user picked an answer — label it "Answered"
-          // so the user isn't scared into thinking their pick failed (Minor 4).
+          // An ask card resolves as allow + updatedInput.answers (see
+          // ask-renderer) even though the button is the wire transport — label
+          // it "Answered" so the user isn't scared into thinking the pick
+          // failed. The picked answer is written back onto the card (real-machine
+          // feedback: after answering, "不知道当时选择的什么了"), extracted from
+          // updatedInput.answers — single source of truth with buildAskUpdatedInput.
           // 带理由的拒绝(引用回复而来)vs 点按钮的光秃秃拒绝 —— 回写卡要看得出
           // 区别,所以用户知道这次拒绝是"说了理由"还是"就是不批"(Task 7)。
-          // 理由本身也写回卡上(用户自己的话,卡自成完整记录)。ask 的 message
-          // 是合成 JSON 答案不适合整段展示 —— 但答案那一行必须写回卡上
-          // (真机反馈:答完"不知道当时选择的什么了"),extractAskAnswer 从
-          // deny message 里取 Answer 行,单一事实来源。
-          const label = isAsk && decision === 'deny' ? 'Answered'
+          const askAnswer = isAsk ? extractAskAnswer(updatedInput) : null;
+          const label = askAnswer ? 'Answered'
             : decision === 'deny' && message ? 'Denied with guidance'
             : (OUTCOME[decision] ?? decision);
-          const askAnswer = isAsk && decision === 'deny' && message ? extractAskAnswer(message) : null;
           const settledBody = askAnswer
             ? `${c.body}\n\n> Answered: ${askAnswer}`
             : decision === 'deny' && message && !isAsk
@@ -444,7 +445,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         title: 'Turn finished',
         body: buildContinueCardBody(raw),
         cwd: req.cwd,
-        inputAction: { id: `continueinput:${req.requestId}`, placeholder: 'Reply to continue the session', submitLabel: 'Continue' },
+        // No on-card input box: continuing a turn is done by quote-replying to
+        // this card (inbound-handler routes a reply → the session's pending
+        // continueId). The empty form + redundant Continue button read as
+        // clutter; TG never rendered it anyway (quote-reply was always its path).
       });
     }
   });
@@ -586,6 +590,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             kind: 'hook.permission.result',
             decision: r.decision === 'local' ? 'defer' : r.decision,
             ...(r.message ? { message: r.message } : {}),
+            ...(r.updatedInput !== undefined ? { updatedInput: r.updatedInput } : {}),
           });
           return;
         }

@@ -49,7 +49,7 @@ export type IpcResponse =
   | { kind: 'daemon.status'; uptimeMs: number; pid: number; codex?: 'running' | 'degraded' | 'off' }
   | { kind: 'daemon.stopped' }
   | { kind: 'ack' }
-  | { kind: 'hook.permission.result'; decision: 'allow' | 'deny' | 'defer'; message?: string }
+  | { kind: 'hook.permission.result'; decision: 'allow' | 'deny' | 'defer'; message?: string; updatedInput?: unknown }
   | { kind: 'hook.continue.result'; reply: string | null }
   | { kind: 'session.list'; sessions: SessionView[] }
   | { kind: 'error'; message: string };

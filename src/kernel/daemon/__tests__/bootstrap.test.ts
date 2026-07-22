@@ -233,11 +233,10 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const pickBlue = card.buttons!.find((b) => b.id.endsWith(':1'))!;
     adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: pickBlue.id, ts: 0 });
 
-    const r = await pending as { kind: string; decision?: string; message?: string };
+    const r = await pending as { kind: string; decision?: string; updatedInput?: { answers?: Record<string, string> } };
     expect(r.kind).toBe('hook.permission.result');
-    expect(r.decision).toBe('deny');
-    expect(r.message).toContain(']: Blue');
-    expect(r.message).toContain('[Answered Pick a color?]: Blue');
+    expect(r.decision).toBe('allow'); // allow + updatedInput, not deny+message
+    expect(r.updatedInput?.answers?.['Pick a color?']).toBe('Blue');
   });
 
   it('Skip passes through with an allow decision and no message (local terminal answers)', async () => {
@@ -635,7 +634,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: submitBtn.id, ts: 0 });
 
       const r = await pending as { kind: string; decision?: string; message?: string };
-      expect(r.decision).toBe('deny');
+      expect(r.decision).toBe('allow'); // ask answer = allow + updatedInput
 
       // Let both artificially-delayed edits land (serialized: ~50ms + ~5ms with the fix).
       await new Promise((r2) => setTimeout(r2, 150));
@@ -716,7 +715,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       tg.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: submitBtn.id, ts: 0 });
 
       const r = await pending as { kind: string; decision?: string };
-      expect(r.decision).toBe('deny');
+      expect(r.decision).toBe('allow'); // ask answer = allow + updatedInput
 
       // Let both artificially-delayed channels' edits fully land (serialized
       // per-rid: worst case is well under 80ms*2 + 5ms*2).
@@ -748,9 +747,9 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       const submitBtn = card.buttons!.find((b) => b.id.startsWith('asksubmit:'))!;
       adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: submitBtn.id, ts: 0 });
 
-      const r = await pending as { kind: string; decision?: string; message?: string };
-      expect(r.decision).toBe('deny');
-      expect(r.message).toContain(']: Red, Blue');
+      const r = await pending as { kind: string; decision?: string; updatedInput?: { answers?: Record<string, string> } };
+      expect(r.decision).toBe('allow'); // allow + updatedInput, not deny+message
+      expect(r.updatedInput?.answers?.['Pick colors?']).toBe('Red, Blue');
 
       const lastEdit = edits.at(-1)!;
       const title = (lastEdit.msg as { title?: string }).title ?? '';
@@ -870,6 +869,6 @@ describe('Codex resume handler → continue card (regression: sentinel mismatch)
     // Title carries the usual `<label> · ` session tag (unrelated to this bug);
     // what matters here is that the body is NOT a quoted repeat of the title.
     expect(card.title?.endsWith('Turn finished')).toBe(true);
-    expect(card.body).toBe('\n*Reply to continue*');
+    expect(card.body).toBe('\n*Reply to this message to continue.*');
   });
 });

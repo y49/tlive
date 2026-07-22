@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderAskCard, buildAskAnswerMessage, askMultiButtons, type AskOption } from '../ask-renderer.js';
+import { renderAskCard, buildAskUpdatedInput, extractAskAnswer, askMultiButtons, type AskOption } from '../ask-renderer.js';
 
 const INPUT = {
   questions: [{
@@ -36,10 +36,16 @@ describe('renderAskCard', () => {
     expect(card.body.startsWith('Q?')).toBe(true);
   });
 
-  it('omits the em-dash when an option has no description', () => {
+  it('omits the in-body option list entirely when no option has a description (buttons carry the labels)', () => {
     const card = renderAskCard({ questions: [{ question: 'Q?', options: [{ label: 'A' }, { label: 'B' }] }] })!;
-    expect(card.body).toContain('**1.** A\n');
-    expect(card.body).not.toContain('A —');
+    expect(card.body).toBe('Q?'); // just the question — no duplicated list
+    expect(card.body).not.toContain('**1.**');
+  });
+
+  it('keeps the in-body list when at least one option has a description', () => {
+    const card = renderAskCard({ questions: [{ question: 'Q?', options: [{ label: 'A', description: 'the a' }, { label: 'B' }] }] })!;
+    expect(card.body).toContain('**1.** A — the a');
+    expect(card.body).toContain('**2.** B');
   });
 
   it('only renders the first question (multi-question batches are flattened)', () => {
@@ -54,18 +60,37 @@ describe('renderAskCard', () => {
   });
 });
 
-describe('buildAskAnswerMessage', () => {
-  it("mimics CC's native answer feedback format (mined from the 2.1.216 binary)", () => {
-    const msg = buildAskAnswerMessage(INPUT.questions[0].question, ['Blue']);
-    expect(msg).toContain('Nothing failed');
-    expect(msg).toContain('answered remotely via tlive');
-    expect(msg).toContain('The user answered: [Answered What is your favorite color?]: Blue');
-    expect(msg).toContain('Do not call AskUserQuestion again');
-    expect(msg).toContain('continue with these answers in mind');
+describe('buildAskUpdatedInput (allow + updatedInput, the documented/native answer path)', () => {
+  it('echoes questions[0] and maps question text → answer (single-select)', () => {
+    const ui = buildAskUpdatedInput(
+      { question: 'What is your favorite color?', header: 'Color', options: INPUT.questions[0].options, multiSelect: false },
+      ['Blue'],
+    );
+    expect(ui.answers).toEqual({ 'What is your favorite color?': 'Blue' });
+    expect(ui.questions).toHaveLength(1);
+    expect(ui.questions[0]).toMatchObject({ question: 'What is your favorite color?', header: 'Color', multiSelect: false });
   });
 
-  it('joins multiple selections', () => {
-    expect(buildAskAnswerMessage('Q?', ['A', 'B'])).toContain(']: A, B');
+  it('joins multiple selections comma-separated (multi-select)', () => {
+    const ui = buildAskUpdatedInput({ question: 'Q?', options: [{ label: 'A' }, { label: 'B' }], multiSelect: true }, ['A', 'B']);
+    expect(ui.answers).toEqual({ 'Q?': 'A, B' });
+  });
+
+  it('omits header from the echoed question when absent', () => {
+    const ui = buildAskUpdatedInput({ question: 'Q?', options: [{ label: 'A' }], multiSelect: false }, ['A']);
+    expect(ui.questions[0]).not.toHaveProperty('header');
+  });
+});
+
+describe('extractAskAnswer (settled card readback)', () => {
+  it('reads the answer string back out of updatedInput.answers', () => {
+    const ui = buildAskUpdatedInput({ question: 'Q?', options: [{ label: 'A' }], multiSelect: false }, ['A, B']);
+    expect(extractAskAnswer(ui)).toBe('A, B');
+  });
+
+  it('returns null when there is no answers object', () => {
+    expect(extractAskAnswer({})).toBeNull();
+    expect(extractAskAnswer(null)).toBeNull();
   });
 });
 

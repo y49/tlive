@@ -38,8 +38,10 @@ export interface PermissionRouterDeps {
   onPending?: (p: { key: string; cwd: string; requestId: string; title: string; body: string; toolName: string; askOptions?: AskOption[]; askQuestion?: string; askHeader?: string; askMulti?: boolean }) => void;
   /** Fired when the request resolves (answered / timed out / deferred after a card). Same key/cwd split as onPending.
    *  message:带理由的拒绝所携带的文本(引用回复而来)—— 供回写区分
-   *  `Denied` 与 `Denied with guidance`。 */
-  onResolved?: (p: { key: string; cwd: string; requestId: string; decision: Decision; message?: string }) => void;
+   *  `Denied` 与 `Denied with guidance`。
+   *  updatedInput:AskUserQuestion 的答案(allow + updatedInput.answers,见
+   *  ask-renderer)—— 供结算卡回写"Answered: …"。 */
+  onResolved?: (p: { key: string; cwd: string; requestId: string; decision: Decision; message?: string; updatedInput?: unknown }) => void;
   /** 发 IM 卡前的静默期(秒)。本地秒答的审批在此窗口内 cancel → 卡永不发出
    *  (键盘前零刷屏)。0 = 立即发。web 广播(onPending)不受影响。 */
   graceSec: () => number;
@@ -49,7 +51,7 @@ export interface PermissionRouterDeps {
 const PERMISSION_TIMEOUT_SEC = 580;
 
 interface PendingEntry {
-  resolve: (d: { decision: Decision; message?: string }) => void;
+  resolve: (d: { decision: Decision; message?: string; updatedInput?: unknown }) => void;
   key: string;
   toolName: string;
   sessionId?: string;
@@ -75,7 +77,7 @@ export class PermissionRouter {
    *  Keeping them as two required, separate fields is the whole point of this
    *  split — collapsing them back into one is the bug (see bootstrap.ts's
    *  resolveKey doc comment). */
-  async requestPermission(opts: { key: string; cwd: string; toolName: string; input: unknown; permissionMode?: string; timeoutSec?: number; sessionId?: string; agentId?: string; onAbandoned?: (cb: () => void) => void }): Promise<{ decision: Decision; message?: string }> {
+  async requestPermission(opts: { key: string; cwd: string; toolName: string; input: unknown; permissionMode?: string; timeoutSec?: number; sessionId?: string; agentId?: string; onAbandoned?: (cb: () => void) => void }): Promise<{ decision: Decision; message?: string; updatedInput?: unknown }> {
     // Policy first: an auto-allow (read-only / trust switch) skips the card even when muted.
     const pd = this.deps.policyDecide({ toolName: opts.toolName, input: opts.input, permissionMode: opts.permissionMode });
     if (pd.decision === 'allow') return { decision: 'allow' };
@@ -87,7 +89,7 @@ export class PermissionRouter {
 
     const requestId = randomUUID();
     const { title, body, askOptions, askQuestion, askHeader, askMulti } = this.deps.renderCard({ toolName: opts.toolName, input: opts.input });
-    const result = await new Promise<{ decision: Decision; message?: string }>((resolve) => {
+    const result = await new Promise<{ decision: Decision; message?: string; updatedInput?: unknown }>((resolve) => {
       this.pending.set(requestId, {
         resolve,
         key: opts.key,
@@ -131,7 +133,7 @@ export class PermissionRouter {
       if (grace > 0) setTimeout(push, grace * 1000).unref();
       else push();
     });
-    this.deps.onResolved?.({ key: opts.key, cwd: opts.cwd, requestId, decision: result.decision, ...(result.message ? { message: result.message } : {}) });
+    this.deps.onResolved?.({ key: opts.key, cwd: opts.cwd, requestId, decision: result.decision, ...(result.message ? { message: result.message } : {}), ...(result.updatedInput !== undefined ? { updatedInput: result.updatedInput } : {}) });
     return result;
   }
 
@@ -141,12 +143,15 @@ export class PermissionRouter {
   }
 
   /** 返回 true = 命中并已 resolve;false = 无此 pending(卡已 stale:daemon
-   *  重启 / 已超时 / 会话已结束)。调用方据此告知用户,而非静默丢弃。 */
-  answer(requestId: string, approved: boolean, message?: string): boolean {
+   *  重启 / 已超时 / 会话已结束)。调用方据此告知用户,而非静默丢弃。
+   *  updatedInput:AskUserQuestion 作答走 approved=true(allow)+ updatedInput
+   *  (echo questions + answers),CC 据此把工具当"已回答"正常跑,自己生成干净
+   *  反馈 —— 不再是 deny+message 的 Error 外壳(见 ask-renderer)。 */
+  answer(requestId: string, approved: boolean, message?: string, updatedInput?: unknown): boolean {
     const e = this.pending.get(requestId);
     if (!e) return false;
     this.pending.delete(requestId);
-    e.resolve({ decision: approved ? 'allow' : 'deny', ...(message ? { message } : {}) });
+    e.resolve({ decision: approved ? 'allow' : 'deny', ...(message ? { message } : {}), ...(updatedInput !== undefined ? { updatedInput } : {}) });
     return true;
   }
 

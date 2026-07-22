@@ -112,7 +112,8 @@ export async function runHook(argv: string[]): Promise<void> {
       );
       const decision = r.kind === 'hook.permission.result' ? r.decision : 'defer';
       const message = r.kind === 'hook.permission.result' ? r.message : undefined;
-      process.stdout.write(JSON.stringify(permissionRequestDecisionOut(decision, message)));
+      const updatedInput = r.kind === 'hook.permission.result' ? r.updatedInput : undefined;
+      process.stdout.write(JSON.stringify(permissionRequestDecisionOut(decision, message, updatedInput)));
       return;
     }
 

@@ -108,7 +108,11 @@ export function buildCard(out: CardMessage): object {
       ? {
           header: {
             title: { tag: 'plain_text', content: out.title },
-            ...(buttons?.length || out.inputAction ? { template: 'blue' } : {}),
+            // Header colour = the card's demand on you at a glance: blue when
+            // it needs an action (approval / question buttons or a reply box),
+            // grey when it's just informational (turn-finished, settled). An
+            // approval card going blue→grey on settlement reads as "done".
+            template: buttons?.length || out.inputAction ? 'blue' : 'grey',
           },
         }
       : {}),
