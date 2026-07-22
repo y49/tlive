@@ -595,8 +595,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           return;
         case 'hook.continue.request': {
           const key = resolveKey(req.sessionId, req.cwd, req.wrappedId);
-          // Stop = the turn ended; any still-pending approval card is stale.
-          permissionRouter.cancel({ key });
+          // Stop = the MAIN session's turn ended; its own still-pending approval
+          // card is stale. Scope to matchAgent:null — a backgrounded sub-agent
+          // outlives the parent turn and its tool call is still genuinely
+          // pending (and has no local answer path), so a parent Stop must NOT
+          // sweep sub-agent cards; those clear via their own PostToolUse / deny.
+          permissionRouter.cancel({ key, matchAgent: null });
           if (shouldFastNullContinue(configuredChats().length, events.size())) {
             // Nobody can answer (no IM chat, no dashboard client) — don't make
             // the Stop hook sit its full window for nothing.
@@ -664,8 +668,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           } else if (ev.event === 'permission-denied') {
             permissionRouter.cancel({ key, toolName: ev.toolName, sessionId: ev.sessionId, matchAgent: null });
           } else if (ev.event === 'prompt') {
-            // 清场:用户新输入意味着上一轮对话框(含子 agent 的)都没了
-            permissionRouter.cancel({ key, sessionId: ev.sessionId });
+            // 主会话新输入 → 主会话上一轮的对话框已没了,撤它的卡。matchAgent:null
+            // 精确到主会话:一个 backgrounded 子 agent 的审批与父会话的输入框无关
+            // (它仍真在等,且无本地答路 —— 清掉 = 保证被 deny),不得被父 prompt 清场。
+            permissionRouter.cancel({ key, sessionId: ev.sessionId, matchAgent: null });
             // 用户在键盘前开始了新一轮 → 取消上一 turn 还在 grace 里的续跑卡
             const g = continueGrace.get(key);
             if (g) { continueGrace.delete(key); g(); }

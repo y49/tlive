@@ -1,6 +1,6 @@
 // src/kernel/daemon/__tests__/session-ipc.test.ts
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { bootstrapDaemon, type DaemonHandle } from '../bootstrap';
@@ -40,5 +40,68 @@ describe('session.* over IPC', () => {
     h = await bootstrapDaemon({ home: tmp });
     h.sessions.register(meta);
     expect(h.sessions.list()).toHaveLength(1);
+  });
+});
+
+describe('parent-session 清场 must be agent-scoped (backgrounded sub-agent approval survival)', () => {
+  const tick = () => new Promise((r) => setTimeout(r, 40));
+  // A configured chat keeps requestPermission pending; with no injected imAdapters
+  // sendToChat is a no-op (no network), so the pending simply sits in the router.
+  const writeConfig = () => writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+    adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    approvals: { approvalGraceSec: 0, continueGraceSec: 0, continueWindowSec: 30 },
+  }));
+  const fireSubAgentApproval = () =>
+    request({ kind: 'hook.permission.request', cwd: '/proj', sessionId: 'parent', toolName: 'Bash', input: { command: 'date' }, agentId: 'subA' },
+      { socketPath: sock, timeoutMs: 4000 }).catch(() => undefined);
+
+  it('a parent-session prompt does NOT cancel a backgrounded sub-agent pending approval', async () => {
+    writeConfig();
+    h = await bootstrapDaemon({ home: tmp });
+    const sub = fireSubAgentApproval();
+    await tick();
+    expect(h.permissionRouter.pendingCount()).toBe(1);
+
+    // The parent (main session, no agent_id) submits a new prompt while the
+    // sub-agent is still waiting. The sub-agent's tool call is genuinely pending
+    // and has no local answer path — its card must survive.
+    await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/proj', sessionId: 'parent', prompt: 'do something else' } }, { socketPath: sock, timeoutMs: 2000 });
+    await tick();
+    expect(h.permissionRouter.pendingCount()).toBe(1);
+
+    h.permissionRouter.cancel({ key: 'parent' });
+    await sub;
+  });
+
+  it("a parent-session prompt STILL cancels the main session's own pending approval (guard against over-scoping)", async () => {
+    writeConfig();
+    h = await bootstrapDaemon({ home: tmp });
+    const main = request({ kind: 'hook.permission.request', cwd: '/proj', sessionId: 'parent', toolName: 'Bash', input: {} },
+      { socketPath: sock, timeoutMs: 4000 }).catch(() => undefined); // no agentId = main session
+    await tick();
+    expect(h.permissionRouter.pendingCount()).toBe(1);
+
+    await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/proj', sessionId: 'parent', prompt: 'next' } }, { socketPath: sock, timeoutMs: 2000 });
+    await tick();
+    expect(h.permissionRouter.pendingCount()).toBe(0); // main-session dialog is gone → its card is withdrawn
+
+    await main;
+  });
+
+  it('a parent-session Stop does NOT cancel a backgrounded sub-agent pending approval', async () => {
+    writeConfig();
+    h = await bootstrapDaemon({ home: tmp });
+    const sub = fireSubAgentApproval();
+    await tick();
+    expect(h.permissionRouter.pendingCount()).toBe(1);
+
+    // Stop long-polls (grace + continue window); fire-and-forget — the cancel
+    // it performs runs synchronously on arrival, before any waiting.
+    const stop = request({ kind: 'hook.continue.request', cwd: '/proj', sessionId: 'parent', context: 'turn ended' }, { socketPath: sock, timeoutMs: 300 }).catch(() => undefined);
+    await tick();
+    expect(h.permissionRouter.pendingCount()).toBe(1);
+
+    h.permissionRouter.cancel({ key: 'parent' });
+    await Promise.all([sub, stop]);
   });
 });
