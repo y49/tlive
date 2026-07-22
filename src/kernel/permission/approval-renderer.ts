@@ -78,7 +78,10 @@ export function renderApprovalCard(req: RenderRequest): { title: string; body: s
     }
     case 'Bash': {
       const cmd = str(input, 'command') ?? '';
-      const desc = str(input, 'description');
+      // Codex commandExecution approvals carry `reason` (not `description`) —
+      // fall back to it so the command's rationale shows on the card. CC's Bash
+      // input has no `reason`, so this only ever fires for Codex.
+      const desc = str(input, 'description') ?? str(input, 'reason');
       // B 全留白:标题后空行(前导 \n) + 描述后空行 + 风险行空开。
       // 无 desc 时前导 \n\n(否则单 \n 被 fence 前 trim 吃掉,标题后无空行)。
       return { title, body: `${desc ? `\n*${inlineSafe(desc)}*\n\n` : '\n\n'}\`\`\`bash\n${fenceSafe(maskSecrets(cmd))}\n\`\`\`${riskFlag(cmd)}` };

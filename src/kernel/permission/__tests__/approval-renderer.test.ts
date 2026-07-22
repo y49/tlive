@@ -38,6 +38,11 @@ describe('renderApprovalCard', () => {
     const secret = renderApprovalCard({ toolName: 'Bash', input: { command: 'curl h?token=abc' } });
     expect(secret.body).toContain('token=***');
   });
+  it('Bash → shows the Codex "reason" as the description line when no description is present', () => {
+    // Codex commandExecution approvals pass `reason` (not `description`); surface it.
+    const { body } = renderApprovalCard({ toolName: 'Bash', input: { command: 'npm test', reason: 'Run the suite before merging' } });
+    expect(body).toContain('Run the suite before merging');
+  });
   it('unknown/MCP tool → masked key:value summary (not raw JSON)', () => {
     const { body } = renderApprovalCard({ toolName: 'mcp__s__t', input: { password: 'p', q: 1 } });
     expect(body).toContain('password: ***');
