@@ -157,6 +157,26 @@ describe('InboundHandler', () => {
     expect(setTrust).toHaveBeenCalledWith(false);
   });
 
+  it('a bare /mute (Telegram menu tap) replies with on/off buttons — never "Unknown command"', async () => {
+    const msgs: Array<{ kind: string; text?: string; buttons?: Array<{ id: string; label: string }> }> = [];
+    const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter(msgs) }));
+    await h.handle(envelope({ text: '/mute' }));
+    const card = msgs.find((m) => m.kind === 'card') as { buttons?: Array<{ id: string }> } | undefined;
+    expect(card?.buttons?.map((b) => b.id)).toEqual(['set:mute:on', 'set:mute:off']);
+    expect(msgs.some((m) => m.text === 'Unknown command — try /help.')).toBe(false);
+  });
+
+  it('a set:<which>:<on|off> button click drives the matching setter', async () => {
+    const setMuted = vi.fn(); const setTrust = vi.fn(); const setAutoApprove = vi.fn();
+    const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter([]), setMuted, setTrust, setAutoApprove }));
+    await h.handle(envelope({ text: 'set:mute:on' }));
+    expect(setMuted).toHaveBeenCalledWith(true);
+    await h.handle(envelope({ text: 'set:trust:off' }));
+    expect(setTrust).toHaveBeenCalledWith(false);
+    await h.handle(envelope({ text: 'set:safe:on' }));
+    expect(setAutoApprove).toHaveBeenCalledWith(true);
+  });
+
   it('ask:<id>:<idx> answers with allow + updatedInput.answers carrying the picked option', async () => {
     const permAnswer = vi.fn().mockReturnValue(true); // hit — a live pending
     const h = new InboundHandler(baseDeps({

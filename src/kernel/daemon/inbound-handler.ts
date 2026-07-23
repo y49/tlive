@@ -77,6 +77,18 @@ function parseCallback(text: string): { requestId: string; approved: boolean } |
   return null;
 }
 
+/** `set:<which>:<on|off>` — the button click emitted by a toggle-prompt card
+ *  (a bare /mute /trust /safe tap). Explicit on/off, so a menu tap never blindly
+ *  flips a dangerous state. */
+function parseSetCallback(text: string): { which: 'mute' | 'trust' | 'safe'; on: boolean } | null {
+  if (!text.startsWith('set:')) return null;
+  const [, which, state] = text.split(':');
+  if ((which === 'mute' || which === 'trust' || which === 'safe') && (state === 'on' || state === 'off')) {
+    return { which, on: state === 'on' };
+  }
+  return null;
+}
+
 export class InboundHandler {
   constructor(private deps: InboundHandlerDeps) {}
 
@@ -234,6 +246,17 @@ export class InboundHandler {
       return;
     }
 
+    // Toggle-prompt button click (from a bare /mute /trust /safe menu tap) —
+    // route to the exact same setter + confirmation as the typed `<cmd> on|off`.
+    const set = parseSetCallback(env.text);
+    if (set) {
+      const cmd = set.which === 'mute' ? { kind: 'mute' as const, muted: set.on }
+        : set.which === 'trust' ? { kind: 'trust' as const, enabled: set.on }
+        : { kind: 'safe' as const, enabled: set.on };
+      await this.runCommand(env, cmd);
+      return;
+    }
+
     const cmd = parseImCommand(env.text);
     if (cmd) {
       await this.runCommand(env, cmd);
@@ -372,6 +395,22 @@ export class InboundHandler {
           ? 'Safe auto-approve ON — routine ops run without a card; dangerous ops, MCP/unknown tools, and questions still ask.'
           : 'Safe auto-approve OFF — back to asking for everything except read-only tools.' });
         return;
+      case 'toggle-prompt': {
+        // Bare /mute /trust /safe (a menu tap sends the command with no arg). Reply
+        // with explicit on/off buttons instead of "Unknown command" — the tap is now
+        // actionable, and staying explicit (vs a blind flip) means a menu tap can
+        // never one-shot enable a dangerous state like /trust.
+        const P = {
+          mute: { title: 'tlive · /mute', body: 'Mute IM notifications? (on = quiet; desktop toasts are separate)', on: 'Mute (quiet)', off: 'Notifications on' },
+          trust: { title: 'tlive · /trust', body: 'Pause approvals? “On” auto-allows **everything** until you resume.', on: 'Pause (auto-allow all)', off: 'Resume' },
+          safe: { title: 'tlive · /safe', body: 'Safe auto-approve? Routine ops run without a card; dangerous / MCP / unknown tools still ask.', on: 'Safe on', off: 'Safe off' },
+        }[cmd.which];
+        await this.reply(env, {
+          kind: 'card', title: P.title, body: P.body,
+          buttons: [{ id: `set:${cmd.which}:on`, label: P.on }, { id: `set:${cmd.which}:off`, label: P.off }],
+        });
+        return;
+      }
       case 'help':
         // A card (not bare text): commands as inline-code chips, the reply hint
         // as its own paragraph — so it renders with structure on both channels

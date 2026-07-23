@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Fixed — IM command-menu taps (`/mute` `/trust` `/safe`) now actionable
+
+- Tapping one of these in a client command menu sends the **bare** command (no
+  `on|off`), which used to parse to `unknown` → the bot replied *"Unknown command —
+  try /help."*. A bare (or bad-arg) `/mute` / `/trust` / `/safe` now replies with
+  explicit **on/off inline buttons** (`set:<which>:<on|off>` → the same setter and
+  confirmation as the typed command). Kept explicit (buttons, not a blind toggle) so a
+  menu tap can never one-shot enable a dangerous state like `/trust`.
+- `@botname` is stripped, so `/mute@bot …` (what Telegram group menus send) resolves
+  the same as in a private chat.
+
 ### Added — `mode` posture switch (off / notify / full), default `notify`
 
 - New top-level config `mode` (and `tlive mode off|notify|full`) sets what tlive is

@@ -6,8 +6,14 @@ describe('parseImCommand (mute/help/trust/safe)', () => {
     expect(parseImCommand('/mute on')).toEqual({ kind: 'mute', muted: true });
     expect(parseImCommand('/mute off')).toEqual({ kind: 'mute', muted: false });
   });
-  it('/mute with bad arg → unknown', () => {
-    expect(parseImCommand('/mute maybe')).toEqual({ kind: 'unknown', name: 'mute' });
+  it('bare /mute (menu tap) or a bad arg → toggle-prompt (offer on/off buttons, not "unknown")', () => {
+    expect(parseImCommand('/mute')).toEqual({ kind: 'toggle-prompt', which: 'mute' });
+    expect(parseImCommand('/mute maybe')).toEqual({ kind: 'toggle-prompt', which: 'mute' });
+  });
+  it('strips @botname (Telegram group menus send /mute@bot)', () => {
+    expect(parseImCommand('/mute@tlive_bot on')).toEqual({ kind: 'mute', muted: true });
+    expect(parseImCommand('/mute@tlive_bot')).toEqual({ kind: 'toggle-prompt', which: 'mute' });
+    expect(parseImCommand('/help@tlive_bot')).toEqual({ kind: 'help' });
   });
   it('/perm is retired (renamed to /mute) → unknown', () => {
     expect(parseImCommand('/perm on')).toEqual({ kind: 'unknown', name: 'perm' });
@@ -25,12 +31,12 @@ describe('parseImCommand (mute/help/trust/safe)', () => {
   it('parses /trust on|off', () => {
     expect(parseImCommand('/trust on')).toEqual({ kind: 'trust', enabled: true });
     expect(parseImCommand('/trust off')).toEqual({ kind: 'trust', enabled: false });
-    expect(parseImCommand('/trust')).toEqual({ kind: 'unknown', name: 'trust' });
+    expect(parseImCommand('/trust')).toEqual({ kind: 'toggle-prompt', which: 'trust' });
   });
   it('parses /safe on|off', () => {
     expect(parseImCommand('/safe on')).toEqual({ kind: 'safe', enabled: true });
     expect(parseImCommand('/safe off')).toEqual({ kind: 'safe', enabled: false });
-    expect(parseImCommand('/safe')).toEqual({ kind: 'unknown', name: 'safe' });
+    expect(parseImCommand('/safe')).toEqual({ kind: 'toggle-prompt', which: 'safe' });
   });
   it('/desktop is NOT an IM command — the toast is a machine-local control (CLI `tlive desktop` only)', () => {
     expect(parseImCommand('/desktop on')).toEqual({ kind: 'unknown', name: 'desktop' });
