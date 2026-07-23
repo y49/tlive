@@ -1,7 +1,10 @@
 # tlive CLI Command Reference
 
-> **v2 CLI surface.** The shipped commands are exactly:
+> **v2 CLI surface.** The frozen core is exactly:
 > `setup`, `start`, `stop`, `status`, `logs`, `run`, `url`, `hook`.
+> Additive since: `mode` (posture: off / notify / full) and the runtime
+> toggles `mute`, `trust`, `safe`, `desktop` (`on|off`, same setters as the
+> in-chat IM commands).
 >
 > Removed in v2.0: `restart`, `doctor` (folded into `status`),
 > `daemon-logs` (renamed `logs`), `install-integrations` (folded into `setup`),
@@ -28,7 +31,9 @@ work). Waits up to 2 s for the event loop to drain before forcing exit.
 
 Show whether the daemon is running, its uptime, PID, and the configured IM
 adapters, plus the web URLs and QR code. Replaces the removed `doctor`
-subcommand.
+subcommand. Also prints the effective **`mode:`** line (off / notify / full) —
+the first thing to check when an approval card never arrives (in the default
+`notify` mode tlive never sends one; see `tlive mode`).
 
 ### `tlive logs [N] [-f | --follow]`
 
@@ -82,7 +87,7 @@ it to one.
 
 Replaces the removed `install-integrations` subcommand. The workspace setup
 step has been removed; notifications are delivered to all configured chats,
-gated by `/perm on|off` (global mute).
+gated by `/mute on|off` (global mute).
 
 ---
 
@@ -91,6 +96,40 @@ gated by `/perm on|off` (global mute).
 Print the web dashboard URL (local + LAN) and a QR code. Focused shortcut for
 when a full-screen TUI (claude) cleared the `tlive run` banner and you just
 want the address again — run it in another terminal.
+
+---
+
+## Posture & runtime toggles
+
+### `tlive mode off|notify|full`
+
+Set tlive's **posture** — one coarse switch above every fine toggle. Persisted
+to `~/.tlive/config.json` and read by the hook shim on every event, so it takes
+effect on the **next hook** — no daemon restart, no new session.
+
+| Mode | What it does |
+|---|---|
+| `notify` (default) | Watch + notify only. The shim short-circuits every `PermissionRequest` to a pass-through `{}` — tlive **can never hold or block an approval**; every prompt stays 100% native. Monitoring, turn-finished / waiting notifications, and reply-to-continue all still work. |
+| `full` | Remote approval ON — tlive holds each tool call so you can Allow/Deny it from IM / desktop / dashboard. The previous always-on behaviour. |
+| `off` | Every hook is a no-op — no gating, notifications, monitoring, or daemon autostart (kill switch). |
+
+Remote approval is opt-in by design: a freshly-installed tool must never be
+able to silently hang a workflow. `tlive status` shows the effective mode.
+
+### `tlive mute|trust|safe on|off` · `tlive desktop on|off`
+
+The same runtime switches as the in-chat IM commands, from the CLI:
+
+- `tlive mute on|off` — silence IM notifications (IM only; the desktop toast is
+  a separate surface, see below).
+- `tlive trust on|off` — pause approvals (auto-allow everything). High-risk.
+- `tlive safe on|off` — also auto-allow routine ops (non-dangerous Bash,
+  non-sensitive edits); the danger floor still asks.
+- `tlive desktop on|off` — machine-local desktop notifications. No IM command
+  for it (IM ⊥ desktop); unaffected by `mute`.
+
+These flip in-memory daemon state (cleared on restart), unlike `mode`, which
+persists to config.
 
 ---
 
@@ -110,11 +149,18 @@ subcommands.
 
 | Command | Description |
 |---|---|
-| `/perm on\|off` | Global mute toggle — `off` suppresses all outbound notifications. |
+| `/mute on\|off` | Global mute toggle — `off` suppresses all outbound IM notifications. |
 | `/trust on\|off` | Pause approvals (auto-allow everything) until turned off. High-risk; prefer the per-tool "Always allow" button. |
+| `/safe on\|off` | Auto-allow routine ops (non-dangerous Bash, non-sensitive edits); the danger floor still asks. |
 | `/help` | Show in-chat help. |
 | *quote-reply + text* | Typed into that session's terminal (wrapped sessions). |
 | *photo / file* | Downloaded to `~/.tlive/inbox`; path injected into the session. |
+
+Tapping a bare command from the client's command menu (which sends `/mute`,
+`/trust`, or `/safe` with no `on|off` argument) replies with explicit on/off
+buttons instead of an error — a menu tap can never one-shot enable a dangerous
+state like `/trust`. These are approval / posture controls; the mode posture
+(`off`/`notify`/`full`) is CLI-only via `tlive mode`.
 
 ---
 

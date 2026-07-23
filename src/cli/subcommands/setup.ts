@@ -26,6 +26,31 @@ export function resolveVendorSelection(detected: VendorSelection, answer: string
   return detected;
 }
 
+// Closing step of the wizard: offer to turn on remote approval (mode: full).
+// Only offer it when there's a channel to approve to and remote approval isn't
+// already on — and never downgrade an existing `full`.
+export function shouldOfferFull(currentMode: unknown, hasChannel: boolean): boolean {
+  return hasChannel && currentMode !== 'full';
+}
+
+// Enabling remote approval is an opt-in escalation, so ONLY an explicit yes
+// flips it. Crucially, the wizard's question() returns '' for both an
+// interactive Enter and a piped-EOF, so a bare Enter / scripted install must
+// resolve to false — a fresh setup must never silently start holding approvals.
+export function isAffirmative(answer: string): boolean {
+  return /^y(es)?$/.test(answer.trim().toLowerCase());
+}
+
+// Feishu creds are only written when both app credentials are present; chatId
+// (the destination `open_chat_id`, `oc_…`) is included when given. FeishuAdapter
+// REQUIRES chatId to send, so collecting it in the wizard is what makes a
+// Feishu-only setup actually able to post (not just receive).
+export function buildFeishuCreds(appId: string, appSecret: string, chatId: string):
+  { appId: string; appSecret: string; chatId?: string } | undefined {
+  if (!appId || !appSecret) return undefined;
+  return { appId, appSecret, ...(chatId ? { chatId } : {}) };
+}
+
 async function registerPlugins(sel: VendorSelection): Promise<string> {
   const run = defaultRunner();
   const lines: string[] = [];
@@ -103,7 +128,26 @@ export async function runSetup(argv: string[]): Promise<void> {
 
   const fsAppId = await ask('Feishu appId (blank to skip)', cfg.adapters.feishu?.appId);
   const fsSecret = fsAppId ? await ask('Feishu appSecret', cfg.adapters.feishu?.appSecret) : '';
-  if (fsAppId && fsSecret) cfg.adapters.feishu = { appId: fsAppId, appSecret: fsSecret };
+  const fsChat = fsAppId && fsSecret ? await ask('Feishu chat id (oc_… — the chat the bot posts to)', cfg.adapters.feishu?.chatId) : '';
+  const feishuCreds = buildFeishuCreds(fsAppId, fsSecret, fsChat);
+  if (feishuCreds) cfg.adapters.feishu = feishuCreds;
+
+  // Closing step: offer remote approval (mode: full). Default posture is notify
+  // (watch + notify only), so a fresh install can never silently hold a tool
+  // call — enabling it here is an explicit, per-setup opt-in.
+  const hasChannel = !!(cfg.adapters.telegram?.token || (cfg.adapters.feishu?.appId && cfg.adapters.feishu?.appSecret));
+  if (shouldOfferFull(cfg.mode, hasChannel)) {
+    const ans = await question(
+      '\nEnable remote approval now? tlive will hold each tool call so you can\n'
+      + 'Allow/Deny it from your phone (default: watch + notify only) [y/N]: ',
+    );
+    if (isAffirmative(ans)) {
+      cfg.mode = 'full';
+      process.stdout.write('Remote approval ON (mode: full). Revert any time with `tlive mode notify`.\n');
+    } else {
+      process.stdout.write('Keeping the default notify posture — enable later with `tlive mode full`.\n');
+    }
+  }
 
   try { rl.close(); } catch { /* already closed by piped-EOF */ }
   writeFileSync(configPath, JSON.stringify(cfg, null, 2));

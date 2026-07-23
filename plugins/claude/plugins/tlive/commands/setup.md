@@ -46,7 +46,13 @@ Guide the user through tlive setup. Execute in order, showing each result:
    the configured platforms appear under channels.
 7. Have the user send the bot a test message; hand out the dashboard address
    via `tlive url`.
-8. If status shows the Codex companion as `off` or `degraded`, explain what it
+8. Offer remote approval. tlive defaults to `notify` (watch + notify only — it
+   never holds a tool call, so a fresh install can't hang a workflow). Ask
+   whether the user wants to Allow/Deny tool calls from their phone; if yes, run
+   `tlive mode full` (holds each tool call for a remote answer, in parallel with
+   the local prompt — first answer wins; revert any time with `tlive mode
+   notify`). If they only want monitoring, leave it in `notify`.
+9. If status shows the Codex companion as `off` or `degraded`, explain what it
    means (codex missing from PATH / app-server child failing — see
    `~/.tlive/codex-appserver.log`); Codex approvals stay local-only until it is
    `running`. There is no trust step to perform.

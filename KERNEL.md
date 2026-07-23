@@ -1,8 +1,14 @@
 # KERNEL.md — tlive frozen surface (v2)
 
-> ⚠️ tlive 2.x 是**厂商中立、自托管的 hook 审批/监看层 + web 终端**(从 v1.0 的
+> ⚠️ tlive 2.x 是**厂商中立、自托管的 hook 监看/审批层 + web 终端**(从 v1.0 的
 > Agent-SDK 桥转向,详见 `CHANGELOG.md`)。下面列出的接口是 CONTRACTS,由
 > `tests/contract/` 锁定。改动任一接口 = breaking change = bump major。
+>
+> **默认姿态 `notify`**:只监看 / 通知,shim 把每个 `PermissionRequest` 短路成
+> `{}`,tlive 物理上不 hold 任何审批。下文"审批"一节描述的 gating 只在
+> **`mode: full`**(远程审批 opt-in)下发生;`mode: off` 则每个 hook 都 no-op。
+> mode 语义见 `README.md` / `CHANGELOG.md`,由 `normalizer.ts` 的 `effectiveMode`
+> 单点决定(notify 默认)。
 >
 > v1.0 的 SDK-driver 冻结面(`RuntimeAdapter` / MCP 三工具等)已在 v2 移除——
 > tlive 不再驱动/拥有会话。
@@ -92,8 +98,12 @@ continueDecisionOut(reply: string | null): object   // reply → {decision:'bloc
 Claude 的原始 hook JSON 在这里归一。加一个新 AI runtime = 把它的 hook 事件
 映射进这套归一模型(hook 式集成)或走 companion 式集成(见下),kernel 不变。
 
-**审批(Claude Code)**:gating 走 `PermissionRequest` hook——它与本地权限
-对话**并行**(先答先得),窗口默认顶格(`approvals.windowSec`,默认 86200s
+**审批(Claude Code)**(下述 gating 仅 `mode: full`;默认 `notify` 下 shim
+把 `PermissionRequest` 短路成 `{}`,以下一律不发生)。**带 `agent_id` 的
+子代理请求默认透传**(→`{}`,交 CC 原生;被 hold 的子代理没有并行本地框可
+兜底)——opt-in `approvals.holdSubagents:true` 才 hold 住等远程答;`safe`/
+`trust` 的自动放行在此闸之前,不受影响。gating 走 `PermissionRequest` hook
+——它与本地权限对话**并行**(先答先得),窗口默认顶格(`approvals.windowSec`,默认 86200s
 ≈24h,clamp 60~86200,**两家共用**;hooks.json `timeout: 86400`,shim
 IPC=窗+100s,daemon clamp 24h。超时 ≠ 拒绝——本地框永不超时仍在等,短窗口
 只是逼用户回电脑,恰是 tlive 要消灭的失效模式);本地答掉后 daemon 靠 PostToolUse(同 key+tool,本地点了允许)/
@@ -240,15 +250,19 @@ daemon 时新实例打印一行提示并 `exit 0`,绝不 unlink/抢占活 socket
 的 `AlreadyRunningError`)。这是 `SessionStart` 懒启动(见 `README.md`)并发
 安全的基础:多个会话同时触发懒启动时,只有一个真正落地。
 
-### 5. CLI subcommand surface (8)
+### 5. CLI subcommand surface
 
 File: `src/kernel/contracts/cli-surface.ts`
 
 ```
-setup, start, stop, status, logs, run, url, hook
+核心 8:      setup, start, stop, status, logs, run, url, hook
+加法命令:    mode (off|notify|full 姿态,持久化到 config)
+             mute, trust, safe, desktop (on|off 运行时开关,与 IM 命令同一 setter)
 ```
 
-加 CLI 命令 = 先开 issue 讨论。
+核心 8 是原始冻结面;`mode` 与 4 个运行时开关是后加的(仍由
+`tests/contract/cli-surface.test.ts` 锁定整份清单)。加 CLI 命令 = 先开
+issue 讨论 + 更新契约测试。
 
 ## NOT frozen(内部实现,可自由演进)
 

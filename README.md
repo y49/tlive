@@ -9,11 +9,25 @@
 > **A vendor-neutral, self-hosted remote-approval + live-monitoring layer for AI coding agents.**
 >
 > Your `claude` / `codex` runs in your terminal as usual. tlive rides the
-> **open hook mechanism** both vendors support to push approval cards and
-> status to **Telegram / Feishu**, and serves a **web dashboard + real
-> terminal** off your own machine — approve, reply, send a screenshot, or
-> take over typing, from any device. Works **regardless of subscription or
-> API key**; your session and data never leave your machine.
+> **open hook mechanism** both vendors support to push status (and, when you
+> turn it on, approval cards) to **Telegram / Feishu**, and serves a **web
+> dashboard + real terminal** off your own machine — watch a run, reply to
+> continue, send a screenshot, or take over typing, from any device. Works
+> **regardless of subscription or API key**; your session and data never
+> leave your machine.
+>
+> Out of the box tlive **watches and notifies** (`mode: notify`, the safe
+> default — it can never hold up a tool call). Flip on remote approval —
+> hold each tool call so you can Allow/Deny it from your phone — with one
+> command: **`tlive mode full`** (or let `tlive setup` offer it).
+
+> [!WARNING]
+> **v2.0 is a ground-up rewrite — breaking, with no migration.** tlive is no
+> longer the Agent-SDK IM *bridge* of v1.x and earlier: it no longer drives or
+> owns your sessions, and the old bridge model, its config schema, and its
+> commands (`workspace`, `/use`, chat-binding, …) are **gone and unsupported**.
+> Don't try to carry an old `~/.tlive` config forward — just run `tlive setup`
+> fresh. The final SDK-bridge release is preserved at git tag `v1.0-sdk-bridge`.
 
 ## 30 seconds to running
 
@@ -29,7 +43,8 @@ tlive start        # daemon up — prints web URLs + a QR code for your phone
 tlive run claude   # (optional) wrap the session → live web terminal + preview card
 ```
 
-Scan the QR once — the dashboard lists every session. When a tool call needs
+Scan the QR once — the dashboard lists every session and streams each run.
+Turn on remote approval (`tlive mode full`) and, when a tool call needs
 approval, your IM gets a card with **Allow / Deny / Always-allow** buttons and
 the web card lights up red.
 
@@ -45,16 +60,32 @@ the web card lights up red.
 | IM photo/file → agent | — | ✅ (downloaded, path injected) |
 | Web paste/drop upload | — | ✅ |
 
-Hooks-only always works — wrapping is pure addition. IM messages carry a
-`label · ` prefix (the session's directory) but no longer mark wrapped vs.
-hooks-only visually — the continue card's own "Reply to continue" line makes
-the distinction moot for what you actually do.
+Hooks-only always works — wrapping is pure addition. The **Approval cards**
+row needs remote approval on (`tlive mode full`); the default `notify` mode
+does everything else — live monitoring, turn-finished / waiting notifications,
+reply-to-continue, the web terminal — without ever holding a tool call. IM
+messages carry a `label · ` prefix (the session's directory) but no longer
+mark wrapped vs. hooks-only visually — the continue card's own "Reply to
+continue" line makes the distinction moot for what you actually do.
 
 ## What's in the box
 
-- **Approvals** — dual-channel on Claude Code: the `PermissionRequest` hook
-  fires **in parallel with the local permission dialog** — both are live,
-  first answer wins. A card isn't sent immediately: `approvals.approvalGraceSec`
+- **Posture — `notify` (default) / `full` / `off`.** One coarse switch that
+  sits above every fine toggle. **`notify`** (default) watches and notifies
+  but the shim can never hold or block an approval — every prompt stays 100%
+  native (your local terminal dialog, or CC's own auto-deny when headless).
+  **`full`** turns on remote approval: tlive holds each tool call so you can
+  answer it from IM / desktop / dashboard (everything the *Approvals* bullet
+  below describes). **`off`** makes every hook a no-op (kill switch — no
+  gating, notifications, monitoring, or daemon autostart). Flip it live with
+  `tlive mode off|notify|full`; the shim re-reads config on the next hook, so
+  no restart or new session is needed, and `tlive status` shows the effective
+  mode. Remote approval is opt-in by design — a freshly-installed tool must
+  never be able to silently hang a workflow.
+- **Approvals** *(remote approval — `mode: full`)* — dual-channel on Claude
+  Code: the `PermissionRequest` hook fires **in parallel with the local
+  permission dialog** — both are live, first answer wins. A card isn't sent
+  immediately: `approvals.approvalGraceSec`
   (default 10s, `0` disables) holds it first, so answering at the keyboard
   right away means the IM card is never sent at all. Answer from IM buttons
   or the web card any time within 24 hours; answer at the keyboard and the
@@ -71,6 +102,10 @@ the distinction moot for what you actually do.
   the only emoji left anywhere is `⚠️` on a risky-command flag or an
   error-level notification; expandable quotes still handle long diffs/
   commands — use a reasonably recent Telegram app for best rendering.
+  Backgrounded / async **sub-agents pass through by default** (a held
+  sub-agent has no parallel local dialog to fall back on, so tlive returns
+  `{}` and lets CC handle it natively); hold them for a remote answer too
+  with `approvals.holdSubagents: true`.
 - **Answer `AskUserQuestion` from IM (Claude Code only)** — CC fires a
   `PermissionRequest` for its own question tool; tlive relays it as a
   single-select or multi-select card (checkboxes, a live `Submit (N)` count,
@@ -233,21 +268,32 @@ layer for sessions you already run.
 ```
 tlive setup            wizard + registers the vendor plugin(s) (idempotent); --hooks-only
 tlive start | stop     daemon lifecycle (stop is idempotent)
-tlive status           health, web URLs + QR, config paths
+tlive status           health, effective mode, web URLs + QR, config paths
 tlive logs [-f]        tail the daemon log
 tlive run <cmd> …      wrap a process: local terminal + web terminal
 tlive url              print the dashboard URL + QR (when a full-screen app hid the run banner)
+tlive mode off|notify|full   set posture (see "What's in the box"); takes effect on the next hook
 tlive hook <event>     hook shim (called by Claude Code, not by you;
                         Codex has no hooks — see the app-server companion)
 ```
 
-IM commands: `/perm on|off` (mute), `/trust on|off`, `/help`.
-Quote-reply any session message to type into that session.
+`setup`, `start`, `stop`, `status`, `logs`, `run`, `url`, `hook` are the
+frozen surface (locked by `tests/contract/`); `mode` and the runtime toggles
+`mute | trust | safe` (`on|off`) and `desktop` (`on|off`) are additive.
+
+IM commands: `/mute on|off` (silence IM notifications), `/trust on|off` (pause
+approvals — auto-allow everything), `/safe on|off` (auto-allow routine ops),
+`/help`. Tapping a bare command from the client's command menu replies with
+on/off buttons instead of an error. Quote-reply any session message to type
+into that session.
 
 ## Config (`~/.tlive/config.json`)
 
 ```jsonc
 {
+  // posture: "off" | "notify" (default) | "full" (remote approval on).
+  // Also set live with `tlive mode …`; unset/unknown falls back to notify.
+  "mode": "notify",
   "adapters": {
     "telegram": { "token": "…", "chatIdAllowList": ["123"] },
     "feishu":   { "appId": "…", "appSecret": "…", "chatId": "oc_…" }
@@ -282,7 +328,16 @@ Quote-reply any session message to type into that session.
     // Cuts the card volume for autonomous / agent-driven runs where there's no
     // local dialog. Toggle live with /safe on|off. Never crosses the danger
     // floor — only /trust on auto-allows dangerous ops.
-    "autoApprove": "readonly"
+    "autoApprove": "readonly",
+    // hold a backgrounded/async sub-agent's approval for a remote answer too
+    // (default false: sub-agents pass through to CC-native handling). Only
+    // relevant in mode: full.
+    "holdSubagents": false,
+    // what a HELD approval does when its window times out with nobody
+    // answering: "defer" (default) → pass-through {} (CC-native fallback);
+    // "deny" → deny with a "timed out" message so the turn can end and the
+    // continuation card can redirect the agent. Never auto-allows.
+    "timeoutAction": "defer"
   },
   "allowedSenders": [{ "channel": "telegram", "userId": "42" }]  // optional
 }

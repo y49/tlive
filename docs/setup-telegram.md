@@ -3,11 +3,12 @@
 [Back to Getting Started](getting-started.md)
 
 This guide walks you through creating a Telegram bot and wiring it into
-tlive. The result is a bot you can DM (or add to a group) from which
-approval cards and status notifications are delivered.
+tlive. The result is a bot you can DM (or add to a group) that delivers
+status notifications — and, once you enable remote approval
+(`tlive mode full`), approval cards you can answer from the chat.
 
 **v2.0:** config is `~/.tlive/config.json`. The `tlive setup` wizard
-writes it for you and also installs the Claude Code hooks.
+writes it for you and registers the tlive plugin (hooks + skill + commands).
 
 ## What you'll need
 
@@ -29,8 +30,8 @@ Recommended BotFather settings:
 
 | `/setprivacy` | Disable | Lets the bot read group messages (needed for group / forum use). |
 
-> The `/setcommands` registration is handled automatically by tlive at boot
-> via `setMyCommands` (see spec §10.1 `bot-commands.ts`).
+> The command-menu registration is handled automatically by tlive at boot
+> via `setMyCommands`.
 
 ## Step 2 — Find your chat ID
 
@@ -45,15 +46,17 @@ Needed so tlive knows which chat to bind to.
 4. In the JSON, find `"chat":{"id":123456789,...}` — that's your chat ID.
 5. **Group/forum chats** have negative IDs like `-1001234567890`.
 
-## Step 3 — (Optional) Allowed user IDs
+## Step 3 — (Optional) Allowed senders
 
-If you don't want anyone who finds the bot to use it, restrict by user.
+By default tlive trusts anyone messaging from an allow-listed chat. To restrict
+further by *user* (useful in group chats), collect user IDs:
 
 1. Search for **@userinfobot** and send it any message.
 2. It replies with your numeric Telegram user ID.
-3. Collect IDs for every allowed user.
+3. Add one `allowedSenders` entry per user (see Step 4).
 
-> Recommended: always set at least one of `chatId` or `allowedUsers`.
+> Recommended: always set at least one of `chatIdAllowList` (which chats) or
+> `allowedSenders` (which users).
 
 ## Step 4 — Run `tlive setup`
 
@@ -64,34 +67,29 @@ tlive setup
 When prompted for a channel, pick **Telegram** and paste:
 
 - Bot token.
-- Chat ID (or leave blank to allow any chat that an allowed user DMs from).
-- Allowed user IDs (comma-separated).
+- Chat ID (the destination the bot sends to).
 
 The wizard writes `~/.tlive/config.json` with a block like:
 
 ```json
 {
-  "channels": {
+  "adapters": {
     "telegram": {
       "token": "7823456789:AAF-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-      "chatId": "123456789",
-      "allowedUsers": ["123456789"],
-      "requireMention": true
+      "chatIdAllowList": ["123456789"]
     }
-  }
+  },
+  "allowedSenders": [{ "channel": "telegram", "userId": "123456789" }]
 }
 ```
 
-You can edit the file by hand afterwards. Fields per spec §10.1:
+You can edit the file by hand afterwards.
 
 | Field | Type | Purpose |
 |---|---|---|
-| `token` | string | Bot token from BotFather. |
-| `chatId` | string \| string[] | Restrict to specific chat(s). Negative IDs = groups. |
-| `allowedUsers` | string[] | Whitelist of user IDs. |
-| `requireMention` | boolean | In groups, only respond when @mentioned (default `true`). |
-| `webhook` | object | See "Webhook mode" below. Omit for long-polling. |
-| `proxy` | string | `http://`, `https://`, `socks4://`, `socks5://`. |
+| `adapters.telegram.token` | string | Bot token from BotFather. |
+| `adapters.telegram.chatIdAllowList` | string[] | Chat IDs the bot sends to and accepts input from; inbound from any other chat is dropped (fail-closed). Negative IDs = groups/forums. |
+| `allowedSenders` | `{channel, userId}[]` | Optional per-user hardening (Step 3). Empty ⇒ trust anyone in an allow-listed chat. |
 
 Secure the file:
 
@@ -107,62 +105,32 @@ tlive status
 ```
 
 In `tlive status` output, the Telegram probe calls `getMe` — a ✅ there
-means the token is valid and tlive can reach the API.
+means the token is valid and tlive can reach the API. The `mode:` line shows
+your posture (default `notify`).
 
-Then from the configured Telegram chat: DM the bot or send a message
-and trigger a Claude tool call to see the approval card.
+Then confirm the round trip from the configured Telegram chat: DM the bot
+`/help` and check it replies. To exercise **approval cards**, first turn on
+remote approval (`tlive mode full`), then trigger a Claude tool call — in the
+default `notify` mode no card is sent (tool prompts stay local).
 
 ---
 
 ## v2.0 platform notes
 
-- **Transport.** Long-polling by default; webhook optional.
+- **Transport.** Long-polling (no public URL, webhook, or TLS setup needed —
+  the daemon connects outbound to Telegram).
 - **Inline keyboards.** Used for approval-card buttons (Allow / Deny).
 - **Inbound filtering.** The adapter accepts messages and button callbacks
-  only from the configured `chatId`(s). Any chat not in `allowedChatIds`
-  is silently dropped (fail-closed).
-
-## Webhook mode (optional)
-
-For production, avoid long-polling overhead:
-
-```json
-{
-  "channels": {
-    "telegram": {
-      "token": "…",
-      "webhook": {
-        "url": "https://your-domain.com/telegram-webhook",
-        "secret": "random-hex-string",
-        "port": 8443
-      }
-    }
-  }
-}
-```
-
-The daemon exposes the webhook endpoint on the given port. TLS
-termination is on you (nginx / Caddy / fly.io proxy).
-
-## Proxy
-
-```json
-{
-  "channels": {
-    "telegram": { "token": "…", "proxy": "socks5://127.0.0.1:1080" }
-  }
-}
-```
-
-Supported: `http://`, `https://`, `socks4://`, `socks5://`.
+  only from chats in `chatIdAllowList`. Any other chat is silently dropped
+  (fail-closed).
 
 ---
 
 ## Troubleshooting
 
 - **Bot responds in DM but not in groups.** Disable privacy via BotFather
-  (`/setprivacy` → your bot → Disable). If `requireMention: true` you must
-  `@yourbot <message>`.
+  (`/setprivacy` → your bot → Disable), and make sure the group's ID is in
+  `chatIdAllowList`.
 - **"Unauthorized" at boot.** Token regenerated — copy the current one.
 - **Empty `getUpdates` response.** Send a message to the bot first, then
   refresh.

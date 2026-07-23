@@ -4,11 +4,12 @@
 
 本指南带你创建飞书（或 Lark）自建应用并接入 tlive。飞书配置步骤
 比其他平台略多 —— 需要创建应用、添加权限、订阅事件、发布版本并让
-企业管理员审批。完成后你会拥有一个在配置的聊天中收发
-Claude Code 审批卡片和状态通知的机器人。
+企业管理员审批。完成后你会拥有一个在配置的聊天中收发 Claude Code
+状态通知——以及开启远程审批(`tlive mode full`)后、可在聊天里作答的
+审批卡片——的机器人。
 
 **v2.0：** 配置文件为 `~/.tlive/config.json`（JSON）。推荐用
-`tlive setup` 向导填充 `channels.feishu` 字段并安装 hooks。
+`tlive setup` 向导填充 `adapters.feishu` 字段并注册 tlive 插件。
 
 ## 前置条件
 
@@ -59,7 +60,7 @@ App Secret 请妥善保管。
 }
 ```
 
-### v1.0 权限用途（规范 §10.3）
+### 权限用途
 
 | 权限 | 作用 |
 |---|---|
@@ -82,7 +83,7 @@ App Secret 请妥善保管。
 2. **回调模式** 选择 **长连接（WebSocket）**。
    **不要**选 HTTP 回调；tlive 只用 WebSocket，你无需公网地址。
 
-> v1.0 只支持 WebSocket：守护进程从你本机反向连飞书，不需要开防火墙
+> 仅支持长连接（WebSocket）：守护进程从你本机反向连飞书，不需要开防火墙
 > 或配 TLS。
 
 ## 第五步 —— 发布并审批
@@ -110,32 +111,33 @@ channel 选择 **Feishu**，依次粘贴：
 
 - App ID。
 - App Secret。
-- （可选）允许的用户 Open ID（`ou_…`）。
+- Chat ID —— 机器人发送的目标聊天的 `open_chat_id`(`oc_…`)。
 
 向导写入 `~/.tlive/config.json`：
 
 ```json
 {
-  "channels": {
+  "adapters": {
     "feishu": {
       "appId": "cli_xxxxxxxxxxxxxxxx",
       "appSecret": "…",
-      "allowedUsers": ["ou_xxxxxxxxxxxxxxxx"],
-      "lark": false
+      "chatId": "oc_xxxxxxxxxxxxxxxx"
     }
-  }
+  },
+  "allowedSenders": [{ "channel": "feishu", "userId": "ou_xxxxxxxxxxxxxxxx" }]
 }
 ```
 
-字段说明（规范 §10.3）：
-
 | 字段 | 类型 | 作用 |
 |---|---|---|
-| `appId` | string | 开发者后台的 App ID。 |
-| `appSecret` | string | 开发者后台的 App Secret。 |
-| `lark` | boolean | 为 `true` 时使用 `open.larksuite.com` 端点。 |
-| `allowedUsers` | string[] | Open ID 白名单（可选）。 |
-| `topicPerSession` | boolean | 在新版群组里为每个会话开独立 topic（默认 `true`）。 |
+| `adapters.feishu.appId` | string | 开发者后台的 App ID。 |
+| `adapters.feishu.appSecret` | string | 开发者后台的 App Secret。 |
+| `adapters.feishu.chatId` | string | 机器人发送的目标聊天——它的 `open_chat_id`(以 `oc_` 开头)。**发送必需。** |
+| `allowedSenders` | `{channel, userId}[]` | 可选的按用户加固——Open ID(`ou_…`)。空 ⇒ 信任已配置的聊天。 |
+
+`chatId` **发送必需**。如果还没拿到,这一问留空、之后再补——从群信息里拿,
+或在机器人收到你第一条消息后(第七步)从入站事件里读——再重跑 `tlive setup`
+(或直接改文件)填上。
 
 保护权限：
 
@@ -151,11 +153,12 @@ tlive status
 ```
 
 飞书探测会调用 `auth/v3/tenant_access_token/internal`，返回
-`code: 0` 即凭证有效。
+`code: 0` 即凭证有效;`mode:` 行显示当前姿态(默认 `notify`)。
 
 打开飞书搜索应用名，机器人应出现在 **机器人** / **应用** 分类下。
-在已配置的聊天中触发一次 Claude 工具调用，你应看到一张带
-Allow / Deny 按钮的审批卡片。
+先给它发 `/help` 确认能收到回复。想验证**审批卡**,先开远程审批
+(`tlive mode full`),再触发一次 Claude 工具调用——默认 `notify` 模式下
+不会发卡(工具提示留在本地)。
 
 ---
 
@@ -169,13 +172,15 @@ Allow / Deny 按钮的审批卡片。
 
 ## Lark 国际版
 
-流程完全一致，差异仅为：
+开发者 / 管理后台不同：
 
 - 开发者后台：https://open.larksuite.com/app
 - 管理后台：https://larksuite.com/admin
-- 配置里 `lark: true`。
 
-所有权限标识、事件名、API 形状完全相同。
+权限标识、事件名、API 形状,以及 tlive 配置(`appId` / `appSecret` /
+`chatId`)完全相同。注意 tlive **暂不**提供飞书/Lark 端点切换(没有
+`lark`/`domain` 配置字段)——用的是 `@larksuiteoapi/node-sdk` 默认。若你在
+Lark 国际版且连不上,请提 issue。
 
 ---
 
@@ -188,6 +193,6 @@ Allow / Deny 按钮的审批卡片。
 - **"Invalid App ID" / "Invalid App Secret"。** 打错，或复制错了应用
   的凭证。
 - **飞书里机器人有回复但 tlive 日志什么也没有。** `config.json` 漏了
-  `channels.feishu`，或者改完配置没有重新 `tlive start`。
+  `adapters.feishu`，或者改完配置没有重新 `tlive start`。
 
 返回 [入门指南](getting-started-cn.md) · [CLI 命令参考](commands.md)。

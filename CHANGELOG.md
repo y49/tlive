@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Fixed — `tlive setup` now collects the Feishu chat id
+
+- The wizard prompted for Feishu `appId` + `appSecret` but not `chatId`, yet
+  `FeishuAdapter` **requires** `chatId` (the destination `open_chat_id`) to send —
+  so a wizard-only Feishu setup could receive but never post a card. Setup now
+  prompts for it, and re-running setup no longer wipes an existing `chatId`
+  (blank keeps the current value).
+
 ### Fixed — IM command-menu taps (`/mute` `/trust` `/safe`) now actionable
 
 - Tapping one of these in a client command menu sends the **bare** command (no
@@ -37,7 +45,9 @@ All notable changes to this project will be documented in this file.
   permission prompts is a real escalation that should be granted deliberately, and a
   default must never be able to hang a workflow in a way that's hard to diagnose.
   Existing setups that want remote approval should run `tlive mode full`.
-  (Follow-up: `/tlive:setup` will offer to enable `full` as its closing step.)
+  `tlive setup` (and the `/tlive:setup` guide) now **offer** to enable `full` as
+  their closing step — an explicit opt-in prompt, only when a channel is
+  configured; a bare Enter or a scripted/piped install keeps the safe `notify`.
 
 ### Changed — sub-agents pass through by default (tlive stays transparent)
 

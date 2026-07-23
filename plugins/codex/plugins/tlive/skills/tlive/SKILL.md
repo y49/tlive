@@ -9,19 +9,27 @@ description: tlive — remote approvals (Telegram/Feishu/web), live web terminal
 
 # tlive usage guide
 
-tlive is a self-hosted approval/monitoring layer. Claude Code sessions report
+tlive is a self-hosted monitoring/approval layer. Claude Code sessions report
 through global hooks; Codex sessions are watched through an app-server
-companion process (no hooks, no trust step). Approvals, completions, and
-failures land in IM (Telegram/Feishu) and the web dashboard, where you can
-approve/deny/reply-to-continue. The daemon auto-starts with new sessions
-(disable via `daemon.autoStart: false`).
+companion process (no hooks, no trust step). Completions and failures land in
+IM (Telegram/Feishu) and the web dashboard, where you can reply-to-continue.
+The **posture** (`tlive mode`, default `notify`) decides whether approvals are
+held for a remote answer: in `notify` tlive only watches + notifies (the shim
+never holds an approval — prompts stay 100% native); `tlive mode full` turns on
+remote approval (Allow/Deny from IM/desktop/dashboard); `off` makes every hook a
+no-op. The daemon auto-starts with new sessions (disable via
+`daemon.autoStart: false`).
 
 ## Commands
 - `tlive setup` — configure IM credentials + register the Claude/Codex plugins
   (hooks ride the Claude plugin; Codex needs none). `--hooks-only` re-registers
   plugins only; add `--claude` / `--codex` to pick a vendor.
-- `tlive status` — daemon health, channels, and the Codex companion state
-  (`running` / `degraded` / `off`; degraded or off = Codex approvals local-only).
+- `tlive status` — daemon health, effective `mode`, channels, and the Codex
+  companion state (`running` / `degraded` / `off`; degraded or off = Codex
+  approvals local-only).
+- `tlive mode off|notify|full` — set posture (see intro). Persisted to config,
+  takes effect on the next hook; `notify` is the default, `full` = remote
+  approval on.
 - `tlive run <cmd>` — wrap a process: local terminal + live web terminal (QR to open).
 - `tlive url` — print the dashboard link + QR code.
 - `tlive logs -f` — follow the daemon log.
@@ -35,11 +43,14 @@ approve/deny/reply-to-continue. The daemon auto-starts with new sessions
    `running`. `off` means codex isn't on PATH (or Windows); `degraded` means the
    app-server child keeps dying — see `~/.tlive/codex-appserver.log`. Either way
    Codex still prompts locally; nothing is ever auto-run.
-3. Claude approval card unanswered: the local dialog stays live the whole time
-   (parallel channels, first answer wins); answering locally resolves the remote
-   card as "answered in terminal". The remote window defaults to ~24h
+3. No approval card ever arrives: check `tlive status` — the `mode:` line must
+   say `full`. The default `notify` never sends approval cards (tool prompts
+   stay local); enable remote approval with `tlive mode full`.
+4. Claude approval card unanswered (in `full`): the local dialog stays live the
+   whole time (parallel channels, first answer wins); answering locally resolves
+   the remote card as "answered in terminal". The remote window defaults to ~24h
    (`approvals.windowSec`, shared by both vendors).
-4. Web page unreachable: `tlive url` for the current link (token is in the URL);
+5. Web page unreachable: `tlive url` for the current link (token is in the URL);
    phones need the same LAN (or your own reverse proxy/VPN — tlive has no
    `publicUrl` config, and cards never carry the link).
 
@@ -68,5 +79,9 @@ through:
    (appId + appSecret) credentials and merge into `~/.tlive/config.json`:
    `{ "allowedSenders": [], "adapters": { "telegram": { "token": "…", "chatIdAllowList": ["…"] }, "feishu": { "appId": "…", "appSecret": "…" } } }`
 3. `tlive start` → `tlive status` to verify channels; `tlive url` for the dashboard.
-4. Codex needs no extra step — the companion starts with the daemon. If status
+4. Offer remote approval: tlive defaults to `notify` (watch + notify only). If
+   the user wants to Allow/Deny tool calls from their phone, run `tlive mode full`
+   (holds each tool call for a remote answer; reversible with `tlive mode notify`).
+   Leave it in `notify` if they only want monitoring.
+5. Codex needs no extra step — the companion starts with the daemon. If status
    says `off`/`degraded`, that's diagnostic info, not a setup task.

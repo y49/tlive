@@ -5,11 +5,13 @@
 This guide walks you through creating a Feishu (or Lark) custom app and
 wiring it into tlive. Feishu's setup has more steps than other platforms —
 you create an app, add permissions, subscribe to events, publish a version,
-and get workspace-admin approval. Once done, the bot delivers approval cards
-and status notifications from Claude Code.
+and get workspace-admin approval. Once done, the bot delivers status
+notifications — and, once you enable remote approval (`tlive mode full`),
+approval cards you can answer from the chat.
 
 **v2.0:** config is `~/.tlive/config.json` (JSON). `tlive setup` is the
-recommended way to populate the `channels.feishu` block and install hooks.
+recommended way to populate the `adapters.feishu` block and register the
+tlive plugin.
 
 ## What you'll need
 
@@ -61,7 +63,7 @@ In **Permissions & Scopes**, click **Batch import** and paste:
 }
 ```
 
-### v1.0 permission rationale (spec §10.3)
+### Permission rationale
 
 | Scope | Why |
 |---|---|
@@ -85,9 +87,8 @@ In **Events & Callbacks**:
    Do **not** choose HTTP callback; tlive uses WebSocket so you don't
    need a public URL.
 
-> WebSocket mode is the only supported transport in v1.0 — the daemon
-> pushes outbound from your machine, so no firewall or TLS setup
-> required.
+> WebSocket (Long Connection) is the only supported transport — the daemon
+> pushes outbound from your machine, so no firewall or TLS setup required.
 
 ## Step 5 — Publish & get admin approval
 
@@ -114,43 +115,40 @@ Pick **Feishu** when prompted. Paste:
 
 - App ID.
 - App Secret.
-- (Optional) Allowed user Open IDs (`ou_…`).
+- Chat ID — the `open_chat_id` (`oc_…`) of the chat the bot posts to.
 
 The wizard writes `~/.tlive/config.json`:
 
 ```json
 {
-  "channels": {
+  "adapters": {
     "feishu": {
       "appId": "cli_xxxxxxxxxxxxxxxx",
       "appSecret": "…",
-      "allowedUsers": ["ou_xxxxxxxxxxxxxxxx"],
-      "lark": false
+      "chatId": "oc_xxxxxxxxxxxxxxxx"
     }
-  }
+  },
+  "allowedSenders": [{ "channel": "feishu", "userId": "ou_xxxxxxxxxxxxxxxx" }]
 }
 ```
 
-Fields per spec §10.3:
-
 | Field | Type | Purpose |
 |---|---|---|
-| `appId` | string | From developer console. |
-| `appSecret` | string | From developer console. |
-| `lark` | boolean | `true` to use `open.larksuite.com` endpoints. |
-| `allowedUsers` | string[] | Open ID whitelist (optional). |
-| `topicPerSession` | boolean | Use new-style group topics as session threads (default `true` when supported). |
+| `adapters.feishu.appId` | string | From the developer console. |
+| `adapters.feishu.appSecret` | string | From the developer console. |
+| `adapters.feishu.chatId` | string | The chat the bot posts to — its `open_chat_id` (starts `oc_`). **Required to send.** |
+| `allowedSenders` | `{channel, userId}[]` | Optional per-user hardening — Open IDs (`ou_…`). Empty ⇒ trust the configured chat. |
+
+`chatId` is **required to send**. If you don't have it yet, leave that prompt
+blank and add it later — find it from the group's info, or from the inbound
+event once the bot receives your first message (Step 7) — then re-run
+`tlive setup` (or edit the file) to fill it in.
 
 Secure the file:
 
 ```bash
 chmod 600 ~/.tlive/config.json
 ```
-
-> **Note:** `allowedUsers` and `topicPerSession` are accepted in the
-> documentation block above for forward-compatibility, but as of v1.0
-> only `appId`, `appSecret`, and `lark` are read by the daemon. Use
-> `lark: true` for the international Lark edition (open.larksuite.com).
 
 ## Step 7 — Start + verify
 
@@ -160,11 +158,14 @@ tlive status
 ```
 
 The Feishu probe calls
-`auth/v3/tenant_access_token/internal`. Code `0` = credentials valid.
+`auth/v3/tenant_access_token/internal`. Code `0` = credentials valid. The
+`mode:` line shows your posture (default `notify`).
 
 Open Feishu, search for the app name — the bot should appear under
-**Bots** / **Apps**. DM it or send a message in the configured chat, then
-trigger a Claude tool call to see the approval card.
+**Bots** / **Apps**. DM it `/help` and check it replies. To exercise
+**approval cards**, first turn on remote approval (`tlive mode full`), then
+trigger a Claude tool call — in the default `notify` mode no card is sent
+(tool prompts stay local).
 
 ---
 
@@ -180,13 +181,16 @@ trigger a Claude tool call to see the approval card.
 
 ## Lark (international)
 
-Everything is identical except:
+The developer / admin portals differ:
 
 - Developer portal: https://open.larksuite.com/app
 - Admin console: https://larksuite.com/admin
-- Set `lark: true` in the config block.
 
-All scopes, event names, and API shapes are the same.
+Scopes, event names, API shapes, and the tlive config (`appId` / `appSecret` /
+`chatId`) are all the same. Note tlive does **not** currently expose a
+Feishu-vs-Lark endpoint switch (no `lark`/`domain` config field) — it uses the
+`@larksuiteoapi/node-sdk` default. If you're on Lark international and it does
+not connect, open an issue.
 
 ---
 
@@ -200,7 +204,7 @@ All scopes, event names, and API shapes are the same.
   release — create a new version and get it re-approved.
 - **"Invalid App ID" / "Invalid App Secret".** Typos, or you copied from
   the wrong app.
-- **Bot replies in Feishu but nothing in tlive logs.** `channels.feishu`
+- **Bot replies in Feishu but nothing in tlive logs.** `adapters.feishu`
   missing from `config.json`, or `tlive start` wasn't run after config
   edit.
 

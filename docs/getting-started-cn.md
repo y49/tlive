@@ -1,13 +1,14 @@
 # tlive v2.0 入门指南
 
 本指南将带你从零完成 tlive 配置。结束后，你会拥有一个运行中的守护进程、
-至少一个已连接的 IM 机器人，以及通过 hook 层把 Claude Code / Codex
-工具审批路由到手机的完整流程。
+至少一个已连接的 IM 机器人、在手机上实时监看 Claude Code / Codex 会话——
+以及(如果你开启的话)审批也路由到手机。
 
 **v2.0 变更说明：** tlive 不再是 SDK 驱动的 IM 桥接。它已经演进为
-**厂商中立、自托管的 hook 审批/监看层**。守护进程不持有任何 agent 会话；
-你自己的 `claude` / `codex` 进程在本地运行，通过
-`~/.claude/settings.json` 调用 tlive 的 hooks。
+**厂商中立、自托管的 hook 监看/审批层**。守护进程不持有任何 agent 会话；
+你自己的 `claude` / `codex` 进程在本地运行，通过 tlive 插件的 hooks 上报。
+它的**默认姿态是 `notify`**——只监看 + 通知;远程审批(hold 住工具调用、
+让你在手机上作答)是 opt-in,用 `tlive mode full` 开启。
 
 ## 前置条件
 
@@ -70,8 +71,9 @@ tlive status
 ```
 
 `tlive start` 会打印 web 地址(本机 + 局域网)**和一个二维码**——手机扫一次
-即可打开 dashboard。`tlive status` 显示守护进程运行时间、PID、已配置的适配器
-和同样的地址/二维码;它取代了已删除的 `tlive doctor` 子命令。
+即可打开 dashboard。`tlive status` 显示守护进程运行时间、PID、已配置的适配器、
+当前生效的 **`mode:`** 行(默认 `notify`),以及同样的地址/二维码;它取代了
+已删除的 `tlive doctor` 子命令。
 
 ## 包装会话(可选但推荐)
 
@@ -93,18 +95,27 @@ tlive run claude
 
 ## 工作原理
 
-1. 你在终端里像平常一样运行 `claude`（或 `codex`）。
-2. Claude 准备调用工具（`Bash`、`Write` 等）时，`PreToolUse` hook 调用
-   `tlive hook pre-tool-use`，通过本地 IPC socket 联系守护进程。
-3. 守护进程向所有已配置的 IM 聊天发送审批卡片。
-4. 你在手机上点击 **Allow** 或 **Deny**。
-5. hook 把决定返回给 Claude，Claude 继续或中止。
+你在终端里像平常一样运行 `claude`（或 `codex`）；tlive 插件的 hooks 把每个
+事件通过本地 IPC socket 上报给守护进程。接下来发生什么取决于你的**姿态**
+（`tlive mode`）：
 
-Claude 停止时，`Stop` hook 发送通知；回复一条续跑消息即可让 Claude
-继续执行。
+**`notify`（默认）**——只监看 + 通知，绝不 hold 住工具调用：
 
-所有 hooks 在守护进程不可达或超时时都会**静默退回**到本地终端提示
-（不自动放行、不全拒）。
+1. 工具调用照常走它**本地**的权限提示——tlive 把 `PermissionRequest` hook
+   短路成透传，什么都不 hold、也不发出去等远程审批。
+2. 会话停止或空闲时，`Stop` hook 发一条 IM 通知；回复一条续跑消息即可继续。
+3. 工具/会话失败会作为旁路 `⚠️` 消息推送。
+
+**`full`**（`tlive mode full`）——`notify` 的一切，外加远程审批：
+
+1. Claude 准备调用需要审批的工具时，`PermissionRequest` hook 会 hold 住这个
+   决定，守护进程向所有已配置的 IM 聊天发送审批卡片——与本地提示**并行**
+   （先答先得）。
+2. 你在手机上点 **Allow** 或 **Deny**（或在键盘前答）。
+3. hook 把决定返回给 Claude，Claude 继续或中止。
+
+绝不自动放行、也绝不全拒:守护进程不可达、窗口超时、或没配 chat 时,hook
+回落 `{}`,控制权退回本地终端,就像 tlive 不存在。
 
 ---
 

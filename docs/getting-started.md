@@ -1,13 +1,16 @@
 # Getting Started with tlive v2.0
 
 This guide takes you from zero to a working tlive setup. By the end you'll
-have the daemon running, at least one IM bot connected, and Claude Code /
-Codex hook approvals routing to your phone.
+have the daemon running, at least one IM bot connected, live monitoring of
+your Claude Code / Codex sessions on your phone — and, if you turn it on,
+approvals routing there too.
 
 **Changed in v2.0:** tlive is no longer an SDK-driven IM bridge. It is a
-vendor-neutral, self-hosted hook approval and monitoring layer. The daemon
-does not own any agent sessions; your own `claude` / `codex` process runs
-locally and calls tlive's hooks via `~/.claude/settings.json`.
+vendor-neutral, self-hosted hook monitoring / approval layer. The daemon does
+not own any agent sessions; your own `claude` / `codex` process runs locally
+and reports through the tlive plugin's hooks. Its **default posture is
+`notify`** — watch and notify only; remote approval (holding tool calls so you
+can answer them from your phone) is opt-in via `tlive mode full`.
 
 ## Prerequisites
 
@@ -76,8 +79,8 @@ tlive status
 
 `tlive start` prints the web URLs (local + LAN) **and a QR code** — scan it
 once on your phone to open the dashboard. `tlive status` shows daemon uptime,
-PID, configured adapters, and the same URLs/QR; it replaces the removed
-`tlive doctor` subcommand.
+PID, configured adapters, the effective **`mode:`** line (default `notify`),
+and the same URLs/QR; it replaces the removed `tlive doctor` subcommand.
 
 ## Wrap a session (optional but recommended)
 
@@ -103,20 +106,32 @@ Want the session to survive closing your terminal? Combine with tmux:
 
 ## How it works
 
-1. You run `claude` (or `codex`) in your terminal as usual.
-2. When Claude wants to call a tool (`Bash`, `Write`, etc.), the
-   `PreToolUse` hook calls `tlive hook pre-tool-use`, which contacts the
-   daemon over a local IPC socket.
-3. The daemon sends an approval card to all configured IM chats.
-4. You tap **Allow** or **Deny** on your phone.
-5. The hook returns the decision to Claude; Claude continues or aborts.
+You run `claude` (or `codex`) in your terminal as usual; the tlive plugin's
+hooks report each event to the daemon over a local IPC socket. What happens
+next depends on your **posture** (`tlive mode`):
 
-When Claude stops, the `Stop` hook sends a notification; reply with a
-continuation message to resume it.
+**`notify` (default)** — tlive watches and notifies but never holds a tool
+call:
 
-All hooks fail-open silently (no auto-approve, no blanket deny) when the
-daemon is unreachable or the timeout expires, returning control to the local
-terminal.
+1. Tool calls run with their normal **local** permission prompt — tlive
+   short-circuits the `PermissionRequest` hook to a pass-through, so nothing
+   is held or sent for remote approval.
+2. When the session stops or goes idle, the `Stop` hook sends an IM
+   notification; reply with a continuation message to resume it.
+3. Tool/session failures are pushed as side-channel `⚠️` messages.
+
+**`full`** (`tlive mode full`) — everything in `notify`, plus remote approval:
+
+1. When Claude wants to call a tool that needs approval, the
+   `PermissionRequest` hook holds the decision and the daemon sends an
+   approval card to all configured IM chats — **in parallel** with the local
+   prompt (first answer wins).
+2. You tap **Allow** or **Deny** on your phone (or answer at the keyboard).
+3. The hook returns the decision to Claude; Claude continues or aborts.
+
+Nothing is ever auto-approved or blanket-denied: if the daemon is unreachable,
+the window expires, or no chat is configured, the hook falls back to `{}` and
+control returns to the local terminal as if tlive weren't there.
 
 ---
 

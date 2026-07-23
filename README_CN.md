@@ -9,9 +9,20 @@
 > **厂商中立、自托管的 AI 编码 agent 远程审批 + 实时监看层。**
 >
 > 你的 `claude` / `codex` 照常在终端里跑。tlive 借两家都支持的**开放 hook 机制**,
-> 把审批卡和状态推到 **Telegram / 飞书**,并在你自己的机器上提供 **web 仪表板 +
-> 真实终端**——在任何设备上批准、回复、发截图,甚至接管打字。**订阅还是 API key
-> 都能用**,会话与数据永不离开你的机器。
+> 把状态(以及你开启后的审批卡)推到 **Telegram / 飞书**,并在你自己的机器上提供
+> **web 仪表板 + 真实终端**——在任何设备上监看、回复续跑、发截图,甚至接管打字。
+> **订阅还是 API key 都能用**,会话与数据永不离开你的机器。
+>
+> 开箱即用时 tlive **只监看 + 通知**(`mode: notify`,安全默认——它物理上无法
+> 卡住任何工具调用)。想开**远程审批**——hold 住每个工具调用、让你在手机上
+> 允许/拒绝——一条命令:**`tlive mode full`**(或让 `tlive setup` 帮你开)。
+
+> [!WARNING]
+> **v2.0 是彻底重写,breaking,无迁移。** tlive 不再是 v1.x 及更早的 Agent-SDK
+> IM *桥接*:它不再驱动/拥有你的会话,旧的桥接模型、它的配置 schema、它的命令
+> (`workspace`、`/use`、chat 绑定……)**均已删除、不再支持**。别把旧的
+> `~/.tlive` 配置沿用过来——直接重跑 `tlive setup`。最后一个 SDK-桥接版本保留在
+> git tag `v1.0-sdk-bridge`。
 
 ## 30 秒跑起来
 
@@ -26,8 +37,9 @@ tlive start        # 起 daemon —— 打印 web 地址 + 手机扫码二维码
 tlive run claude   # (可选)包装会话 → 实时 web 终端 + 预览卡
 ```
 
-扫一次码,dashboard 列出所有会话。工具调用需要审批时,IM 收到带
-**允许 / 拒绝 / 总是允许** 按钮的卡片,web 卡片同步亮红。
+扫一次码,dashboard 列出所有会话并实时串流每个 run。开启远程审批
+(`tlive mode full`)后,工具调用需要审批时,IM 收到带 **允许 / 拒绝 /
+总是允许** 按钮的卡片,web 卡片同步亮红。
 
 ## 两档集成
 
@@ -41,14 +53,26 @@ tlive run claude   # (可选)包装会话 → 实时 web 终端 + 预览卡
 | IM 发图/文件 → agent | — | ✅(下载后注入路径) |
 | web 粘贴/拖拽上传 | — | ✅ |
 
-只装 hooks 永远可用,包装是纯加法。IM 消息带 `label · ` 前缀(会话目录名),
-但不再用图标区分包装/仅 hooks——续跑卡自带的"回复继续"提示已经让这个区分对
-你实际要做的事没有影响。
+只装 hooks 永远可用,包装是纯加法。表里的**审批卡**那一行需要开着远程审批
+(`tlive mode full`);默认的 `notify` 模式把其余全都做了——实时监看、
+turn 结束 / 等待输入通知、回复续跑、web 终端——却绝不 hold 住任何工具调用。
+IM 消息带 `label · ` 前缀(会话目录名),但不再用图标区分包装/仅 hooks——
+续跑卡自带的"回复继续"提示已经让这个区分对你实际要做的事没有影响。
 
 ## 功能一览
 
-- **审批** —— Claude Code 上是双通道:`PermissionRequest` hook 与本地权限
-  对话**并行**——两边同时可答,先到先得。卡片不会立刻发出:
+- **姿态 —— `notify`(默认)/ `full` / `off`。** 一个坐在所有细旋钮之上的
+  粗开关。**`notify`**(默认)只监看 + 通知,但 shim 物理上无法 hold 或
+  阻塞任何审批——每个提示都保持 100% 原生(你本地终端的对话框,或无头时
+  CC 自己的 auto-deny)。**`full`** 开启远程审批:tlive hold 住每个工具调用,
+  让你在 IM / 桌面 / dashboard 上作答(即下方*审批*那条描述的一切)。
+  **`off`** 让每个 hook 都成 no-op(kill switch——不 gating、不通知、不监看、
+  不懒启动 daemon)。用 `tlive mode off|notify|full` 实时切换;shim 每个 hook
+  都重读 config,无需重启也无需新会话,`tlive status` 会显示当前生效的 mode。
+  远程审批设计成 opt-in——刚装好的工具绝不该能悄悄挂起你的工作流。
+- **审批** *(远程审批 —— `mode: full`)* —— Claude Code 上是双通道:
+  `PermissionRequest` hook 与本地权限对话**并行**——两边同时可答,先到先得。
+  卡片不会立刻发出:
   `approvals.approvalGraceSec`(默认 10 秒,`0` 关闭)先静默这么久,你在键盘前
   马上答掉的话,IM 卡就压根不会发出。IM 按钮 / web 卡默认约 24 小时内可答
   (`approvals.windowSec`,两家共用);
@@ -61,7 +85,9 @@ tlive run claude   # (可选)包装会话 → 实时 web 终端 + 预览卡
   **绝不自动拒绝**;没人答时本地提示一直有效。Telegram 卡片克制留白:标题
   整行粗体、按钮纯文字、段落间空行分层,唯一保留的 emoji 是高危命令标记或
   error 级别通知上的 `⚠️`;长 diff/命令仍走 expandable 折叠——用较新版本
-  Telegram 客户端渲染最佳。
+  Telegram 客户端渲染最佳。后台 / 异步**子代理默认透传**(被 hold 的子代理
+  没有并行本地框可兜底,所以 tlive 返回 `{}`、交给 CC 原生处理);想连子代理
+  也 hold 住等远程作答,设 `approvals.holdSubagents: true`。
 - **远程回答 `AskUserQuestion`(仅 Claude Code)** —— CC 为自己的提问工具
   fire `PermissionRequest`;tlive 把它转成单选或多选卡(复选框、实时
   `Submit (N)` 计数、`Skip`)而非 Allow/Deny。本地问题框依旧并行渲染且永远
@@ -193,21 +219,31 @@ tlive 刻意**不做**"手机从零 vibe coding"——官方远程做得更好�
 ```
 tlive setup            向导 + 注册厂商插件(幂等);--hooks-only 只重装插件
 tlive start | stop     daemon 生命周期(stop 幂等)
-tlive status           健康态、web 地址 + 二维码、配置路径
+tlive status           健康态、当前生效 mode、web 地址 + 二维码、配置路径
 tlive logs [-f]        看 daemon 日志
 tlive run <cmd> …      包装进程:本地终端 + web 终端
 tlive url              打印 dashboard 地址 + 二维码(全屏应用盖住 run banner 时用)
+tlive mode off|notify|full   设置姿态(见"功能一览");下一个 hook 即生效
 tlive hook <event>     hook shim(Claude Code 调用,不是给你用的;
                         Codex 没有 hook——见 app-server companion)
 ```
 
-IM 命令:`/perm on|off`(静音)、`/trust on|off`、`/help`。
-引用任意会话消息回复 = 打字进那个会话。
+`setup`、`start`、`stop`、`status`、`logs`、`run`、`url`、`hook` 是冻结面
+(由 `tests/contract/` 锁定);`mode` 与运行时开关 `mute | trust | safe`
+(`on|off`)、`desktop`(`on|off`)是加法命令。
+
+IM 命令:`/mute on|off`(静音 IM 通知)、`/trust on|off`(暂停审批——全部
+自动放行)、`/safe on|off`(自动放行日常操作)、`/help`。在客户端命令菜单里
+点一下裸命令,会回一组 on/off 按钮而不是报错。引用任意会话消息回复 =
+打字进那个会话。
 
 ## 配置(`~/.tlive/config.json`)
 
 ```jsonc
 {
+  // 姿态:"off" | "notify"(默认)| "full"(开远程审批)。
+  // 也可用 `tlive mode …` 实时设置;未设 / 未知值都回落 notify。
+  "mode": "notify",
   "adapters": {
     "telegram": { "token": "…", "chatIdAllowList": ["123"] },
     "feishu":   { "appId": "…", "appSecret": "…", "chatId": "oc_…" }
@@ -236,7 +272,15 @@ IM 命令:`/perm on|off`(静音)、`/trust on|off`、`/help`。
     //                     MCP/未知工具、AskUserQuestion 仍然发卡
     // 用于自主/agent 驱动、没有本地框的场景减少卡量。可用 /safe on|off 实时切换。
     // 绝不越过危险地板——只有 /trust on 才会自动放行危险操作。
-    "autoApprove": "readonly"
+    "autoApprove": "readonly",
+    // 是否连后台/异步子代理的审批也 hold 住等远程作答
+    //(默认 false:子代理透传给 CC 原生处理)。仅在 mode: full 下有意义。
+    "holdSubagents": false,
+    // 一个被 hold 的审批在窗口超时、无人应答时怎么办:
+    //  "defer"(默认)→ 透传 {}(回落 CC 原生);
+    //  "deny"        → 带一句"已超时"的拒绝,好让 turn 结束、续跑卡改道 agent。
+    // 绝不自动放行。
+    "timeoutAction": "defer"
   },
   "allowedSenders": [{ "channel": "telegram", "userId": "42" }]  // 可选
 }
