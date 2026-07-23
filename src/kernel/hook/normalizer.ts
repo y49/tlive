@@ -140,14 +140,33 @@ export function permissionRequestDecisionOut(decision: 'allow' | 'deny' | 'defer
 }
 
 
-/** session-start 欢迎提示:CC-only(Codex hooks 已退役),
- *  仅在 IM 未配置时通过 additionalContext 引导 agent 主动提示用户配置。 */
-export function sessionStartOut(vendor: HookVendor, imConfigured: boolean): string {
-  if (vendor !== 'claude' || imConfigured) return '{}';
-  return JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: 'SessionStart',
-      additionalContext: 'tlive 已就绪(hook 审批/监看已挂载),但 IM 通知还没配置 — 用户说"帮我配置 tlive"或运行 /tlive:setup 即可由你引导完成。',
-    },
-  });
+/** tlive 姿态开关。full = 远程审批 + 监看(卖点全开);notify = 只监看/通知,
+ *  PermissionRequest 绝不 gating(默认,安全:tlive 物理上无法 hold 任何审批);
+ *  off = 全关 kill switch。shim 按此短路(见 modeShortCircuit)。 */
+export type ShimMode = 'off' | 'notify' | 'full';
+
+/** session-start additionalContext(CC-only,Codex hooks 已退役)。分级引导:
+ *  - IM 未配置 → 先引导配 IM(优先,没 IM 谈不上远程)。
+ *  - IM 已配置但 mode≠full → 提示远程审批当前是关的,引导用 `tlive mode full` 打开
+ *    (默认 notify 下的"卖点在一步之外"提示,兜住手动配了 IM 却没走 setup 的缝)。
+ *  - IM 已配置且 full → {}(不打扰)。 */
+export function sessionStartOut(vendor: HookVendor, imConfigured: boolean, mode: ShimMode): string {
+  if (vendor !== 'claude') return '{}';
+  if (!imConfigured) {
+    return JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'SessionStart',
+        additionalContext: 'tlive 已就绪(hook 监看已挂载),但 IM 通知还没配置 — 用户说"帮我配置 tlive"或运行 /tlive:setup 即可由你引导完成。',
+      },
+    });
+  }
+  if (mode !== 'full') {
+    return JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'SessionStart',
+        additionalContext: 'tlive 的通知/监看已就绪,但远程审批(替你 hold 工具审批、可手机/桌面作答)当前是关的 — 用户想开启就运行 `tlive mode full`(或重跑 /tlive:setup)。',
+      },
+    });
+  }
+  return '{}';
 }

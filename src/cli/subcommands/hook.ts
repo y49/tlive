@@ -17,6 +17,7 @@ import {
   type HookEventName,
   type HookVendor,
   type MonitorEvent,
+  type ShimMode,
 } from '../../kernel/hook/normalizer.js';
 import { loadConfig } from '../../kernel/config/loader.js';
 import { spawnDaemonDetached } from '../../kernel/daemon/spawn.js';
@@ -59,6 +60,32 @@ export function continueWindow(approvals?: { continueWindowSec?: number }): numb
   return Math.min(Math.max(approvals?.continueWindowSec ?? 1800, 30), 86_400);
 }
 
+/** Mode posture gate (see ShimMode). Returns the stdout to write *and stop* for a
+ *  disabled/notify short-circuit, or null to proceed with normal handling.
+ *  - off    → '{}' for EVERY event: tlive does nothing (no gating, no IPC, no autostart).
+ *  - notify → '{}' for permission-request ONLY: the one gating hook is silenced so
+ *             tlive can never hold/block an approval (it falls through to CC-native);
+ *             every monitoring/notification hook still runs.
+ *  - full   → null everywhere: current behaviour (remote approval + monitoring). */
+export function modeShortCircuit(mode: ShimMode, event: HookEventName): string | null {
+  if (mode === 'off') return '{}';
+  if (mode === 'notify' && event === 'permission-request') return '{}';
+  return null;
+}
+
+/** Read the posture from config. Default 'notify' — a freshly-installed tlive
+ *  observes + notifies but never intercepts a permission decision until the user
+ *  opts into 'full' (via /tlive:setup or `tlive mode full`). Unreadable config or
+ *  an unknown value falls back to the safe 'notify'. */
+function readMode(home: string): ShimMode {
+  try {
+    const m = loadConfig(home).mode;
+    return m === 'off' || m === 'full' ? m : 'notify';
+  } catch {
+    return 'notify';
+  }
+}
+
 export function parseHookArgs(argv: string[]): { event?: HookEventName; vendor: HookVendor } {
   const vendor: HookVendor = argv.includes('--codex') ? 'codex' : 'claude';
   const event = argv.find((a) => !a.startsWith('--')) as HookEventName | undefined;
@@ -80,6 +107,15 @@ export async function runHook(argv: string[]): Promise<void> {
     process.stdout.write('{}');
     return;
   }
+
+  // Posture gate FIRST — before reading stdin / any IPC / daemon autostart. In
+  // 'notify' (default) a permission-request never reaches the hold logic below;
+  // in 'off' nothing runs at all. This is why "notify mode" can't hang anything:
+  // the gating hook is short-circuited to a pass-through {} before it can hold.
+  const home = process.env.TLIVE_HOME ?? join(homedir(), '.tlive');
+  const mode = readMode(home);
+  const short = modeShortCircuit(mode, event);
+  if (short !== null) { process.stdout.write(short); return; }
 
   try {
     const raw = await readStdin();
@@ -190,7 +226,7 @@ export async function runHook(argv: string[]): Promise<void> {
         const cfg = loadConfig(process.env.TLIVE_HOME ?? join(homedir(), '.tlive'));
         configured = Boolean(cfg.adapters.telegram?.token || cfg.adapters.feishu?.appId);
       } catch { /* 读不了按已配置,不打扰 */ }
-      process.stdout.write(sessionStartOut(vendor, configured));
+      process.stdout.write(sessionStartOut(vendor, configured, mode));
     } else {
       process.stdout.write('{}');
     }

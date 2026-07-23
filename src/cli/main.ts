@@ -17,6 +17,8 @@ Usage: tlive <subcommand> [args]   |   tlive --version
   run <cmd> [args]   wrap a process: local terminal + web terminal
   url                print the web dashboard URL + a QR code (for scanning)
   hook [--codex] <event>  hook shim (invoked by Claude/Codex hooks; --codex = Codex decision wire)
+  mode off|notify|full  posture: notify (default) = watch + notify, never gate approvals;
+                     full = remote approval on; off = do nothing
   mute on|off        mute / unmute IM notifications — on = quiet (same as IM /mute)
   trust on|off       pause approvals (auto-allow ALL) / resume (IM /trust)
   safe on|off        auto-allow routine ops, still ask for dangerous (IM /safe)
@@ -58,6 +60,7 @@ export async function runCli(argv: string[]): Promise<void> {
     case 'run': { const { runRun } = await import('./subcommands/run.js'); return runRun(rest); }
     case 'url': { const { runUrl } = await import('./subcommands/url.js'); return runUrl(rest); }
     case 'hook': { const { runHook } = await import('./subcommands/hook.js'); return runHook(rest); }
+    case 'mode': { const { runMode } = await import('./subcommands/mode.js'); return runMode(rest); }
     case 'mute': case 'trust': case 'safe': case 'desktop': {
       const { runToggle } = await import('./subcommands/toggle.js');
       return runToggle(name, rest);

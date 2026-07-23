@@ -152,14 +152,23 @@ describe('failure events', () => {
 
 describe('sessionStartOut(欢迎提示)', () => {
   it('claude + IM 未配置 → additionalContext', () => {
-    const o = JSON.parse(sessionStartOut('claude', false));
+    const o = JSON.parse(sessionStartOut('claude', false, 'full'));
     expect(o.hookSpecificOutput.hookEventName).toBe('SessionStart');
     expect(o.hookSpecificOutput.additionalContext).toContain('帮我配置 tlive');
   });
-  it('claude + 已配置 → {}', () => expect(sessionStartOut('claude', true)).toBe('{}'));
+  it('claude + 已配置 + full → {}', () => expect(sessionStartOut('claude', true, 'full')).toBe('{}'));
+  it('claude + 已配置 + notify → 提示远程审批是关的(引导 tlive mode full)', () => {
+    const o = JSON.parse(sessionStartOut('claude', true, 'notify'));
+    expect(o.hookSpecificOutput.hookEventName).toBe('SessionStart');
+    expect(o.hookSpecificOutput.additionalContext).toContain('tlive mode full');
+  });
+  it('claude + IM 未配置 → 仍是配置引导(与 mode 无关,先配 IM)', () => {
+    const o = JSON.parse(sessionStartOut('claude', false, 'notify'));
+    expect(o.hookSpecificOutput.additionalContext).toContain('帮我配置 tlive');
+  });
   it('codex → 恒 {}(输出 schema deny_unknown_fields)', () => {
-    expect(sessionStartOut('codex', false)).toBe('{}');
-    expect(sessionStartOut('codex', true)).toBe('{}');
+    expect(sessionStartOut('codex', false, 'notify')).toBe('{}');
+    expect(sessionStartOut('codex', true, 'full')).toBe('{}');
   });
 });
 

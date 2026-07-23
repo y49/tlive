@@ -33,6 +33,10 @@ export interface KernelConfig {
   policy?: PolicyConfig;
   approvals?: ApprovalsConfig;
   daemon?: { socketPath?: string; healthPort?: number; autoStart?: boolean };
+  /** tlive 姿态:'full' = 远程审批 + 监看(卖点全开);'notify' = 只监看/通知,
+   *  绝不 gating 任何审批(shim 默认,安全);'off' = 全关 kill switch。
+   *  缺省时 shim 按 'notify' 处理(见 hook.ts readMode)。 */
+  mode?: 'off' | 'notify' | 'full';
 }
 
 const DEFAULT: KernelConfig = { allowedSenders: [], adapters: {} };

@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Added — `mode` posture switch (off / notify / full), default `notify`
+
+- New top-level config `mode` (and `tlive mode off|notify|full`) sets what tlive is
+  allowed to do — a single coarse posture that sits above all the fine toggles:
+  - **`notify` (default)** — tlive watches and notifies (turn-finished /
+    waiting-for-input cards, dashboard monitoring), but the shim short-circuits every
+    `PermissionRequest` to a pass-through `{}`: tlive **can never hold or block an
+    approval**. Approvals stay 100% native (the local terminal dialog when
+    interactive; CC's own auto-deny when headless). Safe, least-surprise default —
+    a freshly-installed tool cannot silently hang a workflow.
+  - **`full`** — remote approval ON: tlive holds tool approvals so you can answer them
+    from IM / desktop / dashboard (the previous always-on behaviour). A SessionStart
+    hint nudges configured-but-not-`full` sessions toward `tlive mode full`.
+  - **`off`** — every hook is a no-op (kill switch): no gating, no notifications, no
+    monitoring, no daemon autostart.
+- `mode` is read by the hook shim from config on every event, so `tlive mode …` takes
+  effect on the next hook — no daemon restart, no new session needed.
+- **Behaviour change**: the default posture is now `notify`, so remote approval is
+  **opt-in** (`tlive mode full`, or via `/tlive:setup`). Rationale: intercepting
+  permission prompts is a real escalation that should be granted deliberately, and a
+  default must never be able to hang a workflow in a way that's hard to diagnose.
+  Existing setups that want remote approval should run `tlive mode full`.
+  (Follow-up: `/tlive:setup` will offer to enable `full` as its closing step.)
+
 ### Changed — sub-agents pass through by default (tlive stays transparent)
 
 - A tool call from a **backgrounded / async sub-agent** (the `PermissionRequest`
