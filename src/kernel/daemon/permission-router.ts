@@ -58,7 +58,15 @@ export interface PermissionRouterDeps {
    *  引入一个 CC 自己根本不会有的阻塞,且超时前没有本地兜底。tlive 因此默认对
    *  子 agent 完全透明;想手机远程批子 agent 的人 opt-in 打开(approvals.holdSubagents)。 */
   holdSubagents?: () => boolean;
+  /** 超时动作(opt-in)。默认(缺省/`'defer'`)= 超时落回 `{}`(CC 原生:本地框
+   *  继续等 / 无头 auto-deny),绝不自动决定。`'deny'` = 超时即拒(带"timed out"
+   *  说明),让 turn 得以结束 → 续跑卡可重定向。deny 是安全方向,不破 never-auto-
+   *  allow 地板。只作用于**真的 hold 到超时**的请求,不影响答复面缺失的即时 defer。 */
+  timeoutAction?: () => 'defer' | 'deny';
 }
+
+/** 超时改判为 deny 时给 agent 的说明——让它知道不是硬拒、是没人及时答,可重试。 */
+const TIMEOUT_DENY_MESSAGE = 'Approval timed out — no one answered within the window, so the tool was not run. Ask again if it is still needed.';
 
 /** Unanswered request auto-defers after this (s). Must be < shim IPC (590s) < hook timeout (600s). */
 const PERMISSION_TIMEOUT_SEC = 580;
@@ -126,7 +134,15 @@ export class PermissionRouter {
         ...(opts.agentId ? { agentId: opts.agentId } : {}),
       });
       setTimeout(() => {
-        if (this.pending.has(requestId)) { this.pending.delete(requestId); resolve({ decision: 'defer' }); }
+        if (this.pending.has(requestId)) {
+          this.pending.delete(requestId);
+          // Held-then-timed-out: 'deny' (opt-in) ends it so the turn can move on
+          // and the continue card can redirect; 'defer' (default) falls back to
+          // CC-native (local dialog / auto-deny), never auto-deciding.
+          resolve(this.deps.timeoutAction?.() === 'deny'
+            ? { decision: 'deny', message: TIMEOUT_DENY_MESSAGE }
+            : { decision: 'defer' });
+        }
       }, (opts.timeoutSec ?? PERMISSION_TIMEOUT_SEC) * 1000).unref();
       // 调用方死亡 → 放弃该 pending。判据零误判:answer()/cancel() 都先
       // pending.delete() 再 resolve,所以此时 has() 为真 ⟺ 真的没人答过。

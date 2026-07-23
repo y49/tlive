@@ -24,7 +24,7 @@ export interface PolicyConfig { autoAllow?: string[]; autoDeny?: string[]; ask?:
  *  continueWindowSec: async Stop hook 后台等续跑回复的时长(默认 1800)。
  *  continueGraceSec: turn 结束后等这么久再推续跑卡(默认 15)。
  *  approvalGraceSec: 审批卡推送前的静默期(默认 10;0=立即发)。 */
-export interface ApprovalsConfig { windowSec?: number; continueWindowSec?: number; continueGraceSec?: number; approvalGraceSec?: number; desktopNotify?: boolean; autoApprove?: 'readonly' | 'safe'; holdSubagents?: boolean }
+export interface ApprovalsConfig { windowSec?: number; continueWindowSec?: number; continueGraceSec?: number; approvalGraceSec?: number; desktopNotify?: boolean; autoApprove?: 'readonly' | 'safe'; holdSubagents?: boolean; timeoutAction?: 'defer' | 'deny' }
 
 export interface KernelConfig {
   allowedSenders: Array<{ channel: 'telegram' | 'feishu'; userId: string }>;

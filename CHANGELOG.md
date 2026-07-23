@@ -60,6 +60,18 @@ All notable changes to this project will be documented in this file.
   headless/async agents, which CC auto-denies *before any hook fires* (so tlive
   never saw them either way).
 
+### Added — `timeoutAction` (opt-in: deny a held approval on timeout)
+
+- **`approvals.timeoutAction: "deny"`** (default `"defer"`) changes what happens when a
+  *held* approval times out with nobody answering: instead of `defer` (pass-through
+  `{}` → CC-native fallback, e.g. a local dialog left waiting indefinitely), it resolves
+  as a **deny** carrying a "timed out — ask again if still needed" message. The turn can
+  then end, so the continuation card can redirect the agent. `deny` is the safe
+  direction (never auto-*allow*), and it only affects a hold that actually expired — the
+  no-answer-surface immediate `defer` and the sub-agent pass-through are untouched.
+  Pairs naturally with `holdSubagents` (bound a remote-held sub-agent instead of leaving
+  it stalled).
+
 ### Added — hook consistency checks (the "doctor", CI edition)
 
 - New consistency tests lock three surfaces together: the plugin's

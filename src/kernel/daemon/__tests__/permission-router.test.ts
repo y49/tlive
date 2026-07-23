@@ -444,6 +444,39 @@ describe('approval grace gating', () => {
   });
 });
 
+describe('timeoutAction (opt-in: deny on timeout instead of defer)', () => {
+  it('default (unset) → a timed-out hold resolves defer (CC-native fallback, unchanged)', async () => {
+    vi.useFakeTimers();
+    try {
+      const r = new PermissionRouter(base());
+      const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 5 });
+      await vi.advanceTimersByTimeAsync(5_100);
+      expect((await p).decision).toBe('defer');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("timeoutAction 'deny' → a timed-out hold resolves deny + a 'timed out' message (bounded block; turn ends → continue card can redirect)", async () => {
+    vi.useFakeTimers();
+    try {
+      const r = new PermissionRouter(base({ timeoutAction: () => 'deny' }));
+      const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 5 });
+      await vi.advanceTimersByTimeAsync(5_100);
+      const res = await p;
+      expect(res.decision).toBe('deny');
+      expect(res.message).toMatch(/timed out/i);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("timeoutAction 'deny' does NOT affect an answered request (only the timeout path)", async () => {
+    let id = '';
+    const r = new PermissionRouter(base({ timeoutAction: () => 'deny', sendToChat: async (_t: unknown, c: { requestId: string }) => { id = c.requestId; } }));
+    const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
+    await new Promise((res) => setTimeout(res, 10));
+    r.answer(id, true);
+    expect((await p).decision).toBe('allow');
+  });
+});
+
 describe('sub-agent pass-through (tlive stays transparent for sub-agents by default)', () => {
   // A backgrounded/async sub-agent has NO parallel local dialog while a synchronous
   // PermissionRequest hook is held (only the main session does — first-answer-wins).

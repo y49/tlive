@@ -347,6 +347,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     // Sub-agents pass through by default (tlive transparent — no tlive-introduced
     // block); opt in to hold + remote-answer sub-agent approvals. See permission-router.
     holdSubagents: () => cfg.approvals?.holdSubagents ?? false,
+    // Opt-in: on a held approval's timeout, deny (→ turn ends → continue card can
+    // redirect) instead of the default defer (→ CC-native local fallback).
+    timeoutAction: () => cfg.approvals?.timeoutAction ?? 'defer',
     onPending: ({ key, cwd, requestId, title, body, toolName, askOptions, askQuestion, askHeader, askMulti }) => {
       // Desktop ping FIRST — this notification is for the person AT this
       // machine, so it must be immediate (the IM card's grace delay exists to
