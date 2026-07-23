@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseHookInput, permissionRequestDecisionOut, sessionStartOut } from '../normalizer.js';
+import { parseHookInput, permissionRequestDecisionOut, sessionStartOut, effectiveMode } from '../normalizer.js';
 
 describe('hook normalizer', () => {
   it('parses PostToolUse as activity', () => {
@@ -147,6 +147,19 @@ describe('failure events', () => {
   it('stop-failure is unaffected — never droppable (Stop hook failing itself, not tool_error-based)', () => {
     const n = parseHookInput('stop-failure', { cwd: '/x', session_id: 's', error_type: 'rate_limit' });
     expect((n as any).droppable).toBeUndefined();
+  });
+});
+
+describe('effectiveMode(缺省 notify 的单一真相)', () => {
+  it("透传 'off' 与 'full'", () => {
+    expect(effectiveMode('off')).toBe('off');
+    expect(effectiveMode('full')).toBe('full');
+  });
+  it("其余一律 → 'notify'(未设 / 未知 / null)", () => {
+    expect(effectiveMode(undefined)).toBe('notify');
+    expect(effectiveMode('notify')).toBe('notify');
+    expect(effectiveMode('bogus')).toBe('notify');
+    expect(effectiveMode(null)).toBe('notify');
   });
 });
 

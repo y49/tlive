@@ -145,6 +145,14 @@ export function permissionRequestDecisionOut(decision: 'allow' | 'deny' | 'defer
  *  off = 全关 kill switch。shim 按此短路(见 modeShortCircuit)。 */
 export type ShimMode = 'off' | 'notify' | 'full';
 
+/** Resolve a config `mode` value to the effective posture — the single source of
+ *  the `notify` default. Unset / unknown / malformed all fall back to the safe
+ *  `notify` (watch + notify, never gate). Used by both the shim (readMode) and
+ *  `tlive status` so the displayed posture always matches the enforced one. */
+export function effectiveMode(m: unknown): ShimMode {
+  return m === 'off' || m === 'full' ? m : 'notify';
+}
+
 /** session-start additionalContext(CC-only,Codex hooks 已退役)。分级引导:
  *  - IM 未配置 → 先引导配 IM(优先,没 IM 谈不上远程)。
  *  - IM 已配置但 mode≠full → 提示远程审批当前是关的,引导用 `tlive mode full` 打开

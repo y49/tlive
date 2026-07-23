@@ -14,6 +14,7 @@ import {
   parseHookInput,
   permissionRequestDecisionOut,
   sessionStartOut,
+  effectiveMode,
   type HookEventName,
   type HookVendor,
   type MonitorEvent,
@@ -79,8 +80,7 @@ export function modeShortCircuit(mode: ShimMode, event: HookEventName): string |
  *  an unknown value falls back to the safe 'notify'. */
 function readMode(home: string): ShimMode {
   try {
-    const m = loadConfig(home).mode;
-    return m === 'off' || m === 'full' ? m : 'notify';
+    return effectiveMode(loadConfig(home).mode);
   } catch {
     return 'notify';
   }
