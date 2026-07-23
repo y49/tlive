@@ -179,7 +179,7 @@ describe('PermissionRouter web-only gate + cancel + per-request timeout', () => 
   it('cancel does not cross sessions or sub-agents sharing key+tool', async () => {
     // 两个子 agent(同 key 同 tool 不同 agentId)各有一张 pending 卡:
     // 本地答掉 agent A 的对话框,不得误伤 agent B 的卡。
-    const r = new PermissionRouter(base({ configuredChats: () => [], hasWebClients: () => true }));
+    const r = new PermissionRouter(base({ configuredChats: () => [], hasWebClients: () => true, holdSubagents: () => true }));
     const pA = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, sessionId: 's1', agentId: 'agentA' });
     const pB = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, sessionId: 's1', agentId: 'agentB' });
     await new Promise((res) => setImmediate(res));
@@ -191,7 +191,7 @@ describe('PermissionRouter web-only gate + cancel + per-request timeout', () => 
   });
 
   it('matchAgent tri-state: null = main-session only, undefined = any, string = that agent', async () => {
-    const r = new PermissionRouter(base({ configuredChats: () => [], hasWebClients: () => true }));
+    const r = new PermissionRouter(base({ configuredChats: () => [], hasWebClients: () => true, holdSubagents: () => true }));
     const pMain = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {} }); // 主会话卡
     const pSub = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, agentId: 'agentA' }); // 子 agent 卡
     await new Promise((res) => setImmediate(res));
@@ -441,5 +441,51 @@ describe('approval grace gating', () => {
     expect(sent).toEqual([]);
     r.cancel({ key: '/w' });
     await p;
+  });
+});
+
+describe('sub-agent pass-through (tlive stays transparent for sub-agents by default)', () => {
+  // A backgrounded/async sub-agent has NO parallel local dialog while a synchronous
+  // PermissionRequest hook is held (only the main session does — first-answer-wins).
+  // Holding a sub-agent would therefore introduce a block CC never has on its own,
+  // with no local fallback until the window times out. So the default is pass-through
+  // (defer → shim outputs {} → CC-native: local dialog if interactive, else auto-deny).
+  // Remote sub-agent approval is opt-in via approvals.holdSubagents.
+  it('a sub-agent request (agentId present) passes through to defer by default — no card, no onPending, even when an answer surface exists', async () => {
+    const send = vi.fn().mockResolvedValue(undefined);
+    const pend: unknown[] = [];
+    const r = new PermissionRouter(base({ sendToChat: send, hasLocalAnswerPath: () => true, onPending: (p: unknown) => pend.push(p) }));
+    const res = await r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, agentId: 'agentA', timeoutSec: 0.1 });
+    expect(res.decision).toBe('defer');
+    expect(send).not.toHaveBeenCalled();
+    expect(pend).toEqual([]);
+  });
+
+  it('with holdSubagents opt-in, a sub-agent request holds and is remotely answerable', async () => {
+    let id = '';
+    const r = new PermissionRouter(base({ holdSubagents: () => true, sendToChat: async (_t: unknown, c: { requestId: string }) => { id = c.requestId; } }));
+    const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, agentId: 'agentA', timeoutSec: 60 });
+    await new Promise((res) => setTimeout(res, 10));
+    expect(id).not.toBe('');
+    r.answer(id, true);
+    expect((await p).decision).toBe('allow');
+  });
+
+  it('a main-session request (no agentId) is unaffected — still holds and sends a card', async () => {
+    let id = '';
+    const r = new PermissionRouter(base({ sendToChat: async (_t: unknown, c: { requestId: string }) => { id = c.requestId; } }));
+    const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
+    await new Promise((res) => setTimeout(res, 10));
+    expect(id).not.toBe('');
+    r.answer(id, true);
+    expect((await p).decision).toBe('allow');
+  });
+
+  it('a policy-allowed sub-agent tool still auto-allows (safe/trust wins over pass-through, no regression)', async () => {
+    const send = vi.fn();
+    const r = new PermissionRouter(base({ policyDecide: () => ({ decision: 'allow', reason: 'read-only' }), sendToChat: send }));
+    const res = await r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Read', input: {}, agentId: 'agentA' });
+    expect(res.decision).toBe('allow');
+    expect(send).not.toHaveBeenCalled();
   });
 });

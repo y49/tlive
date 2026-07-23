@@ -344,6 +344,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       return renderApprovalCard({ toolName: req.toolName, input: req.input });
     },
     graceSec: () => Math.max(cfg.approvals?.approvalGraceSec ?? 10, 0),
+    // Sub-agents pass through by default (tlive transparent — no tlive-introduced
+    // block); opt in to hold + remote-answer sub-agent approvals. See permission-router.
+    holdSubagents: () => cfg.approvals?.holdSubagents ?? false,
     onPending: ({ key, cwd, requestId, title, body, toolName, askOptions, askQuestion, askHeader, askMulti }) => {
       // Desktop ping FIRST — this notification is for the person AT this
       // machine, so it must be immediate (the IM card's grace delay exists to

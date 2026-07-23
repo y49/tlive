@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Changed — sub-agents pass through by default (tlive stays transparent)
+
+- A tool call from a **backgrounded / async sub-agent** (the `PermissionRequest`
+  payload carries `agent_id`) now **passes through by default** — tlive returns
+  `{}` and lets CC handle it natively (a local dialog in the parent terminal when
+  interactive, or CC's own auto-deny when headless) instead of holding the
+  approval for a remote answer. Rationale, from real-machine probes (CC 2.1.217):
+  a **main-session** approval renders its local dialog *in parallel* while the
+  synchronous hook is held (first-answer-wins — so tlive never blocks you at the
+  keyboard), but a **backgrounded sub-agent has no parallel local dialog** during
+  the hold. Holding one would introduce a block CC never has on its own, with no
+  local fallback until the window times out — so the default is "behave as if
+  tlive weren't there" for sub-agents.
+- Remote sub-agent approval is **opt-in** via **`approvals.holdSubagents: true`**:
+  a sub-agent's approval is then held and answerable from IM / desktop / dashboard
+  like a main-session card (same window).
+- Unchanged: main-session approvals; `safe`/`trust` auto-allow (a safe/trusted
+  sub-agent tool still auto-allows — the policy check runs first); and true
+  headless/async agents, which CC auto-denies *before any hook fires* (so tlive
+  never saw them either way).
+
 ### Added — hook consistency checks (the "doctor", CI edition)
 
 - New consistency tests lock three surfaces together: the plugin's

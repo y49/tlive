@@ -51,6 +51,13 @@ export interface PermissionRouterDeps {
   /** 发 IM 卡前的静默期(秒)。本地秒答的审批在此窗口内 cancel → 卡永不发出
    *  (键盘前零刷屏)。0 = 立即发。web 广播(onPending)不受影响。 */
   graceSec: () => number;
+  /** 子 agent(请求带 agentId)的审批是否也 hold 等远程答。默认(缺省/false)=
+   *  pass-through:立即 defer(→ shim 输出 {} → CC 原生处理:交互终端弹本地框、
+   *  无头 auto-deny)。理由:被后台化的子 agent 在同步 hook 被 hold 期间**没有**
+   *  并行本地框(只有主会话有,先答先得 —— 真机实测),所以 hold 一个子 agent 会
+   *  引入一个 CC 自己根本不会有的阻塞,且超时前没有本地兜底。tlive 因此默认对
+   *  子 agent 完全透明;想手机远程批子 agent 的人 opt-in 打开(approvals.holdSubagents)。 */
+  holdSubagents?: () => boolean;
 }
 
 /** Unanswered request auto-defers after this (s). Must be < shim IPC (590s) < hook timeout (600s). */
@@ -87,6 +94,16 @@ export class PermissionRouter {
     // Policy first: an auto-allow (read-only / trust switch) skips the card even when muted.
     const pd = this.deps.policyDecide({ toolName: opts.toolName, input: opts.input, permissionMode: opts.permissionMode });
     if (pd.decision === 'allow') return { decision: 'allow' };
+
+    // Sub-agent pass-through (方案①): stay transparent for backgrounded/async
+    // sub-agents by default (see holdSubagents doc). Holding one blocks it with no
+    // parallel local dialog until the window times out — a block CC never has on its
+    // own. defer → shim {} → CC-native (local dialog if interactive, else auto-deny).
+    // Runs AFTER the policy allow-check, so a safe/trusted sub-agent tool still
+    // auto-allows; opt-in holdSubagents makes sub-agent approvals remotely answerable.
+    if (opts.agentId && !(this.deps.holdSubagents?.() ?? false)) {
+      return { decision: 'defer' };
+    }
 
     // Answer-surface gate: fall back to the local terminal (defer) only when
     // NOBODY can answer remotely. Muting IM (/mute) no longer defers on its own

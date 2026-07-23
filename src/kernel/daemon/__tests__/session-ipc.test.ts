@@ -58,9 +58,12 @@ describe('parent-session 清场 must be agent-scoped (backgrounded sub-agent app
   const tick = () => new Promise((r) => setTimeout(r, 40));
   // A configured chat keeps requestPermission pending; with no injected imAdapters
   // sendToChat is a no-op (no network), so the pending simply sits in the router.
+  // holdSubagents:true — these tests exercise the *held* sub-agent path (the
+  // cancel-scoping fix). By default sub-agents pass through (no pending to protect),
+  // so remote-hold must be opted in to create a backgrounded sub-agent card at all.
   const writeConfig = () => writeFileSync(join(tmp, 'config.json'), JSON.stringify({
     adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
-    approvals: { approvalGraceSec: 0, continueGraceSec: 0, continueWindowSec: 30 },
+    approvals: { approvalGraceSec: 0, continueGraceSec: 0, continueWindowSec: 30, holdSubagents: true },
   }));
   const fireSubAgentApproval = () =>
     request({ kind: 'hook.permission.request', cwd: '/proj', sessionId: 'parent', toolName: 'Bash', input: { command: 'date' }, agentId: 'subA' },
@@ -114,6 +117,21 @@ describe('parent-session 清场 must be agent-scoped (backgrounded sub-agent app
 
     h.permissionRouter.cancel({ key: 'parent' });
     await Promise.all([sub, stop]);
+  });
+
+  it('by default (holdSubagents off) a sub-agent approval passes through — no pending, tlive stays transparent', async () => {
+    // No holdSubagents in config → default false. A backgrounded sub-agent has no
+    // parallel local dialog while a sync hook is held, so holding it would block it
+    // with no fallback; instead tlive defers (shim {} → CC-native handling).
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+      approvals: { approvalGraceSec: 0, continueGraceSec: 0, continueWindowSec: 30 },
+    }));
+    h = await bootstrapDaemon({ home: tmp });
+    const res = await request({ kind: 'hook.permission.request', cwd: '/proj', sessionId: 'parent', toolName: 'Bash', input: { command: 'date' }, agentId: 'subA' },
+      { socketPath: sock, timeoutMs: 4000 });
+    expect(res.kind === 'hook.permission.result' && res.decision).toBe('defer');
+    expect(h.permissionRouter.pendingCount()).toBe(0);
   });
 });
 
