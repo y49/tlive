@@ -6,7 +6,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  id-token: write
+  id-token: write # npm provenance
 
 jobs:
   release-please:
@@ -20,85 +20,34 @@ jobs:
         with:
           release-type: node
 
-  build-go:
-    needs: release-please
-    if: ${{ needs.release-please.outputs.release_created }}
-    strategy:
-      matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
-          - goos: darwin
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
-          - goos: windows
-            goarch: amd64
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-      - name: Build
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-        run: |
-          cd core
-          ext=""
-          if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
-          CGO_ENABLED=0 go build -ldflags="-s -w" -o "tlive-${GOOS}-${GOARCH}${ext}" ./cmd/tlive/
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tlive-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: core/tlive-*
-
-  test-bridge:
-    needs: release-please
-    if: ${{ needs.release-please.outputs.release_created }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Install, test, build
-        working-directory: bridge
-        run: |
-          npm install
-          npm test
-          npm run build
-
-  upload-assets:
-    needs: [release-please, build-go, test-bridge]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          merge-multiple: true
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.release-please.outputs.tag_name }}
-          files: tlive-*
-
+  # tlive is a single pure-Node package (was v1's Go `core/` + `bridge/` — both
+  # removed in the v2 rewrite). One job: verify on the release commit, then
+  # publish the root package to npm. Prerelease versions (2.0.0-beta.0) go to
+  # the matching dist-tag (`beta`), stable to `latest`.
   publish-npm:
-    needs: [release-please, build-go, test-bridge]
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: pnpm
           registry-url: 'https://registry.npmjs.org'
-      - name: Build Bridge
-        working-directory: bridge
-        run: |
-          npm install
-          npm run build
+      - run: pnpm install --frozen-lockfile
       - name: Publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public
+        run: |
+          # prepublishOnly runs `npm run ci` (typecheck + test + build) as the safety net.
+          ver=$(node -p "require('./package.json').version")
+          case "$ver" in
+            *-*) tag="${ver#*-}"; tag="${tag%%.*}" ;; # 2.0.0-beta.0 -> beta
+            *)   tag="latest" ;;
+          esac
+          echo "publishing $ver under dist-tag '$tag'"
+          pnpm publish --no-git-checks --provenance --access public --tag "$tag"
