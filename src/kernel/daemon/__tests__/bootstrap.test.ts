@@ -7,6 +7,25 @@ import { request, daemonSocketPath } from '../../ipc/client';
 import type { IMAdapter, IMChannel, OutgoingMessage, IncomingEnvelope } from '../../contracts/im-adapter';
 import { SessionRegistry } from '../../web/session-registry';
 
+// #45 — robustness helpers for this file's "held request" pattern
+// (const pending = request(...); …asserts…; await pending). On a slow/jittery
+// Windows named-pipe runner two things bit: (1) the fixed setTimeout before
+// reading `sent[0]` wasn't always long enough → the read/assert threw; (2) that
+// throw happened BEFORE `await pending`, abandoning the held request, which then
+// rejected IpcConnectionClosedError at shutdown() with no handler attached → an
+// unhandled rejection failed the whole run (#45's Windows "teardown noise").
+// `held()` pre-attaches a no-op catch (the promise stays awaitable — a real
+// reply/rejection still reaches `await pending`) so an abandoned request can
+// never surface as unhandled. `waitForSent()` polls until the async card
+// actually went out instead of guessing a fixed delay.
+function held<T>(p: Promise<T>): Promise<T> {
+  p.catch(() => { /* abandoned-at-teardown guard; `await pending` still observes it */ });
+  return p;
+}
+async function waitForSent(sent: unknown[], n = 1): Promise<void> {
+  await vi.waitFor(() => expect(sent.length).toBeGreaterThanOrEqual(n), { timeout: 3000, interval: 10 });
+}
+
 let tmp: string;
 let h: DaemonHandle;
 
@@ -157,6 +176,7 @@ describe('local-answer cancel + Stop fast-null (integration)', () => {
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
       { socketPath: sock, timeoutMs: 10_000 },
     );
+    held(pending);
     await new Promise((r) => setTimeout(r, 100)); // let the card go pending
     await request(
       { kind: 'hook.event', event: { event: 'activity', cwd: '/w', sessionId: 's1', toolName: 'Bash', result: {} } },
@@ -219,7 +239,8 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       },
       { socketPath: sock, timeoutMs: 10_000 },
     );
-    await new Promise((r) => setTimeout(r, 100)); // grace=0, let the card go out
+    held(pending);
+    await waitForSent(sent);
     expect(sent).toHaveLength(1);
     const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
     const ids = card.buttons?.map((b) => b.id) ?? [];
@@ -257,7 +278,8 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       },
       { socketPath: sock, timeoutMs: 10_000 },
     );
-    await new Promise((r) => setTimeout(r, 100));
+    held(pending);
+    await waitForSent(sent);
     const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
     const skipBtn = card.buttons!.find((b) => b.id.startsWith('askskip:'))!;
     adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: skipBtn.id, ts: 0 });
@@ -285,7 +307,8 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       },
       { socketPath: sock, timeoutMs: 10_000 },
     );
-    await new Promise((r) => setTimeout(r, 100));
+    held(pending);
+    await waitForSent(sent);
     const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
     const pickBlue = card.buttons!.find((b) => b.id.endsWith(':1'))!;
     adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: pickBlue.id, ts: 0 });
@@ -320,6 +343,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'touch /x' }, timeoutSec: 60 },
       { socketPath: sock, timeoutMs: 10_000 },
     );
+    held(pending);
     await new Promise((r) => setTimeout(r, 100));
     expect(notes).toHaveLength(1); // exactly once — not once per configured channel
     expect(notes[0].title).toContain('Bash');
@@ -347,6 +371,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
       { socketPath: sock, timeoutMs: 10_000 },
     );
+    held(pending);
     await new Promise((r) => setTimeout(r, 150));
     expect(sent).toHaveLength(0); // …but the desktop already knows
     expect(notes).toHaveLength(1);
@@ -379,6 +404,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
       { socketPath: sock, timeoutMs: 10_000 },
     );
+    held(pending);
     await new Promise((r) => setTimeout(r, 100));
     expect(notes).toHaveLength(0); // toast gated off; the IM card still went out
     expect(sent).toHaveLength(1);
@@ -410,6 +436,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'touch /x' }, timeoutSec: 60 },
       { socketPath: sock, timeoutMs: 10_000 },
     );
+    held(pending);
     await new Promise((r) => setTimeout(r, 150));
     expect(sent).toHaveLength(2); // one card per channel…
     expect(notes).toHaveLength(1); // …but a single desktop ping
@@ -484,7 +511,8 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       },
       { socketPath: sock, timeoutMs: 10_000 },
     );
-    await new Promise((r) => setTimeout(r, 100));
+    held(pending);
+    await waitForSent(sent);
     const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
     const approveBtn = card.buttons!.find((b) => b.id.startsWith('approve:'))!;
     adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: approveBtn.id, ts: 0 });
@@ -516,6 +544,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       },
       { socketPath: sock, timeoutMs: 10_000 },
     );
+    held(pending);
     await new Promise((r) => setTimeout(r, 100));
     const cardMsgId = 'm1'; // interactiveAdapter assigns sequential ids m1, m2, …
     adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x2', text: 'use mv to the scratchpad instead', replyToMessageId: cardMsgId, ts: 0 });
@@ -543,7 +572,8 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'AskUserQuestion', input: { questions: [] }, timeoutSec: 60 },
       { socketPath: sock, timeoutMs: 10_000 },
     );
-    await new Promise((r) => setTimeout(r, 100));
+    held(pending);
+    await waitForSent(sent);
     const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
     const ids = card.buttons?.map((b) => b.id) ?? [];
     expect(ids.some((id) => id.startsWith('approve:'))).toBe(true);
@@ -579,7 +609,8 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
       const sock = daemonSocketPath(tmp);
       const pending = fireMultiSelectRequest(sock);
-      await new Promise((r) => setTimeout(r, 100));
+      held(pending);
+      await waitForSent(sent);
       const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
       const ids = card.buttons?.map((b) => b.id) ?? [];
       expect(ids.filter((id) => id.startsWith('asktoggle:')).length).toBe(2); // one per option
@@ -605,7 +636,8 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
       const sock = daemonSocketPath(tmp);
       const pending = fireMultiSelectRequest(sock);
-      await new Promise((r) => setTimeout(r, 100));
+      held(pending);
+      await waitForSent(sent);
       const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
       const toggleBlue = card.buttons!.find((b) => b.id.startsWith('asktoggle:') && b.id.endsWith(':1'))!;
 
@@ -637,7 +669,8 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
       const sock = daemonSocketPath(tmp);
       const pending = fireMultiSelectRequest(sock);
-      await new Promise((r) => setTimeout(r, 100));
+      held(pending);
+      await waitForSent(sent);
       const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
       const answerSpy = vi.spyOn(h.permissionRouter, 'answer');
       const submitBtn = card.buttons!.find((b) => b.id.startsWith('asksubmit:'))!;
@@ -677,7 +710,8 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
       const sock = daemonSocketPath(tmp);
       const pending = fireMultiSelectRequest(sock);
-      await new Promise((r) => setTimeout(r, 100));
+      held(pending);
+      await waitForSent(sent);
       const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
       const toggleRed = card.buttons!.find((b) => b.id.startsWith('asktoggle:') && b.id.endsWith(':0'))!;
       const submitBtn = card.buttons!.find((b) => b.id.startsWith('asksubmit:'))!;
@@ -690,17 +724,17 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       const r = await pending as { kind: string; decision?: string; message?: string };
       expect(r.decision).toBe('allow'); // ask answer = allow + updatedInput
 
-      // Let both artificially-delayed edits land (serialized: ~50ms + ~5ms with the fix).
-      await new Promise((r2) => setTimeout(r2, 150));
-
-      expect(edits.length).toBe(2);
-      const last = edits.at(-1)!;
-      const lastMsg = last.msg as { title?: string; buttons?: unknown };
-      // The settlement edit (from onResolved) must be the one that lands LAST —
-      // "no zombie cards": the final state must be the answered card, not the
-      // reverted checkbox layout.
-      expect(lastMsg.title).toContain('Answered');
-      expect(lastMsg.buttons).toBeUndefined();
+      // Poll until BOTH artificially-delayed edits have landed AND the card has
+      // settled — the LAST edit must be the settlement (from onResolved), never a
+      // late toggle edit resurrecting the checkbox layout ("no zombie cards").
+      // vi.waitFor holds the invariant deterministically instead of guessing a
+      // fixed delay (fragile on slow/jittery Windows named-pipe timing).
+      await vi.waitFor(() => {
+        expect(edits.length).toBe(2);
+        const m = edits.at(-1)!.msg as { title?: string; buttons?: unknown };
+        expect(m.title).toContain('Answered');
+        expect(m.buttons).toBeUndefined();
+      }, { timeout: 3000, interval: 20 });
     });
 
     it('dual-channel race: a slow channel\'s in-flight toggle loop must not let a fast channel\'s settlement land, then get overwritten by a late toggle edit (multi-channel review Important repro)', async () => {
@@ -755,7 +789,9 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       h = await bootstrapDaemon({ home: tmp, imAdapters: [tg, fs] });
       const sock = daemonSocketPath(tmp);
       const pending = fireMultiSelectRequest(sock);
-      await new Promise((r) => setTimeout(r, 100)); // grace=0, let both cards go out
+      held(pending);
+      await waitForSent(sentTg);
+      await waitForSent(sentFs);
       expect(sentTg).toHaveLength(1);
       expect(sentFs).toHaveLength(1);
       const card = sentTg[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
@@ -771,17 +807,15 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       const r = await pending as { kind: string; decision?: string };
       expect(r.decision).toBe('allow'); // ask answer = allow + updatedInput
 
-      // Let both artificially-delayed channels' edits fully land (serialized
-      // per-rid: worst case is well under 80ms*2 + 5ms*2).
-      await new Promise((r2) => setTimeout(r2, 300));
-
-      const fsEdits = edits.filter((e) => e.channel === 'feishu');
-      const last = fsEdits.at(-1)!;
-      const lastMsg = last.msg as { title?: string; buttons?: unknown };
-      // "no zombie cards": feishu's card must end up on the settled/Answered
-      // state too, not reverted to the checkbox layout by a late toggle edit.
-      expect(lastMsg.title).toContain('Answered');
-      expect(lastMsg.buttons).toBeUndefined();
+      // Poll until feishu's card has settled — its LAST edit must be the
+      // settlement/Answered state, not reverted to the checkbox layout by a late
+      // toggle edit ("no zombie cards"). Deterministic vs a fixed delay.
+      await vi.waitFor(() => {
+        const fsEdits = edits.filter((e) => e.channel === 'feishu');
+        const m = fsEdits.at(-1)?.msg as { title?: string; buttons?: unknown } | undefined;
+        expect(m?.title).toContain('Answered');
+        expect(m?.buttons).toBeUndefined();
+      }, { timeout: 3000, interval: 20 });
     });
 
     it('Submit with picks answers deny+message carrying every selected label, and edits the card to Answered', async () => {
@@ -792,7 +826,8 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
       const sock = daemonSocketPath(tmp);
       const pending = fireMultiSelectRequest(sock);
-      await new Promise((r) => setTimeout(r, 100));
+      held(pending);
+      await waitForSent(sent);
       const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
       const toggleRed = card.buttons!.find((b) => b.id.startsWith('asktoggle:') && b.id.endsWith(':0'))!;
       const toggleBlue = card.buttons!.find((b) => b.id.startsWith('asktoggle:') && b.id.endsWith(':1'))!;
@@ -829,7 +864,8 @@ describe('quoting a live approval card = deny with guidance (Task 7)', () => {
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'rm -rf /tmp/x' }, timeoutSec: 60 },
       { socketPath: sock, timeoutMs: 10_000 },
     );
-    await new Promise((r) => setTimeout(r, 100)); // let the card go pending + send
+    held(pending);
+    await waitForSent(sent);
     expect(sent).toHaveLength(1); // sanity: the card really was sent, its messageId is `m1`
     adapter.fire({
       channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1',
@@ -861,7 +897,8 @@ describe('quoting a live approval card = deny with guidance (Task 7)', () => {
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'rm -rf /tmp/x' }, timeoutSec: 60 },
       { socketPath: sock, timeoutMs: 10_000 },
     );
-    await new Promise((r) => setTimeout(r, 100));
+    held(pending);
+    await waitForSent(sent);
     const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
     const denyBtn = card.buttons!.find((b) => b.id.startsWith('deny:'))!;
     adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: denyBtn.id, ts: 0 });
