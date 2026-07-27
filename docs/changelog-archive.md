@@ -799,7 +799,7 @@ changelog covers the same ground more tersely.
   cache; after a `tlive` upgrade, re-run `tlive setup --hooks-only` to
   refresh it. Old vendor versions without a plugin CLI: `tlive setup`
   detects this and points at the new manual-config appendix,
-  [docs/manual-hooks.md](docs/manual-hooks.md). `npm uninstall -g tlive`'s
+  [docs/manual-hooks.md](manual-hooks.md). `npm uninstall -g tlive`'s
   `preuninstall` now best-effort uninstalls the plugin (`claude plugin
   uninstall tlive@tlive`, `codex plugin remove tlive@tlive`) in addition to
   its existing direct-write hook cleanup.

@@ -128,8 +128,8 @@ tlive status
   ID 在 `chatIdAllowList` 里。
 - **启动时 "Unauthorized"。** Token 可能被重置，复制最新的。
 - **`getUpdates` 返回空。** 先给机器人发条消息，再刷新该链接。
-- **权限卡按钮点了没反应。** 见
-  [references/troubleshooting.md](../references/troubleshooting.md)
-  的 "Permission card buttons not working" 一节。
+- **权限卡按钮点了没反应。** 远程审批是 opt-in 的,默认的 `notify` 姿态从不
+  hold 审批,也就没有可作答的卡。用 `tlive mode full` 切换。若卡片出现但按钮
+  不生效,先 `tlive status` 确认 daemon 活着,再看 `tlive logs`。
 
 返回 [入门指南](getting-started-cn.md) · [CLI 命令参考](commands.md)。

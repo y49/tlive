@@ -12,8 +12,6 @@
     "scripts/preuninstall.js",
     "dist/",
     "src/",
-    "references/",
-    "config.env.example",
     "plugins/"
   ],
   "scripts": {

@@ -134,8 +134,9 @@ default `notify` mode no card is sent (tool prompts stay local).
 - **"Unauthorized" at boot.** Token regenerated — copy the current one.
 - **Empty `getUpdates` response.** Send a message to the bot first, then
   refresh.
-- **Permission-card button clicks do nothing.** See
-  [references/troubleshooting.md](../references/troubleshooting.md)
-  ("Permission card buttons not working").
+- **Permission-card button clicks do nothing.** Remote approval is opt-in, and
+  the default `notify` posture never holds an approval — so there is no card to
+  answer. Switch with `tlive mode full`. If cards do appear but buttons don't
+  land, check `tlive status` for a live daemon, then `tlive logs`.
 
 Back to [Getting Started](getting-started.md) · [CLI command reference](commands.md).
