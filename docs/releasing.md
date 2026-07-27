@@ -4,8 +4,8 @@ Maintainer runbook. Releases are automated by
 [release-please](https://github.com/googleapis/release-please) +
 `.github/workflows/release-please.yml`. Nothing is published by hand.
 
-v2 ships to a small group first via an npm **`beta` dist-tag**, then gets
-promoted to `latest` for the public launch.
+Stable releases are the default path. The npm `beta` dist-tag is available but
+opt-in — see [Cutting a beta](#cutting-a-beta).
 
 ## How the pipeline works
 
@@ -30,34 +30,45 @@ the publish job as the last safety net.
 
 The v2 rewrite landed as an orphan root commit, so every `v0.x` tag is
 unreachable from `main`. release-please's release lookup therefore finds
-nothing — and it does **not** read `package.json`. Two files supply the anchor:
+nothing — and it does **not** read `package.json`.
+`.release-please-manifest.json` supplies the anchor: it holds the current
+version, and release-please bumps from it. Keep it in step with `package.json`.
 
-- `.release-please-manifest.json` — the current version. This is the source of
-  truth release-please bumps from; keep it in step with `package.json`.
-- `release-please-config.json` — `prerelease: true` + `prerelease-type: beta`
-  keeps the beta line tracking (`2.0.0-beta.0` → `2.0.0-beta.1`) instead of
-  jumping to a stable version.
-
-Without those, release-please proposes a **downgrade** to its default initial
+Without it, release-please proposes a **downgrade** to its default initial
 version. If a release PR ever shows a version lower than the manifest, that's
 the symptom — don't merge it.
 
+Once `v2.0.0` is tagged, the tag itself is reachable from `main` and becomes
+the anchor; the manifest is then just belt and braces.
+
+## Normal release
+
+Land Conventional Commits on `main` and merge the release PR when you want a
+release. release-please derives the bump from the commit types (`feat` → minor,
+`fix` → patch, `!`/`BREAKING CHANGE` → major). Nothing else to configure.
+
+Until `2.0.0` is out, npm `latest` resolves to `0.8.0` — the pre-v1
+architecture — so a plain `npm i -g tlive` installs software that matches none
+of the current docs. The first stable v2 release closes that gap.
+
 ## Cutting a beta
 
-Nothing to do beyond normal work: land Conventional Commits on `main`, then
-merge the release PR when you want testers to get the build. Testers install
-with:
+Optional. Add to `release-please-config.json` under `packages["."]`:
 
-```bash
-npm i -g tlive@beta          # persistent global install (the hooks need it)
-# or, for a quick one-off bootstrap:
-npx tlive@beta setup
+```json
+"prerelease": true,
+"prerelease-type": "beta"
 ```
 
-## Promoting to GA (`latest`)
+That keeps the line tracking (`2.1.0-beta.0` → `2.1.0-beta.1`), and the publish
+job routes any prerelease suffix to its own dist-tag, so `latest` is untouched.
+Testers install with `npm i -g tlive@beta`. Remove both keys to return to
+stable releases.
 
-When v2 is ready for everyone, take it off the prerelease line with a
-`Release-As` footer on any commit going into `main`:
+## `Release-As:`
+
+The escape hatch any time the computed version is wrong — put it in the footer
+of any commit going into `main`:
 
 ```
 chore: cut 2.0.0
@@ -65,20 +76,9 @@ chore: cut 2.0.0
 Release-As: 2.0.0
 ```
 
-release-please will propose `2.0.0`; merging the release PR publishes it under
-`latest`. Afterwards drop `prerelease` / `prerelease-type` from
-`release-please-config.json` — from then on it computes stable versions from
-Conventional Commits with no further configuration.
-
-Until that happens, npm `latest` resolves to `0.8.0` — the pre-v1 architecture
-— so a plain `npm i -g tlive` installs software that matches none of the
-current docs. Whatever the user-facing docs say about installing during the
-beta has to be reverted here, at GA, when `latest` finally means v2.
-
-`Release-As:` is also the escape hatch any time the computed version is wrong
-(the repo's merge settings preserve commit bodies on squash, so the footer
-survives). Prefer it over hand-editing `package.json`, which release-please
-ignores.
+The repo's merge settings preserve commit bodies on squash, so the footer
+survives any merge method. Prefer it over hand-editing `package.json`, which
+release-please ignores.
 
 ## Pre-publish checklist
 
