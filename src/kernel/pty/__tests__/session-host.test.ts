@@ -98,13 +98,21 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
             }
           }
         };
-        const cleanup = (): void => { clearTimeout(t); sock.off('data', onData); };
+        const cleanup = (): void => { clearTimeout(t); sock.off('data', onData); sock.off('error', reject); };
         const t = setTimeout(() => { cleanup(); reject(new Error(`timeout waiting for Size ${cols}x${rows}`)); }, 8000);
         sock.on('data', onData);
         sock.on('error', reject);
       });
     const a = createConnection(sockPath);
     const b = createConnection(sockPath);
+    // Attach BEFORE the first write. A write that fails on a socket with no
+    // 'error' listener is an uncaught exception, and on Windows named pipes a
+    // write can fail with EAGAIN while the peer catches up — vitest then fails
+    // the whole run on an unhandled error with every test green. waitForSize
+    // attaches its own listener, but only later: the attach frames below go out
+    // before it exists, and the sockets outlive the last wait. A real error
+    // during a wait still rejects through that listener.
+    for (const s of [a, b]) s.on('error', () => { /* teardown race, not a test failure */ });
     await new Promise<void>((r) => a.on('connect', () => r()));
     await new Promise<void>((r) => b.on('connect', () => r()));
 

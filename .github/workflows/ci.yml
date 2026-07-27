@@ -1,7 +1,11 @@
 name: CI
 on:
+  # Branch pushes are covered by the pull_request trigger — listing `feat/**`
+  # here too ran the whole matrix twice for every push on such a branch, which
+  # doubles the cost and doubles the exposure to any flake (one flaky run is
+  # enough to leave a PR BLOCKED even when its sibling run is green).
   push:
-    branches: [main, 'feat/**']
+    branches: [main]
   pull_request:
     branches: [main]
 
