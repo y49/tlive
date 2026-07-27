@@ -73,7 +73,9 @@ jobs:
           #
           # The trust is declared on the registry side, not here:
           #   npmjs.com -> tlive -> Settings -> Trusted Publisher -> GitHub Actions
-          #   repository: y49/tlive   workflow: .github/workflows/release-please.yml
+          #   organization/user: y49        repository: tlive
+          #   workflow filename: release-please.yml   (the FILE NAME, not a path)
+          #   environment: empty           allowed operations: npm publish only
           # Without it pnpm logs `Skipped OIDC: …` and falls through to a
           # credential that no longer exists.
           #

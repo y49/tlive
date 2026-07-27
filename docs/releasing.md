@@ -133,7 +133,17 @@ authorized*, never *package missing*. If pnpm also logged `Skipped OIDC: …`,
 the trusted publisher is not configured on npmjs.com:
 
     npmjs.com -> tlive -> Settings -> Trusted Publisher -> GitHub Actions
-    repository: y49/tlive   workflow: .github/workflows/release-please.yml
+
+| field | value |
+| --- | --- |
+| Organization or user | `y49` |
+| Repository | `tlive` |
+| Workflow filename | `release-please.yml` — the file name, not a path |
+| Environment | leave empty — the workflow declares no `environment:`, and a value here has to match one |
+| Allowed operations | `npm publish` only; `npm stage publish` is a separate npm feature this pipeline does not use |
+
+Getting any of those wrong produces the same registry 404 as a missing
+credential, so check them before reaching for a token.
 
 ## `Release-As:`
 
