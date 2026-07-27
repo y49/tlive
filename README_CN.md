@@ -349,4 +349,4 @@ npm run typecheck && npm test && npm run build
 
 ## 许可
 
-MIT,见 [LICENSE](LICENSE)。贡献指南:[CONTRIBUTING.md](CONTRIBUTING.md)。
+MIT,见 [LICENSE](LICENSE)。欢迎提 issue 和 PR,开发环境见上面的[开发](#开发)一节。

@@ -414,4 +414,5 @@ npm run typecheck && npm test && npm run build
 
 ## License
 
-MIT. See [LICENSE](LICENSE). Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).
+MIT. See [LICENSE](LICENSE). Issues and PRs welcome — [Development](#development)
+above has the whole setup.
