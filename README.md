@@ -116,10 +116,11 @@ continue" line makes the distinction moot for what you actually do.
     no parallel local dialog to fall back on, so tlive returns `{}` and lets CC
     handle it natively; hold them for a remote answer with
     `approvals.holdSubagents: true`.
-- **Answer `AskUserQuestion` from IM (Claude Code only)** — CC fires a
-  `PermissionRequest` for its own question tool; tlive relays it as a
-  single-select or multi-select card (checkboxes, a live `Submit (N)` count,
-  `Skip`) instead of Allow/Deny. The local question prompt still renders in
+- **Answer `AskUserQuestion` from IM or the dashboard (Claude Code only)** —
+  CC fires a `PermissionRequest` for its own question tool; tlive relays it as
+  a single-select or multi-select card (checkboxes, a live `Submit (N)` count,
+  `Skip`) instead of Allow/Deny, on IM and on the dashboard session card
+  alike. The local question prompt still renders in
   parallel and always wins a race, so an answer given at the keyboard is
   never overridden — `Skip` just passes the tool through so the local prompt
   can be answered instead; it is not an auto-approval of anything. Codex has

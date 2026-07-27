@@ -99,7 +99,8 @@ IM 消息带 `label · ` 前缀(会话目录名),但不再用图标区分包装/
     `approvals.holdSubagents: true`。
 - **远程回答 `AskUserQuestion`(仅 Claude Code)** —— CC 为自己的提问工具
   fire `PermissionRequest`;tlive 把它转成单选或多选卡(复选框、实时
-  `Submit (N)` 计数、`Skip`)而非 Allow/Deny。本地问题框依旧并行渲染且永远
+  `Submit (N)` 计数、`Skip`)而非 Allow/Deny,IM 和 dashboard 会话卡都能答。
+  本地问题框依旧并行渲染且永远
   赢下竞速——键盘前给出的答案绝不会被覆盖;`Skip` 只是放行该工具,让你在
   本地答,不是自动批准任何操作。Codex 无此概念。
 - **续跑** —— `Stop` 时回复 IM 消息(或 web 回复框),会话继续。摘录进

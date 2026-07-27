@@ -29,6 +29,12 @@ export interface PendingApproval {
    *  defer) — the dashboard renders it read-only ("answer in the terminal"),
    *  no Allow/Deny buttons: there is no held request to answer (issue #49). */
   local?: boolean;
+  /** AskUserQuestion payload (#50): the dashboard renders option buttons
+   *  (single-pick, or checkboxes + Submit when multiSelect) instead of
+   *  Allow/Deny — a generic deny would feed the agent a bogus answer to its
+   *  own question. Shape mirrors ask-renderer's AskCard, structurally typed
+   *  here to keep the web layer decoupled from the permission layer. */
+  ask?: { question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect: boolean };
 }
 
 export interface SessionView {

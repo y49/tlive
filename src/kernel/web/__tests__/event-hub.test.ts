@@ -72,3 +72,24 @@ describe('parseEventAction', () => {
     expect(parseEventAction(JSON.stringify({ type: 'mute', id: '/r', muted: 'yes' }))).toBeNull();
   });
 });
+
+describe('parseEventAction: ask (#50)', () => {
+  it('parses picks / text / skip variants', () => {
+    expect(parseEventAction(JSON.stringify({ type: 'ask', requestId: 'r1', picks: [1] })))
+      .toEqual({ type: 'ask', requestId: 'r1', picks: [1] });
+    expect(parseEventAction(JSON.stringify({ type: 'ask', requestId: 'r1', picks: [0, 2], text: 'also this' })))
+      .toEqual({ type: 'ask', requestId: 'r1', picks: [0, 2], text: 'also this' });
+    expect(parseEventAction(JSON.stringify({ type: 'ask', requestId: 'r1', picks: [], skip: true })))
+      .toEqual({ type: 'ask', requestId: 'r1', picks: [], skip: true });
+  });
+
+  it('rejects malformed ask frames (missing/bad picks, bad requestId); drops blank text', () => {
+    expect(parseEventAction(JSON.stringify({ type: 'ask', requestId: 'r1' }))).toBeNull(); // no picks
+    expect(parseEventAction(JSON.stringify({ type: 'ask', requestId: 'r1', picks: ['0'] }))).toBeNull();
+    expect(parseEventAction(JSON.stringify({ type: 'ask', requestId: 'r1', picks: [-1] }))).toBeNull();
+    expect(parseEventAction(JSON.stringify({ type: 'ask', requestId: 'r1', picks: [1.5] }))).toBeNull();
+    expect(parseEventAction(JSON.stringify({ type: 'ask', requestId: 7, picks: [0] }))).toBeNull();
+    expect(parseEventAction(JSON.stringify({ type: 'ask', requestId: 'r1', picks: [0], text: '   ' })))
+      .toEqual({ type: 'ask', requestId: 'r1', picks: [0] });
+  });
+});

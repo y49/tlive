@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Added — answer `AskUserQuestion` from the dashboard (#50)
+
+- Ask cards used to be deliberately hidden from the web: `/ws/events` only
+  understood generic approve/deny, and a deny would have fed the agent a bogus
+  "Denied via tlive" answer to its own question — so the desktop toast pointed
+  you at a dashboard with nothing to answer. The dashboard session card now
+  renders the real option buttons (single-pick, or checkboxes with a live
+  `Submit (N)` for multi-select, plus `Skip`), driven by a new `ask` action on
+  `/ws/events` that answers on the same wire as the IM buttons
+  (`allow + updatedInput`). Generic approve/deny frames aimed at an ask card
+  are ignored server-side, keeping the original misanswer guard. `Skip` remains
+  a pass-through (the local selector stays yours), never an auto-answer.
+
 ### Fixed — notify mode now tells you a permission prompt is waiting (#49)
 
 - In `notify` mode (the default posture) a permission prompt or

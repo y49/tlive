@@ -156,25 +156,17 @@ describe('daemon → /ws/events downstream broadcast', () => {
     await p;
   });
 
-  it('AskUserQuestion does NOT broadcast a pending session to /ws/events — the dashboard\'s generic Allow/Deny buttons would misanswer it (Task 9 review, Important)', async () => {
+  it('AskUserQuestion broadcasts a pending card WITH the ask payload — the dashboard renders option buttons, not Allow/Deny (#50)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { port: 0 },
       approvals: { approvalGraceSec: 0, continueGraceSec: 0 },
       adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
     }));
-    let inboundHandler: ((e: IncomingEnvelope) => void) | undefined;
     const sentIm: OutgoingMessage[] = [];
-    const askAdapter: IMAdapter = {
-      channel: 'telegram',
-      async start() { /* noop */ },
-      async stop() { /* noop */ },
-      async send(out: OutgoingMessage) { sentIm.push(out); return { messageId: `m${sentIm.length}` }; },
-      async edit() { /* noop */ },
-      onInbound(handler) { inboundHandler = handler; },
-      isConnected() { return 'connected'; },
-    };
+    const askAdapter = makeFakeAdapter('telegram');
+    askAdapter.send = async (out: OutgoingMessage) => { sentIm.push(out); return { messageId: `m${sentIm.length}` }; };
     h = await bootstrapDaemon({ home: tmp, imAdapters: [askAdapter] });
-    const frames = await openEvents();
+    const { frames, ws } = await openEventsWs();
     const p = request(
       {
         kind: 'hook.permission.request', cwd: '/repo/ask', sessionId: 's', toolName: 'AskUserQuestion',
@@ -182,20 +174,90 @@ describe('daemon → /ws/events downstream broadcast', () => {
       },
       { socketPath: sock, timeoutMs: 5000 },
     );
-    // give both the IM card and any (incorrect) web broadcast time to land
-    await new Promise((r) => setTimeout(r, 150));
+    const f = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's' && x.session.status === 'waiting-approval');
+    expect(f.session.pending.ask).toEqual({ question: 'Pick a color?', options: [{ label: 'Red' }, { label: 'Blue' }], multiSelect: false });
+    await new Promise((r) => setTimeout(r, 100));
     expect(sentIm).toHaveLength(1); // IM still gets the ask card with option buttons
-    // Registry key is the session id ('s'), not the cwd — assert the real
-    // new-model identity, or this guards nothing (Task 5 review, Important:
-    // the old '/repo/ask' assertion is vacuously true under the new model,
-    // since no frame ever carries that id regardless of suppression).
-    expect(frames.some((f) => f.type === 'session-upsert' && f.session.id === 's')).toBe(false);
 
-    // Settle the pending permission request via IM (Skip) so it doesn't dangle past the test.
-    const card = sentIm[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
-    const skip = card.buttons!.find((b) => b.id.startsWith('askskip:'))!;
-    inboundHandler?.({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: skip.id, ts: 0 });
-    await p;
+    // Answer from the dashboard: pick "Blue" → allow + updatedInput.answers
+    // (same wire as the IM buttons — CC treats the tool as answered).
+    ws.send(JSON.stringify({ type: 'ask', requestId: f.session.pending.requestId, picks: [1] }));
+    const res = (await p) as { decision: string; updatedInput?: { answers?: Record<string, string> } };
+    expect(res.decision).toBe('allow');
+    expect(res.updatedInput?.answers).toEqual({ 'Pick a color?': 'Blue' });
+    // pending cleared on resolve
+    const done = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's' && x.session.status === 'active');
+    expect(done.session.pending).toBeUndefined();
+  });
+
+  it('multiSelect ask: Submit with several picks answers with a comma-joined selection', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { port: 0 },
+      approvals: { approvalGraceSec: 0, continueGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [makeFakeAdapter('telegram')] });
+    const { frames, ws } = await openEventsWs();
+    const p = request(
+      {
+        kind: 'hook.permission.request', cwd: '/repo/ask', sessionId: 's', toolName: 'AskUserQuestion',
+        input: { questions: [{ question: 'Which features?', multiSelect: true, options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }] }] },
+      },
+      { socketPath: sock, timeoutMs: 5000 },
+    );
+    const f = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's' && x.session.pending?.ask);
+    expect(f.session.pending.ask.multiSelect).toBe(true);
+    ws.send(JSON.stringify({ type: 'ask', requestId: f.session.pending.requestId, picks: [0, 2] }));
+    const res = (await p) as { decision: string; updatedInput?: { answers?: Record<string, string> } };
+    expect(res.decision).toBe('allow');
+    expect(res.updatedInput?.answers).toEqual({ 'Which features?': 'A, C' });
+  });
+
+  it('ask Skip from the dashboard = allow pass-through (no updatedInput) — the local selector stays yours', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { port: 0 },
+      approvals: { approvalGraceSec: 0, continueGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [makeFakeAdapter('telegram')] });
+    const { frames, ws } = await openEventsWs();
+    const p = request(
+      {
+        kind: 'hook.permission.request', cwd: '/repo/ask', sessionId: 's', toolName: 'AskUserQuestion',
+        input: { questions: [{ question: 'Pick?', options: [{ label: 'X' }, { label: 'Y' }] }] },
+      },
+      { socketPath: sock, timeoutMs: 5000 },
+    );
+    const f = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's' && x.session.pending?.ask);
+    ws.send(JSON.stringify({ type: 'ask', requestId: f.session.pending.requestId, picks: [], skip: true }));
+    const res = (await p) as { decision: string; updatedInput?: unknown };
+    expect(res.decision).toBe('allow');
+    expect(res.updatedInput).toBeUndefined();
+  });
+
+  it('generic approve/deny on an ask card is IGNORED — a deny would feed the agent a bogus answer (Task 9 concern, kept as a guard)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { port: 0 },
+      approvals: { approvalGraceSec: 0, continueGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [makeFakeAdapter('telegram')] });
+    const { frames, ws } = await openEventsWs();
+    const p = request(
+      {
+        kind: 'hook.permission.request', cwd: '/repo/ask', sessionId: 's', toolName: 'AskUserQuestion',
+        input: { questions: [{ question: 'Pick?', options: [{ label: 'X' }, { label: 'Y' }] }] },
+      },
+      { socketPath: sock, timeoutMs: 5000 },
+    );
+    const f = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's' && x.session.pending?.ask);
+    const rid = f.session.pending.requestId as string;
+    ws.send(JSON.stringify({ type: 'approve', requestId: rid, approved: false }));
+    await new Promise((r) => setTimeout(r, 150));
+    expect(h.sessions.get('s')?.pending?.requestId).toBe(rid); // still pending — the deny was dropped
+    // settle properly via the ask action
+    ws.send(JSON.stringify({ type: 'ask', requestId: rid, picks: [0] }));
+    expect(((await p) as { decision: string }).decision).toBe('allow');
   });
 
   it('upstream approve action over /ws/events resolves the permission request', async () => {

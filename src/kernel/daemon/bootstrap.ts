@@ -8,7 +8,7 @@ import { daemonSocketPath } from '../ipc/client.js';
 import { PermissionRouter, type PermChat } from './permission-router.js';
 import { decide as policyDecide, type PolicyState } from '../permission/policy-engine.js';
 import { renderApprovalCard } from '../permission/approval-renderer.js';
-import { renderAskCard, askMultiButtons, extractAskAnswer, type AskOption } from '../permission/ask-renderer.js';
+import { renderAskCard, askMultiButtons, extractAskAnswer, buildAskUpdatedInput, type AskOption } from '../permission/ask-renderer.js';
 import { AskSelection } from './ask-state.js';
 import { createEditQueue } from './edit-queue.js';
 import { createDesktopNotifier } from './desktop-notify.js';
@@ -390,23 +390,20 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       if (askOptions && askQuestion) {
         askContexts.set(requestId, { question: askQuestion, ...(askHeader ? { header: askHeader } : {}), options: askOptions, multiSelect: Boolean(askMulti) });
         askRequestIds.add(requestId); // Task 9 review Minor 4: survives the button-click's askContexts consumption, so onResolved can still tell this was an ask card
-        // Task 9 review Important: an AskUserQuestion card must NOT reach the
-        // dashboard. /ws/events' onAction only understands generic approve/deny
-        // (web/src/dashboard.ts renders plain Allow/Deny buttons for `pending`),
-        // and deny-with-no-message would feed the agent a bogus "Denied via
-        // tlive" answer to its own question. Before this feature, AskUserQuestion
-        // auto-allowed at the policy layer and never reached onPending at all —
-        // this restores that "invisible to web" behavior for the ask branch only.
-        // IM still gets the card via sendToChat below (grace push), unaffected.
-        // Full web support (message-carrying EventAction + option buttons) is a
-        // follow-up task, not this fix.
-        return;
       }
       // key = registry identity, cwd = real directory — carried as two
       // explicit fields all the way from requestPermission's opts (Task 5 fix
       // wave: this is exactly the upsert that used to write the key into both
       // id and cwd, permanently, when both arrived as one field).
-      events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd, status: 'waiting-approval', pending: { requestId, title, body, toolName } }) });
+      // An ask card ships its option payload (#50) so the dashboard renders
+      // option buttons; the generic Allow/Deny path is blocked for ask
+      // requestIds in onAction below (a deny would feed the agent a bogus
+      // "Denied via tlive" answer to its own question — the reason ask cards
+      // used to be hidden from the web entirely).
+      events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd, status: 'waiting-approval', pending: {
+        requestId, title, body, toolName,
+        ...(askOptions && askQuestion ? { ask: { question: askQuestion, ...(askHeader ? { header: askHeader } : {}), options: askOptions, multiSelect: Boolean(askMulti) } } : {}),
+      } }) });
     },
     onResolved: ({ key, cwd, requestId, decision, message, updatedInput }) => {
       askContexts.delete(requestId); // no leak whether consumed by a button click or resolved another way
@@ -528,10 +525,18 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     codexResume = (threadId, input) => codexCompanion!.resume(threadId, input);
   }
 
-  // Upstream actions from a dashboard client (/ws/events): approve/reply/mute.
+  // Upstream actions from a dashboard client (/ws/events): approve/ask/reply/mute.
   const onAction = (action: import('../web/event-hub.js').EventAction): void => {
     switch (action.type) {
       case 'approve': {
+        // An ask card must not be answered through generic approve/deny (#50):
+        // a deny would feed the agent a bogus "Denied via tlive" answer to its
+        // own question. The dashboard doesn't render Allow/Deny for ask cards;
+        // this guard covers stale/hand-crafted frames.
+        if (askRequestIds.has(action.requestId)) {
+          console.log(`[web] generic approve on an ask card ignored: requestId=${action.requestId}`);
+          return;
+        }
         if (action.approved && action.alwaysAllowTool) policyState.allowTools?.add(action.alwaysAllowTool);
         const hit = permissionRouter.answer(action.requestId, action.approved);
         if (!hit) {
@@ -542,6 +547,32 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // 留给后续(见 task-4 报告)。这里先落一条服务端日志,不静默吞掉。
           console.log(`[web] stale approve tapped: requestId=${action.requestId} (already resolved / daemon restarted)`);
         }
+        return;
+      }
+      case 'ask': {
+        // AskUserQuestion from the dashboard (#50) — same wire as the IM
+        // buttons: allow + updatedInput (ask-renderer), so CC treats the tool
+        // as answered and emits its own clean feedback. Skip = allow with NO
+        // updatedInput = pass-through, the local selector stays yours — never
+        // an auto-answer. Same peek-then-consume discipline as inbound-handler.
+        const ctx = askContexts.get(action.requestId);
+        if (!ctx) {
+          console.log(`[web] stale ask tapped: requestId=${action.requestId} (already resolved / daemon restarted)`);
+          return;
+        }
+        if (action.skip) {
+          askContexts.delete(action.requestId);
+          askSelection.clear(action.requestId);
+          permissionRouter.answer(action.requestId, true);
+          return;
+        }
+        const labels = action.picks.filter((i) => i < ctx.options.length).map((i) => ctx.options[i].label);
+        const text = action.text?.trim();
+        const selected = text ? [...labels, text] : labels;
+        if (selected.length === 0) return; // nothing picked — ignore, the card stays live
+        askContexts.delete(action.requestId);
+        askSelection.clear(action.requestId); // free any IM multi-select picks too — one answer wins
+        permissionRouter.answer(action.requestId, true, undefined, buildAskUpdatedInput(ctx, selected));
         return;
       }
       case 'reply':

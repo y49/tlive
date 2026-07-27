@@ -17,9 +17,14 @@ export type EventFrame =
   | { type: 'session-upsert'; session: SessionView }
   | { type: 'session-remove'; id: string };
 
-/** Upstream actions a dashboard client sends over /ws/events. Vendor-neutral. */
+/** Upstream actions a dashboard client sends over /ws/events. Vendor-neutral.
+ *  `ask` answers an AskUserQuestion card (#50) on the same wire as the IM
+ *  buttons: picks are option indexes into pending.ask.options, optional free
+ *  text is appended to the selection, skip = allow pass-through (leave the
+ *  question to the terminal — never an auto-answer). */
 export type EventAction =
   | { type: 'approve'; requestId: string; approved: boolean; alwaysAllowTool?: string }
+  | { type: 'ask'; requestId: string; picks: number[]; text?: string; skip?: boolean }
   | { type: 'reply'; requestId: string; text: string }
   | { type: 'mute'; id: string; muted: boolean }
   | { type: 'inject'; id: string; text: string };
@@ -37,6 +42,15 @@ export function parseEventAction(raw: string): EventAction | null {
             type: 'approve', requestId: a.requestId, approved: a.approved,
             ...(typeof a.alwaysAllowTool === 'string' && a.alwaysAllowTool ? { alwaysAllowTool: a.alwaysAllowTool } : {}),
           } : null;
+    case 'ask': {
+      if (typeof a.requestId !== 'string') return null;
+      if (!Array.isArray(a.picks) || !a.picks.every((p) => typeof p === 'number' && Number.isInteger(p) && p >= 0)) return null;
+      return {
+        type: 'ask', requestId: a.requestId, picks: a.picks as number[],
+        ...(typeof a.text === 'string' && a.text.trim() ? { text: a.text } : {}),
+        ...(a.skip === true ? { skip: true } : {}),
+      };
+    }
     case 'reply':
       return typeof a.requestId === 'string' && typeof a.text === 'string'
         ? { type: 'reply', requestId: a.requestId, text: a.text } : null;

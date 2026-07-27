@@ -10,7 +10,8 @@ import { FrameType, FrameDecoder, encodeAttach, parseDims } from './frame.js';
 const token = new URLSearchParams(location.search).get('token') ?? '';
 
 type Status = 'active' | 'waiting-approval' | 'waiting-input' | 'idle';
-interface Pending { requestId: string; title: string; body: string; toolName?: string; local?: boolean }
+interface AskInfo { question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect: boolean }
+interface Pending { requestId: string; title: string; body: string; toolName?: string; local?: boolean; ask?: AskInfo }
 interface SessionView {
   id: string; label: string; cwd: string;
   kind: 'wrapped' | 'hook'; status: Status;
@@ -23,6 +24,7 @@ type Frame =
   | { type: 'session-remove'; id: string };
 type Action =
   | { type: 'approve'; requestId: string; approved: boolean; alwaysAllowTool?: string }
+  | { type: 'ask'; requestId: string; picks: number[]; text?: string; skip?: boolean }
   | { type: 'reply'; requestId: string; text: string }
   | { type: 'mute'; id: string; muted: boolean }
   | { type: 'inject'; id: string; text: string };
@@ -101,6 +103,9 @@ function fallbackCopy(t: string): void {
 }
 
 const replyDrafts = new Map<string, string>();
+// Multi-select AskUserQuestion checkbox state, per requestId (#50) — purely
+// client-side until Submit; pruned in render() when the card resolves.
+const askPicks = new Map<string, Set<number>>();
 
 /** markdown-ish approval body (fences + diff lines) with colors */
 function renderApprovalBody(body: string): string {
@@ -280,7 +285,42 @@ function card(s: SessionView): HTMLElement {
 
   const actions = document.createElement('div'); actions.className = 'actions';
 
-  if (s.pending && !s.pending.local) {
+  if (s.pending?.ask) {
+    // AskUserQuestion (#50): option buttons instead of Allow/Deny — a generic
+    // deny would feed the agent a bogus answer to its own question. Single
+    // select fires on click; multiSelect keeps local checkbox state (askPicks)
+    // until Submit. Skip leaves the question to the terminal (pass-through).
+    const rid = s.pending.requestId, ask = s.pending.ask;
+    if (ask.multiSelect) {
+      const picks = askPicks.get(rid) ?? new Set<number>();
+      ask.options.forEach((o, i) => {
+        const b = document.createElement('button'); b.className = picks.has(i) ? 'btn ok' : 'btn';
+        b.textContent = `${picks.has(i) ? '▣' : '▢'} ${o.label}`;
+        if (o.description) b.title = o.description;
+        b.onclick = () => {
+          const p = askPicks.get(rid) ?? new Set<number>();
+          if (p.has(i)) p.delete(i); else p.add(i);
+          askPicks.set(rid, p);
+          render();
+        };
+        actions.append(b);
+      });
+      const sub = document.createElement('button'); sub.className = 'btn ok'; sub.textContent = `Submit (${picks.size})`;
+      sub.onclick = () => { if (picks.size) { send({ type: 'ask', requestId: rid, picks: [...picks].sort((a, b) => a - b) }); askPicks.delete(rid); } };
+      actions.append(sub);
+    } else {
+      ask.options.forEach((o, i) => {
+        const b = document.createElement('button'); b.className = 'btn ok'; b.textContent = `${i + 1}. ${o.label}`;
+        if (o.description) b.title = o.description;
+        b.onclick = () => send({ type: 'ask', requestId: rid, picks: [i] });
+        actions.append(b);
+      });
+    }
+    const skip = document.createElement('button'); skip.className = 'btn no'; skip.textContent = 'Skip';
+    skip.title = 'Leave the question to the terminal';
+    skip.onclick = () => send({ type: 'ask', requestId: rid, picks: [], skip: true });
+    actions.append(skip);
+  } else if (s.pending && !s.pending.local) {
     const rid = s.pending.requestId, tool = s.pending.toolName;
     const ok = document.createElement('button'); ok.className = 'btn ok'; ok.textContent = '✅ Allow';
     ok.onclick = () => send({ type: 'approve', requestId: rid, approved: true });
@@ -349,6 +389,9 @@ const RANK: Record<Status, number> = { 'waiting-approval': 0, 'waiting-input': 1
 
 function render(): void {
   const list = [...sessions.values()].sort((a, b) => RANK[a.status] - RANK[b.status] || b.lastActivityAt - a.lastActivityAt);
+  // prune checkbox state for ask cards that are no longer pending
+  const liveAskRids = new Set(list.filter((s) => s.pending?.ask).map((s) => s.pending!.requestId));
+  for (const rid of [...askPicks.keys()]) if (!liveAskRids.has(rid)) askPicks.delete(rid);
   empty.style.display = list.length ? 'none' : 'block';
   count.textContent = String(list.length);
   const active = document.activeElement as HTMLInputElement | null;
