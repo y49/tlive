@@ -39,3 +39,52 @@ jobs:
         run: pnpm test
       - name: Build
         run: pnpm run build
+
+  # Install the REAL tarball on an image with no C/C++ toolchain.
+  #
+  # `npm i -g tlive` pulls node-pty, a native addon. When its package carries no
+  # prebuilt binary for the platform it falls back to node-gyp, and the install
+  # dies on any machine without python3 + make + g++ — which is most slim
+  # containers and minimal servers, i.e. exactly where an agent-watching daemon
+  # tends to run. That failure happens during dependency install, before tlive's
+  # own postinstall ever runs, so the user sees a wall of gyp errors that never
+  # mentions tlive.
+  #
+  # No unit test can see this: the test job installs with a full toolchain
+  # present. Only a real install on a bare image can, and it caught node-pty
+  # 1.1.0 shipping prebuilds for darwin/win32 but not linux. The pty is actually
+  # spawned too — a prebuilt binary that exists can still fail to load if it was
+  # built against a newer glibc than the target has.
+  install-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: npm pack
+      - name: install + run on node:22-slim (no compiler, older glibc)
+        run: |
+          docker run --rm -v "$PWD:/w:ro" node:22-slim bash -euc '
+            cd /tmp && cp /w/tlive-*.tgz .
+            npm i -g ./tlive-*.tgz --no-audit --no-fund
+            tlive --version
+            node -e "
+              const path = require.resolve(\"node-pty\", { paths: [\"/usr/local/lib/node_modules/tlive\"] });
+              const { spawn } = require(path);
+              const p = spawn(\"/bin/echo\", [\"pty-ok\"], {});
+              let out = \"\";
+              p.onData(d => { out += d; });
+              setTimeout(() => {
+                if (!out.includes(\"pty-ok\")) { console.error(\"pty did not produce output\"); process.exit(1); }
+                console.log(\"pty loads and runs\");
+                process.exit(0);
+              }, 1500);
+            "
+          '
