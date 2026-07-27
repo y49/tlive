@@ -156,6 +156,55 @@ describe('daemon → /ws/events downstream broadcast', () => {
     await p;
   });
 
+  it('a multi-question batch advances BOTH surfaces per question and answers once, with every question present', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { port: 0 },
+      approvals: { approvalGraceSec: 0, continueGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sentIm: OutgoingMessage[] = [];
+    const edits: OutgoingMessage[] = [];
+    const askAdapter = makeFakeAdapter('telegram');
+    askAdapter.send = async (out: OutgoingMessage) => { sentIm.push(out); return { messageId: `m${sentIm.length}` }; };
+    askAdapter.edit = async (_id: string, out: OutgoingMessage) => { edits.push(out); };
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [askAdapter] });
+    const { frames, ws } = await openEventsWs();
+    const p = request(
+      {
+        kind: 'hook.permission.request', cwd: '/repo/ask2', sessionId: 's2', toolName: 'AskUserQuestion',
+        input: { questions: [
+          { question: 'First?', options: [{ label: 'A' }, { label: 'B' }] },
+          { question: 'Second?', options: [{ label: 'X' }, { label: 'Y' }] },
+        ] },
+      },
+      { socketPath: sock, timeoutMs: 5000 },
+    );
+    const f = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's2' && x.session.status === 'waiting-approval');
+    const rid = f.session.pending.requestId;
+    expect(f.session.pending.ask).toMatchObject({ question: 'First?', index: 0, total: 2 });
+    await new Promise((r) => setTimeout(r, 100));
+    const first = sentIm[0] as { title?: string; body: string };
+    expect(first.title).toContain('Question 1/2');
+
+    // Answer question 1 from the dashboard — the batch must NOT resolve yet,
+    // and BOTH surfaces must move to question 2.
+    ws.send(JSON.stringify({ type: 'ask', requestId: rid, picks: [0] }));
+    const second = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's2' && x.session.pending?.ask?.index === 1);
+    expect(second.session.pending.ask).toMatchObject({ question: 'Second?', index: 1, total: 2 });
+    await new Promise((r) => setTimeout(r, 100));
+    // The IM card follows the dashboard: title progress AND body, not just one
+    // of them (the badge froze at "Question 1/2" while the body moved on).
+    const edited = edits.at(-1) as { title?: string; body: string; buttons?: Array<{ id: string }> };
+    expect(edited.title).toContain('Question 2/2');
+    expect(edited.body).toContain('Second?');
+    expect(edited.buttons?.map((b) => b.id)).toContain(`askback:${rid}`);
+
+    ws.send(JSON.stringify({ type: 'ask', requestId: rid, picks: [1] }));
+    const res = (await p) as { decision: string; updatedInput?: { answers?: Record<string, string> } };
+    expect(res.decision).toBe('allow');
+    expect(res.updatedInput?.answers).toEqual({ 'First?': 'A', 'Second?': 'Y' });
+  });
+
   it('AskUserQuestion broadcasts a pending card WITH the ask payload — the dashboard renders option buttons, not Allow/Deny (#50)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { port: 0 },

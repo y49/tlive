@@ -177,8 +177,14 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     msgToKey.set(`${channel}:${messageId}`, key);
   };
 
-  // Approval cards sent per requestId — edited to their outcome on resolve (no zombie buttons).
-  const sentCards = new Map<string, Array<{ channel: string; messageId: string; title: string; body: string }>>();
+  // Approval cards sent per requestId — edited to their outcome on resolve (no
+  // zombie buttons). `title`/`body` track the card's CURRENT contents, not the
+  // ones it was born with: a multi-question ask repaints as its cursor moves,
+  // and the settlement edit further down rebuilds from these fields. `tag` is
+  // the `<label> · ` prefix, kept so a repaint can rebuild the title without
+  // re-deriving it (the router hands sendToChat the session KEY as `cwd`, so
+  // guessing wrong here silently drops the prefix).
+  const sentCards = new Map<string, Array<{ channel: string; messageId: string; title: string; body: string; tag: string }>>();
 
   /** IM messageId → still-live approval requestId, or null. sentCards is deleted
    *  the instant onResolved fires (see below), so "findable" IS "still live" —
@@ -297,9 +303,15 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       : { id: `askinput:${requestId}`, placeholder: 'Type your own answer', submitLabel: 'Send' };
     const askPayload = { question: q.question, ...(q.header ? { header: q.header } : {}), options: q.options, multiSelect: q.multiSelect };
     for (const card of sentCards.get(requestId) ?? []) {
+      // Write the new contents BACK onto the stored card. Editing with the
+      // stored title left the progress badge frozen at "Question 1/2" while
+      // the body and buttons moved on, and the settlement edit below rebuilds
+      // from these same fields — so a stale entry outlives the repaint.
+      card.title = `${card.tag}${title}`;
+      card.body = body;
       const adapter = (opts.imAdapters ?? []).find((a) => a.channel === card.channel);
       if (!adapter) continue;
-      void editQueue.enqueue(requestId, () => adapter.edit(card.messageId, { kind: 'card', title: card.title, body, buttons, ask: askPayload, inputAction }));
+      void editQueue.enqueue(requestId, () => adapter.edit(card.messageId, { kind: 'card', title: card.title, body: card.body, buttons, ask: askPayload, inputAction }));
     }
     const owner = askOwner.get(requestId);
     if (!owner) return;
@@ -368,7 +380,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       });
       if (msg.requestId) {
         const list = sentCards.get(msg.requestId) ?? [];
-        list.push({ channel: target.channel, messageId: sent.messageId, title: title ?? '', body });
+        list.push({ channel: target.channel, messageId: sent.messageId, title: title ?? '', body, tag });
         sentCards.set(msg.requestId, list);
       }
     }
