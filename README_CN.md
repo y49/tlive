@@ -100,6 +100,9 @@ IM 消息带 `label · ` 前缀(会话目录名),但不再用图标区分包装/
 - **远程回答 `AskUserQuestion`(仅 Claude Code)** —— CC 为自己的提问工具
   fire `PermissionRequest`;tlive 把它转成单选或多选卡(复选框、实时
   `Submit (N)` 计数、`Skip`)而非 Allow/Deny,IM 和 dashboard 会话卡都能答。
+  一次调用带多个问题时逐题走:卡标题显示 `Question 2/3`,`← Back` 可重答
+  上一题,答完最后一题才整批回传。cursor 归 daemon 所有,所以在手机上答一题,
+  dashboard 的卡也跟着推进。
   本地问题框依旧并行渲染且永远
   赢下竞速——键盘前给出的答案绝不会被覆盖;`Skip` 只是放行该工具,让你在
   本地答,不是自动批准任何操作。Codex 无此概念。

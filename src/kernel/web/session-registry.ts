@@ -34,7 +34,16 @@ export interface PendingApproval {
    *  Allow/Deny — a generic deny would feed the agent a bogus answer to its
    *  own question. Shape mirrors ask-renderer's AskCard, structurally typed
    *  here to keep the web layer decoupled from the permission layer. */
-  ask?: { question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect: boolean };
+  ask?: {
+    question: string; header?: string;
+    options: Array<{ label: string; description?: string }>;
+    multiSelect: boolean;
+    /** Position in the batch (0-based) and its size. One AskUserQuestion call
+     *  can carry several questions; the daemon owns the cursor and ships one
+     *  question at a time, so the card renders a "2/3" badge and a Back
+     *  button rather than pretending the batch is a single question. */
+    index: number; total: number;
+  };
 }
 
 export interface SessionView {

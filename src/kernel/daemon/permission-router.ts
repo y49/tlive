@@ -1,6 +1,11 @@
 // src/kernel/daemon/permission-router.ts
 import { randomUUID } from 'node:crypto';
-import type { AskOption } from '../permission/ask-renderer.js';
+import type { AskBatch } from '../permission/ask-renderer.js';
+
+/** Everything an AskUserQuestion card needs, carried as one unit: the whole
+ *  parsed batch (a call can hold several questions) plus the raw tool input,
+ *  which the answer is built by spreading. */
+export interface AskContext { batch: AskBatch; input: unknown }
 
 /** 'local' = 用户在本地终端答的;IPC 层映射成 'defer'(shim 输出 pass-through {})—— 绝不 auto-allow。
  *  'gone'  = 调用方(shim)在等待中异常死亡(会话被 Ctrl+C / 终端关闭)。终态,
@@ -11,12 +16,12 @@ export interface PermChat { channel: string; chatId: string }
 
 export interface PermissionRouterDeps {
   configuredChats: () => PermChat[];
-  /** askOptions (present only for an AskUserQuestion card) drives the remote
-   *  card's option buttons instead of the usual Allow/Deny (Task 9). askMulti
+  /** `ask` (present only for an AskUserQuestion card) drives the remote
+   *  card's option buttons instead of the usual Allow/Deny. multiSelect
    *  (Task 10) additionally selects the checkbox/Submit(N)/Skip layout over
    *  the single-pick numbered buttons — both are opaque booleans/arrays to
    *  this vendor-neutral layer, it never inspects toolName itself. */
-  sendToChat: (target: PermChat, card: { title: string; body: string; requestId: string; toolName: string; cwd: string; askOptions?: AskOption[]; askMulti?: boolean }) => Promise<void>;
+  sendToChat: (target: PermChat, card: { title: string; body: string; requestId: string; toolName: string; cwd: string; ask?: AskContext }) => Promise<void>;
   /** `key` — the session's registry identity (see requestPermission's `key` opt), NOT the real cwd.
    *  Mutes the IM card ONLY (desktop toast / dashboard stay live) — it no longer
    *  defers the whole approval on its own (see requestPermission). */
@@ -30,10 +35,13 @@ export interface PermissionRouterDeps {
   hasLocalAnswerPath: () => boolean;
   /** Vendor-neutral policy: allow (auto) vs ask (send card). Never auto-denies. */
   policyDecide: (req: { toolName: string; input: unknown; permissionMode?: string }) => { decision: 'allow' | 'ask'; reason?: string };
-  /** Render the approval card body from the normalized request. askOptions/
-   *  askQuestion/askMulti are the AskUserQuestion branch's extras (Task 9/10):
-   *  absent for every other tool. */
-  renderCard: (req: { toolName: string; input: unknown }) => { title: string; body: string; askOptions?: AskOption[]; askQuestion?: string; askHeader?: string; askMulti?: boolean };
+  /** Render the approval card body from the normalized request. `ask` is the
+   *  AskUserQuestion branch's extra — absent for every other tool. It carries
+   *  the WHOLE parsed batch plus the raw tool input, because a batch can hold
+   *  several questions and the answer must be built by spreading the original
+   *  input (see ask-renderer); passing a flattened single question here is
+   *  what silently dropped questions 2..N. */
+  renderCard: (req: { toolName: string; input: unknown }) => { title: string; body: string; ask?: AskContext };
   /** Fired when a card is created & sent (session enters waiting-approval).
    *  `key` and `cwd` are carried as two separate, explicit fields — never
    *  collapse them back into one. `key` is the session's registry identity
@@ -41,7 +49,7 @@ export interface PermissionRouterDeps {
    *  directory, threaded through only for the registry's display field
    *  (label = basename(cwd)). Conflating them here is exactly the bug this
    *  split fixes (see resolveKey in bootstrap.ts). */
-  onPending?: (p: { key: string; cwd: string; requestId: string; title: string; body: string; toolName: string; askOptions?: AskOption[]; askQuestion?: string; askHeader?: string; askMulti?: boolean }) => void;
+  onPending?: (p: { key: string; cwd: string; requestId: string; title: string; body: string; toolName: string; ask?: AskContext }) => void;
   /** Fired when the request resolves (answered / timed out / deferred after a card). Same key/cwd split as onPending.
    *  message:带理由的拒绝所携带的文本(引用回复而来)—— 供回写区分
    *  `Denied` 与 `Denied with guidance`。
@@ -124,7 +132,7 @@ export class PermissionRouter {
     }
 
     const requestId = randomUUID();
-    const { title, body, askOptions, askQuestion, askHeader, askMulti } = this.deps.renderCard({ toolName: opts.toolName, input: opts.input });
+    const { title, body, ask } = this.deps.renderCard({ toolName: opts.toolName, input: opts.input });
     const result = await new Promise<{ decision: Decision; message?: string; updatedInput?: unknown }>((resolve) => {
       this.pending.set(requestId, {
         resolve,
@@ -155,10 +163,7 @@ export class PermissionRouter {
       // web 立即 —— dashboard 是 pull 视图,不该等 grace。
       this.deps.onPending?.({
         key: opts.key, cwd: opts.cwd, requestId, title, body, toolName: opts.toolName,
-        ...(askOptions ? { askOptions } : {}),
-        ...(askQuestion ? { askQuestion } : {}),
-        ...(askHeader ? { askHeader } : {}),
-        ...(askMulti ? { askMulti } : {}),
+        ...(ask ? { ask } : {}),
       });
       // IM 卡走 grace:开火时 pending 还在才发。cancel()/answer() 都先 delete
       // 再 resolve,所以这一句就是权威判据,不需要额外的取消令牌。
@@ -170,7 +175,7 @@ export class PermissionRouter {
           // lookup and reply-routing map (bootstrap.ts's sessionTag/rememberMsg)
           // both index by registry key, same convention as hook.notify/
           // hook.continue.request elsewhere in bootstrap.ts.
-          void this.deps.sendToChat(t, { title, body, requestId, toolName: opts.toolName, cwd: opts.key, ...(askOptions ? { askOptions } : {}), ...(askMulti ? { askMulti } : {}) }).catch(() => undefined);
+          void this.deps.sendToChat(t, { title, body, requestId, toolName: opts.toolName, cwd: opts.key, ...(ask ? { ask } : {}) }).catch(() => undefined);
         }
       };
       const grace = this.deps.graceSec();

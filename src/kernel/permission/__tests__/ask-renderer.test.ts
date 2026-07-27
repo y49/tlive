@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderAskCard, buildAskUpdatedInput, extractAskAnswer, askMultiButtons, type AskOption } from '../ask-renderer.js';
+import { parseAskBatch, renderAskBody, askButtons, buildAskUpdatedInput, extractAskAnswer, type AskBatch } from '../ask-renderer.js';
 
 const INPUT = {
   questions: [{
@@ -13,122 +13,148 @@ const INPUT = {
   }],
 };
 
-describe('renderAskCard', () => {
+const THREE = {
+  questions: [
+    { question: 'First?', options: [{ label: 'A' }, { label: 'B' }] },
+    { question: 'Second?', multiSelect: true, options: [{ label: 'X' }, { label: 'Y' }] },
+    { question: 'Third?', options: [{ label: 'P' }, { label: 'Q' }] },
+  ],
+};
+
+describe('parseAskBatch', () => {
+  it('keeps every question in the batch — CC sends up to four per call', () => {
+    const batch = parseAskBatch(THREE)!;
+    expect(batch.questions.map((q) => q.question)).toEqual(['First?', 'Second?', 'Third?']);
+    expect(batch.questions[1].multiSelect).toBe(true);
+  });
+
+  it('returns null for malformed input — CC should report the error itself', () => {
+    expect(parseAskBatch({})).toBeNull();
+    expect(parseAskBatch({ questions: [] })).toBeNull();
+    expect(parseAskBatch({ questions: [{ question: 'Q?', options: [{ label: 'only-one' }] }] })).toBeNull();
+  });
+
+  it('rejects the whole batch when ANY question is malformed', () => {
+    // Partial acceptance is the bug class this feature exists to kill: a
+    // dropped question becomes a silently missing answer. All or nothing.
+    const mixed = { questions: [THREE.questions[0], { question: 'Bad?', options: [{ label: 'lonely' }] }] };
+    expect(parseAskBatch(mixed)).toBeNull();
+  });
+});
+
+describe('renderAskBody', () => {
   it('renders header, question and numbered options with descriptions', () => {
-    const card = renderAskCard(INPUT)!;
-    expect(card.title).toBe('Question');
-    expect(card.body).toBe(
+    const { title, body } = renderAskBody(parseAskBatch(INPUT)!, 0);
+    expect(title).toBe('Question');
+    expect(body).toBe(
       '*Color*\n\nWhat is your favorite color?\n\n' +
       '**1.** Red — Warm, bold, energetic.\n' +
       '**2.** Blue — Cool, calm, classic.',
     );
-    expect(card.options.map((o) => o.label)).toEqual(['Red', 'Blue']);
-    expect(card.multiSelect).toBe(false);
-  });
-
-  it('carries the raw question text on the card (review Minor 5: single source of truth, no re-extraction by callers)', () => {
-    const card = renderAskCard(INPUT)!;
-    expect(card.question).toBe('What is your favorite color?');
-  });
-
-  it('omits the header chip when absent', () => {
-    const card = renderAskCard({ questions: [{ question: 'Q?', options: [{ label: 'A' }, { label: 'B' }] }] })!;
-    expect(card.body.startsWith('Q?')).toBe(true);
   });
 
   it('omits the in-body option list entirely when no option has a description (buttons carry the labels)', () => {
-    const card = renderAskCard({ questions: [{ question: 'Q?', options: [{ label: 'A' }, { label: 'B' }] }] })!;
-    expect(card.body).toBe('Q?'); // just the question — no duplicated list
-    expect(card.body).not.toContain('**1.**');
+    const { body } = renderAskBody(parseAskBatch({ questions: [{ question: 'Q?', options: [{ label: 'A' }, { label: 'B' }] }] })!, 0);
+    expect(body).toBe('Q?');
   });
 
   it('keeps the in-body list when at least one option has a description', () => {
-    const card = renderAskCard({ questions: [{ question: 'Q?', options: [{ label: 'A', description: 'the a' }, { label: 'B' }] }] })!;
-    expect(card.body).toContain('**1.** A — the a');
-    expect(card.body).toContain('**2.** B');
+    const { body } = renderAskBody(parseAskBatch({ questions: [{ question: 'Q?', options: [{ label: 'A', description: 'the a' }, { label: 'B' }] }] })!, 0);
+    expect(body).toContain('**1.** A — the a');
   });
 
-  it('only renders the first question (multi-question batches are flattened)', () => {
-    const two = { questions: [INPUT.questions[0], { question: 'Second?', options: [{ label: 'X' }, { label: 'Y' }] }] };
-    expect(renderAskCard(two)!.body).not.toContain('Second?');
+  it('carries progress in the title for a multi-question batch, and renders the question at the cursor', () => {
+    const batch = parseAskBatch(THREE)!;
+    expect(renderAskBody(batch, 0).title).toBe('Question 1/3');
+    expect(renderAskBody(batch, 1).title).toBe('Question 2/3');
+    expect(renderAskBody(batch, 1).body).toContain('Second?');
+    expect(renderAskBody(batch, 1).body).not.toContain('First?');
   });
 
-  it('returns null for malformed input — CC should report the error itself', () => {
-    expect(renderAskCard({})).toBeNull();
-    expect(renderAskCard({ questions: [] })).toBeNull();
-    expect(renderAskCard({ questions: [{ question: 'Q?', options: [{ label: 'only-one' }] }] })).toBeNull();
-  });
-});
-
-describe('buildAskUpdatedInput (allow + updatedInput, the documented/native answer path)', () => {
-  it('echoes questions[0] and maps question text → answer (single-select)', () => {
-    const ui = buildAskUpdatedInput(
-      { question: 'What is your favorite color?', header: 'Color', options: INPUT.questions[0].options, multiSelect: false },
-      ['Blue'],
-    );
-    expect(ui.answers).toEqual({ 'What is your favorite color?': 'Blue' });
-    expect(ui.questions).toHaveLength(1);
-    expect(ui.questions[0]).toMatchObject({ question: 'What is your favorite color?', header: 'Color', multiSelect: false });
-  });
-
-  it('joins multiple selections comma-separated (multi-select)', () => {
-    const ui = buildAskUpdatedInput({ question: 'Q?', options: [{ label: 'A' }, { label: 'B' }], multiSelect: true }, ['A', 'B']);
-    expect(ui.answers).toEqual({ 'Q?': 'A, B' });
-  });
-
-  it('omits header from the echoed question when absent', () => {
-    const ui = buildAskUpdatedInput({ question: 'Q?', options: [{ label: 'A' }], multiSelect: false }, ['A']);
-    expect(ui.questions[0]).not.toHaveProperty('header');
+  it('leaves a single-question title bare — no 1/1 noise', () => {
+    expect(renderAskBody(parseAskBatch(INPUT)!, 0).title).toBe('Question');
   });
 });
 
-describe('extractAskAnswer (settled card readback)', () => {
-  it('reads the answer string back out of updatedInput.answers', () => {
-    const ui = buildAskUpdatedInput({ question: 'Q?', options: [{ label: 'A' }], multiSelect: false }, ['A, B']);
-    expect(extractAskAnswer(ui)).toBe('A, B');
+describe('askButtons', () => {
+  const single = parseAskBatch({ questions: [{ question: 'Q?', options: [{ label: 'Red' }, { label: 'Blue' }, { label: 'Green' }] }] })!;
+  const multi = parseAskBatch({ questions: [{ question: 'Q?', multiSelect: true, options: [{ label: 'Red' }, { label: 'Blue' }, { label: 'Green' }] }] })!;
+
+  it('numbers the options for a single-select question', () => {
+    expect(askButtons('r1', single, 0, []).slice(0, 3)).toEqual([
+      { id: 'ask:r1:0', label: '1. Red' },
+      { id: 'ask:r1:1', label: '2. Blue' },
+      { id: 'ask:r1:2', label: '3. Green' },
+    ]);
   });
 
-  it('returns null when there is no answers object', () => {
-    expect(extractAskAnswer({})).toBeNull();
-    expect(extractAskAnswer(null)).toBeNull();
-  });
-});
-
-describe('askMultiButtons (Task 10)', () => {
-  const options: AskOption[] = [{ label: 'Red' }, { label: 'Blue' }, { label: 'Green' }];
-
-  it('renders one checkbox button per option, unchecked when nothing is selected', () => {
-    const buttons = askMultiButtons('r1', options, []);
-    expect(buttons.slice(0, 3)).toEqual([
+  it('renders checkboxes + a live Submit(N) for a multi-select question', () => {
+    expect(askButtons('r1', multi, 0, []).slice(0, 3)).toEqual([
       { id: 'asktoggle:r1:0', label: '▢ Red' },
       { id: 'asktoggle:r1:1', label: '▢ Blue' },
       { id: 'asktoggle:r1:2', label: '▢ Green' },
     ]);
+    expect(askButtons('r1', multi, 0, [0, 2])[0].label).toBe('▣ Red');
+    expect(askButtons('r1', multi, 0, [0, 1]).at(-2)).toEqual({ id: 'asksubmit:r1', label: 'Submit (2)' });
   });
 
-  it('marks selected options with a filled checkbox', () => {
-    const buttons = askMultiButtons('r1', options, [0, 2]);
-    expect(buttons[0].label).toBe('▣ Red');
-    expect(buttons[1].label).toBe('▢ Blue');
-    expect(buttons[2].label).toBe('▣ Green');
+  it('always ends with Skip', () => {
+    expect(askButtons('r1', single, 0, []).at(-1)).toEqual({ id: 'askskip:r1', label: 'Skip' });
+    expect(askButtons('r1', multi, 0, []).at(-1)).toEqual({ id: 'askskip:r1', label: 'Skip' });
   });
 
-  it('appends a Submit(N) button carrying the live selection count', () => {
-    expect(askMultiButtons('r1', options, []).at(-2)).toEqual({ id: 'asksubmit:r1', label: 'Submit (0)' });
-    expect(askMultiButtons('r1', options, [0, 1]).at(-2)).toEqual({ id: 'asksubmit:r1', label: 'Submit (2)' });
-  });
-
-  it('appends a Skip button', () => {
-    expect(askMultiButtons('r1', options, []).at(-1)).toEqual({ id: 'askskip:r1', label: 'Skip' });
+  it('offers Back only past the first question — a misclick on question 2 is recoverable', () => {
+    const batch = parseAskBatch(THREE)!;
+    expect(askButtons('r1', batch, 0, []).map((b) => b.id)).not.toContain('askback:r1');
+    expect(askButtons('r1', batch, 2, []).map((b) => b.id)).toContain('askback:r1');
   });
 
   it('uses geometric checkbox glyphs, never an emoji-presentation character — project emoji allowlist is ⚠️ only', () => {
-    const labels = askMultiButtons('r1', options, [1]).map((b) => b.label).join(' ');
+    const labels = askButtons('r1', multi, 0, [1]).map((b) => b.label).join(' ');
     expect(labels).toContain('▣');
     expect(labels).toContain('▢');
     // U+2600-27BF (Misc Symbols/Dingbats, includes ☑ U+2611 / ☐ U+2610) would
     // render as a colorful emoji on Telegram — our glyphs live in Geometric
     // Shapes (U+25A0-25FF) instead, which stays monochrome text.
-    expect(labels).not.toMatch(/[\u2600-\u27BF\uFE0F]/);
+    expect(labels).not.toMatch(/[☀-➿️]/);
+  });
+});
+
+describe('buildAskUpdatedInput (allow + updatedInput, the documented/native answer path)', () => {
+  const answersOf = (batch: AskBatch, m: Record<number, string[]>) => new Map(Object.entries(m).map(([k, v]) => [Number(k), v]));
+
+  it('spreads the ORIGINAL tool input rather than rebuilding it', () => {
+    // CC's own submit path returns {...input, answers}. Rebuilding the
+    // questions array is what silently dropped questions 2..N.
+    const batch = parseAskBatch(THREE)!;
+    const ui = buildAskUpdatedInput(THREE, batch, answersOf(batch, { 0: ['A'], 1: ['X', 'Y'], 2: ['Q'] })) as { questions: unknown[]; answers: Record<string, string> };
+    expect(ui.questions).toBe(THREE.questions); // same reference — nothing reconstructed
+    expect(ui.answers).toEqual({ 'First?': 'A', 'Second?': 'X, Y', 'Third?': 'Q' });
+  });
+
+  it('maps question text → answer for a single-question batch', () => {
+    const batch = parseAskBatch(INPUT)!;
+    const ui = buildAskUpdatedInput(INPUT, batch, answersOf(batch, { 0: ['Blue'] })) as { answers: Record<string, string> };
+    expect(ui.answers).toEqual({ 'What is your favorite color?': 'Blue' });
+  });
+
+  it('preserves unrelated keys the tool input carried', () => {
+    const withExtra = { ...INPUT, someFutureField: 42 };
+    const batch = parseAskBatch(withExtra)!;
+    const ui = buildAskUpdatedInput(withExtra, batch, answersOf(batch, { 0: ['Red'] })) as Record<string, unknown>;
+    expect(ui.someFutureField).toBe(42);
+  });
+});
+
+describe('extractAskAnswer (settled card readback)', () => {
+  it('reads every answer back out of updatedInput.answers', () => {
+    const batch = parseAskBatch(THREE)!;
+    const ui = buildAskUpdatedInput(THREE, batch, new Map([[0, ['A']], [1, ['X']], [2, ['Q']]]));
+    expect(extractAskAnswer(ui)).toBe('A; X; Q');
+  });
+
+  it('returns null when there is no answers object', () => {
+    expect(extractAskAnswer({})).toBeNull();
+    expect(extractAskAnswer(null)).toBeNull();
   });
 });

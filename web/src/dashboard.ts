@@ -108,6 +108,19 @@ const replyDrafts = new Map<string, string>();
 const askPicks = new Map<string, Set<number>>();
 
 /** markdown-ish approval body (fences + diff lines) with colors */
+/** The card body is authored once, in the markdown the IM adapters speak
+ *  (Telegram turns **bold** into <b>, Feishu renders it natively). The web
+ *  reused that string as plain text, so an ask card printed its own
+ *  `*header*` and `**1.**` markers on screen. Convert the same small subset
+ *  here — bold, italic, inline code — and nothing else: this is a card body,
+ *  not a document. Input is already HTML-escaped by the caller. */
+function inline(escaped: string): string {
+  return escaped
+    .replace(/`([^`]+)`/g, '<span class="k">$1</span>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')   // bold first, so it consumes paired **
+    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+}
+
 function renderApprovalBody(body: string): string {
   const out: string[] = [];
   let fence: string | null = null;
@@ -120,8 +133,8 @@ function renderApprovalBody(body: string): string {
       if (raw.startsWith('-')) { out.push(`<span class="d-del">${line}</span>`); continue; }
       if (raw.startsWith('@@')) { out.push(`<span class="d-hunk">${line}</span>`); continue; }
     } else if (fence === 'bash') { out.push(`<span class="d-cmd">${line}</span>`); continue; }
-    if (raw.includes('⚠️')) { out.push(`<span class="d-del">${line.replace(/\*\*/g, '')}</span>`); continue; }
-    out.push(line.replace(/`([^`]+)`/g, '<span class="k">$1</span>'));
+    if (raw.includes('⚠️')) { out.push(`<span class="d-del">${inline(line).replace(/\*\*/g, '')}</span>`); continue; }
+    out.push(inline(line));
   }
   return out.join('\n');
 }
@@ -286,10 +299,16 @@ function card(s: SessionView): HTMLElement {
   const actions = document.createElement('div'); actions.className = 'actions';
 
   if (s.pending?.ask) {
-    // AskUserQuestion (#50): option buttons instead of Allow/Deny — a generic
-    // deny would feed the agent a bogus answer to its own question. Single
-    // select fires on click; multiSelect keeps local checkbox state (askPicks)
-    // until Submit. Skip leaves the question to the terminal (pass-through).
+    // AskUserQuestion: option buttons instead of Allow/Deny — a generic deny
+    // would feed the agent a bogus answer to its own question. Single select
+    // fires on click; multiSelect keeps local checkbox state (askPicks) until
+    // Submit. Skip leaves the whole batch to the terminal (pass-through).
+    //
+    // One call can carry several questions. The daemon owns the cursor and
+    // ships one question at a time, so this only ever renders the current one
+    // — answering here advances it, and answering the same batch from IM
+    // repaints this card. The title already reads "Question 2/3"; Back undoes
+    // a misclick on an earlier one.
     const rid = s.pending.requestId, ask = s.pending.ask;
     if (ask.multiSelect) {
       const picks = askPicks.get(rid) ?? new Set<number>();
@@ -316,8 +335,16 @@ function card(s: SessionView): HTMLElement {
         actions.append(b);
       });
     }
+    if (ask.index > 0) {
+      const back = document.createElement('button'); back.className = 'btn'; back.textContent = '← Back';
+      back.title = 'Re-answer the previous question';
+      back.onclick = () => { askPicks.delete(rid); send({ type: 'ask', requestId: rid, picks: [], back: true }); };
+      actions.append(back);
+    }
     const skip = document.createElement('button'); skip.className = 'btn no'; skip.textContent = 'Skip';
-    skip.title = 'Leave the question to the terminal';
+    skip.title = ask.total > 1
+      ? 'Leave all these questions to the terminal'
+      : 'Leave the question to the terminal';
     skip.onclick = () => send({ type: 'ask', requestId: rid, picks: [], skip: true });
     actions.append(skip);
   } else if (s.pending && !s.pending.local) {

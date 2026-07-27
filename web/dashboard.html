@@ -92,7 +92,10 @@
     .msg .d-add { color: #86efac; } .msg .d-del { color: #fca5a5; } .msg .d-hunk { color: #67e8f9; } .msg .d-cmd { color: #fde68a; }
 
     /* actions */
-    .actions { display: flex; align-items: center; gap: 8px; }
+    /* wrap, never squeeze: flex items shrink below their content width by
+       default, and CJK has no spaces to break on — so a row of option buttons
+       collapsed into one-character-wide columns. */
+    .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
     .actions .spring { flex: 1; }
     button { font-family: inherit; cursor: pointer; }
     .icon-btn { flex: 0 0 auto; width: 42px; height: 42px; display: flex; align-items: center; justify-content: center;
@@ -103,8 +106,8 @@
                 border: 1px solid rgba(53,208,127,.28); background: rgba(53,208,127,.08); color: #eef1f6; text-decoration: none; }
     .term-btn:hover { background: rgba(53,208,127,.14); }
     .term-btn .g { color: var(--accent); font-weight: 800; }
-    .btn { font-size: 12.5px; font-weight: 700; padding: 9px 16px; border-radius: 10px; border: 1px solid var(--line-2);
-           background: rgba(255,255,255,.04); color: var(--text); }
+    .btn { flex: 0 0 auto; max-width: 100%; font-size: 12.5px; font-weight: 700; padding: 9px 16px; border-radius: 10px;
+           border: 1px solid var(--line-2); background: rgba(255,255,255,.04); color: var(--text); }
     .btn.ok { border-color: rgba(53,208,127,.28); background: rgba(53,208,127,.08); color: #86efac; }
     .btn.no { border-color: rgba(255,95,87,.28); background: rgba(255,95,87,.08); color: #fca5a5; }
     .reply { display: flex; gap: 8px; }

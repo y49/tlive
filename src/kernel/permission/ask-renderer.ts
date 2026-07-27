@@ -3,16 +3,19 @@
 // AskUserQuestion(CC 专属 —— Codex 无此概念)的卡渲染 + 答案回传措辞。
 //
 // 机制(真机实测 claude 2.1.210):CC 为 AskUserQuestion fire PermissionRequest;
-// 回 decision.behavior='deny' + message 会让 CC 跳过内置问题框,并把 message
-// 送进 agent 的对话流。hook 挂起期间本地框并行弹出,先答先得 —— 本地答会
-// 触发 PostToolUse,cancel 机制照常撤卡,tlive 绝不篡改键盘前的选择。
+// 挂起期间本地框并行弹出,先答先得 —— 本地答会触发 PostToolUse,cancel 机制
+// 照常撤卡,tlive 绝不篡改键盘前的选择。
 //
-// agent 看到的是 "Error: <message>",所以 message 必须自证是答案而非故障:
-// 来源说明 + Selected + 一份合成的 AskUserQuestionOutput JSON(继承 v1.0
-// 的做法)。措辞是这套机制唯一的软肋 —— 措辞差 agent 就会重问一遍。
+// **一次调用可以带多个问题**(CC 的问题框把它们渲染成 tab)。整批被当作一个
+// 单元:要么全部答完再回传,要么一个都不答(Skip / 超时 → 本地框接管)。
+// 早期版本只渲染 questions[0] 并重建一个单问题的 updatedInput —— 结果是从
+// IM 或 dashboard 答一个三问批次时,第 2、3 问被静默丢弃,agent 根本不知道
+// 自己问过。答案回传因此改为**摊开原始 input**(见 buildAskUpdatedInput):
+// 不重建 = 结构上不可能漏。
 
 export interface AskOption { label: string; description?: string }
-export interface AskCard { title: string; body: string; question: string; header?: string; options: AskOption[]; multiSelect: boolean }
+export interface AskQuestion { question: string; header?: string; options: AskOption[]; multiSelect: boolean }
+export interface AskBatch { questions: AskQuestion[] }
 
 interface RawAsk {
   questions?: Array<{
@@ -23,48 +26,69 @@ interface RawAsk {
   }>;
 }
 
-/** 归一 tool_input → 卡。malformed → null(放行让 CC 自己报错,不自作聪明)。
- *  只渲染 questions[0]:多问题批次罕见,flatten 掉。 */
-export function renderAskCard(input: unknown): AskCard | null {
-  const q = (input as RawAsk)?.questions?.[0];
-  if (!q?.question || !Array.isArray(q.options) || q.options.length < 2) return null;
-  const options: AskOption[] = q.options
+function parseQuestion(raw: NonNullable<RawAsk['questions']>[number]): AskQuestion | null {
+  if (!raw?.question || !Array.isArray(raw.options)) return null;
+  const options: AskOption[] = raw.options
     .filter((o): o is { label: string; description?: string } => typeof o?.label === 'string')
     .map((o) => ({ label: o.label, ...(o.description ? { description: o.description } : {}) }));
   if (options.length < 2) return null;
-
-  const header = q.header ? `*${q.header}*\n\n` : '';
-  const multiSelect = Boolean(q.multiSelect);
-  // The option buttons already carry the labels, so the in-body list is pure
-  // duplication UNLESS an option has a description worth showing. List only
-  // when at least one description exists; otherwise the body is just the
-  // question (buttons speak for themselves).
-  const hasDesc = options.some((o) => o.description);
-  const lines = options.map((o, i) => `**${i + 1}.** ${o.label}${o.description ? ` — ${o.description}` : ''}`);
-  const body = hasDesc ? `${header}${q.question}\n\n${lines.join('\n')}` : `${header}${q.question}`;
-  // No free-text hint here: channels advertise their own path (Feishu has an
-  // on-card input box; Telegram appends its quote-reply hint in the adapter).
   return {
-    title: 'Question',
-    body,
-    question: q.question,
-    ...(q.header ? { header: q.header } : {}),
+    question: raw.question,
+    ...(raw.header ? { header: raw.header } : {}),
     options,
-    multiSelect,
+    multiSelect: Boolean(raw.multiSelect),
   };
 }
 
-/** 多选卡按钮:每个选项一个 checkbox toggle + Submit(N) 计数 + Skip。每次
- *  toggle 都要用最新 selected 重算一遍,调用方拿去 edit 卡片(Task 10)。
- *  ▣/▢(U+25A3/U+25A2,Geometric Shapes)——几何字符,不带 emoji presentation,
- *  不会被 Telegram 渲染成彩色方块;项目 emoji 白名单仅剩 ⚠️,这两个不算违规。 */
-export function askMultiButtons(requestId: string, options: AskOption[], selected: number[]): Array<{ id: string; label: string }> {
+/** 归一 tool_input → 整批问题。malformed → null(放行让 CC 自己报错,不自作聪明)。
+ *  任一问题不合法就整批作废:半批接受 = 半份答案 = 静默丢问题,正是本模块要根除的。 */
+export function parseAskBatch(input: unknown): AskBatch | null {
+  const raw = (input as RawAsk)?.questions;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const questions: AskQuestion[] = [];
+  for (const r of raw) {
+    const q = parseQuestion(r);
+    if (!q) return null;
+    questions.push(q);
+  }
+  return { questions };
+}
+
+/** 当前这一问的卡标题 + 正文。多问题批次把进度写进 title(`Question 2/3`)——
+ *  IM 和 web 都渲染 title,不必碰 im-adapter 的冻结面加字段。 */
+export function renderAskBody(batch: AskBatch, cursor: number): { title: string; body: string } {
+  const total = batch.questions.length;
+  const q = batch.questions[Math.min(Math.max(cursor, 0), total - 1)];
+  const header = q.header ? `*${q.header}*\n\n` : '';
+  // The option buttons already carry the labels, so the in-body list is pure
+  // duplication UNLESS an option has a description worth showing.
+  const hasDesc = q.options.some((o) => o.description);
+  const lines = q.options.map((o, i) => `**${i + 1}.** ${o.label}${o.description ? ` — ${o.description}` : ''}`);
+  return {
+    title: total > 1 ? `Question ${cursor + 1}/${total}` : 'Question',
+    body: hasDesc ? `${header}${q.question}\n\n${lines.join('\n')}` : `${header}${q.question}`,
+  };
+}
+
+/** 当前这一问的按钮。单选 = 编号直选;多选 = checkbox + Submit(N)。
+ *  ▣/▢(U+25A3/U+25A2,Geometric Shapes)—— 几何字符,不带 emoji presentation,
+ *  不会被 Telegram 渲染成彩色方块;项目 emoji 白名单仅剩 ⚠️,这两个不算违规。
+ *  Back 只在 cursor>0 出现 —— 多问题批次里单选点一下就前进,没有 Back 就没法
+ *  救误点。Skip 恒在末位:任何时候都能把整批交回终端(绝不提交半份答案)。 */
+export function askButtons(
+  requestId: string,
+  batch: AskBatch,
+  cursor: number,
+  picks: number[],
+): Array<{ id: string; label: string }> {
+  const q = batch.questions[cursor];
+  const opts = q.multiSelect
+    ? q.options.map((o, i) => ({ id: `asktoggle:${requestId}:${i}`, label: `${picks.includes(i) ? '▣' : '▢'} ${o.label}` }))
+    : q.options.map((o, i) => ({ id: `ask:${requestId}:${i}`, label: `${i + 1}. ${o.label}` }));
   return [
-    ...options.map((o, i) => ({
-      id: `asktoggle:${requestId}:${i}`,
-      label: `${selected.includes(i) ? '▣' : '▢'} ${o.label}`,
-    })),
-    { id: `asksubmit:${requestId}`, label: `Submit (${selected.length})` },
+    ...opts,
+    ...(q.multiSelect ? [{ id: `asksubmit:${requestId}`, label: `Submit (${picks.length})` }] : []),
+    ...(cursor > 0 ? [{ id: `askback:${requestId}`, label: '← Back' }] : []),
     { id: `askskip:${requestId}`, label: 'Skip' },
   ];
 }
@@ -73,24 +97,23 @@ export function askMultiButtons(requestId: string, options: AskOption[], selecte
  *  updatedInput. Mined from the installed 2.1.216 binary — CC's own submit path
  *  (`oei`) returns `{behavior:"allow", updatedInput:{...input, answers}}`, then
  *  the tool runs "without prompting" and CC emits its OWN clean feedback
- *  (`The user answered: "q"="a". …`). This replaces the old deny+message hack,
- *  which CC wrapped in an `Error: … Denied by PermissionRequest hook` shell
- *  (user-reported). `answers` maps question text → answer string (multi-select
- *  comma-separated). Only questions[0] is handled (renderAskCard flattens the
- *  batch), so the questions array is reconstructed from the card context. */
+ *  (`The user answered: "q"="a". …`).
+ *
+ *  原始 input 原样摊开,只补 `answers` —— **不重建 questions**。重建是旧实现
+ *  丢问题的根源;摊开之后,批次里有几个问题就原样有几个,漏答只可能是 answers
+ *  少一项(可检出),不可能是问题凭空消失(不可检出)。
+ *  `answers` 映射 问题文本 → 答案字符串(多选逗号分隔)。 */
 export function buildAskUpdatedInput(
-  ctx: { question: string; header?: string; options: AskOption[]; multiSelect?: boolean },
-  selected: string[],
-): { questions: unknown[]; answers: Record<string, string> } {
-  return {
-    questions: [{
-      question: ctx.question,
-      ...(ctx.header ? { header: ctx.header } : {}),
-      options: ctx.options,
-      multiSelect: Boolean(ctx.multiSelect),
-    }],
-    answers: { [ctx.question]: selected.join(', ') },
-  };
+  originalInput: unknown,
+  batch: AskBatch,
+  answers: ReadonlyMap<number, string[]>,
+): unknown {
+  const map: Record<string, string> = {};
+  batch.questions.forEach((q, i) => {
+    const picked = answers.get(i);
+    if (picked?.length) map[q.question] = picked.join(', ');
+  });
+  return { ...(originalInput as Record<string, unknown>), answers: map };
 }
 
 /** The settled card must still show WHAT was answered (user feedback: after

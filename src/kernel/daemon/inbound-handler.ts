@@ -6,9 +6,8 @@ import type { IncomingEnvelope, IMAdapter, IMChannel, OutgoingMessage } from '..
 import type { PermissionRouter } from './permission-router.js';
 import type { ContinueBroker } from '../permission/continue-broker.js';
 import type { SenderGuard } from './sender-guard.js';
-import type { AskSelection } from './ask-state.js';
+import type { AskFlow, AskStep } from './ask-flow.js';
 import { parseImCommand } from './im-commands.js';
-import { buildAskUpdatedInput, askMultiButtons, type AskOption } from '../permission/ask-renderer.js';
 import { STALE_CARD_NOTICE } from './bootstrap.js';
 
 export interface InboundHandlerDeps {
@@ -27,35 +26,18 @@ export interface InboundHandlerDeps {
   setAutoApprove: (safe: boolean) => void;
   /** Grant "always allow <tool>" (in-memory). */
   addAllowTool: (tool: string) => void;
-  /** Read-only lookup of the pending AskUserQuestion context for a requestId —
-   *  no side effect. Used to validate an `ask:` click BEFORE consuming, so a
-   *  malformed/out-of-range index doesn't eat the context out from under a
-   *  legit follow-up click (review Minor 1/2). */
-  peekAskContext: (requestId: string) => { question: string; header?: string; options: AskOption[]; multiSelect?: boolean } | undefined;
-  /** Returns + clears the pending AskUserQuestion context for a requestId
-   *  (single-use; Task 9). Populated by the permission router's onPending,
-   *  consumed here once a click is validated (`ask:`/`asksubmit:`), or
-   *  unconditionally on `askskip:` (discarded either way). */
-  takeAskContext: (requestId: string) => { question: string; header?: string; options: AskOption[]; multiSelect?: boolean } | undefined;
-  /** Multi-select checkbox state (Task 10) — per-requestId picks toggled by
-   *  `asktoggle:`, read/cleared by `asksubmit:`, also freed on `askskip:` and
-   *  (by the caller's onResolved) on any other resolution — never leaks past
-   *  a request's pending window, same discipline as askContexts. */
-  askSelection: Pick<AskSelection, 'toggle' | 'selected' | 'clear'>;
-  /** The IM cards already sent for a requestId (channel + messageId), so an
-   *  `asktoggle:` click can edit them in place with the refreshed checkbox
-   *  state. Empty when nothing was sent yet (still in grace) or it already
-   *  resolved. */
-  getAskCards: (requestId: string) => Array<{ channel: string; messageId: string; title: string; body: string }>;
-  /** Task 10 review Important fix: per-requestId edit serialization. edit()
-   *  is a real network call — nothing guarantees a toggle edit dispatched
-   *  earlier actually LANDS earlier than the settlement edit onResolved
-   *  fires afterward. Every edit for a rid (toggle here, settlement in
-   *  bootstrap.ts's onResolved) must go through the SAME queue instance so
-   *  landing order matches enqueue order — otherwise a slow toggle edit can
-   *  land after the fast settlement edit and resurrect the checkbox layout
-   *  on top of the "Answered" card (a zombie-card regression). */
-  queueEdit: (requestId: string, fn: () => Promise<unknown>) => Promise<void>;
+  /** AskUserQuestion progress for every pending request: the parsed batch, the
+   *  cursor, the answers collected so far and the current question's checkbox
+   *  picks. Started by the permission router's onPending, consumed the moment
+   *  the last question is answered, freed on skip / any other resolution.
+   *  Validation lives inside it, so a malformed click returns `noop` without
+   *  eating the context out from under a legit follow-up (review Minor 1/2). */
+  askFlow: Pick<AskFlow, 'peek' | 'pick' | 'toggle' | 'submit' | 'back' | 'end'>;
+  /** Repaint every surface for this request at the flow's current cursor — the
+   *  IM cards already sent AND the dashboard session card. Owned by bootstrap
+   *  because both surfaces must move together: the daemon holds the cursor, so
+   *  answering a question here has to advance the dashboard too. */
+  repaintAsk: (requestId: string) => void;
   /** Reply-to routing: IM messageId → session cwd (daemon-lifetime map). */
   resolveReply: (channel: string, messageId: string) => string | undefined;
   /** Session lookup for injection routing. */
@@ -128,91 +110,38 @@ export class InboundHandler {
     }
 
     if (env.text.startsWith('ask:')) {
-      // ask:<requestId>:<optionIndex> — a picked AskUserQuestion option.
+      // ask:<requestId>:<optionIndex> — a picked single-select option. Strict
+      // digits-only match rejects '' and non-numeric input; `Number('')` is 0,
+      // which would otherwise silently pick option 0 (review Minor 2).
       const [, rid, idxRaw] = env.text.split(':');
-      // Peek (no side effect) and validate BEFORE consuming — an out-of-range
-      // or malformed index must not eat the context out from under a legit
-      // follow-up click (review Minor 1). Strict digits-only match rejects ''
-      // and non-numeric input; `Number('')` is 0, which would otherwise
-      // silently pick option 0 (review Minor 2).
-      const ctx = this.deps.peekAskContext(rid);
-      if (!ctx) {
-        // ctx 缺失 = 卡已 stale(daemon 重启 / 已 resolve)——告知,而非静默丢弃。
-        await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
-        return;
-      }
       const idx = /^\d+$/.test(idxRaw) ? Number(idxRaw) : NaN;
-      if (!Number.isInteger(idx) || !ctx.options[idx]) return; // 畸形 index,非 stale,维持静默
-      this.deps.takeAskContext(rid); // valid pick — now consume (single-use)
-      // allow + updatedInput.answers = 答案(见 ask-renderer 文件头):CC 把
-      // AskUserQuestion 当"已回答"正常跑,自己生成干净反馈,无 Error 外壳。
-      if (!this.deps.permissionRouter.answer(rid, true, undefined, buildAskUpdatedInput(ctx, [ctx.options[idx].label]))) {
-        await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
-      }
+      await this.applyAskStep(env, rid, Number.isInteger(idx) ? this.deps.askFlow.pick(rid, idx) : { kind: 'noop' });
       return;
     }
     if (env.text.startsWith('asktoggle:')) {
-      // asktoggle:<requestId>:<optionIndex> — a multi-select checkbox flip
-      // (Task 10). Same peek-then-validate discipline as `ask:`: a bad index
-      // must not mutate AskSelection or touch the card. On a valid toggle,
-      // edit every sent card in place so the checkboxes + Submit(N) count
-      // reflect the new pick immediately.
+      // asktoggle:<requestId>:<optionIndex> — a multi-select checkbox flip.
+      // Validation lives in the flow: a bad index returns noop without
+      // touching state or the card.
       const [, rid, idxRaw] = env.text.split(':');
-      const ctx = this.deps.peekAskContext(rid);
       const idx = /^\d+$/.test(idxRaw) ? Number(idxRaw) : NaN;
-      if (!ctx || !Number.isInteger(idx) || !ctx.options[idx]) return;
-      this.deps.askSelection.toggle(rid, idx);
-      const buttons = askMultiButtons(rid, ctx.options, this.deps.askSelection.selected(rid));
-      // Enqueue every card's edit SYNCHRONOUSLY, in this same tick — mirrors
-      // bootstrap.ts's onResolved settlement loop (`void editQueue.enqueue`,
-      // no per-card await). Multi-channel review Important fix: awaiting
-      // each queueEdit() one at a time here left the loop suspended on a
-      // slow channel's edit before it ever reached a later, faster channel's
-      // card. A Submit that arrives while that await is in flight triggers
-      // onResolved, whose settlement loop enqueues ALL channels' settlement
-      // edits synchronously — including the fast channel this loop hadn't
-      // reached yet. That settlement edit then lands first, and the toggle
-      // edit (enqueued only once the slow channel's await finally resolved)
-      // lands after it — resurrecting the checkbox layout on the fast
-      // channel's already-"Answered" card (a zombie-card regression visible
-      // only with 2+ configured channels). Firing every enqueue call before
-      // yielding to the event loop guarantees this click's toggle edits are
-      // all registered ahead of any settlement edit a later message could
-      // trigger.
-      // Feishu 真机反馈:toggle 后输入框消失 —— edit 时必须带上 ask 布局 +
-      // inputAction,否则 adapter 按通用 body 重渲,form 就没了。
-      const askPayload = { question: ctx.question, ...(ctx.header ? { header: ctx.header } : {}), options: ctx.options, multiSelect: true };
-      const inputAction = { id: `asksubmit:${rid}`, placeholder: 'Type something (optional — sent with your ticks)', submitLabel: 'Submit' };
-      for (const card of this.deps.getAskCards(rid)) {
-        const adapter = this.deps.imBy(card.channel as IMChannel);
-        if (!adapter) continue;
-        void this.deps.queueEdit(rid, () => adapter.edit(card.messageId, { kind: 'card', title: card.title, body: card.body, buttons, ask: askPayload, inputAction }));
-      }
+      await this.applyAskStep(env, rid, Number.isInteger(idx) ? this.deps.askFlow.toggle(rid, idx) : { kind: 'noop' });
       return;
     }
     if (env.text.startsWith('asksubmit:')) {
-      // asksubmit:<requestId> — commit the current multi-select picks (Task
-      // 10). Nothing selected → no-op: a Submit tap with zero checkboxes must
-      // NOT answer with an empty selection.
+      // asksubmit:<requestId> — commit the current question's picks. Feishu's
+      // form submit rides its input-box text along as formText; ticks and text
+      // merge into one answer. Both empty = no-op (an empty answer is not an
+      // answer), enforced inside the flow.
       const rid = env.text.slice('asksubmit:'.length);
-      const ctx = this.deps.peekAskContext(rid);
-      if (!ctx) {
-        // ctx 缺失 = 卡已 stale ——告知,而非静默丢弃。picked.length===0(有
-        // ctx 但没勾选)不是 stale,是正常"啥都没选就点提交",维持静默。
-        await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
-        return;
-      }
-      const picked = this.deps.askSelection.selected(rid);
-      // 单一 Submit:飞书 form 提交把输入框文本作为 formText 一并带来 ——
-      // 勾选 + 文本合并成一个答案;两者皆空才是无操作(不允许空答案)。
-      const typed = env.formText?.trim();
-      if (!picked.length && !typed) return;
-      this.deps.takeAskContext(rid); // valid submit — now consume (single-use)
-      this.deps.askSelection.clear(rid); // free the selection, no leak
-      const labels = [...picked.map((i) => ctx.options[i].label), ...(typed ? [typed] : [])];
-      if (!this.deps.permissionRouter.answer(rid, true, undefined, buildAskUpdatedInput(ctx, labels))) {
-        await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
-      }
+      await this.applyAskStep(env, rid, this.deps.askFlow.submit(rid, env.formText));
+      return;
+    }
+    if (env.text.startsWith('askback:')) {
+      // askback:<requestId> — step back one question in a multi-question
+      // batch, dropping that answer so it gets asked again. Rescues a misclick
+      // on a single-select question, which otherwise advances on one tap.
+      const rid = env.text.slice('askback:'.length);
+      await this.applyAskStep(env, rid, this.deps.askFlow.back(rid));
       return;
     }
     if (env.text.startsWith('askskip:')) {
@@ -224,12 +153,12 @@ export class InboundHandler {
       // 告知不冲突这条 hardening:下面这条回复只是文案,并不调用 answer(),
       // 所以"未知 rid 绝不能被当场放行"这条底线原样保留;只是不再对着一次
       // 真实无效的点击装聋作哑。
-      if (!this.deps.peekAskContext(rid)) {
+      if (!this.deps.askFlow.peek(rid)) {
         await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
         return;
       }
-      this.deps.takeAskContext(rid); // clear, avoid leak — the answer itself is discarded
-      this.deps.askSelection.clear(rid); // free any multi-select picks too (Task 10, no leak)
+      // 整批作废,连同已答的前几问 —— Skip 绝不提交半份答案。
+      this.deps.askFlow.end(rid);
       // Skip = allow = pass-through:本地问题框归你在电脑前答(等同 defer 语义),
       // 不是自动批准执行工具。
       if (!this.deps.permissionRouter.answer(rid, true)) {
@@ -269,17 +198,7 @@ export class InboundHandler {
       const askIn = /^askinput:(.+)$/.exec(env.text);
       if (askIn) {
         const rid = askIn[1];
-        const askCtx = this.deps.peekAskContext(rid);
-        if (askCtx) {
-          const picked = this.deps.askSelection.selected(rid).map((i) => askCtx.options[i]?.label).filter((l): l is string => Boolean(l));
-          const updatedInput = buildAskUpdatedInput(askCtx, [...picked, env.formText]);
-          this.deps.takeAskContext(rid);
-          if (!this.deps.permissionRouter.answer(rid, true, undefined, updatedInput)) {
-            await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
-          }
-        } else {
-          await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
-        }
+        await this.applyAskStep(env, rid, this.deps.askFlow.submit(rid, env.formText));
         return;
       }
       // (The continuation card has no on-card input box; continuing is done by
@@ -329,14 +248,8 @@ export class InboundHandler {
       // already ticked ride along with the typed text. Answered via allow +
       // updatedInput.answers (same as a button pick) so CC treats it as the
       // question's answer, not a refusal.
-      const askCtx = this.deps.peekAskContext(rid);
-      if (askCtx) {
-        const picked = this.deps.askSelection.selected(rid).map((i) => askCtx.options[i]?.label).filter((l): l is string => Boolean(l));
-        const updatedInput = buildAskUpdatedInput(askCtx, [...picked, env.text!]);
-        this.deps.takeAskContext(rid); // consume (single-use), same as a button pick
-        if (!this.deps.permissionRouter.answer(rid, true, undefined, updatedInput)) {
-          await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
-        }
+      if (this.deps.askFlow.peek(rid)) {
+        await this.applyAskStep(env, rid, this.deps.askFlow.submit(rid, env.text!));
         return;
       }
       if (!this.deps.permissionRouter.answer(rid, false, env.text)) {
@@ -376,6 +289,34 @@ export class InboundHandler {
       await this.reply(env, { kind: 'text', text: `Sent to [${label}]${n ? ` (${n} attachment path${n === 1 ? '' : 's'})` : ''}` });
     } catch {
       await this.reply(env, { kind: 'text', text: `[${label}] 注入失败:会话可能已退出。` });
+    }
+  }
+
+  /** Single landing point for every AskUserQuestion interaction — button pick,
+   *  checkbox toggle, Submit, Back, Feishu form text, quote-reply text. The
+   *  flow decides what happened; this only carries it out. Before this, five
+   *  call sites each re-implemented "look up context → assemble answer →
+   *  answer()", which is how multi-question support could be missing from all
+   *  of them at once. */
+  private async applyAskStep(env: IncomingEnvelope, requestId: string, step: AskStep): Promise<void> {
+    switch (step.kind) {
+      case 'stale':
+        // ctx 缺失 = 卡已 stale(daemon 重启 / 已 resolve)——告知,而非静默丢弃。
+        await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
+        return;
+      case 'noop':
+        // 畸形下标 / 空提交:不是 stale,是一次无效点击,维持静默。
+        return;
+      case 'render':
+        this.deps.repaintAsk(requestId);
+        return;
+      case 'answered':
+        // allow + updatedInput.answers = 答案(见 ask-renderer 文件头):CC 把
+        // AskUserQuestion 当"已回答"正常跑,自己生成干净反馈,无 Error 外壳。
+        if (!this.deps.permissionRouter.answer(requestId, true, undefined, step.updatedInput)) {
+          await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
+        }
+        return;
     }
   }
 

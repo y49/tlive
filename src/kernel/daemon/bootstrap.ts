@@ -8,8 +8,9 @@ import { daemonSocketPath } from '../ipc/client.js';
 import { PermissionRouter, type PermChat } from './permission-router.js';
 import { decide as policyDecide, type PolicyState } from '../permission/policy-engine.js';
 import { renderApprovalCard } from '../permission/approval-renderer.js';
-import { renderAskCard, askMultiButtons, extractAskAnswer, buildAskUpdatedInput, type AskOption } from '../permission/ask-renderer.js';
-import { AskSelection } from './ask-state.js';
+import { parseAskBatch, renderAskBody, askButtons, extractAskAnswer, type AskBatch } from '../permission/ask-renderer.js';
+import { AskFlow } from './ask-flow.js';
+import type { AskContext } from './permission-router.js';
 import { createEditQueue } from './edit-queue.js';
 import { createDesktopNotifier } from './desktop-notify.js';
 import { LocalPrompts } from './local-prompts.js';
@@ -18,7 +19,7 @@ import { SenderGuard } from './sender-guard.js';
 import { loadConfig } from '../config/loader.js';
 import { approvalWindow } from '../config/window.js';
 import type { IMAdapter } from '../contracts/im-adapter.js';
-import { SessionRegistry } from '../web/session-registry.js';
+import { SessionRegistry, type SessionView } from '../web/session-registry.js';
 import { startWebServer, type WebServerHandle } from '../web/server.js';
 import { loadOrCreateToken } from '../web/token.js';
 import { EventHub } from '../web/event-hub.js';
@@ -239,22 +240,76 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     if (permissionRouter.pendingCount() === 0 && localPrompts.count() === 0) void desktop.clear();
   };
 
-  // AskUserQuestion (Task 9): raw question + options per pending requestId, so an
-  // `ask:<rid>:<idx>` button click can build the deny+message answer. Written at
-  // onPending, cleared at onResolved (or consumed once by the button click) —
-  // never leaks across the request's lifetime.
-  const askContexts = new Map<string, { question: string; header?: string; options: AskOption[]; multiSelect: boolean }>();
-  // Same lifetime as askContexts' *pending* window, but never consumed by the
-  // button-click handler (askContexts is get-and-clear there) — lets onResolved
-  // still know "this requestId was an ask card" after the answer already
-  // cleared askContexts (Minor 4: label the IM card "Answered", not "Denied").
+  // Same lifetime as the ask flow's *pending* window, but never consumed by an
+  // answer (the flow deletes its entry the moment the last question lands) —
+  // lets onResolved still know "this requestId was an ask card" afterwards
+  // (Minor 4: label the IM card "Answered", not "Denied").
   const askRequestIds = new Set<string>();
-  // Multi-select checkbox state (Task 10) — per-requestId picks, toggled by
-  // asktoggle: (via inbound-handler), read/cleared by asksubmit:. Also freed
-  // on askskip: and unconditionally in onResolved below (same no-leak
-  // discipline as askContexts — covers defer/timeout/local-answer races that
-  // never reach asksubmit:/askskip: at all).
-  const askSelection = new AskSelection();
+  // AskUserQuestion progress per pending requestId: the parsed batch, which
+  // question the cursor is on, the answers gathered so far and the current
+  // question's checkbox picks. Started in onPending, consumed the moment the
+  // last question is answered, and freed unconditionally in onResolved below
+  // — that last one covers the defer/timeout/local-answer races that never
+  // reach asksubmit:/askskip: at all, so nothing leaks past a request's
+  // pending window.
+  const askFlow = new AskFlow();
+  // requestId → the session that owns it, so repaintAsk can re-broadcast the
+  // dashboard card without threading key/cwd through every call site.
+  const askOwner = new Map<string, { key: string; cwd: string }>();
+
+  /** The dashboard's view of one question. `index`/`total` drive the "2/3"
+   *  progress badge; a single-question batch renders exactly as before. */
+  const askView = (batch: AskBatch, cursor: number): NonNullable<SessionView['pending']>['ask'] => {
+    const q = batch.questions[cursor];
+    return {
+      question: q.question, ...(q.header ? { header: q.header } : {}),
+      options: q.options, multiSelect: q.multiSelect,
+      index: cursor, total: batch.questions.length,
+    };
+  };
+
+  /** Repaint every surface at the flow's current cursor — the IM cards already
+   *  sent AND the dashboard session card. The daemon owns the cursor, so both
+   *  must move together: answering a question on your phone has to advance the
+   *  dashboard, and vice versa. Called for every `render` step, wherever the
+   *  interaction came in.
+   *
+   *  Enqueue every card's edit SYNCHRONOUSLY, in this same tick — mirrors the
+   *  onResolved settlement loop (`void editQueue.enqueue`, no per-card await).
+   *  Multi-channel review Important fix: awaiting each enqueue one at a time
+   *  left the loop suspended on a slow channel before it reached a faster
+   *  channel's card; an answer arriving during that await fires onResolved,
+   *  whose settlement edits then land FIRST on the fast channel, and this
+   *  repaint lands after — resurrecting a live question on top of an already
+   *  "Answered" card (a zombie-card regression visible only with 2+ channels).
+   *
+   *  Feishu 真机反馈:重画时必须带上 ask 布局 + inputAction,否则 adapter 按
+   *  通用 body 重渲,输入框就没了。 */
+  const repaintAsk = (requestId: string): void => {
+    const state = askFlow.peek(requestId);
+    if (!state) return;
+    const { batch, cursor, picks } = state;
+    const q = batch.questions[cursor];
+    const { title, body } = renderAskBody(batch, cursor);
+    const buttons = askButtons(requestId, batch, cursor, picks);
+    const inputAction = q.multiSelect
+      ? { id: `asksubmit:${requestId}`, placeholder: 'Type something (optional — sent with your ticks)', submitLabel: 'Submit' }
+      : { id: `askinput:${requestId}`, placeholder: 'Type your own answer', submitLabel: 'Send' };
+    const askPayload = { question: q.question, ...(q.header ? { header: q.header } : {}), options: q.options, multiSelect: q.multiSelect };
+    for (const card of sentCards.get(requestId) ?? []) {
+      const adapter = (opts.imAdapters ?? []).find((a) => a.channel === card.channel);
+      if (!adapter) continue;
+      void editQueue.enqueue(requestId, () => adapter.edit(card.messageId, { kind: 'card', title: card.title, body, buttons, ask: askPayload, inputAction }));
+    }
+    const owner = askOwner.get(requestId);
+    if (!owner) return;
+    const view = sessions.get(owner.key);
+    if (view?.pending?.requestId !== requestId) return;
+    events.broadcast({ type: 'session-upsert', session: sessions.upsert({
+      key: owner.key, cwd: owner.cwd, status: 'waiting-approval',
+      pending: { ...view.pending, title, body, ask: askView(batch, cursor) },
+    }) });
+  };
 
   /** `<label> · ` prefix. wrapped/hook-only 不再用图标区分 —— 续跑卡自带
    *  "Reply to continue" 引导,该区分对用户的实际操作没有影响。 */
@@ -267,7 +322,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
 
   const sendToChat = async (
     target: PermChat,
-    msg: { title?: string; body?: string; text?: string; requestId?: string; toolName?: string; cwd?: string; askOptions?: AskOption[]; askMulti?: boolean; ask?: { question: string; header?: string; options: AskOption[]; multiSelect: boolean }; inputAction?: { id: string; placeholder: string; submitLabel: string } },
+    msg: { title?: string; body?: string; text?: string; requestId?: string; toolName?: string; cwd?: string; ask?: AskContext },
   ): Promise<void> => {
     const adapter = (opts.imAdapters ?? []).find((a) => a.channel === target.channel);
     if (!adapter) return;
@@ -283,18 +338,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         kind: 'card',
         ...(title ? { title } : {}),
         body,
-        // AskUserQuestion cards get option buttons instead of Allow/Deny (Task
-        // 9); a multiSelect question gets checkboxes + Submit(N) + Skip
-        // instead of the numbered single-pick buttons (Task 10). Freshly-sent
-        // card always starts with an empty selection — askSelection has no
-        // entry yet for a brand-new requestId.
-        ...(msg.requestId ? { buttons: msg.askMulti
-          ? askMultiButtons(msg.requestId, msg.askOptions ?? [], [])
-          : msg.askOptions
-          ? [
-              ...msg.askOptions.map((o, i) => ({ id: `ask:${msg.requestId}:${i}`, label: `${i + 1}. ${o.label}` })),
-              { id: `askskip:${msg.requestId}`, label: 'Skip' },
-            ]
+        // AskUserQuestion cards get option buttons instead of Allow/Deny; a
+        // multiSelect question gets checkboxes + Submit(N). A freshly sent
+        // card is always at the batch's first question with nothing ticked —
+        // every later repaint goes through inbound-handler's editAskCards.
+        ...(msg.requestId ? { buttons: msg.ask
+          ? askButtons(msg.requestId, msg.ask.batch, 0, [])
           : [
               { id: `approve:${msg.requestId}`, label: 'Allow' },
               { id: `deny:${msg.requestId}`, label: 'Deny' },
@@ -302,8 +351,20 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               { id: `pause:${msg.requestId}`, label: 'Pause approvals' },
             ],
         } : {}),
-        ...(msg.ask ? { ask: msg.ask } : {}),
-        ...(msg.inputAction ? { inputAction: msg.inputAction } : {}),
+        ...(msg.ask && msg.requestId ? (() => {
+          // Channels with a native input (Feishu form) get ONE submit. multi →
+          // the form submit IS the Submit (id = asksubmit:<rid>): typed text
+          // and ticked boxes travel together, no second button (live feedback:
+          // Submit + Send side by side read as two competing actions).
+          // single → typed text answers directly (askinput:<rid>).
+          const q = msg.ask.batch.questions[0];
+          return {
+            ask: { question: q.question, ...(q.header ? { header: q.header } : {}), options: q.options, multiSelect: q.multiSelect },
+            inputAction: q.multiSelect
+              ? { id: `asksubmit:${msg.requestId}`, placeholder: 'Type something (optional — sent with your ticks)', submitLabel: 'Submit' }
+              : { id: `askinput:${msg.requestId}`, placeholder: 'Type your own answer', submitLabel: 'Send' },
+          };
+        })() : {}),
       });
       if (msg.requestId) {
         const list = sentCards.get(msg.requestId) ?? [];
@@ -324,20 +385,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
 
   const permissionRouter = new PermissionRouter({
     configuredChats,
-    sendToChat: (t, card) => sendToChat(t, {
-      ...card,
-      // Ask cards: channels with a native input (Feishu form) get ONE submit.
-      // multi → the form submit IS the Submit (id = asksubmit:<rid>): typed
-      // text and ticked boxes travel together, no second button (live
-      // feedback: Submit + Send side by side read as two competing actions).
-      // single → typed text answers directly (askinput:<rid>).
-      ...(card.askOptions ? {
-        ask: { question: (askContexts.get(card.requestId)?.question) ?? '', ...(askContexts.get(card.requestId)?.header ? { header: askContexts.get(card.requestId)!.header } : {}), options: card.askOptions, multiSelect: Boolean(card.askMulti) },
-        inputAction: card.askMulti
-          ? { id: `asksubmit:${card.requestId}`, placeholder: 'Type something (optional — sent with your ticks)', submitLabel: 'Submit' }
-          : { id: `askinput:${card.requestId}`, placeholder: 'Type your own answer', submitLabel: 'Send' },
-      } : {}),
-    }),
+    sendToChat: (t, card) => sendToChat(t, card),
     isMuted: (key) => muted || (sessions.get(key)?.muted ?? false),
     hasWebClients: () => events.size() > 0,
     // The desktop approval toast IS an answer path when it can open a dashboard
@@ -355,10 +403,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // card instead of the generic diff/command renderer — malformed input
       // falls through to the normal approval card so CC reports its own error.
       if (req.toolName === 'AskUserQuestion') {
-        const ask = renderAskCard(req.input);
-        // ask.question (not a re-extraction from req.input) — renderAskCard
-        // already validated it; a single source of truth (review Minor 5).
-        if (ask) return { title: ask.title, body: ask.body, askOptions: ask.options, askQuestion: ask.question, ...(ask.header ? { askHeader: ask.header } : {}), askMulti: ask.multiSelect };
+        const batch = parseAskBatch(req.input);
+        // The whole batch travels together with the raw input: a call can hold
+        // several questions, and the answer is built by spreading that input.
+        if (batch) return { ...renderAskBody(batch, 0), ask: { batch, input: req.input } };
       }
       return renderApprovalCard({ toolName: req.toolName, input: req.input });
     },
@@ -369,7 +417,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     // Opt-in: on a held approval's timeout, deny (→ turn ends → continue card can
     // redirect) instead of the default defer (→ CC-native local fallback).
     timeoutAction: () => cfg.approvals?.timeoutAction ?? 'defer',
-    onPending: ({ key, cwd, requestId, title, body, toolName, askOptions, askQuestion, askHeader, askMulti }) => {
+    onPending: ({ key, cwd, requestId, title, body, toolName, ask }) => {
       // Desktop ping FIRST — this notification is for the person AT this
       // machine, so it must be immediate (the IM card's grace delay exists to
       // spare the phone when you answer at the keyboard — delaying the local
@@ -387,9 +435,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           waiting > 1 ? `${waiting} approvals waiting — click to open and answer` : 'Approval needed — click to open and answer',
         );
       }
-      if (askOptions && askQuestion) {
-        askContexts.set(requestId, { question: askQuestion, ...(askHeader ? { header: askHeader } : {}), options: askOptions, multiSelect: Boolean(askMulti) });
-        askRequestIds.add(requestId); // Task 9 review Minor 4: survives the button-click's askContexts consumption, so onResolved can still tell this was an ask card
+      if (ask) {
+        askFlow.begin(requestId, ask.batch, ask.input);
+        askOwner.set(requestId, { key, cwd });
+        askRequestIds.add(requestId); // survives the flow's consumption, so onResolved can still tell this was an ask card
       }
       // key = registry identity, cwd = real directory — carried as two
       // explicit fields all the way from requestPermission's opts (Task 5 fix
@@ -402,11 +451,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // used to be hidden from the web entirely).
       events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd, status: 'waiting-approval', pending: {
         requestId, title, body, toolName,
-        ...(askOptions && askQuestion ? { ask: { question: askQuestion, ...(askHeader ? { header: askHeader } : {}), options: askOptions, multiSelect: Boolean(askMulti) } } : {}),
+        ...(ask ? { ask: askView(ask.batch, 0) } : {}),
       } }) });
     },
     onResolved: ({ key, cwd, requestId, decision, message, updatedInput }) => {
-      askContexts.delete(requestId); // no leak whether consumed by a button click or resolved another way
       // Warp-style lifecycle: the desktop notification exists exactly while
       // something waits. Last pending approval just resolved → close it
       // (answered means gone; the tray must never hold a stale "Waiting").
@@ -416,7 +464,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // session key is untouched.
       localPrompts.clear({ key });
       if (permissionRouter.pendingCount() === 0 && localPrompts.count() === 0) void desktop.clear();
-      askSelection.clear(requestId); // no leak — covers defer/timeout/local-answer paths that skip asksubmit:/askskip: entirely (Task 10)
+      askFlow.end(requestId); askOwner.delete(requestId); // no leak — covers defer/timeout/local-answer paths that skip asksubmit:/askskip: entirely
       const isAsk = askRequestIds.delete(requestId); // true only for an AskUserQuestion card (Minor 4)
       // Only touch the session view if THIS request still owns the pending slot —
       // with two concurrent approvals on one key, resolving A must not wipe B's
@@ -550,29 +598,33 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         return;
       }
       case 'ask': {
-        // AskUserQuestion from the dashboard (#50) — same wire as the IM
-        // buttons: allow + updatedInput (ask-renderer), so CC treats the tool
-        // as answered and emits its own clean feedback. Skip = allow with NO
-        // updatedInput = pass-through, the local selector stays yours — never
-        // an auto-answer. Same peek-then-consume discipline as inbound-handler.
-        const ctx = askContexts.get(action.requestId);
-        if (!ctx) {
+        // AskUserQuestion from the dashboard — the SAME flow the IM buttons
+        // drive, so a multi-question batch advances identically whichever
+        // surface you use, and the other surface repaints to match. Skip =
+        // allow with NO updatedInput = pass-through, the local selector stays
+        // yours — never an auto-answer, and never a half-answered batch.
+        if (!askFlow.peek(action.requestId)) {
           console.log(`[web] stale ask tapped: requestId=${action.requestId} (already resolved / daemon restarted)`);
           return;
         }
         if (action.skip) {
-          askContexts.delete(action.requestId);
-          askSelection.clear(action.requestId);
+          askFlow.end(action.requestId);
           permissionRouter.answer(action.requestId, true);
           return;
         }
-        const labels = action.picks.filter((i) => i < ctx.options.length).map((i) => ctx.options[i].label);
-        const text = action.text?.trim();
-        const selected = text ? [...labels, text] : labels;
-        if (selected.length === 0) return; // nothing picked — ignore, the card stays live
-        askContexts.delete(action.requestId);
-        askSelection.clear(action.requestId); // free any IM multi-select picks too — one answer wins
-        permissionRouter.answer(action.requestId, true, undefined, buildAskUpdatedInput(ctx, selected));
+        if (action.back) {
+          if (askFlow.back(action.requestId).kind === 'render') repaintAsk(action.requestId);
+          return;
+        }
+        // The dashboard sends the whole selection at once (single-pick or a
+        // Submit'd checkbox set), so seed the flow's picks then submit.
+        for (const i of action.picks) askFlow.toggle(action.requestId, i);
+        const single = askFlow.peek(action.requestId);
+        const step = single && !single.batch.questions[single.cursor].multiSelect && action.picks.length === 1 && !action.text
+          ? askFlow.pick(action.requestId, action.picks[0])
+          : askFlow.submit(action.requestId, action.text);
+        if (step.kind === 'render') repaintAsk(action.requestId);
+        else if (step.kind === 'answered') permissionRouter.answer(action.requestId, true, undefined, step.updatedInput);
         return;
       }
       case 'reply':
@@ -853,15 +905,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     setTrust: (t: boolean) => runtimeSet('trust', t),
     setAutoApprove: (safe: boolean) => runtimeSet('safe', safe),
     addAllowTool: (tool: string) => { policyState.allowTools?.add(tool); },
-    peekAskContext: (rid: string) => askContexts.get(rid),
-    takeAskContext: (rid: string) => {
-      const ctx = askContexts.get(rid);
-      if (ctx) askContexts.delete(rid);
-      return ctx;
-    },
-    askSelection,
-    getAskCards: (rid: string) => sentCards.get(rid) ?? [],
-    queueEdit: (rid, fn) => editQueue.enqueue(rid, fn),
+    askFlow,
+    repaintAsk,
     resolveReply: (channel, messageId) => msgToKey.get(`${channel}:${messageId}`),
     sessionInfo: (cwd) => {
       const s = sessions.get(cwd);

@@ -175,7 +175,7 @@ describe('daemon → /ws/events downstream broadcast', () => {
       { socketPath: sock, timeoutMs: 5000 },
     );
     const f = await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's' && x.session.status === 'waiting-approval');
-    expect(f.session.pending.ask).toEqual({ question: 'Pick a color?', options: [{ label: 'Red' }, { label: 'Blue' }], multiSelect: false });
+    expect(f.session.pending.ask).toEqual({ question: 'Pick a color?', options: [{ label: 'Red' }, { label: 'Blue' }], multiSelect: false, index: 0, total: 1 });
     await new Promise((r) => setTimeout(r, 100));
     expect(sentIm).toHaveLength(1); // IM still gets the ask card with option buttons
 

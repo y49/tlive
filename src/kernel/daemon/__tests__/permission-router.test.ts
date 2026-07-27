@@ -279,31 +279,35 @@ describe('PermissionRouter answer message passthrough', () => {
   });
 });
 
-describe('PermissionRouter askMulti passthrough (Task 10)', () => {
-  it('threads renderCard askMulti through to sendToChat, without affecting a plain (non-ask) card', async () => {
-    let sentCard: { askMulti?: boolean } | undefined;
+describe('PermissionRouter ask passthrough', () => {
+  const ASK = { batch: { questions: [{ question: 'Q?', options: [{ label: 'A' }, { label: 'B' }], multiSelect: true }] }, input: { questions: [] } };
+
+  it('threads renderCard\'s whole ask context through to sendToChat, without affecting a plain (non-ask) card', async () => {
+    let sentCard: { ask?: typeof ASK } | undefined;
     let pendingId = '';
     const r = new PermissionRouter(base({
-      renderCard: () => ({ title: 'T', body: 'B', askMulti: true }),
-      sendToChat: async (_t: unknown, c: { requestId: string; askMulti?: boolean }) => { pendingId = c.requestId; sentCard = c; },
+      renderCard: () => ({ title: 'T', body: 'B', ask: ASK }),
+      sendToChat: async (_t: unknown, c: { requestId: string; ask?: typeof ASK }) => { pendingId = c.requestId; sentCard = c; },
     }));
     const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'AskUserQuestion', input: {} });
     await new Promise((res) => setTimeout(res, 0));
-    expect(sentCard?.askMulti).toBe(true);
+    // The BATCH travels, not a flattened single question — that flattening is
+    // what silently dropped questions 2..N from a multi-question answer.
+    expect(sentCard?.ask).toBe(ASK);
     r.answer(pendingId, true);
     await p;
   });
 
-  it('omits askMulti on the wire when renderCard does not set it (single-select / every other tool)', async () => {
-    let sentCard: { askMulti?: boolean } | undefined;
+  it('omits ask on the wire when renderCard does not set it (every other tool)', async () => {
+    let sentCard: { ask?: unknown } | undefined;
     let pendingId = '';
     const r = new PermissionRouter(base({
       renderCard: () => ({ title: 'T', body: 'B' }),
-      sendToChat: async (_t: unknown, c: { requestId: string; askMulti?: boolean }) => { pendingId = c.requestId; sentCard = c; },
+      sendToChat: async (_t: unknown, c: { requestId: string; ask?: unknown }) => { pendingId = c.requestId; sentCard = c; },
     }));
     const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {} });
     await new Promise((res) => setTimeout(res, 0));
-    expect(sentCard?.askMulti).toBeUndefined();
+    expect(sentCard?.ask).toBeUndefined();
     r.answer(pendingId, true);
     await p;
   });

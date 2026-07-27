@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { InboundHandler, type InboundHandlerDeps } from '../inbound-handler.js';
 import { SenderGuard } from '../sender-guard.js';
-import { AskSelection } from '../ask-state.js';
+import { AskFlow } from '../ask-flow.js';
+import { parseAskBatch } from '../../permission/ask-renderer.js';
 import { createEditQueue } from '../edit-queue.js';
 import type { IncomingEnvelope, IMAdapter, OutgoingMessage } from '../../contracts/im-adapter.js';
 import type { PermissionRouter } from '../permission-router.js';
@@ -40,31 +41,24 @@ const baseDeps = (over: Partial<InboundHandlerDeps> = {}): InboundHandlerDeps =>
     listSessions: () => [],
     inject: vi.fn().mockResolvedValue(undefined),
     findLiveCard: () => null,
-    peekAskContext: () => undefined,
-    takeAskContext: () => undefined,
-    askSelection: new AskSelection(),
-    getAskCards: () => [],
-    queueEdit: (rid, fn) => editQueue.enqueue(rid, fn),
+    askFlow: new AskFlow(),
+    repaintAsk: vi.fn(),
     ...over,
   };
 };
 
-/** A real get-and-clear store (mirrors bootstrap.ts's askContexts Map) so tests
- *  can observe whether a bad `ask:` click actually consumed the context —
- *  a plain `takeAskContext: () => ({...})` stub (as the old tests used) always
- *  returns the same value regardless of calls and can't catch that regression
- *  (review Minor 1). */
-function makeAskStore(entries: Record<string, { question: string; options: Array<{ label: string; description?: string }> }>) {
-  const map = new Map(Object.entries(entries));
-  return {
-    peekAskContext: (rid: string) => map.get(rid),
-    takeAskContext: (rid: string) => {
-      const v = map.get(rid);
-      if (v) map.delete(rid);
-      return v;
-    },
-  };
+/** The REAL AskFlow, seeded from raw tool input — no stub. A stubbed context
+ *  lookup always returns the same value regardless of calls and so cannot
+ *  catch "a bad click consumed the context" (review Minor 1); the real flow
+ *  can, and it is pure in-memory logic with nothing to fake. */
+function askFlowWith(entries: Record<string, unknown>): AskFlow {
+  const flow = new AskFlow();
+  for (const [rid, input] of Object.entries(entries)) flow.begin(rid, parseAskBatch(input)!, input);
+  return flow;
 }
+
+const ONE = (question: string, ...labels: string[]) => ({ questions: [{ question, options: labels.map((label) => ({ label })) }] });
+const ONE_MULTI = (question: string, ...labels: string[]) => ({ questions: [{ question, multiSelect: true, options: labels.map((label) => ({ label })) }] });
 
 describe('InboundHandler', () => {
   it('approve:<id> answers true, sends no reply', async () => {
@@ -180,7 +174,7 @@ describe('InboundHandler', () => {
   it('ask:<id>:<idx> answers with allow + updatedInput.answers carrying the picked option', async () => {
     const permAnswer = vi.fn().mockReturnValue(true); // hit — a live pending
     const h = new InboundHandler(baseDeps({
-      ...makeAskStore({ 'req-9': { question: 'Pick a color?', options: [{ label: 'Red' }, { label: 'Blue' }] } }),
+      askFlow: askFlowWith({ 'req-9': ONE('Pick a color?', 'Red', 'Blue') }),
       permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
     }));
     await h.handle(envelope({ text: 'ask:req-9:1' }));
@@ -197,8 +191,6 @@ describe('InboundHandler', () => {
     const msgs: Array<{ kind: string; text?: string }> = [];
     const h = new InboundHandler(baseDeps({
       imBy: () => makeAdapter(msgs),
-      peekAskContext: () => undefined,
-      takeAskContext: () => undefined,
       permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
     }));
     await h.handle(envelope({ text: 'ask:req-9:1' }));
@@ -209,40 +201,36 @@ describe('InboundHandler', () => {
 
   it('an out-of-range index does not consume the context — a later legit index still answers (review Minor 1)', async () => {
     const permAnswer = vi.fn().mockReturnValue(true); // hit — a live pending
-    const store = makeAskStore({ 'req-9': { question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] } });
+    const askFlow = askFlowWith({ 'req-9': ONE('Pick?', 'Red', 'Blue') });
     const h = new InboundHandler(baseDeps({
-      ...store,
+      askFlow,
       permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
     }));
     await h.handle(envelope({ text: 'ask:req-9:5' })); // out of range — must NOT eat the context
     expect(permAnswer).not.toHaveBeenCalled();
-    expect(store.peekAskContext('req-9')).toBeDefined(); // still there for a real pick
+    expect(askFlow.peek('req-9')).toBeDefined(); // still there for a real pick
 
     await h.handle(envelope({ text: 'ask:req-9:1' })); // the legit follow-up click
     expect(permAnswer).toHaveBeenCalledTimes(1);
-    const [rid, approved, , updatedInput] = permAnswer.mock.calls[0];
-    expect(rid).toBe('req-9');
-    expect(approved).toBe(true);
-    expect((updatedInput as { answers: Record<string, string> }).answers['Pick?']).toBe('Blue');
+    expect((permAnswer.mock.calls[0][3] as { answers: Record<string, string> }).answers['Pick?']).toBe('Blue');
   });
 
   it('ask:<id>: (empty index) is a no-op, not a silent pick of option 0 — Number("") === 0 (review Minor 2)', async () => {
     const permAnswer = vi.fn();
-    const store = makeAskStore({ 'req-9': { question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] } });
+    const askFlow = askFlowWith({ 'req-9': ONE('Pick?', 'Red', 'Blue') });
     const h = new InboundHandler(baseDeps({
-      ...store,
+      askFlow,
       permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
     }));
     await h.handle(envelope({ text: 'ask:req-9:' }));
     expect(permAnswer).not.toHaveBeenCalled();
-    expect(store.peekAskContext('req-9')).toBeDefined(); // not consumed either
+    expect(askFlow.peek('req-9')).toBeDefined(); // not consumed either
   });
 
   it('ask:<id>:<idx> with a non-numeric index is a no-op', async () => {
     const permAnswer = vi.fn();
-    const store = makeAskStore({ 'req-9': { question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] } });
     const h = new InboundHandler(baseDeps({
-      ...store,
+      askFlow: askFlowWith({ 'req-9': ONE('Pick?', 'Red', 'Blue') }),
       permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
     }));
     await h.handle(envelope({ text: 'ask:req-9:abc' }));
@@ -251,157 +239,171 @@ describe('InboundHandler', () => {
 
   it('askskip:<id> passes through with answer(rid, true) — not an auto-approve', async () => {
     const permAnswer = vi.fn().mockReturnValue(true); // hit — a live pending
-    const takeAskContext = vi.fn().mockReturnValue({ question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] });
+    const askFlow = askFlowWith({ 'req-9': ONE('Pick?', 'Red', 'Blue') });
     const h = new InboundHandler(baseDeps({
-      peekAskContext: () => ({ question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] }),
-      takeAskContext,
+      askFlow,
       permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
     }));
     await h.handle(envelope({ text: 'askskip:req-9' }));
-    expect(takeAskContext).toHaveBeenCalledWith('req-9');
     expect(permAnswer).toHaveBeenCalledWith('req-9', true);
+    expect(askFlow.peek('req-9')).toBeUndefined(); // freed, no leak
   });
 
-  it('askskip:<id> also frees any multi-select picks — no AskSelection leak (Task 10)', async () => {
-    const askSelection = new AskSelection();
-    askSelection.toggle('req-9', 0);
+  it('askskip: on a half-answered multi-question batch discards the lot — never a partial answer', async () => {
+    const permAnswer = vi.fn().mockReturnValue(true);
+    const askFlow = askFlowWith({ 'req-9': { questions: [
+      { question: 'First?', options: [{ label: 'A' }, { label: 'B' }] },
+      { question: 'Second?', options: [{ label: 'X' }, { label: 'Y' }] },
+    ] } });
     const h = new InboundHandler(baseDeps({
-      peekAskContext: () => ({ question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] }),
-      takeAskContext: vi.fn().mockReturnValue({ question: 'Pick?', options: [{ label: 'Red' }, { label: 'Blue' }] }),
-      askSelection,
-      permissionRouter: { answer: vi.fn(), requestPermission: vi.fn() } as unknown as PermissionRouter,
+      askFlow,
+      permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
     }));
+    await h.handle(envelope({ text: 'ask:req-9:0' }));   // answers First?, advances
     await h.handle(envelope({ text: 'askskip:req-9' }));
-    expect(askSelection.selected('req-9')).toEqual([]);
+    expect(permAnswer).toHaveBeenCalledTimes(1);
+    expect(permAnswer).toHaveBeenCalledWith('req-9', true); // bare pass-through, no updatedInput
+    expect(askFlow.peek('req-9')).toBeUndefined();
   });
 
   it('askskip:<id> replies with the stale-card notice when the context is gone — symmetric with ask:/asktoggle:/asksubmit: peek-before-consume hardening (opus review); never touches answer() for the unconfirmed rid', async () => {
     const permAnswer = vi.fn();
-    const takeAskContext = vi.fn();
     const msgs: Array<{ kind: string; text?: string }> = [];
     const h = new InboundHandler(baseDeps({
       imBy: () => makeAdapter(msgs),
-      peekAskContext: () => undefined,
-      takeAskContext,
       permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
     }));
     await h.handle(envelope({ text: 'askskip:req-9' }));
     expect(permAnswer).not.toHaveBeenCalled(); // hardening intact: unconfirmed rid never reaches answer(rid, true)
-    expect(takeAskContext).not.toHaveBeenCalled();
     expect(msgs).toHaveLength(1);
     expect(msgs[0].text).toMatch(/no longer active/i);
   });
 
-  it('asktoggle:<id>:<idx> flips the selection and edits every sent card with refreshed checkboxes + Submit(N) (Task 10)', async () => {
-    const askSelection = new AskSelection();
-    const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
-    const edit = vi.fn().mockImplementation((messageId: string, msg: OutgoingMessage) => { edits.push({ messageId, msg }); return Promise.resolve(); });
-    const h = new InboundHandler(baseDeps({
-      ...makeAskStore({ 'req-1': { question: 'Pick colors?', options: [{ label: 'Red' }, { label: 'Blue' }] } }),
-      askSelection,
-      getAskCards: (rid) => (rid === 'req-1' ? [{ channel: 'telegram', messageId: 'm1', title: 'Question', body: 'Pick colors?' }] : []),
-      imBy: () => ({ ...makeAdapter([]), edit }),
-    }));
+  it('asktoggle:<id>:<idx> flips the selection and repaints every surface', async () => {
+    const askFlow = askFlowWith({ 'req-1': ONE_MULTI('Pick colors?', 'Red', 'Blue') });
+    const repaintAsk = vi.fn();
+    const h = new InboundHandler(baseDeps({ askFlow, repaintAsk }));
     await h.handle(envelope({ text: 'asktoggle:req-1:1' }));
-    expect(askSelection.selected('req-1')).toEqual([1]);
-    expect(edits).toHaveLength(1);
-    expect(edits[0].messageId).toBe('m1');
-    const card = edits[0].msg as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
-    expect(card.buttons).toEqual([
-      { id: 'asktoggle:req-1:0', label: '▢ Red' },
-      { id: 'asktoggle:req-1:1', label: '▣ Blue' },
-      { id: 'asksubmit:req-1', label: 'Submit (1)' },
-      { id: 'askskip:req-1', label: 'Skip' },
-    ]);
+    expect(askFlow.peek('req-1')!.picks).toEqual([1]);
+    expect(repaintAsk).toHaveBeenCalledWith('req-1');
   });
 
-  it('asktoggle: with an out-of-range index is a no-op — no state change, no card edit', async () => {
-    const askSelection = new AskSelection();
-    const edit = vi.fn();
-    const h = new InboundHandler(baseDeps({
-      ...makeAskStore({ 'req-1': { question: 'Q?', options: [{ label: 'Red' }, { label: 'Blue' }] } }),
-      askSelection,
-      getAskCards: () => [{ channel: 'telegram', messageId: 'm1', title: 't', body: 'b' }],
-      imBy: () => ({ ...makeAdapter([]), edit }),
-    }));
-    await h.handle(envelope({ text: 'asktoggle:req-1:9' }));
-    expect(askSelection.selected('req-1')).toEqual([]);
-    expect(edit).not.toHaveBeenCalled();
-  });
-
-  it('asktoggle: with a non-numeric index is a no-op', async () => {
-    const askSelection = new AskSelection();
-    const edit = vi.fn();
-    const h = new InboundHandler(baseDeps({
-      ...makeAskStore({ 'req-1': { question: 'Q?', options: [{ label: 'Red' }, { label: 'Blue' }] } }),
-      askSelection,
-      getAskCards: () => [{ channel: 'telegram', messageId: 'm1', title: 't', body: 'b' }],
-      imBy: () => ({ ...makeAdapter([]), edit }),
-    }));
-    await h.handle(envelope({ text: 'asktoggle:req-1:abc' }));
-    expect(askSelection.selected('req-1')).toEqual([]);
-    expect(edit).not.toHaveBeenCalled();
-  });
+  for (const [name, text] of [['out-of-range', 'asktoggle:req-1:9'], ['non-numeric', 'asktoggle:req-1:abc'], ['single-select question', 'asktoggle:req-1:0']] as const) {
+    it(`asktoggle: with a ${name} index is a no-op — no state change, no repaint`, async () => {
+      const askFlow = askFlowWith({ 'req-1': name === 'single-select question' ? ONE('Q?', 'Red', 'Blue') : ONE_MULTI('Q?', 'Red', 'Blue') });
+      const repaintAsk = vi.fn();
+      const h = new InboundHandler(baseDeps({ askFlow, repaintAsk }));
+      await h.handle(envelope({ text }));
+      expect(askFlow.peek('req-1')!.picks).toEqual([]);
+      expect(repaintAsk).not.toHaveBeenCalled();
+    });
+  }
 
   it('asktoggle: for an unknown/expired requestId is a no-op', async () => {
-    const askSelection = new AskSelection();
-    const edit = vi.fn();
-    const h = new InboundHandler(baseDeps({
-      askSelection,
-      getAskCards: () => [{ channel: 'telegram', messageId: 'm1', title: 't', body: 'b' }],
-      imBy: () => ({ ...makeAdapter([]), edit }),
-    }));
+    const repaintAsk = vi.fn();
+    const h = new InboundHandler(baseDeps({ repaintAsk }));
     await h.handle(envelope({ text: 'asktoggle:gone:0' }));
-    expect(askSelection.selected('gone')).toEqual([]);
-    expect(edit).not.toHaveBeenCalled();
+    expect(repaintAsk).not.toHaveBeenCalled();
   });
 
   it('asksubmit:<id> with nothing selected is a no-op — never answers with an empty selection', async () => {
     const permAnswer = vi.fn();
     const h = new InboundHandler(baseDeps({
-      ...makeAskStore({ 'req-1': { question: 'Q?', options: [{ label: 'Red' }, { label: 'Blue' }] } }),
-      askSelection: new AskSelection(),
+      askFlow: askFlowWith({ 'req-1': ONE_MULTI('Q?', 'Red', 'Blue') }),
       permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
     }));
     await h.handle(envelope({ text: 'asksubmit:req-1' }));
     expect(permAnswer).not.toHaveBeenCalled();
   });
 
-  it('asksubmit:<id> answers deny+message with every picked label, consumes the context, and frees the selection', async () => {
+  it('asksubmit:<id> answers with every picked label and frees the request', async () => {
     const permAnswer = vi.fn().mockReturnValue(true); // hit — a live pending
-    const askSelection = new AskSelection();
-    askSelection.toggle('req-1', 0);
-    askSelection.toggle('req-1', 1);
-    const store = makeAskStore({ 'req-1': { question: 'Pick colors?', options: [{ label: 'Red' }, { label: 'Blue' }] } });
+    const askFlow = askFlowWith({ 'req-1': ONE_MULTI('Pick colors?', 'Red', 'Blue') });
     const h = new InboundHandler(baseDeps({
-      ...store,
-      askSelection,
+      askFlow,
       permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
     }));
+    await h.handle(envelope({ text: 'asktoggle:req-1:0' }));
+    await h.handle(envelope({ text: 'asktoggle:req-1:1' }));
     await h.handle(envelope({ text: 'asksubmit:req-1' }));
     expect(permAnswer).toHaveBeenCalledTimes(1);
     const [rid, approved, , updatedInput] = permAnswer.mock.calls[0];
     expect(rid).toBe('req-1');
     expect(approved).toBe(true); // allow + updatedInput
     expect((updatedInput as { answers: Record<string, string> }).answers['Pick colors?']).toBe('Red, Blue');
-    expect(askSelection.selected('req-1')).toEqual([]); // freed, no leak
-    expect(store.peekAskContext('req-1')).toBeUndefined(); // consumed
+    expect(askFlow.peek('req-1')).toBeUndefined(); // consumed, no leak
   });
 
   it('asksubmit: for an unknown/expired requestId replies with the stale-card notice — not a silent no-op', async () => {
     const permAnswer = vi.fn();
-    const askSelection = new AskSelection();
-    askSelection.toggle('gone', 0); // stale selection with no matching context
     const msgs: Array<{ kind: string; text?: string }> = [];
     const h = new InboundHandler(baseDeps({
       imBy: () => makeAdapter(msgs),
-      askSelection,
       permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
     }));
     await h.handle(envelope({ text: 'asksubmit:gone' }));
     expect(permAnswer).not.toHaveBeenCalled();
     expect(msgs).toHaveLength(1);
     expect(msgs[0].text).toMatch(/no longer active/i);
+  });
+
+  describe('multi-question batches', () => {
+    const THREE = { questions: [
+      { question: 'First?', options: [{ label: 'A' }, { label: 'B' }] },
+      { question: 'Second?', multiSelect: true, options: [{ label: 'X' }, { label: 'Y' }] },
+      { question: 'Third?', options: [{ label: 'P' }, { label: 'Q' }] },
+    ] };
+
+    it('walks the whole batch and answers ONCE, with every question answered', async () => {
+      const permAnswer = vi.fn().mockReturnValue(true);
+      const repaintAsk = vi.fn();
+      const askFlow = askFlowWith({ 'r': THREE });
+      const h = new InboundHandler(baseDeps({
+        askFlow, repaintAsk,
+        permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
+      }));
+      await h.handle(envelope({ text: 'ask:r:0' }));         // First? -> A
+      expect(permAnswer).not.toHaveBeenCalled();             // NOT answered yet
+      await h.handle(envelope({ text: 'asktoggle:r:1' }));
+      await h.handle(envelope({ text: 'asksubmit:r' }));     // Second? -> Y
+      expect(permAnswer).not.toHaveBeenCalled();
+      await h.handle(envelope({ text: 'ask:r:1' }));         // Third? -> Q
+
+      expect(permAnswer).toHaveBeenCalledTimes(1);
+      expect((permAnswer.mock.calls[0][3] as { answers: Record<string, string> }).answers)
+        .toEqual({ 'First?': 'A', 'Second?': 'Y', 'Third?': 'Q' });
+      expect(repaintAsk).toHaveBeenCalledWith('r');          // surfaces followed the cursor
+    });
+
+    it('askback: re-asks the previous question and drops its answer', async () => {
+      const permAnswer = vi.fn().mockReturnValue(true);
+      const askFlow = askFlowWith({ 'r': THREE });
+      const h = new InboundHandler(baseDeps({
+        askFlow,
+        permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as unknown as PermissionRouter,
+      }));
+      await h.handle(envelope({ text: 'ask:r:0' }));         // First? -> A (a misclick)
+      await h.handle(envelope({ text: 'askback:r' }));
+      expect(askFlow.peek('r')!.cursor).toBe(0);
+      await h.handle(envelope({ text: 'ask:r:1' }));         // First? -> B instead
+      await h.handle(envelope({ text: 'asktoggle:r:0' }));
+      await h.handle(envelope({ text: 'asksubmit:r' }));
+      await h.handle(envelope({ text: 'ask:r:0' }));
+      expect((permAnswer.mock.calls[0][3] as { answers: Record<string, string> }).answers['First?']).toBe('B');
+    });
+
+    it('askback: on the first question is a no-op, and on an unknown request reports stale', async () => {
+      const repaintAsk = vi.fn();
+      const msgs: Array<{ kind: string; text?: string }> = [];
+      const h = new InboundHandler(baseDeps({ askFlow: askFlowWith({ 'r': THREE }), repaintAsk, imBy: () => makeAdapter(msgs) }));
+      await h.handle(envelope({ text: 'askback:r' }));
+      expect(repaintAsk).not.toHaveBeenCalled();
+      expect(msgs).toHaveLength(0);
+
+      await h.handle(envelope({ text: 'askback:gone' }));
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0].text).toMatch(/no longer active/i);
+    });
   });
 
   it('tells the user when a stale card button is tapped instead of silently ignoring it', async () => {
@@ -515,10 +517,10 @@ describe('reply-to routing & injection', () => {
 describe('quoting a live ASK card = free-form answer (the remote "Type something")', () => {
   it('single-select: quoted text becomes the ask answer via allow + updatedInput (not a bare deny reason)', async () => {
     const answers: Array<{ rid: string; approved: boolean; updatedInput?: unknown }> = [];
-    const store = askStore('req-1', { question: 'Pick a color?', options: [{ label: 'Red' }, { label: 'Blue' }] });
+    const askFlow = askFlowWith({ 'req-1': ONE('Pick a color?', 'Red', 'Blue') });
     const h = new InboundHandler(baseDeps({
       findLiveCard: () => 'req-1',
-      ...store.deps,
+      askFlow,
       permissionRouter: {
         answer: (rid: string, approved: boolean, _m?: string, updatedInput?: unknown) => { answers.push({ rid, approved, updatedInput }); return true; },
         requestPermission: vi.fn(),
@@ -528,54 +530,41 @@ describe('quoting a live ASK card = free-form answer (the remote "Type something
     expect(answers).toHaveLength(1);
     expect(answers[0].approved).toBe(true); // allow, not deny
     expect((answers[0].updatedInput as { answers: Record<string, string> }).answers['Pick a color?']).toBe('a warm orange, actually');
-    expect(store.peekAskContext('req-1')).toBeUndefined(); // consumed, single-use
+    expect(askFlow.peek('req-1')).toBeUndefined(); // consumed, single-use
   });
 
   it('multi-select: ticked boxes ride along with the typed text', async () => {
     const answers: Array<{ updatedInput?: unknown }> = [];
-    const store = askStore('req-1', { question: 'Channels?', options: [{ label: 'Feishu' }, { label: 'Telegram' }] });
-    const deps = baseDeps({
+    const askFlow = askFlowWith({ 'req-1': ONE_MULTI('Channels?', 'Feishu', 'Telegram') });
+    const h = new InboundHandler(baseDeps({
       findLiveCard: () => 'req-1',
-      ...store.deps,
+      askFlow,
       permissionRouter: {
         answer: (_r: string, _a: boolean, _m?: string, updatedInput?: unknown) => { answers.push({ updatedInput }); return true; },
         requestPermission: vi.fn(),
       } as unknown as PermissionRouter,
-    });
-    deps.askSelection.toggle('req-1', 1); // Telegram ticked
-    const h = new InboundHandler(deps);
+    }));
+    askFlow.toggle('req-1', 1); // Telegram ticked
     await h.handle(envelope({ text: 'and email please', replyToMessageId: 'card-msg-1' }));
     expect((answers[0].updatedInput as { answers: Record<string, string> }).answers['Channels?']).toBe('Telegram, and email please');
   });
 });
 
-function askStore(rid: string, ctx: { question: string; options: Array<{ label: string }> }) {
-  const map = new Map([[rid, ctx]]);
-  return {
-    peekAskContext: (r: string) => map.get(r),
-    deps: {
-      peekAskContext: (r: string) => map.get(r),
-      takeAskContext: (r: string) => { const v = map.get(r); map.delete(r); return v; },
-    },
-  };
-}
-
 describe('native input box submits (Feishu form → formText)', () => {
   it('askinput:<rid> + formText answers the ask with picks merged in', async () => {
     const answers: Array<{ updatedInput?: unknown }> = [];
-    const store = askStore('req-1', { question: 'Channels?', options: [{ label: 'Feishu' }, { label: 'Telegram' }] });
-    const deps = baseDeps({
-      ...store.deps,
+    const askFlow = askFlowWith({ 'req-1': ONE_MULTI('Channels?', 'Feishu', 'Telegram') });
+    const h = new InboundHandler(baseDeps({
+      askFlow,
       permissionRouter: {
         answer: (_r: string, _a: boolean, _m?: string, updatedInput?: unknown) => { answers.push({ updatedInput }); return true; },
         requestPermission: vi.fn(),
       } as unknown as PermissionRouter,
-    });
-    deps.askSelection.toggle('req-1', 0);
-    const h = new InboundHandler(deps);
+    }));
+    askFlow.toggle('req-1', 0);
     await h.handle(envelope({ text: 'askinput:req-1', formText: 'and email' }));
     expect((answers[0].updatedInput as { answers: Record<string, string> }).answers['Channels?']).toBe('Feishu, and email');
-    expect(store.peekAskContext('req-1')).toBeUndefined(); // consumed
+    expect(askFlow.peek('req-1')).toBeUndefined(); // consumed
   });
 
 });
