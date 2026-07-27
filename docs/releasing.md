@@ -70,9 +70,10 @@ release-please will propose `2.0.0`; merging the release PR publishes it under
 `release-please-config.json` — from then on it computes stable versions from
 Conventional Commits with no further configuration.
 
-Then drop the beta scaffolding from the docs: the `> [!NOTE] v2 is in beta`
-blocks and the `@beta` suffixes in `README.md`, `README_CN.md`, and
-`docs/getting-started{,-cn}.md`.
+Until that happens, npm `latest` resolves to `0.8.0` — the pre-v1 architecture
+— so a plain `npm i -g tlive` installs software that matches none of the
+current docs. Whatever the user-facing docs say about installing during the
+beta has to be reverted here, at GA, when `latest` finally means v2.
 
 `Release-As:` is also the escape hatch any time the computed version is wrong
 (the repo's merge settings preserve commit bodies on squash, so the footer

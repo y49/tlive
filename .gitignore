@@ -4,9 +4,6 @@ dist/
 .env
 .env.local
 .env.*.local
-core/tlive-core
-core/tlive
-bridge/dist/
 *.log
 .termlive.toml
 .worktrees/

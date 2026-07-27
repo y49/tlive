@@ -38,8 +38,13 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/y49/tlive"
+    "url": "git+https://github.com/y49/tlive.git"
   },
+  "homepage": "https://github.com/y49/tlive#readme",
+  "bugs": {
+    "url": "https://github.com/y49/tlive/issues"
+  },
+  "author": "y49",
   "dependencies": {
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
