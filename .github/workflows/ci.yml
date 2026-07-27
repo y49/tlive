@@ -12,8 +12,9 @@ on:
 jobs:
   test:
     # windows-latest is the project's only Windows coverage: the named-pipe IPC
-    # branches, PATHEXT command resolution, and the win32 shell runner. Runners
-    # ship VS Build Tools, so node-pty's native build is validated too.
+    # branches, PATHEXT command resolution, and the win32 shell runner. It does
+    # NOT validate a native build — node-pty ships win32 prebuilds, so nothing
+    # is compiled here (nor on linux since 1.2.0-beta; see install-smoke).
     #
     # Hard gate on BOTH OSes. The former ~1/3 Windows flake (#45) was test
     # fragility — fixed-setTimeout waits that abandoned held IPC requests on the
@@ -59,7 +60,16 @@ jobs:
   # 1.1.0 shipping prebuilds for darwin/win32 but not linux. The pty is actually
   # spawned too — a prebuilt binary that exists can still fail to load if it was
   # built against a newer glibc than the target has.
+  #
+  # The matrix pins both ends of the supported range: 20 is the floor
+  # `package.json` engines promises, 22 is what CI otherwise runs on. Nothing
+  # tested the floor before — a dependency that quietly needs a newer Node
+  # would have shipped with an engines field that lies.
   install-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['node:20-slim', 'node:22-slim']
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -73,9 +83,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
       - run: npm pack
-      - name: install + run on node:22-slim (no compiler, older glibc)
+      - name: install + run on ${{ matrix.image }} (no compiler, older glibc)
         run: |
-          docker run --rm -v "$PWD:/w:ro" node:22-slim bash -euc '
+          docker run --rm -v "$PWD:/w:ro" ${{ matrix.image }} bash -euc '
             cd /tmp && cp /w/tlive-*.tgz .
             npm i -g ./tlive-*.tgz --no-audit --no-fund
             tlive --version
