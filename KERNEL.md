@@ -1,13 +1,13 @@
 # KERNEL.md — tlive frozen surface (v2)
 
 > ⚠️ tlive 2.x 是**厂商中立、自托管的 hook 监看/审批层 + web 终端**(从 v1.0 的
-> Agent-SDK 桥转向,详见 `CHANGELOG.md`)。下面列出的接口是 CONTRACTS,由
+> Agent-SDK 桥转向,详见 `docs/changelog-archive.md`)。下面列出的接口是 CONTRACTS,由
 > `tests/contract/` 锁定。改动任一接口 = breaking change = bump major。
 >
 > **默认姿态 `notify`**:只监看 / 通知,shim 把每个 `PermissionRequest` 短路成
 > `{}`,tlive 物理上不 hold 任何审批。下文"审批"一节描述的 gating 只在
 > **`mode: full`**(远程审批 opt-in)下发生;`mode: off` 则每个 hook 都 no-op。
-> mode 语义见 `README.md` / `CHANGELOG.md`,由 `normalizer.ts` 的 `effectiveMode`
+> mode 语义见 `README.md`,由 `normalizer.ts` 的 `effectiveMode`
 > 单点决定(notify 默认)。
 >
 > v1.0 的 SDK-driver 冻结面(`RuntimeAdapter` / MCP 三工具等)已在 v2 移除——

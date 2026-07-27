@@ -334,7 +334,8 @@ flowchart LR
 
 ## 从 v1.0 升级
 
-v1.0 用 Agent SDK 驱动会话;v2 转向 hook 层(见 `CHANGELOG.md`)。Breaking、
+v1.0 用 Agent SDK 驱动会话;v2 转向 hook 层(见
+[`docs/changelog-archive.md`](docs/changelog-archive.md))。Breaking、
 无迁移:重跑 `tlive setup`。v1.0 保留在 git tag `v1.0-sdk-bridge`。
 
 ## 开发

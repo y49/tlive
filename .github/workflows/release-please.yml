@@ -9,16 +9,27 @@ permissions:
   id-token: write # npm provenance
 
 jobs:
+  # Pushing to main never publishes. This job only opens/updates a release PR
+  # that accumulates unreleased commits; merging that PR is the release button
+  # — it tags, cuts the GitHub Release, and unblocks publish-npm below.
+  #
+  # Manifest mode (config + manifest files) rather than a bare `release-type`:
+  # the v2 rewrite landed as an orphan root, so every v0.x tag is unreachable
+  # from main and release-please's release lookup finds nothing. Without a
+  # version anchor it falls back to its default initial version and proposes a
+  # *downgrade* (it never reads package.json). `.release-please-manifest.json`
+  # is that anchor, and `prerelease: true` keeps it tracking the beta line.
   release-please:
     runs-on: ubuntu-latest
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
+      releases_created: ${{ steps.release.outputs.releases_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
         with:
-          release-type: node
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
 
   # tlive is a single pure-Node package (was v1's Go `core/` + `bridge/` — both
   # removed in the v2 rewrite). One job: verify on the release commit, then
@@ -26,7 +37,9 @@ jobs:
   # the matching dist-tag (`beta`), stable to `latest`.
   publish-npm:
     needs: release-please
-    if: ${{ needs.release-please.outputs.release_created }}
+    # Compare explicitly: a bare `${{ outputs.x }}` gate is truthy for the
+    # *string* "false", which would publish on every push to main.
+    if: ${{ needs.release-please.outputs.releases_created == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
