@@ -153,6 +153,29 @@ describe('feishu buildCard (schema 2.0)', () => {
     });
   });
 
+  it('makes the reply box required on a single-select ask — typing IS the answer there', () => {
+    const card = buildCard({
+      kind: 'card', title: 'y · Question', body: 'Pick one',
+      ask: { question: 'Pick one', options: [{ label: 'Red' }, { label: 'Blue' }], multiSelect: false },
+      inputAction: { id: 'askinput:r1', placeholder: 'Type your own answer', submitLabel: 'Send' },
+    }) as Card2;
+    const form = card.body.elements.find((e) => e.tag === 'form') as { elements: Array<Record<string, unknown>> };
+    expect(form.elements[0]).toMatchObject({ required: true });
+  });
+
+  it('makes the reply box OPTIONAL on a multi-select ask — ticking boxes is the primary path', () => {
+    // Feishu enforces `required` client-side: with it set, submitting ticks and
+    // no text fails validation ("必填项") and the answer can never be sent —
+    // while the placeholder promises the text is optional.
+    const card = buildCard({
+      kind: 'card', title: 'y · Question 2/3', body: 'Pick any',
+      ask: { question: 'Pick any', options: [{ label: 'Red' }, { label: 'Blue' }], multiSelect: true },
+      inputAction: { id: 'asksubmit:r1', placeholder: 'Type something (optional — sent with your ticks)', submitLabel: 'Submit' },
+    }) as Card2;
+    const form = card.body.elements.find((e) => e.tag === 'form') as { elements: Array<Record<string, unknown>> };
+    expect(form.elements[0]).toMatchObject({ required: false });
+  });
+
   it('omits buttons/form when the card has neither, and uses the plain white default header (settled card)', () => {
     const card = buildCard({ kind: 'card', title: 'Allowed · tlive · Bash', body: 'ls' }) as Card2;
     expect(card.body.elements.some((e) => e.tag === 'column_set' || e.tag === 'form')).toBe(false);

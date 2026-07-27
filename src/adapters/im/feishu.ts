@@ -83,7 +83,13 @@ export function buildCard(out: CardMessage): object {
         {
           tag: 'input',
           name: 'reply',
-          required: true,
+          // Feishu enforces this client-side. On a multi-select ask the ticks
+          // ARE the answer and the text merely rides along, so requiring it
+          // made the primary path unsubmittable ("必填项") while the
+          // placeholder promised it was optional. Everywhere else — a
+          // single-select ask, any future non-ask form — typing is the only
+          // input there is, so it stays required.
+          required: !out.ask?.multiSelect,
           input_type: 'multiline_text',
           placeholder: { tag: 'plain_text', content: out.inputAction.placeholder },
         },
