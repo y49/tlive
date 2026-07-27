@@ -402,8 +402,9 @@ flowchart LR
 ## Upgrading from v1.0
 
 v1.0 drove sessions via the Agent SDK; v2.0 is the hook layer (see
-`CHANGELOG.md`). Breaking, no migration: re-run `tlive setup`. v1.0 is
-preserved at git tag `v1.0-sdk-bridge`.
+[`docs/changelog-archive.md`](docs/changelog-archive.md)). Breaking, no
+migration: re-run `tlive setup`. v1.0 is preserved at git tag
+`v1.0-sdk-bridge`.
 
 ## Development
 
@@ -416,4 +417,5 @@ npm run typecheck && npm test && npm run build
 
 ## License
 
-MIT. See [LICENSE](LICENSE). Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).
+MIT. See [LICENSE](LICENSE). Issues and PRs welcome — [Development](#development)
+above has the whole setup.

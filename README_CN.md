@@ -337,7 +337,8 @@ flowchart LR
 
 ## 从 v1.0 升级
 
-v1.0 用 Agent SDK 驱动会话;v2 转向 hook 层(见 `CHANGELOG.md`)。Breaking、
+v1.0 用 Agent SDK 驱动会话;v2 转向 hook 层(见
+[`docs/changelog-archive.md`](docs/changelog-archive.md))。Breaking、
 无迁移:重跑 `tlive setup`。v1.0 保留在 git tag `v1.0-sdk-bridge`。
 
 ## 开发
@@ -351,4 +352,4 @@ npm run typecheck && npm test && npm run build
 
 ## 许可
 
-MIT,见 [LICENSE](LICENSE)。贡献指南:[CONTRIBUTING.md](CONTRIBUTING.md)。
+MIT,见 [LICENSE](LICENSE)。欢迎提 issue 和 PR,开发环境见上面的[开发](#开发)一节。

@@ -12,8 +12,6 @@
     "scripts/preuninstall.js",
     "dist/",
     "src/",
-    "references/",
-    "config.env.example",
     "plugins/"
   ],
   "scripts": {
@@ -40,8 +38,13 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/y49/tlive"
+    "url": "git+https://github.com/y49/tlive.git"
   },
+  "homepage": "https://github.com/y49/tlive#readme",
+  "bugs": {
+    "url": "https://github.com/y49/tlive/issues"
+  },
+  "author": "y49",
   "dependencies": {
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
@@ -53,7 +56,7 @@
     "@xterm/xterm": "^6.0.0",
     "grammy": "^1.41.1",
     "https-proxy-agent": "^9.0.0",
-    "node-pty": "^1.1.0",
+    "node-pty": "^1.2.0-beta.14",
     "qrcode-terminal": "^0.12.0",
     "socks-proxy-agent": "^10.0.0",
     "ws": "^8.20.0"
