@@ -810,6 +810,24 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## 1.0.0 (2026-07-27)
+
+
+### Features
+
+* **web:** answer AskUserQuestion from the dashboard ([#50](https://github.com/y49/tlive/issues/50)) ([#52](https://github.com/y49/tlive/issues/52)) ([69d0ea2](https://github.com/y49/tlive/commit/69d0ea2e098f1b8663868967b925a4bd3bc27ad0))
+
+
+### Bug Fixes
+
+* **daemon:** don't process.exit from the shutdown safety-net under vitest ([#45](https://github.com/y49/tlive/issues/45)) ([e9a13d4](https://github.com/y49/tlive/commit/e9a13d4f350b8cd9520bddc2408509ead959cd9c))
+* **daemon:** drain held IPC requests on shutdown (defer/null) ([#45](https://github.com/y49/tlive/issues/45)) ([9dbdbe3](https://github.com/y49/tlive/commit/9dbdbe3bce9e197e8f75d8d84e110bc8f59a5f62))
+* **ipc:** drain connections gracefully on close, destroy only stragglers ([#45](https://github.com/y49/tlive/issues/45)) ([eb08863](https://github.com/y49/tlive/commit/eb08863931ea804ed01f2255aab10e56552ebceb))
+* **ipc:** flush replies (end + delay) before destroy on close ([#45](https://github.com/y49/tlive/issues/45)) ([b656b96](https://github.com/y49/tlive/commit/b656b9688fa68ad36bf59f3405cac634dc1c74ce))
+* **ipc:** force-close in-flight connections on server shutdown ([#45](https://github.com/y49/tlive/issues/45)) ([0598a73](https://github.com/y49/tlive/commit/0598a7390545b0fd2d89c8d3c5d2f60544c2e541))
+* **notify:** surface waiting permission prompts locally in notify mode ([#49](https://github.com/y49/tlive/issues/49)) ([#51](https://github.com/y49/tlive/issues/51)) ([df81b0a](https://github.com/y49/tlive/commit/df81b0af22a3a0f385b4e8d92fd9e8600b459889))
+* **win:** root-fix Windows CI teardown flake + make Windows a hard gate ([#45](https://github.com/y49/tlive/issues/45)) ([2542986](https://github.com/y49/tlive/commit/25429861d5265e27f70768c8bfc0bf13ffb17cf6))
+
 ## 2.0.0 — hook 层重构(从 SDK 桥转向)
 
 **Breaking.** v1.0 是用 Agent SDK 驱动会话的 IM 桥("在手机上聊 Claude、起新任务、
