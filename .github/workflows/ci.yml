@@ -61,15 +61,18 @@ jobs:
   # spawned too — a prebuilt binary that exists can still fail to load if it was
   # built against a newer glibc than the target has.
   #
-  # The matrix pins both ends of the supported range: 20 is the floor
-  # `package.json` engines promises, 22 is what CI otherwise runs on. Nothing
-  # tested the floor before — a dependency that quietly needs a newer Node
-  # would have shipped with an engines field that lies.
+  # Both ends of the supported range: 20 is the floor `package.json` engines
+  # promises, 22 is what CI otherwise runs on. Nothing tested the floor before
+  # — a dependency that quietly needs a newer Node would have shipped with an
+  # engines field that lies.
+  #
+  # Looped inside ONE job rather than a matrix, deliberately: a matrix renames
+  # the check to `install-smoke (node:20-slim)`, and this is a required status
+  # check. Required contexts are matched by exact name, so every matrix edit
+  # would have to be mirrored in branch protection or the branch blocks
+  # forever on a context that no longer reports — which is exactly what
+  # happened when the matrix first landed.
   install-smoke:
-    strategy:
-      fail-fast: false
-      matrix:
-        image: ['node:20-slim', 'node:22-slim']
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -83,9 +86,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
       - run: npm pack
-      - name: install + run on ${{ matrix.image }} (no compiler, older glibc)
+      - name: install + run on node:20-slim and node:22-slim (no compiler, older glibc)
         run: |
-          docker run --rm -v "$PWD:/w:ro" ${{ matrix.image }} bash -euc '
+          for image in node:20-slim node:22-slim; do
+          echo "::group::$image"
+          docker run --rm -v "$PWD:/w:ro" "$image" bash -euc '
             cd /tmp && cp /w/tlive-*.tgz .
             npm i -g ./tlive-*.tgz --no-audit --no-fund
             tlive --version
@@ -102,3 +107,5 @@ jobs:
               }, 1500);
             "
           '
+          echo "::endgroup::"
+          done
