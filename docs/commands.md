@@ -109,7 +109,7 @@ effect on the **next hook** — no daemon restart, no new session.
 
 | Mode | What it does |
 |---|---|
-| `notify` (default) | Watch + notify only. The shim short-circuits every `PermissionRequest` to a pass-through `{}` — tlive **can never hold or block an approval**; every prompt stays 100% native. Monitoring, turn-finished / waiting notifications, and reply-to-continue all still work. |
+| `notify` (default) | Watch + notify only. The shim short-circuits every `PermissionRequest` to a pass-through `{}` — tlive **can never hold or block an approval**; every prompt stays 100% native. You still get told when a prompt is waiting at the terminal (desktop toast, read-only dashboard card, graced IM text — pointers only, never a decision). Monitoring, turn-finished / waiting notifications, and reply-to-continue all still work. |
 | `full` | Remote approval ON — tlive holds each tool call so you can Allow/Deny it from IM / desktop / dashboard. The previous always-on behaviour. |
 | `off` | Every hook is a no-op — no gating, notifications, monitoring, or daemon autostart (kill switch). |
 

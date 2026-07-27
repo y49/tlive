@@ -522,3 +522,27 @@ describe('sub-agent pass-through (tlive stays transparent for sub-agents by defa
     expect(send).not.toHaveBeenCalled();
   });
 });
+
+describe('hasPendingFor — the daemon dedupe test for Notification(permission_prompt) (issue #49)', () => {
+  it('true while a request for the key is held, false after it resolves', async () => {
+    let id = '';
+    const r = new PermissionRouter(base({ sendToChat: async (_t: unknown, c: { requestId: string }) => { id = c.requestId; } }));
+    const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, sessionId: 's1', timeoutSec: 60 });
+    await new Promise((res) => setTimeout(res, 0));
+    expect(r.hasPendingFor({ key: '/w', sessionId: 's1' })).toBe(true);
+    r.answer(id, true);
+    await p;
+    expect(r.hasPendingFor({ key: '/w', sessionId: 's1' })).toBe(false);
+  });
+
+  it('sessionId is conservative-wildcard (same rule as cancel): missing side matches, both-set-different does not', async () => {
+    const r = new PermissionRouter(base());
+    const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, sessionId: 's1', timeoutSec: 60 });
+    await new Promise((res) => setTimeout(res, 0));
+    expect(r.hasPendingFor({ key: '/w' })).toBe(true);
+    expect(r.hasPendingFor({ key: '/w', sessionId: 's2' })).toBe(false);
+    expect(r.hasPendingFor({ key: '/other', sessionId: 's1' })).toBe(false);
+    r.cancel({ key: '/w' });
+    await p;
+  });
+});

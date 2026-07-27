@@ -45,6 +45,14 @@ describe('notification notification_type', () => {
     const b = parseHookInput('notification', { cwd: '/x', session_id: 's', message: 'hi' });
     expect((b as any).message).toBe('hi');
   });
+  it('permission_prompt → attention with permissionPrompt flag (the daemon decides what to do with it — issue #49)', () => {
+    const n = parseHookInput('notification', { cwd: '/x', session_id: 's', notification_type: 'permission_prompt', message: 'Claude needs your permission to use Bash' });
+    expect(n).toEqual({ event: 'attention', cwd: '/x', sessionId: 's', message: 'Claude needs your permission to use Bash', permissionPrompt: true });
+  });
+  it('other types carry NO permissionPrompt flag', () => {
+    const n = parseHookInput('notification', { cwd: '/x', session_id: 's', notification_type: 'idle_prompt', message: 'waiting' }) as any;
+    expect(n.permissionPrompt).toBeUndefined();
+  });
 });
 
 describe('permission-request / permission-denied (CC dual-channel)', () => {

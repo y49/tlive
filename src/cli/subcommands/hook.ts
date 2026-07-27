@@ -153,10 +153,23 @@ export async function runHook(argv: string[]): Promise<void> {
       return;
     }
 
-    if (event === 'notification' && vendor === 'claude'
-        && (raw as { notification_type?: string }).notification_type === 'permission_prompt') {
-      // The parallel PermissionRequest card is already live when the local
-      // dialog pops — this notification would duplicate every approval card.
+    if (event === 'notification' || event === 'post-tool-use-failure' || event === 'stop-failure') {
+      const att = n as { cwd: string; sessionId: string; message: string; droppable?: boolean; permissionPrompt?: boolean };
+      const level = event === 'notification' ? 'info' : 'error';
+      // droppable(空失败,如 Bash 非零退出但 stderr 为空:grep 没命中/test
+      // 判假/diff --quiet)照常发 hook.notify IPC——只透传标记,让 daemon 决定
+      // 怎么处理。Fix 3b:曾经在这里提前 return 跳过整条 IPC,连 dashboard 的
+      // events.broadcast 一起吞了(PostToolUse/PostToolUseFailure 互斥,dashboard
+      // 没有别的途径看到这次工具活动)——落点错了,daemon 层(bootstrap.ts 的
+      // hook.notify handler)现在只据 droppable 跳过 IM 发送,dashboard 广播
+      // 不受影响。
+      // permissionPrompt(issue #49)同一课的同一答案:shim 只透传,daemon 拿
+      // pending 判重 —— full 模式已有卡就丢,没卡(notify 模式 / 立即 defer)
+      // 就走本地等待通知链。曾经在这里无条件吞掉,notify 模式下权限框零通知。
+      await request(
+        { kind: 'hook.notify', cwd: att.cwd, sessionId: att.sessionId, level, message: att.message, ...(wrappedId ? { wrappedId } : {}), ...(att.droppable ? { droppable: true } : {}), ...(att.permissionPrompt ? { permissionPrompt: true } : {}) },
+        { timeoutMs: 4_000 },
+      ).catch(() => undefined);
       process.stdout.write('{}');
       return;
     }
@@ -189,24 +202,6 @@ export async function runHook(argv: string[]): Promise<void> {
         process.exitCode = 2;
       }
       // 无回复 → exit 0:会话保持停止,不唤醒、不循环。
-      return;
-    }
-
-    if (event === 'notification' || event === 'post-tool-use-failure' || event === 'stop-failure') {
-      const att = n as { cwd: string; sessionId: string; message: string; droppable?: boolean };
-      const level = event === 'notification' ? 'info' : 'error';
-      // droppable(空失败,如 Bash 非零退出但 stderr 为空:grep 没命中/test
-      // 判假/diff --quiet)照常发 hook.notify IPC——只透传标记,让 daemon 决定
-      // 怎么处理。Fix 3b:曾经在这里提前 return 跳过整条 IPC,连 dashboard 的
-      // events.broadcast 一起吞了(PostToolUse/PostToolUseFailure 互斥,dashboard
-      // 没有别的途径看到这次工具活动)——落点错了,daemon 层(bootstrap.ts 的
-      // hook.notify handler)现在只据 droppable 跳过 IM 发送,dashboard 广播
-      // 不受影响。
-      await request(
-        { kind: 'hook.notify', cwd: att.cwd, sessionId: att.sessionId, level, message: att.message, ...(wrappedId ? { wrappedId } : {}), ...(att.droppable ? { droppable: true } : {}) },
-        { timeoutMs: 4_000 },
-      ).catch(() => undefined);
-      process.stdout.write('{}');
       return;
     }
 

@@ -39,7 +39,11 @@ export type IpcRequest =
   // bootstrap.ts 的 hook.notify handler);dashboard 广播不受影响,照常收到
   // ——这条 attention 往往是 dashboard 看到这次工具活动的唯一途径
   // (PostToolUse/PostToolUseFailure 互斥,失败时没有 activity 事件替补)。
-  | { kind: 'hook.notify'; cwd: string; sessionId: string; level: 'info' | 'warn' | 'error'; message: string; wrappedId?: string; droppable?: boolean }
+  // permissionPrompt: CC Notification(permission_prompt) 透传标记(issue #49)。
+  // daemon 据 pending 判重:full 模式已有 held 卡 → 丢(卡管全部答复面);
+  // 没卡(notify 模式 / 立即 defer)→ 本地对话框在等 = 走等待通知链
+  // (desktop ping + dashboard 只读 waiting-approval + grace 后 IM 文本)。
+  | { kind: 'hook.notify'; cwd: string; sessionId: string; level: 'info' | 'warn' | 'error'; message: string; wrappedId?: string; droppable?: boolean; permissionPrompt?: boolean }
   | { kind: 'session.register'; session: SessionMeta }
   | { kind: 'session.unregister'; id: string }
   // Terminal-derived activity for a wrapped session (running vs idle) — updates

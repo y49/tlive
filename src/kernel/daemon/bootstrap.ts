@@ -12,6 +12,7 @@ import { renderAskCard, askMultiButtons, extractAskAnswer, type AskOption } from
 import { AskSelection } from './ask-state.js';
 import { createEditQueue } from './edit-queue.js';
 import { createDesktopNotifier } from './desktop-notify.js';
+import { LocalPrompts } from './local-prompts.js';
 import { ContinueBroker } from '../permission/continue-broker.js';
 import { SenderGuard } from './sender-guard.js';
 import { loadConfig } from '../config/loader.js';
@@ -220,6 +221,24 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     },
   });
 
+  // CC-native dialogs tlive is NOT holding, known only via
+  // Notification(permission_prompt): notify mode, or a full-mode immediate
+  // defer (issue #49). Drives the same waiting surfaces as a held card
+  // (desktop toast / read-only dashboard card / graced IM text) minus any
+  // answer path — the answer happens at the terminal, and the local-answer
+  // triggers below (activity / permission-denied / prompt / session-end)
+  // retire the entry exactly like they release held cards.
+  const localPrompts = new LocalPrompts();
+  /** The tracked dialog is gone (answered locally / new prompt / session end):
+   *  drop the read-only pending from the registry and close the toast when
+   *  nothing else waits. The registry upsert is silent — the caller's own
+   *  broadcast (applyMonitorEvent) carries the merged view in the same frame. */
+  const clearLocalPrompt = (key: string, sessionId: string | undefined, cwd: string): void => {
+    if (!localPrompts.clear({ key, ...(sessionId ? { sessionId } : {}) })) return;
+    if (sessions.get(key)?.pending?.local) sessions.upsert({ key, cwd, pending: null });
+    if (permissionRouter.pendingCount() === 0 && localPrompts.count() === 0) void desktop.clear();
+  };
+
   // AskUserQuestion (Task 9): raw question + options per pending requestId, so an
   // `ask:<rid>:<idx>` button click can build the deny+message answer. Written at
   // onPending, cleared at onResolved (or consumed once by the button click) —
@@ -394,7 +413,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // Warp-style lifecycle: the desktop notification exists exactly while
       // something waits. Last pending approval just resolved → close it
       // (answered means gone; the tray must never hold a stale "Waiting").
-      if (permissionRouter.pendingCount() === 0) void desktop.clear();
+      // A permission_prompt that raced ahead of this request's registration
+      // (issue #49) tracked the SAME dialog — retire it with the request so it
+      // can't pin the toast; a genuine separate local prompt for another
+      // session key is untouched.
+      localPrompts.clear({ key });
+      if (permissionRouter.pendingCount() === 0 && localPrompts.count() === 0) void desktop.clear();
       askSelection.clear(requestId); // no leak — covers defer/timeout/local-answer paths that skip asksubmit:/askskip: entirely (Task 10)
       const isAsk = askRequestIds.delete(requestId); // true only for an AskUserQuestion card (Minor 4)
       // Only touch the session view if THIS request still owns the pending slot —
@@ -659,6 +683,38 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         case 'hook.notify': {
           const key = resolveKey(req.sessionId, req.cwd, req.wrappedId);
           const s = sessions.get(key);
+          if (req.permissionPrompt) {
+            // A CC-native permission dialog is up (issue #49). A held request
+            // for this session already owns every surface (toast pinged at
+            // onPending, card sent/gracing, dashboard answerable) → this
+            // notification adds nothing, drop it. No held request — notify
+            // mode, or the router deferred on arrival — this is the ONLY
+            // signal anyone gets: run the local-waiting chain. Never carries
+            // a decision; never-auto-allow untouched.
+            if (!permissionRouter.hasPendingFor({ key, sessionId: req.sessionId })) {
+              localPrompts.note(key, req.sessionId);
+              // Desktop first, immediately — the waiting slot (ping/clear
+              // lifecycle), not an info banner: the dialog IS a waiting state.
+              if (desktopOn) void desktop.ping(`${sessionTag(key)}Permission needed`, `${req.message} — answer in the terminal`);
+              // Dashboard: read-only waiting-approval card (pending.local) —
+              // visible from anywhere, answerable only at the terminal.
+              events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'waiting-approval', pending: { requestId: `local:${key}`, title: 'Permission needed', body: req.message, local: true } }) });
+              // IM text rides the approval-card grace: answered at the
+              // keyboard within the window → never sent (zero spam at the
+              // keyboard, same contract as the held-card push).
+              const pushIm = (): void => {
+                if (!localPrompts.has(key, req.sessionId)) return;
+                if (permissionRouter.hasPendingFor({ key, sessionId: req.sessionId })) return; // raced a held card → the card owns IM
+                if (muted || sessions.get(key)?.muted) return; // muted during grace → respect it
+                for (const t of configuredChats()) void sendToChat(t, { text: `${req.message} — answer in the terminal`, cwd: key }).catch(() => undefined);
+              };
+              const graceSec = Math.max(cfg.approvals?.approvalGraceSec ?? 10, 0);
+              if (graceSec > 0) setTimeout(pushIm, graceSec * 1000).unref();
+              else pushIm();
+            }
+            reply({ kind: 'ack' });
+            return;
+          }
           // droppable(normalizer 判定"无实际错误内容",如 Bash 非零退出但
           // stderr 为空)只压 IM——dashboard 广播(下面的 events.broadcast)
           // 不受影响,始终照常:这条 attention 常是 dashboard 看到这次工具
@@ -697,16 +753,30 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           if (ev.event === 'activity') {
             // 精确关联:回答者身份(agent_id 缺失 = 主会话)必须与 pending 一致
             permissionRouter.cancel({ key, toolName: ev.toolName, sessionId: ev.sessionId, matchAgent: ev.agentId ?? null });
+            // Main-session tool ran → the CC-native dialog (if we tracked one)
+            // was answered. Sub-agent activity doesn't touch it: a backgrounded
+            // agent runs in parallel with a still-waiting main dialog. No
+            // toolName narrowing — the notification never told us the tool
+            // (message text only); a rare parallel-tool clear only retires the
+            // reminder early, never a decision (issue #49).
+            if (!ev.agentId) clearLocalPrompt(key, ev.sessionId, ev.cwd);
           } else if (ev.event === 'permission-denied') {
             permissionRouter.cancel({ key, toolName: ev.toolName, sessionId: ev.sessionId, matchAgent: null });
+            clearLocalPrompt(key, ev.sessionId, ev.cwd);
           } else if (ev.event === 'prompt') {
             // 主会话新输入 → 主会话上一轮的对话框已没了,撤它的卡。matchAgent:null
             // 精确到主会话:一个 backgrounded 子 agent 的审批与父会话的输入框无关
             // (它仍真在等,且无本地答路 —— 清掉 = 保证被 deny),不得被父 prompt 清场。
             permissionRouter.cancel({ key, sessionId: ev.sessionId, matchAgent: null });
+            clearLocalPrompt(key, ev.sessionId, ev.cwd);
             // 用户在键盘前开始了新一轮 → 取消上一 turn 还在 grace 里的续跑卡
             const g = continueGrace.get(key);
             if (g) { continueGrace.delete(key); g(); }
+          } else if (ev.event === 'session-end') {
+            // Session gone → its dialog is gone; retire the tracker so the
+            // toast lifecycle can close (the registry entry is removed by
+            // applyMonitorEvent below anyway).
+            clearLocalPrompt(key, ev.sessionId, ev.cwd);
           }
           events.broadcast(applyMonitorEvent(sessions, ev, key));
           reply({ kind: 'ack' });

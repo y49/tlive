@@ -116,9 +116,14 @@ call:
 1. Tool calls run with their normal **local** permission prompt — tlive
    short-circuits the `PermissionRequest` hook to a pass-through, so nothing
    is held or sent for remote approval.
-2. When the session stops or goes idle, the `Stop` hook sends an IM
+2. When a permission prompt (or an `AskUserQuestion`) is waiting at the
+   terminal, tlive still tells you: a desktop toast, a read-only
+   *waiting-approval* card on the dashboard, and an IM text if you don't
+   answer within the grace window — all pointers back to the terminal, never
+   a decision.
+3. When the session stops or goes idle, the `Stop` hook sends an IM
    notification; reply with a continuation message to resume it.
-3. Tool/session failures are pushed as side-channel `⚠️` messages.
+4. Tool/session failures are pushed as side-channel `⚠️` messages.
 
 **`full`** (`tlive mode full`) — everything in `notify`, plus remote approval:
 

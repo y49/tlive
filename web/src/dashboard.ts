@@ -10,7 +10,7 @@ import { FrameType, FrameDecoder, encodeAttach, parseDims } from './frame.js';
 const token = new URLSearchParams(location.search).get('token') ?? '';
 
 type Status = 'active' | 'waiting-approval' | 'waiting-input' | 'idle';
-interface Pending { requestId: string; title: string; body: string; toolName?: string }
+interface Pending { requestId: string; title: string; body: string; toolName?: string; local?: boolean }
 interface SessionView {
   id: string; label: string; cwd: string;
   kind: 'wrapped' | 'hook'; status: Status;
@@ -259,7 +259,11 @@ function card(s: SessionView): HTMLElement {
 
   if (s.pending) {
     const m = document.createElement('div'); m.className = 'msg approval';
-    m.innerHTML = `<span class="k">${esc(s.pending.title)}</span>\n${renderApprovalBody(s.pending.body)}`;
+    // pending.local = a CC-native dialog waiting at the terminal (notify mode /
+    // full-mode defer) — nothing to answer from here, say so instead of
+    // rendering dead Allow/Deny buttons (issue #49).
+    m.innerHTML = `<span class="k">${esc(s.pending.title)}</span>\n${renderApprovalBody(s.pending.body)}`
+      + (s.pending.local ? `\n<span class="k">waiting at the terminal — not answerable from here</span>` : '');
     foot.appendChild(m);
   } else if (!(s.kind === 'wrapped' && s.sockPath) && (s.lastMessage || s.lastPrompt)) {
     const m = document.createElement('div'); m.className = 'msg';
@@ -276,7 +280,7 @@ function card(s: SessionView): HTMLElement {
 
   const actions = document.createElement('div'); actions.className = 'actions';
 
-  if (s.pending) {
+  if (s.pending && !s.pending.local) {
     const rid = s.pending.requestId, tool = s.pending.toolName;
     const ok = document.createElement('button'); ok.className = 'btn ok'; ok.textContent = '✅ Allow';
     ok.onclick = () => send({ type: 'approve', requestId: rid, approved: true });

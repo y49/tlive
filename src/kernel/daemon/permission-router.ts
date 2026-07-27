@@ -186,6 +186,19 @@ export class PermissionRouter {
     return this.pending.size;
   }
 
+  /** True when a held request exists for this session — the daemon's dedupe
+   *  test for an incoming Notification(permission_prompt): a held card already
+   *  owns every answer surface, so the notification adds nothing (issue #49).
+   *  sessionId matching is the same conservative wildcard as cancel()'s. */
+  hasPendingFor(opts: { key: string; sessionId?: string }): boolean {
+    for (const e of this.pending.values()) {
+      if (e.key !== opts.key) continue;
+      if (!fieldMatches(e.sessionId, opts.sessionId)) continue;
+      return true;
+    }
+    return false;
+  }
+
   /** Graceful shutdown: resolve every held request as pass-through `defer`
    *  (CC-native fallback, the safe direction — never auto-decides). The caller
    *  (shim) then gets a clean reply and resolves normally, instead of its

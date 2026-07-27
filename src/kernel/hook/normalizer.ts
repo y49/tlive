@@ -25,7 +25,7 @@ export type NormalizedHook =
   // 关联回同一个 agent 的挂起审批,同 key 同 tool 的其他 agent 的卡不受影响。
   | { event: 'approval-request'; cwd: string; sessionId: string; toolName: string; input: unknown; permissionMode?: string; agentId?: string }
   | { event: 'activity'; cwd: string; sessionId: string; toolName: string; result: unknown; agentId?: string }
-  | { event: 'attention'; cwd: string; sessionId: string; message: string; lastMessage?: string; stopHookActive?: boolean; droppable?: boolean }
+  | { event: 'attention'; cwd: string; sessionId: string; message: string; lastMessage?: string; stopHookActive?: boolean; droppable?: boolean; permissionPrompt?: boolean }
   | { event: 'prompt'; cwd: string; sessionId: string; prompt: string }
   | { event: 'subagent'; cwd: string; sessionId: string; delta: 1 | -1; agentType?: string }
   | { event: 'session-start'; cwd: string; sessionId: string; source?: string }
@@ -72,10 +72,13 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
       // 不再等续跑,避免 async+asyncRewake 下的无限续跑循环。
       return { event: 'attention', cwd, sessionId, message: TURN_FINISHED_SENTINEL, ...(r.last_assistant_message ? { lastMessage: r.last_assistant_message } : {}), ...(r.stop_hook_active ? { stopHookActive: true } : {}) };
     case 'notification':
-      // permission_prompt notifications are dropped in the shim (the parallel
-      // PermissionRequest card already covers that moment); everything else
-      // passes through verbatim.
-      return { event: 'attention', cwd, sessionId, message: r.message ?? 'needs your attention' };
+      // permission_prompt ("Claude needs your permission to use X") is TAGGED,
+      // not dropped: whether it duplicates a live approval card is the daemon's
+      // call, not the shim's (issue #49 — the old unconditional drop was a
+      // full-mode assumption; in notify mode, or on a full-mode immediate
+      // defer, there is no card and this is the ONLY signal a local dialog is
+      // waiting). Everything else passes through verbatim.
+      return { event: 'attention', cwd, sessionId, message: r.message ?? 'needs your attention', ...(r.notification_type === 'permission_prompt' ? { permissionPrompt: true } : {}) };
     case 'user-prompt-submit':
       return { event: 'prompt', cwd, sessionId, prompt: r.prompt ?? '' };
     case 'session-start':

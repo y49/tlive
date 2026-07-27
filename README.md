@@ -80,7 +80,10 @@ continue" line makes the distinction moot for what you actually do.
 - **Posture — `notify` (default) / `full` / `off`.** One coarse switch that
   sits above every fine toggle. **`notify`** (default) watches and notifies
   but the shim can never hold or block an approval — every prompt stays 100%
-  native (your local terminal dialog, or CC's own auto-deny when headless).
+  native (your local terminal dialog, or CC's own auto-deny when headless);
+  when a prompt is waiting at the terminal you still get told (desktop toast,
+  read-only dashboard card, graced IM text — pointers back to the terminal,
+  never a decision).
   **`full`** turns on remote approval: tlive holds each tool call so you can
   answer it from IM / desktop / dashboard (everything the *Approvals* bullet
   below describes). **`off`** makes every hook a no-op (kill switch — no

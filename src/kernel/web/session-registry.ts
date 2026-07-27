@@ -25,6 +25,10 @@ export interface PendingApproval {
   title: string;
   body: string;
   toolName?: string; // for "always allow <tool>" actions
+  /** True = a CC-native dialog waiting at the terminal (notify mode / full-mode
+   *  defer) — the dashboard renders it read-only ("answer in the terminal"),
+   *  no Allow/Deny buttons: there is no held request to answer (issue #49). */
+  local?: boolean;
 }
 
 export interface SessionView {

@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased — v2: web terminal + dashboard + IM interaction layer
 
+### Fixed — notify mode now tells you a permission prompt is waiting (#49)
+
+- In `notify` mode (the default posture) a permission prompt or
+  `AskUserQuestion` produced **zero signal anywhere**: the shim unconditionally
+  dropped CC's `Notification(permission_prompt)` on a full-mode assumption
+  ("the parallel approval card already covers it"), while the card pipeline
+  itself is full-mode-only — so the session silently sat at the dialog and the
+  dashboard kept showing it as active. The drop decision moved into the daemon
+  (same lesson as the `droppable` fix): the shim forwards the notification,
+  the daemon drops it only when a held request for that session already owns
+  the surfaces, and otherwise fires the local-waiting chain — desktop toast
+  ("Permission needed — answer in the terminal"), a **read-only**
+  waiting-approval card on the dashboard, and an IM text after the usual
+  approval grace window. Answering at the keyboard retires all of it via the
+  existing local-answer triggers. Also covers the full-mode edge where the
+  router defers immediately for lack of an answer surface. Notification only —
+  no decision path changed; never-auto-allow untouched.
+
 ### Fixed — `tlive setup` now collects the Feishu chat id
 
 - The wizard prompted for Feishu `appId` + `appSecret` but not `chatId`, yet

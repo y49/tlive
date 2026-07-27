@@ -103,8 +103,11 @@ tlive run claude
 
 1. 工具调用照常走它**本地**的权限提示——tlive 把 `PermissionRequest` hook
    短路成透传，什么都不 hold、也不发出去等远程审批。
-2. 会话停止或空闲时，`Stop` hook 发一条 IM 通知；回复一条续跑消息即可继续。
-3. 工具/会话失败会作为旁路 `⚠️` 消息推送。
+2. 权限提示（或 `AskUserQuestion`）在终端等你时，tlive 仍会提醒：桌面通知、
+   dashboard 上一张只读的 *waiting-approval* 卡片、以及 grace 窗口内没答时的
+   一条 IM 文本——都只是指回终端的路标，绝不代答。
+3. 会话停止或空闲时，`Stop` hook 发一条 IM 通知；回复一条续跑消息即可继续。
+4. 工具/会话失败会作为旁路 `⚠️` 消息推送。
 
 **`full`**（`tlive mode full`）——`notify` 的一切，外加远程审批：
 

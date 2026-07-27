@@ -71,7 +71,9 @@ IM 消息带 `label · ` 前缀(会话目录名),但不再用图标区分包装/
 - **姿态 —— `notify`(默认)/ `full` / `off`。** 一个坐在所有细旋钮之上的
   粗开关。**`notify`**(默认)只监看 + 通知,但 shim 物理上无法 hold 或
   阻塞任何审批——每个提示都保持 100% 原生(你本地终端的对话框,或无头时
-  CC 自己的 auto-deny)。**`full`** 开启远程审批:tlive hold 住每个工具调用,
+  CC 自己的 auto-deny);提示在终端等你时仍会提醒(桌面通知、dashboard
+  只读卡、grace 后的 IM 文本——只是指回终端的路标,绝不代答)。
+  **`full`** 开启远程审批:tlive hold 住每个工具调用,
   让你在 IM / 桌面 / dashboard 上作答(即下方*审批*那条描述的一切)。
   **`off`** 让每个 hook 都成 no-op(kill switch——不 gating、不通知、不监看、
   不懒启动 daemon)。用 `tlive mode off|notify|full` 实时切换;shim 每个 hook

@@ -963,3 +963,121 @@ describe('Codex resume handler → continue card (regression: sentinel mismatch)
     expect(card.body).toBe('\n*Reply to this message to continue.*');
   });
 });
+
+describe('permission_prompt forwarding — the notify-mode / immediate-defer notification chain (issue #49)', () => {
+  const CFG = {
+    web: { enabled: false },
+    approvals: { approvalGraceSec: 0 },
+    adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+  };
+  const MSG = 'Claude needs your permission to use Bash';
+
+  async function findSession(sock: string, id: string) {
+    const r = await request({ kind: 'session.list' }, { socketPath: sock, timeoutMs: 2000 });
+    if (r.kind !== 'session.list') throw new Error('bad reply');
+    return r.sessions.find((s) => s.id === id);
+  }
+
+  it('no held request → desktop ping + read-only waiting-approval card + IM text (the chain a silent hang used to be)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+
+    // Desktop: the waiting slot (ping), speaking to the person at the machine.
+    expect(notes).toHaveLength(1);
+    expect(notes[0].title).toContain('Permission needed');
+    expect(notes[0].body).toContain('answer in the terminal');
+    // Dashboard: read-only pending — waiting-approval, marked local.
+    const s = await findSession(sock, 's1');
+    expect(s?.status).toBe('waiting-approval');
+    expect(s?.pending?.local).toBe(true);
+    expect(s?.pending?.body).toBe(MSG);
+    // IM: plain text (grace 0 here), pointing back at the terminal.
+    await waitForSent(sent);
+    expect(sent[0]).toMatchObject({ kind: 'text' });
+    expect((sent[0] as { text: string }).text).toContain('answer in the terminal');
+  });
+
+  it('a held request for the same session already owns every surface → the notification is dropped (full-mode dedupe)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+
+    const pending = request(
+      { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
+      { socketPath: sock, timeoutMs: 10_000 },
+    );
+    held(pending);
+    await waitForSent(sent); // card out ⇒ pending registered, onPending ping fired
+    expect(notes).toHaveLength(1);
+
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+
+    expect(notes).toHaveLength(1); // no second toast
+    expect(sent).toHaveLength(1); // no extra IM text — the card owns IM
+    const s = await findSession(sock, 's1');
+    expect(s?.pending?.local).toBeUndefined(); // still the answerable card
+    const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+    adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: card.buttons!.find((b) => b.id.startsWith('approve:'))!.id, ts: 0 });
+    await pending;
+  });
+
+  it('a local answer (main-session PostToolUse) retires the chain: pending gone, toast closed, graced IM text never sent', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, approvals: { approvalGraceSec: 30 } }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const clears: number[] = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, clear: async () => { clears.push(1); }, info: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    expect((await findSession(sock, 's1'))?.status).toBe('waiting-approval');
+
+    await request({ kind: 'hook.event', event: { event: 'activity', cwd: '/w', sessionId: 's1', toolName: 'Bash', result: {} } }, { socketPath: sock, timeoutMs: 2000 });
+
+    const s = await findSession(sock, 's1');
+    expect(s?.status).toBe('active');
+    expect(s?.pending).toBeUndefined();
+    expect(clears.length).toBeGreaterThan(0);
+    expect(sent).toHaveLength(0); // answered within grace → the IM text never fires
+  });
+
+  it('sub-agent activity does NOT retire the main-session dialog tracking (parallel agents keep running while you look at the dialog)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, clear: async () => {}, info: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.event', event: { event: 'activity', cwd: '/w', sessionId: 's1', toolName: 'Read', result: {}, agentId: 'agentA' } }, { socketPath: sock, timeoutMs: 2000 });
+
+    const s = await findSession(sock, 's1');
+    expect(s?.pending?.local).toBe(true); // still waiting — only a MAIN-session answer clears it
+  });
+
+  it('muted IM stays quiet, but desktop + dashboard still fire (IM ⊥ desktop)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+
+    await request({ kind: 'daemon.set', key: 'mute', enabled: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+
+    expect(notes).toHaveLength(1);
+    expect((await findSession(sock, 's1'))?.pending?.local).toBe(true);
+    await new Promise((r) => setTimeout(r, 80));
+    expect(sent).toHaveLength(0);
+  });
+});
