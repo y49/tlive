@@ -26,6 +26,47 @@ goes to that suffix's tag (`2.0.0-beta.1` → `beta`), a plain version goes to
 `latest`. `prepublishOnly` runs `npm run ci` (typecheck + tests + build) inside
 the publish job as the last safety net.
 
+## Version numbers
+
+Two independent version lines. Nothing links them, and that is deliberate.
+
+**Line 1 — tlive itself.** Fully automated; never hand-edit any of it.
+
+| Where | Written by |
+| --- | --- |
+| `package.json` `version` | release-please, in the release PR |
+| `.release-please-manifest.json` | release-please, in the release PR |
+| git tag `vX.Y.Z` + GitHub Release | release-please, on merging the release PR |
+| npm dist-tag | the publish job, derived from the version |
+
+The bump comes from the Conventional Commit types since the last release. To
+override it, use a [`Release-As:`](#release-as) footer — not a manual edit,
+which release-please ignores.
+
+**Line 2 — the bundled plugin.** Manual, and three files must agree:
+`plugins/{claude,codex}/plugins/tlive/…/plugin.json` and
+`plugins/.content-lock.json` (version + a hash over all of `plugins/**`).
+
+```bash
+node scripts/plugin-lock.mjs --bump patch     # or minor / major / 2.6.0
+```
+
+That rewrites all three in one step, so they cannot drift.
+`plugin-consistency.test.ts` fails the build if `plugins/**` changed without a
+bump — a user's plugin cache only refreshes on a new version, so shipping
+changed content under an unchanged version strands everyone on the old copy.
+(`--update` still exists for the rare case of refreshing the lock without a
+version change.)
+
+**Why they aren't synced.** The plugin line is at 2.5.x while tlive is at 2.0.x,
+so syncing would move the plugin *backwards* — and vendor update detection
+compares versions, which is the same failure the content lock exists to
+prevent. The two also change at different rates: the plugin is a hooks file, a
+skill, and three commands, and it stays still across most tlive releases;
+syncing would bump it on releases where its content is byte-identical. If one
+number is ever wanted, the clean moment is when tlive's own version passes
+2.5.x, so it's a bump rather than a downgrade.
+
 ## Version anchoring
 
 The v2 rewrite landed as an orphan root commit, so every `v0.x` tag is
@@ -93,10 +134,10 @@ npm pack --dry-run               # confirm the tarball contents (see below)
   (dashboard + terminal assets). The daemon serves `dist/web` at runtime, so a
   tarball missing it installs a broken web feature. This is why `package.json`
   `files` includes `dist/` (not just `dist/src/`).
-- If anything under `plugins/**` changed, both bundled `plugin.json` versions
-  must be bumped in lockstep and the lock refreshed
-  (`node scripts/plugin-lock.mjs --update`) — enforced by
-  `plugin-consistency.test.ts`.
+- If anything under `plugins/**` changed, bump the plugin line
+  (`node scripts/plugin-lock.mjs --bump patch`) — see
+  [Version numbers](#version-numbers). Enforced by
+  `plugin-consistency.test.ts`, so CI catches a forgotten bump.
 
 ## Notes
 

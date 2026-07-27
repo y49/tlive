@@ -70,8 +70,8 @@ describe('plugin version discipline', () => {
     if (hash !== lock.hash) {
       expect.fail(
         `plugins/** content changed since the lock (version ${lock.version}). ` +
-        `Bump BOTH plugin.json versions (content changes must bump, users\' cache ` +
-        `only refreshes on a new version) and run: node scripts/plugin-lock.mjs --update`,
+        `A user's plugin cache only refreshes on a new version, so content changes ` +
+        `must bump: node scripts/plugin-lock.mjs --bump patch`,
       );
     }
     expect(version, 'lock is stale: run node scripts/plugin-lock.mjs --update').toBe(lock.version);
