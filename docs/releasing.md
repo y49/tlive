@@ -106,6 +106,35 @@ job routes any prerelease suffix to its own dist-tag, so `latest` is untouched.
 Testers install with `npm i -g tlive@beta`. Remove both keys to return to
 stable releases.
 
+## When the release lands but the publish does not
+
+The pipeline is two jobs: release-please tags and cuts the GitHub Release,
+then npm publishes. A credential or registry failure in the second leaves a
+tagged, released version that never reached npm. Nothing needs rolling back —
+the version is not taken until the registry accepts it.
+
+**Re-running the failed run does not help.** A workflow run replays the
+workflow file from the commit that triggered it, so a fix to
+`release-please.yml` can never be applied that way. Use the manual trigger
+instead:
+
+```bash
+gh workflow run release-please.yml
+```
+
+`publish-npm` bypasses the `releases_created` gate on `workflow_dispatch` and
+publishes whatever version `package.json` holds on `main`. Republishing a
+version that is already on the registry fails at the registry, which is the
+safe direction.
+
+Reading the failure: npm answers **404** — not 403 — for an unauthorized
+`PUT`, so a `404 Not Found - PUT https://registry.npmjs.org/tlive` means *not
+authorized*, never *package missing*. If pnpm also logged `Skipped OIDC: …`,
+the trusted publisher is not configured on npmjs.com:
+
+    npmjs.com -> tlive -> Settings -> Trusted Publisher -> GitHub Actions
+    repository: y49/tlive   workflow: .github/workflows/release-please.yml
+
 ## `Release-As:`
 
 The escape hatch any time the computed version is wrong — put it in the footer
@@ -145,9 +174,11 @@ npm pack --dry-run               # confirm the tarball contents (see below)
   bot-managed and gets recreated if deleted.
 - `CHANGELOG.md` is generated. Hand-written history lives in
   [changelog-archive.md](changelog-archive.md).
-- Publishing needs the `NPM_TOKEN` repo secret to be an **automation** or
-  granular token; npm's 2FA enforcement rejects tokens that can't bypass the
-  OTP prompt.
+- Publishing carries **no npm credential**. It goes through npm trusted
+  publishing: pnpm exchanges the workflow's GitHub OIDC id-token for a
+  short-lived npm token, which is why `id-token: write` is in the workflow's
+  permissions. Nothing to rotate, nothing to expire — the `NPM_TOKEN` secret it
+  replaced aged out unnoticed and turned the 2.0.0 release into a registry 404.
 - `preuninstall` stops the daemon and removes the vendor plugins on
   `npm uninstall -g tlive`; see [uninstall.md](uninstall.md).
 - The GitHub install path (`claude plugin marketplace add y49/tlive`) pulls the

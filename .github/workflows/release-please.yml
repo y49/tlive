@@ -2,6 +2,12 @@ name: Release Please
 on:
   push:
     branches: [main]
+  # Manual re-publish. release-please cuts the tag and GitHub Release in one job
+  # and npm publishes in the next, so a credential or registry failure leaves a
+  # released version that never reached npm. Re-running the original run is not
+  # a fix: a run replays the workflow file from the commit that triggered it, so
+  # an edit to this file can never be applied that way. This is the way in.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -38,8 +44,12 @@ jobs:
   publish-npm:
     needs: release-please
     # Compare explicitly: a bare `${{ outputs.x }}` gate is truthy for the
-    # *string* "false", which would publish on every push to main.
-    if: ${{ needs.release-please.outputs.releases_created == 'true' }}
+    # *string* "false", which would publish on every push to main. The manual
+    # trigger bypasses the gate on purpose — it exists for the case where the
+    # release already happened and only the publish needs retrying. Publishing
+    # a version that is already on the registry fails there, not here, which is
+    # the safe direction.
+    if: ${{ needs.release-please.outputs.releases_created == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -50,12 +60,23 @@ jobs:
         with:
           node-version: '22'
           cache: pnpm
-          registry-url: 'https://registry.npmjs.org'
       - run: pnpm install --frozen-lockfile
       - name: Publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          # No credential here on purpose: this publishes through npm trusted
+          # publishing. pnpm exchanges this workflow's GitHub OIDC id-token for
+          # a short-lived npm credential, which is what `id-token: write` above
+          # is for. Nothing to rotate and nothing to expire — the previous
+          # NPM_TOKEN silently aged out and turned a release into a registry
+          # 404 (npm answers 404, not 403, for an unauthorized PUT, so read a
+          # 404 here as "not authorized", never as "package missing").
+          #
+          # The trust is declared on the registry side, not here:
+          #   npmjs.com -> tlive -> Settings -> Trusted Publisher -> GitHub Actions
+          #   repository: y49/tlive   workflow: .github/workflows/release-please.yml
+          # Without it pnpm logs `Skipped OIDC: …` and falls through to a
+          # credential that no longer exists.
+          #
           # prepublishOnly runs `npm run ci` (typecheck + test + build) as the safety net.
           ver=$(node -p "require('./package.json').version")
           case "$ver" in
