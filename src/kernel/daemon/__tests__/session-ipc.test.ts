@@ -7,6 +7,7 @@ import { bootstrapDaemon, type DaemonHandle } from '../bootstrap';
 import { request, daemonSocketPath } from '../../ipc/client';
 import type { SessionMeta } from '../../ipc/protocol';
 import type { IMAdapter, OutgoingMessage } from '../../contracts/im-adapter';
+import { until } from '../../__tests__/wait.js';
 
 const recordingAdapter = (sent: OutgoingMessage[]): IMAdapter => ({
   channel: 'telegram',
@@ -54,8 +55,7 @@ describe('session.* over IPC', () => {
   });
 });
 
-describe('parent-session 清场 must be agent-scoped (backgrounded sub-agent approval survival)', () => {
-  const tick = () => new Promise((r) => setTimeout(r, 40));
+describe('parent-session teardown must be agent-scoped (backgrounded sub-agent approval survival)', () => {
   // A configured chat keeps requestPermission pending; with no injected imAdapters
   // sendToChat is a no-op (no network), so the pending simply sits in the router.
   // holdSubagents:true — these tests exercise the *held* sub-agent path (the
@@ -73,14 +73,13 @@ describe('parent-session 清场 must be agent-scoped (backgrounded sub-agent app
     writeConfig();
     h = await bootstrapDaemon({ home: tmp });
     const sub = fireSubAgentApproval();
-    await tick();
-    expect(h.permissionRouter.pendingCount()).toBe(1);
+    await until(() => { expect(h.permissionRouter.pendingCount()).toBe(1); });
 
     // The parent (main session, no agent_id) submits a new prompt while the
     // sub-agent is still waiting. The sub-agent's tool call is genuinely pending
     // and has no local answer path — its card must survive.
     await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/proj', sessionId: 'parent', prompt: 'do something else' } }, { socketPath: sock, timeoutMs: 2000 });
-    await tick();
+    await new Promise((r) => setTimeout(r, 100)); // real elapsed time: prove the cancel did NOT arrive
     expect(h.permissionRouter.pendingCount()).toBe(1);
 
     h.permissionRouter.cancel({ key: 'parent' });
@@ -92,12 +91,10 @@ describe('parent-session 清场 must be agent-scoped (backgrounded sub-agent app
     h = await bootstrapDaemon({ home: tmp });
     const main = request({ kind: 'hook.permission.request', cwd: '/proj', sessionId: 'parent', toolName: 'Bash', input: {} },
       { socketPath: sock, timeoutMs: 4000 }).catch(() => undefined); // no agentId = main session
-    await tick();
-    expect(h.permissionRouter.pendingCount()).toBe(1);
+    await until(() => { expect(h.permissionRouter.pendingCount()).toBe(1); });
 
     await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/proj', sessionId: 'parent', prompt: 'next' } }, { socketPath: sock, timeoutMs: 2000 });
-    await tick();
-    expect(h.permissionRouter.pendingCount()).toBe(0); // main-session dialog is gone → its card is withdrawn
+    await until(() => { expect(h.permissionRouter.pendingCount()).toBe(0); }); // main-session dialog is gone → its card is withdrawn
 
     await main;
   });
@@ -106,13 +103,12 @@ describe('parent-session 清场 must be agent-scoped (backgrounded sub-agent app
     writeConfig();
     h = await bootstrapDaemon({ home: tmp });
     const sub = fireSubAgentApproval();
-    await tick();
-    expect(h.permissionRouter.pendingCount()).toBe(1);
+    await until(() => { expect(h.permissionRouter.pendingCount()).toBe(1); });
 
     // Stop long-polls (grace + continue window); fire-and-forget — the cancel
     // it performs runs synchronously on arrival, before any waiting.
     const stop = request({ kind: 'hook.continue.request', cwd: '/proj', sessionId: 'parent', context: 'turn ended' }, { socketPath: sock, timeoutMs: 300 }).catch(() => undefined);
-    await tick();
+    await new Promise((r) => setTimeout(r, 100)); // real elapsed time: prove the cancel did NOT arrive
     expect(h.permissionRouter.pendingCount()).toBe(1);
 
     h.permissionRouter.cancel({ key: 'parent' });
@@ -147,10 +143,11 @@ describe('continuation card has no on-card input box (quote-reply is the entry)'
     // Stop long-polls (continue window); fire-and-forget — the card is sent
     // synchronously when continueBroker registers the request, before the wait.
     request({ kind: 'hook.continue.request', cwd: '/proj', sessionId: 'sess', context: 'All green.' }, { socketPath: sock, timeoutMs: 300 }).catch(() => undefined);
-    await new Promise((r) => setTimeout(r, 120));
 
-    const card = sent.find((m) => m.kind === 'card' && (m.title ?? '').includes('Turn finished'));
-    expect(card).toBeTruthy();
-    expect((card as { inputAction?: unknown }).inputAction).toBeUndefined();
+    await until(() => {
+      const card = sent.find((m) => m.kind === 'card' && (m.title ?? '').includes('Turn finished'));
+      expect(card).toBeTruthy();
+      expect((card as { inputAction?: unknown }).inputAction).toBeUndefined();
+    });
   });
 });
