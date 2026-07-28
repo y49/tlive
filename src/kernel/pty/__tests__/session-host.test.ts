@@ -10,6 +10,7 @@ import { SessionHost, authoritativeSize } from '../session-host';
 const sessSock = (dir: string, name: string): string =>
   process.platform === 'win32' ? `\\\\.\\pipe\\tlive-t-${basename(dir)}-${name}` : join(dir, `${name}.sock`);
 import { FrameDecoder, FrameType, encodeAttach, encodeData, parseDims } from '../../web/stream-protocol.js';
+import { until } from '../../__tests__/wait.js';
 
 describe('authoritativeSize', () => {
   it('defaults to 80x24 with no sources', () => {
@@ -149,40 +150,30 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
     });
     await host.start();
 
-    // Ordering the snapshot path needs: EARLY-SCREEN must reach the shadow
-    // terminal BEFORE the real client attaches, otherwise the snapshot is empty,
-    // the live output carries the string anyway, and this test passes without
-    // touching the snapshot path at all.
+    // A client that is already watching the session. It stays attached for the rest
+    // of the test: "late joiner" means "attached after the output happened", not
+    // "the only client" — every client gets its own snapshot on its own first attach,
+    // and the web terminal really does have tabs joining a session others are in.
+    // The error handler goes on before the first write; see the comment in the
+    // sizing test above for why.
+    const probe = createConnection(sockPath);
+    probe.on('error', () => { /* teardown race, not a test failure */ });
+    await new Promise<void>((r) => probe.once('connect', () => r()));
+    probe.write(encodeAttach(80, 24));
+
+    // The precondition the snapshot path needs: EARLY-SCREEN must have reached the
+    // shadow terminal BEFORE the client under test attaches. Otherwise the snapshot
+    // is empty, the live stream carries the string anyway, and this test passes
+    // without touching the snapshot path at all.
     //
-    // A throwaway client proves it: once EARLY-SCREEN has come back over the live
-    // stream, pty.onData has already fed it to the shadow. onActivity cannot be
-    // used for this — on Windows, ConPTY emits initialisation sequences before the
-    // child writes anything, so an activity flip says nothing about child output.
-    await new Promise<void>((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error('probe never saw EARLY-SCREEN')), 8000);
-      const pdec = new FrameDecoder();
-      let acc = '';
-      let resolved = false;
-      const probe = createConnection(sockPath, () => { probe.write(encodeAttach(80, 24)); });
-      probe.on('error', reject);
-      probe.on('data', (chunk: Buffer) => {
-        for (const f of pdec.push(chunk)) {
-          if (f.type === FrameType.Data) {
-            acc += f.payload.toString('utf8');
-            if (acc.includes('EARLY-SCREEN')) {
-              clearTimeout(t);
-              probe.end();
-              // The client-side 'close' event fires when the socket is closed on this
-              // end, but the server still needs to process the close, call removeClient,
-              // and complete applySize. A small additional delay covers that window.
-              probe.on('close', () => {
-                if (!resolved) { resolved = true; setTimeout(resolve, 20); }
-              });
-            }
-          }
-        }
-      });
-    });
+    // Seeing EARLY-SCREEN arrive on a live client does NOT establish that: pty.onData
+    // broadcasts to sockets synchronously, but xterm's write buffer parses on a later
+    // macrotask, so serialize() can still return '' while those bytes are already on
+    // the wire. Wait on the shadow's own content instead — the thing the snapshot is
+    // built from. (onActivity is no use either: on Windows ConPTY emits initialisation
+    // sequences before the child writes anything, so a flip says nothing about output.)
+    const shadow = host as unknown as { serializer: { serialize(): string } | null };
+    await until(() => { expect(shadow.serializer?.serialize() ?? '').toContain('EARLY-SCREEN'); });
 
     const dec = new FrameDecoder();
     const got = await new Promise<string>((resolve, reject) => {
@@ -206,6 +197,7 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
       });
     });
     expect(got).toContain('EARLY-SCREEN');
+    probe.end();
     await host.stop();
   });
 
