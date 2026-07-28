@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { createConnection } from 'node:net';
 import { mkdtempSync } from 'node:fs';
 import { join, basename } from 'node:path';
@@ -171,9 +171,9 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
             if (acc.includes('EARLY-SCREEN')) {
               clearTimeout(t);
               probe.end();
-              // Let the socket fully close before the late joiner connects, ensuring
-              // the ordering guarantee is complete.
-              setTimeout(resolve, 100);
+              // Small delay to ensure the probe socket is fully torn down on the
+              // server side before the late joiner tries to connect.
+              setTimeout(resolve, 10);
             }
           }
         }
@@ -183,15 +183,20 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
     const dec = new FrameDecoder();
     const got = await new Promise<string>((resolve, reject) => {
       const t = setTimeout(() => reject(new Error('late joiner got no snapshot')), 8000);
-      const chunks: Buffer[] = [];
+      let firstDataPayload = '';
+      let gotFirstData = false;
       const sock = createConnection(sockPath, () => { sock.write(encodeAttach(80, 24)); });
       sock.on('error', reject);
       sock.on('data', (chunk: Buffer) => {
         for (const f of dec.push(chunk)) {
-          if (f.type === FrameType.Data) {
-            chunks.push(f.payload);
-            const s = Buffer.concat(chunks).toString('utf8');
-            if (s.includes('EARLY-SCREEN')) { clearTimeout(t); sock.end(); resolve(s); }
+          if (f.type === FrameType.Data && !gotFirstData) {
+            // The first Data frame on a first attach is the snapshot (serializer.serialize).
+            // Live output (from pty.onData) comes after.
+            gotFirstData = true;
+            firstDataPayload = f.payload.toString('utf8');
+            clearTimeout(t);
+            sock.end();
+            resolve(firstDataPayload);
           }
         }
       });
