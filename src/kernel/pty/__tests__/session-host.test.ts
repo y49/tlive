@@ -180,8 +180,8 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
     // the wire. Wait on the shadow's own content instead — the thing the snapshot is
     // built from. (onActivity is no use either: on Windows ConPTY emits initialisation
     // sequences before the child writes anything, so a flip says nothing about output.)
-    const shadow = host as unknown as { serializer: { serialize(): string } | null };
-    await until(() => { expect(shadow.serializer?.serialize() ?? '').toContain('EARLY-SCREEN'); });
+    const internals = host as unknown as { serializer: { serialize(): string } | null };
+    await until(() => { expect(internals.serializer?.serialize() ?? '').toContain('EARLY-SCREEN'); });
 
     const dec = new FrameDecoder();
     const got = await new Promise<string>((resolve, reject) => {
