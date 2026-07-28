@@ -109,3 +109,55 @@ jobs:
           '
           echo "::endgroup::"
           done
+
+  # Windows counterpart to install-smoke, and the only end-to-end Windows
+  # coverage that exists. `test (windows-latest)` runs unit tests; nothing else
+  # touches what a Windows user hits on day one — the node-pty win32 prebuild
+  # actually loading, a ConPTY actually spawning, %APPDATA% paths, the .cmd shim
+  # npm writes for the bin, and the named-pipe daemon.
+  #
+  # The linux install-smoke earned its place by catching node-pty 1.1.0 shipping
+  # no linux prebuild, which no unit test could see. Same reasoning here: issue
+  # #59 was a real Windows daemon crash that spent months filed as test flake
+  # precisely because nothing exercised the product on Windows.
+  #
+  # Single job, no matrix — a matrix renames the check and required contexts are
+  # matched by exact name (see the note on install-smoke above).
+  install-smoke-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: npm pack
+      - name: install the real tarball globally
+        shell: pwsh
+        run: |
+          $tgz = Get-ChildItem -Filter tlive-*.tgz | Select-Object -First 1
+          npm i -g $tgz.FullName --no-audit --no-fund
+      - name: tlive resolves through the .cmd shim
+        shell: pwsh
+        run: tlive --version
+      - name: node-pty loads and spawns a ConPTY
+        shell: pwsh
+        run: |
+          $env:TLIVE_GLOBAL_ROOT = (npm root -g).Trim()
+          node .github/scripts/smoke-pty.mjs
+      - name: daemon start / status / stop over the named pipe
+        shell: pwsh
+        run: |
+          tlive start
+          tlive status
+          tlive stop
+      - name: stop the daemon even if a step above failed
+        if: always()
+        shell: pwsh
+        run: tlive stop
+        continue-on-error: true
