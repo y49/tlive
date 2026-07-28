@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createConnection } from 'node:net';
 import { startIpcServer, type IpcServer } from '../server';
 import { request, daemonSocketPath } from '../client';
+import { until } from '../../__tests__/wait.js';
 
 let cleanup: Array<() => void> = [];
 afterEach(() => { cleanup.forEach((f) => f()); cleanup = []; });
@@ -36,8 +37,7 @@ describe('IpcCallContext.onDisconnect', () => {
         setTimeout(() => { sock.destroy(); resolve(); }, 30);
       });
     });
-    await new Promise((r) => setTimeout(r, 60));
-    expect(fired).toBe(true);
+    await until(() => { expect(fired).toBe(true); });
   });
 
   it('does not fire synchronously when registered, before any disconnect has occurred', async () => {

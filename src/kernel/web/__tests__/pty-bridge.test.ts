@@ -5,6 +5,7 @@ import { mkdtempSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import * as net from 'node:net';
+import { until } from '../../__tests__/wait.js';
 
 // Per-session socket: fs path on POSIX, named pipe on win32 (no unix sockets).
 const sessSock = (dir: string, name: string): string =>
@@ -35,9 +36,11 @@ describe('PtyBridge', () => {
     const ws = new FakeWs();
     const b = bridge(ws as never, sockPath);
 
-    // give the bridge's net.connect a moment, then drive input through the ws
-    await new Promise((r) => setTimeout(r, 100));
+    // Writes before connect are queued by Node, so the attach can go straight
+    // out. The host answers an Attach with a Size frame — wait for that instead
+    // of guessing at a connect delay, then send the payload.
     ws.emit('message', encodeAttach(80, 24));
+    await until(() => { expect(ws.sent.length).toBeGreaterThan(0); });
     ws.emit('message', encodeData(Buffer.from('ping\n')));
 
     await new Promise<void>((resolve, reject) => {

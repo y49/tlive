@@ -147,9 +147,16 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
       sockPath,
       attachLocal: false,
     });
+    // The snapshot path is only under test if EARLY-SCREEN reaches the shadow
+    // terminal BEFORE the client attaches — otherwise the live output carries it
+    // and the test passes without exercising the snapshot at all. onActivity
+    // fires on the host's first observed pty output, so wait for that rather
+    // than guessing. It must be registered before start() creates the timer.
+    const sawOutput = new Promise<void>((resolve) => {
+      host.onActivity((active) => { if (active) resolve(); });
+    });
     await host.start();
-    // let the output land in the shadow terminal before anyone attaches
-    await new Promise((r) => setTimeout(r, 400));
+    await sawOutput;
 
     const dec = new FrameDecoder();
     const got = await new Promise<string>((resolve, reject) => {
