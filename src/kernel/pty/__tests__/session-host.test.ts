@@ -1,16 +1,20 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterAll } from 'vitest';
 import { createConnection } from 'node:net';
 import { mkdtempSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionHost, authoritativeSize } from '../session-host';
 
-// Auto-mocked for the wiring test below: on Linux guardWindowsConinSocket is
-// a no-op by design (see win-conin-guard.ts), so no black-box test can see
-// whether session-host.ts still calls it. Every other test in this file
-// spawns real ptys and never asserts on the guard, so replacing it with a
-// no-op spy for the whole file doesn't change their behavior.
-vi.mock('../win-conin-guard.js');
+// Spied (NOT auto-mocked) for the wiring test below: on Linux
+// guardWindowsConinSocket is a no-op by design (see win-conin-guard.ts), so
+// no black-box test can see whether session-host.ts still calls it. `vi.mock`
+// is file-global and hoisted, so a plain automock would replace the guard
+// with a no-op for every OTHER test in this file too — including the ones
+// that spawn real ptys and drive real writes and kills, which is exactly
+// where a real Windows conin write failure would need swallowing. `spy: true`
+// keeps the real implementation running for all of them and only adds
+// call/return tracking on top.
+vi.mock('../win-conin-guard.js', { spy: true });
 import { guardWindowsConinSocket } from '../win-conin-guard.js';
 
 // Per-session socket: fs path on POSIX (directly in `dir`, no subdir), named
@@ -320,7 +324,7 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
   // Regression guard for #59: guardWindowsConinSocket() is a no-op on Linux
   // by design, so nothing black-box can tell whether start() still calls it —
   // dropping the call here would leave the whole suite green. Assert the
-  // wiring directly via the mocked import instead.
+  // wiring directly via the spied import instead.
   it('wires guardWindowsConinSocket into start()', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'tlive-guard-'));
     const host = new SessionHost({
@@ -329,12 +333,31 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
     });
     // Captured immediately before the action under test, not asserted as an
     // absolute count: other tests in this file also call start() against the
-    // same auto-mocked import, so only the delta from this one call is
-    // meaningful.
+    // same spied import, so only the delta from this one call is meaningful.
     const before = vi.mocked(guardWindowsConinSocket).mock.calls.length;
     await host.start();
     expect(vi.mocked(guardWindowsConinSocket).mock.calls.length).toBe(before + 1);
+    // `spy: true` runs the REAL body, not a stub, proven by the return value:
+    // an automocked function would return undefined, but the real
+    // implementation returns a platform-dependent boolean (false off win32,
+    // true on win32 once it finds a live conin socket to attach to).
+    expect(vi.mocked(guardWindowsConinSocket).mock.results.at(-1)?.value).toBe(process.platform === 'win32');
     await host.stop();
+  });
+
+  // Confirms `spy: true` above is genuinely running the guard's own body for
+  // EVERY test in this file, not just the one above — an automocked stub
+  // would return undefined for all of them, whereas the real implementation
+  // always returns a platform-dependent boolean. If this ever fails, the
+  // guard has silently gone back to being a no-op across the whole file,
+  // which is the exact regression this test exists to catch.
+  afterAll(() => {
+    const results = vi.mocked(guardWindowsConinSocket).mock.results;
+    expect(results.length).toBeGreaterThan(1); // every SessionHost.start() above called it too
+    for (const r of results) {
+      expect(r.type).toBe('return');
+      expect(r.value).toBe(process.platform === 'win32');
+    }
   });
 
 });
