@@ -19,13 +19,24 @@ const { spawn } = require(ptyPath);
 
 const p = spawn('cmd.exe', ['/c', 'echo pty-ok'], { cols: 80, rows: 24 });
 let out = '';
-p.onData((d) => { out += d; });
+let done = false;
 
-setTimeout(() => {
-  if (!out.includes('pty-ok')) {
-    console.error('pty produced no output; got: ' + JSON.stringify(out));
-    process.exit(1);
-  }
-  console.log('pty loads and runs');
-  process.exit(0);
+// 5s is a failure deadline, not a fixed wait: resolve as soon as the output
+// arrives so a passing run doesn't burn 5s of runner time, while a ConPTY
+// that never answers still fails instead of hanging the job.
+const deadline = setTimeout(() => {
+  if (done) return;
+  done = true;
+  console.error('pty produced no output; got: ' + JSON.stringify(out));
+  process.exit(1);
 }, 5000);
+
+p.onData((d) => {
+  out += d;
+  if (!done && out.includes('pty-ok')) {
+    done = true;
+    clearTimeout(deadline);
+    console.log('pty loads and runs');
+    process.exit(0);
+  }
+});
