@@ -352,7 +352,15 @@ describe('daemon → /ws/events downstream broadcast', () => {
     // skipped entirely once `suppressed` resolves true (bootstrap.ts's
     // 'hook.continue.request' case returns before reaching it). Waiting on
     // continueId would hang for the full 5s `until()` timeout every run.
-    await new Promise((r) => setTimeout(r, 150));
+    // This is the one remaining fixed wait in this file. The margin is widened
+    // (150ms → 600ms) as the only mitigation available while the daemon
+    // exposes no grace-registration signal: too short and the suppression
+    // never arms, failing this test outright on the `toBeLessThan(4000)` below
+    // rather than merely flaking. 600ms still leaves ample room under that 4s
+    // budget. If the daemon ever exposes a grace-registration signal (e.g. a
+    // test-only callback off `bootstrapDaemon`/`DaemonHandle`), convert this to
+    // an `until()` on it instead.
+    await new Promise((r) => setTimeout(r, 600));
     // user starts a new turn within the grace window → suppress the continue card
     await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/g', sessionId: 's', prompt: 'next' } }, { socketPath: sock, timeoutMs: 2000 });
     const res = (await p) as { reply: string | null };
@@ -467,7 +475,13 @@ describe('daemon → /ws/events downstream broadcast', () => {
     // resolve A (deny) — must NOT wipe B's pending indicator
     await request({ kind: 'hook.permission.answer', requestId: reqA, approved: false }, { socketPath: sock, timeoutMs: 2000 });
     expect(((await pA) as { decision: string }).decision).toBe('deny');
-    await until(() => { expect(h.sessions.get('s')?.pending?.requestId).toBe(reqB); });
+    // Invariant, not an arrival: `reqB` was read off the frame where pending had
+    // ALREADY moved to B (see the waitFor above), so this asserts that denying A
+    // did not wipe B's indicator. A condition that is already true needs real
+    // elapsed time to mean anything — until() would return on its first check and
+    // prove nothing.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(h.sessions.get('s')?.pending?.requestId).toBe(reqB);
     // cleanup
     await request({ kind: 'hook.permission.answer', requestId: reqB, approved: false }, { socketPath: sock, timeoutMs: 2000 });
     await pB;
