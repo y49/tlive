@@ -6,6 +6,7 @@ import { bootstrapDaemon, shouldFastNullContinue, clampPermissionTimeout, makeCo
 import { request, daemonSocketPath } from '../../ipc/client';
 import type { IMAdapter, IMChannel, OutgoingMessage, IncomingEnvelope } from '../../contracts/im-adapter';
 import { SessionRegistry } from '../../web/session-registry';
+import { until } from '../../__tests__/wait.js';
 
 // #45 — robustness helpers for this file's "held request" pattern
 // (const pending = request(...); …asserts…; await pending). On a slow/jittery
@@ -177,7 +178,7 @@ describe('local-answer cancel + Stop fast-null (integration)', () => {
       { socketPath: sock, timeoutMs: 10_000 },
     );
     held(pending);
-    await new Promise((r) => setTimeout(r, 100)); // let the card go pending
+    await until(() => { expect(h.sessions.get('s1')?.pending).toBeDefined(); }); // let the card go pending
     await request(
       { kind: 'hook.event', event: { event: 'activity', cwd: '/w', sessionId: 's1', toolName: 'Bash', result: {} } },
       { socketPath: sock, timeoutMs: 2000 },
@@ -344,8 +345,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       { socketPath: sock, timeoutMs: 10_000 },
     );
     held(pending);
-    await new Promise((r) => setTimeout(r, 100));
-    expect(notes).toHaveLength(1); // exactly once — not once per configured channel
+    await until(() => { expect(notes).toHaveLength(1); }); // exactly once — not once per configured channel
     expect(notes[0].title).toContain('Bash');
     const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
     adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: card.buttons!.find((b) => b.id.startsWith('approve:'))!.id, ts: 0 });
@@ -372,9 +372,8 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       { socketPath: sock, timeoutMs: 10_000 },
     );
     held(pending);
-    await new Promise((r) => setTimeout(r, 150));
+    await until(() => { expect(notes).toHaveLength(1); });
     expect(sent).toHaveLength(0); // …but the desktop already knows
-    expect(notes).toHaveLength(1);
     // Local answer within grace (PostToolUse cancel) → card never sent, toast cleared.
     await request(
       { kind: 'hook.event', event: { event: 'activity', cwd: '/w', sessionId: 's1', toolName: 'Bash', result: {} } },
@@ -405,9 +404,8 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       { socketPath: sock, timeoutMs: 10_000 },
     );
     held(pending);
-    await new Promise((r) => setTimeout(r, 100));
+    await until(() => { expect(sent).toHaveLength(1); });
     expect(notes).toHaveLength(0); // toast gated off; the IM card still went out
-    expect(sent).toHaveLength(1);
     const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
     adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: card.buttons!.find((b) => b.id.startsWith('approve:'))!.id, ts: 0 });
     await pending;
@@ -437,8 +435,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       { socketPath: sock, timeoutMs: 10_000 },
     );
     held(pending);
-    await new Promise((r) => setTimeout(r, 150));
-    expect(sent).toHaveLength(2); // one card per channel…
+    await until(() => { expect(sent).toHaveLength(2); }); // one card per channel…
     expect(notes).toHaveLength(1); // …but a single desktop ping
     const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
     tg.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: card.buttons!.find((b) => b.id.startsWith('approve:'))!.id, ts: 0 });
@@ -458,9 +455,8 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     // and Codex turn/completed paths both funnel through). Floating request with
     // a tiny window; we only assert the notification surfaces, not the reply.
     void h.continueBroker.request({ cwd: '/w', context: 'Finished building the feature', timeoutSec: 1 });
-    await new Promise((r) => setTimeout(r, 50));
+    await until(() => { expect(sent).toHaveLength(1); }); // …still surfaced on IM
     expect(infos).toHaveLength(0); // no desktop flood on completion…
-    expect(sent).toHaveLength(1);  // …still surfaced on IM
     expect((sent[0] as { title?: string }).title).toContain('Turn finished');
   });
 
@@ -545,7 +541,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       { socketPath: sock, timeoutMs: 10_000 },
     );
     held(pending);
-    await new Promise((r) => setTimeout(r, 100));
+    await waitForSent(sent); // let the card go out before referencing its messageId
     const cardMsgId = 'm1'; // interactiveAdapter assigns sequential ids m1, m2, …
     adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x2', text: 'use mv to the scratchpad instead', replyToMessageId: cardMsgId, ts: 0 });
     const r = await pending as { decision?: string; message?: string };
@@ -645,15 +641,13 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       // fix) — the edit lands on a later microtask, no longer synchronously
       // within fire(), so each assertion needs a tick to let the queue drain.
       adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: toggleBlue.id, ts: 0 });
-      await new Promise((r) => setTimeout(r, 0));
-      expect(edits).toHaveLength(1);
+      await until(() => { expect(edits).toHaveLength(1); });
       const edited1 = edits[0].msg as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
       expect(edited1.buttons!.map((b) => b.label)).toEqual(['▢ Red', '▣ Blue', 'Submit (1)', 'Skip']);
 
       // toggling the same option again flips it back off
       adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: toggleBlue.id, ts: 0 });
-      await new Promise((r) => setTimeout(r, 0));
-      expect(edits).toHaveLength(2);
+      await until(() => { expect(edits).toHaveLength(2); });
       const edited2 = edits[1].msg as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
       expect(edited2.buttons!.map((b) => b.label)).toEqual(['▢ Red', '▢ Blue', 'Submit (0)', 'Skip']);
 
@@ -876,8 +870,7 @@ describe('quoting a live approval card = deny with guidance (Task 7)', () => {
     expect(r.decision).toBe('deny');
     expect(r.message).toBe('Do not use rm -rf, move it to /tmp/.trash instead');
 
-    await new Promise((res) => setTimeout(res, 50)); // let the queued settlement edit land
-    expect(edits).toHaveLength(1);
+    await until(() => { expect(edits).toHaveLength(1); }); // let the queued settlement edit land
     const editedTitle = (edits[0].msg as { title?: string }).title ?? '';
     expect(editedTitle).toContain('Denied with guidance');
   });
@@ -904,8 +897,7 @@ describe('quoting a live approval card = deny with guidance (Task 7)', () => {
     adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: denyBtn.id, ts: 0 });
     await pending;
 
-    await new Promise((res) => setTimeout(res, 50));
-    expect(edits).toHaveLength(1);
+    await until(() => { expect(edits).toHaveLength(1); });
     const editedTitle = (edits[0].msg as { title?: string }).title ?? '';
     expect(editedTitle).toContain('Denied');
     expect(editedTitle).not.toContain('Denied with guidance');
