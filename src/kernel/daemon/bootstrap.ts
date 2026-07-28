@@ -134,6 +134,18 @@ export function buildContinueCardBody(lastMessage: string): string {
   return `\n${quote}*Reply to this message to continue.*`;
 }
 
+/** One structured line per diagnostic event, on the daemon's stdout (captured to
+ *  ~/.tlive/daemon.log). Deliberately not a logging framework: the whole point is
+ *  that `tlive daemon-logs` stays greppable JSON with a stable `msg` per event.
+ *
+ *  Callers pass identity fields ONLY. Tool inputs, prompts, message bodies and
+ *  card text never belong here — the log is shared across every session on the
+ *  machine and any of those can carry secrets. */
+function logJson(msg: string, fields: Record<string, unknown> = {}): void {
+  // eslint-disable-next-line no-console
+  console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'info', msg, ...fields }));
+}
+
 export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle> {
   mkdirSync(opts.home, { recursive: true });
   const cfg = loadConfig(opts.home);
@@ -429,6 +441,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     // Opt-in: on a held approval's timeout, deny (→ turn ends → continue card can
     // redirect) instead of the default defer (→ CC-native local fallback).
     timeoutAction: () => cfg.approvals?.timeoutAction ?? 'defer',
+    log: logJson,
     onPending: ({ key, cwd, requestId, title, body, toolName, ask }) => {
       // Desktop ping FIRST — this notification is for the person AT this
       // machine, so it must be immediate (the IM card's grace delay exists to
@@ -695,8 +708,20 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const ipc: IpcServer = await startIpcServer({
     path: sockPath,
     handler: async (req, reply, ctx) => {
-      // eslint-disable-next-line no-console
-      console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'info', msg: 'ipc.request', kind: req.kind, callerPid: ctx.callerPid ?? null }));
+      // Identity fields only, and only the ones present on this request shape —
+      // a permission request without its session/agent identity is unattributable,
+      // which is what made a whole class of "why did tlive not hold this?" question
+      // unanswerable from the log. Tool input is deliberately never logged.
+      const idOf = (r: unknown): Record<string, unknown> => {
+        const o = r as { cwd?: unknown; sessionId?: unknown; agentId?: unknown; toolName?: unknown };
+        return {
+          ...(typeof o.cwd === 'string' ? { cwd: o.cwd } : {}),
+          ...(typeof o.sessionId === 'string' ? { sessionId: o.sessionId } : {}),
+          ...(typeof o.agentId === 'string' ? { agentId: o.agentId } : {}),
+          ...(typeof o.toolName === 'string' ? { toolName: o.toolName } : {}),
+        };
+      };
+      logJson('ipc.request', { kind: req.kind, callerPid: ctx.callerPid ?? null, ...idOf(req) });
       switch (req.kind) {
         case 'daemon.status':
           reply({ kind: 'daemon.status', uptimeMs: Date.now() - startedAt, pid: process.pid, codex: codexState });
@@ -786,7 +811,14 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // mode, or the router deferred on arrival — this is the ONLY
             // signal anyone gets: run the local-waiting chain. Never carries
             // a decision; never-auto-allow untouched.
-            if (!permissionRouter.hasPendingFor({ key, sessionId: req.sessionId })) {
+            const heldOwnsIt = permissionRouter.hasPendingFor({ key, sessionId: req.sessionId });
+            // The two arms look identical from outside — one means "tlive is
+            // gating this and the card owns every surface", the other means
+            // "tlive is NOT gating this, the terminal is the only answer path".
+            // Confusing them is exactly how a pass-through got mistaken for a
+            // held approval, so the log says which.
+            logJson('permission.localPrompt', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), heldOwnsIt, action: heldOwnsIt ? 'suppressed' : 'tracked' });
+            if (!heldOwnsIt) {
               localPrompts.note(key, req.sessionId);
               // Desktop first, immediately — the waiting slot (ping/clear
               // lifecycle), not an info banner: the dialog IS a waiting state.
@@ -798,10 +830,16 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               // keyboard within the window → never sent (zero spam at the
               // keyboard, same contract as the held-card push).
               const pushIm = (): void => {
-                if (!localPrompts.has(key, req.sessionId)) return;
-                if (permissionRouter.hasPendingFor({ key, sessionId: req.sessionId })) return; // raced a held card → the card owns IM
-                if (muted || sessions.get(key)?.muted) return; // muted during grace → respect it
-                for (const t of configuredChats()) void sendToChat(t, { text: `${req.message} — answer in the terminal`, cwd: key }).catch(() => undefined);
+                // Each bail-out is logged with its own tag: "no IM text arrived"
+                // has four different causes and they are not interchangeable.
+                const note = (outcome: string, extra?: Record<string, unknown>): void =>
+                  logJson('permission.localPrompt.im', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), outcome, ...extra });
+                if (!localPrompts.has(key, req.sessionId)) return note('answered-in-grace');
+                if (permissionRouter.hasPendingFor({ key, sessionId: req.sessionId })) return note('raced-held-card');
+                if (muted || sessions.get(key)?.muted) return note('muted');
+                const targets = configuredChats();
+                note('sent', { chatTargets: targets.length });
+                for (const t of targets) void sendToChat(t, { text: `${req.message} — answer in the terminal`, cwd: key }).catch(() => undefined);
               };
               const graceSec = Math.max(cfg.approvals?.approvalGraceSec ?? 10, 0);
               if (graceSec > 0) setTimeout(pushIm, graceSec * 1000).unref();

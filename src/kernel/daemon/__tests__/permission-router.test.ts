@@ -550,3 +550,73 @@ describe('hasPendingFor — the daemon dedupe test for Notification(permission_p
     await p;
   });
 });
+
+// Diagnostics: the five paths that return without a card are indistinguishable
+// in behaviour from outside (all of them just resolve), which is exactly why the
+// reason tag exists. These lock the tags so a refactor cannot silently collapse
+// two causes into one — the failure mode is a log that says "not held" without
+// saying why, which is what it said before.
+describe('PermissionRouter diagnostics', () => {
+  const base = (log: Array<{ event: string; fields: Record<string, unknown> }>) => ({
+    configuredChats: () => [{ channel: 'telegram', chatId: 'c1' }],
+    sendToChat: async () => {},
+    isMuted: () => false,
+    hasWebClients: () => false,
+    hasLocalAnswerPath: () => false,
+    policyDecide: () => ({ decision: 'ask' as const }),
+    renderCard: () => ({ title: 'T', body: 'B' }),
+    graceSec: () => 0,
+    log: (event: string, fields: Record<string, unknown>) => { log.push({ event, fields }); },
+  });
+  const reasons = (log: Array<{ event: string; fields: Record<string, unknown> }>): unknown[] =>
+    log.filter((l) => l.event === 'permission.outcome').map((l) => l.fields.reason);
+
+  it('tags a policy auto-allow', async () => {
+    const log: Array<{ event: string; fields: Record<string, unknown> }> = [];
+    const r = new PermissionRouter({ ...base(log), policyDecide: () => ({ decision: 'allow' as const }) });
+    await r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Read', input: {} });
+    expect(reasons(log)).toEqual(['policy-allow']);
+  });
+
+  it('tags a sub-agent pass-through, and carries the agentId that caused it', async () => {
+    const log: Array<{ event: string; fields: Record<string, unknown> }> = [];
+    const r = new PermissionRouter(base(log));
+    await r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, agentId: 'subA' });
+    expect(reasons(log)).toEqual(['subagent-passthrough']);
+    expect(log[0].fields.agentId).toBe('subA');
+  });
+
+  it('tags a missing answer surface, and records which surfaces were missing', async () => {
+    const log: Array<{ event: string; fields: Record<string, unknown> }> = [];
+    const r = new PermissionRouter({ ...base(log), configuredChats: () => [] });
+    await r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {} });
+    expect(reasons(log)).toEqual(['no-answer-surface']);
+    expect(log[0].fields).toMatchObject({ chatTargets: 0, webUsable: false, localUsable: false });
+  });
+
+  it('distinguishes a local-terminal release from a remote answer', async () => {
+    const local: Array<{ event: string; fields: Record<string, unknown> }> = [];
+    const r1 = new PermissionRouter(base(local));
+    const p1 = r1.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
+    await vi.waitFor(() => { expect(reasons(local)).toEqual(['held']); });
+    r1.cancel({ key: '/w' });
+    await p1;
+    expect(local.find((l) => l.event === 'permission.resolved')?.fields.by).toBe('local-terminal');
+
+    const remote: Array<{ event: string; fields: Record<string, unknown> }> = [];
+    const r2 = new PermissionRouter(base(remote));
+    const p2 = r2.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, timeoutSec: 60 });
+    await vi.waitFor(() => { expect(reasons(remote)).toEqual(['held']); });
+    const rid = remote.find((l) => l.fields.reason === 'held')!.fields.requestId as string;
+    r2.answer(rid, true);
+    await p2;
+    expect(remote.find((l) => l.event === 'permission.resolved')?.fields.by).toBe('remote');
+  });
+
+  it('never puts the tool input in the log', async () => {
+    const log: Array<{ event: string; fields: Record<string, unknown> }> = [];
+    const r = new PermissionRouter(base(log));
+    await r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: { command: 'echo SUPER_SECRET' }, agentId: 'a' });
+    expect(JSON.stringify(log)).not.toContain('SUPER_SECRET');
+  });
+});

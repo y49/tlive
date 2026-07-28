@@ -71,6 +71,16 @@ export interface PermissionRouterDeps {
    *  说明),让 turn 得以结束 → 续跑卡可重定向。deny 是安全方向,不破 never-auto-
    *  allow 地板。只作用于**真的 hold 到超时**的请求,不影响答复面缺失的即时 defer。 */
   timeoutAction?: () => 'defer' | 'deny';
+  /** Diagnostics. Called once per outcome of requestPermission with a stable
+   *  `reason` tag, and once again when a held request resolves. Identity fields
+   *  only — never the tool input, which can carry secrets.
+   *
+   *  This exists because "why didn't tlive hold this one?" was unanswerable from
+   *  the outside: five separate paths return without a card (policy allow,
+   *  sub-agent pass-through, no answer surface, timeout, caller gone) and they
+   *  are indistinguishable in the log, which turned one regression into several
+   *  rounds of guesswork. */
+  log?: (event: string, fields: Record<string, unknown>) => void;
 }
 
 /** 超时改判为 deny 时给 agent 的说明——让它知道不是硬拒、是没人及时答,可重试。 */
@@ -96,6 +106,9 @@ function fieldMatches(a: string | undefined, b: string | undefined): boolean {
 
 export class PermissionRouter {
   private pending = new Map<string, PendingEntry>();
+  /** requestId → which surface settled it, read once by requestPermission when
+   *  its await returns. Set by whoever resolves; absent means nothing claimed it. */
+  private resolvedBy = new Map<string, string>();
   constructor(private deps: PermissionRouterDeps) {}
 
   /** `key` is the session's registry identity — used for pending-map matching
@@ -107,9 +120,22 @@ export class PermissionRouter {
    *  split — collapsing them back into one is the bug (see bootstrap.ts's
    *  resolveKey doc comment). */
   async requestPermission(opts: { key: string; cwd: string; toolName: string; input: unknown; permissionMode?: string; timeoutSec?: number; sessionId?: string; agentId?: string; onAbandoned?: (cb: () => void) => void }): Promise<{ decision: Decision; message?: string; updatedInput?: unknown }> {
+    // Identity only — the tool input can carry secrets and never goes to the log.
+    const who = {
+      key: opts.key,
+      toolName: opts.toolName,
+      ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+      ...(opts.agentId ? { agentId: opts.agentId } : {}),
+    };
+    const outcome = (reason: string, extra?: Record<string, unknown>): void =>
+      this.deps.log?.('permission.outcome', { ...who, reason, ...extra });
+
     // Policy first: an auto-allow (read-only / trust switch) skips the card even when muted.
     const pd = this.deps.policyDecide({ toolName: opts.toolName, input: opts.input, permissionMode: opts.permissionMode });
-    if (pd.decision === 'allow') return { decision: 'allow' };
+    if (pd.decision === 'allow') {
+      outcome('policy-allow', { ...(pd.reason ? { policyReason: pd.reason } : {}) });
+      return { decision: 'allow' };
+    }
 
     // Sub-agent pass-through (方案①): stay transparent for backgrounded/async
     // sub-agents by default (see holdSubagents doc). Holding one blocks it with no
@@ -118,6 +144,7 @@ export class PermissionRouter {
     // Runs AFTER the policy allow-check, so a safe/trusted sub-agent tool still
     // auto-allows; opt-in holdSubagents makes sub-agent approvals remotely answerable.
     if (opts.agentId && !(this.deps.holdSubagents?.() ?? false)) {
+      outcome('subagent-passthrough');
       return { decision: 'defer' };
     }
 
@@ -127,7 +154,12 @@ export class PermissionRouter {
     // any live dashboard client remain independent answer paths (IM ⊥ desktop).
     const targets = this.deps.configuredChats();
     const imUsable = targets.length > 0 && !this.deps.isMuted(opts.key);
-    if (!imUsable && !this.deps.hasWebClients() && !this.deps.hasLocalAnswerPath()) {
+    const webUsable = this.deps.hasWebClients();
+    const localUsable = this.deps.hasLocalAnswerPath();
+    if (!imUsable && !webUsable && !localUsable) {
+      // Each input is recorded, not just the verdict: "no answer surface" says
+      // nothing about WHICH surface was missing, and that is the whole question.
+      outcome('no-answer-surface', { chatTargets: targets.length, muted: this.deps.isMuted(opts.key), webUsable, localUsable });
       return { decision: 'defer' };
     }
 
@@ -141,9 +173,11 @@ export class PermissionRouter {
         ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
         ...(opts.agentId ? { agentId: opts.agentId } : {}),
       });
+      outcome('held', { requestId, chatTargets: targets.length, webUsable, localUsable, graceSec: this.deps.graceSec(), windowSec: opts.timeoutSec ?? PERMISSION_TIMEOUT_SEC });
       setTimeout(() => {
         if (this.pending.has(requestId)) {
           this.pending.delete(requestId);
+          this.resolvedBy.set(requestId, 'timeout');
           // Held-then-timed-out: 'deny' (opt-in) ends it so the turn can move on
           // and the continue card can redirect; 'defer' (default) falls back to
           // CC-native (local dialog / auto-deny), never auto-deciding.
@@ -157,6 +191,7 @@ export class PermissionRouter {
       opts.onAbandoned?.(() => {
         if (this.pending.has(requestId)) {
           this.pending.delete(requestId);
+          this.resolvedBy.set(requestId, 'caller-gone');
           resolve({ decision: 'gone' });
         }
       });
@@ -182,6 +217,11 @@ export class PermissionRouter {
       if (grace > 0) setTimeout(push, grace * 1000).unref();
       else push();
     });
+    // `by` is the answer surface that won the race — the single most useful field
+    // when the question is "did the terminal or the phone settle this one".
+    const by = this.resolvedBy.get(requestId) ?? 'unknown';
+    this.resolvedBy.delete(requestId);
+    this.deps.log?.('permission.resolved', { ...who, requestId, decision: result.decision, by });
     this.deps.onResolved?.({ key: opts.key, cwd: opts.cwd, requestId, decision: result.decision, ...(result.message ? { message: result.message } : {}), ...(result.updatedInput !== undefined ? { updatedInput: result.updatedInput } : {}) });
     return result;
   }
@@ -212,6 +252,7 @@ export class PermissionRouter {
   settleAllPending(): void {
     for (const [id, entry] of this.pending) {
       this.pending.delete(id);
+      this.resolvedBy.set(id, 'daemon-shutdown');
       entry.resolve({ decision: 'defer' });
     }
   }
@@ -225,6 +266,7 @@ export class PermissionRouter {
     const e = this.pending.get(requestId);
     if (!e) return false;
     this.pending.delete(requestId);
+    this.resolvedBy.set(requestId, 'remote');
     e.resolve({ decision: approved ? 'allow' : 'deny', ...(message ? { message } : {}), ...(updatedInput !== undefined ? { updatedInput } : {}) });
     return true;
   }
@@ -244,6 +286,7 @@ export class PermissionRouter {
       if (!fieldMatches(e.sessionId, opts.sessionId)) continue;
       if (opts.matchAgent !== undefined && e.agentId !== (opts.matchAgent ?? undefined)) continue;
       this.pending.delete(rid);
+      this.resolvedBy.set(rid, 'local-terminal');
       e.resolve({ decision: 'local' }); // onResolved fires from requestPermission's own path
       n++;
     }
