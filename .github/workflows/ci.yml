@@ -148,14 +148,33 @@ jobs:
       - name: node-pty loads and spawns a ConPTY
         shell: pwsh
         run: |
-          $env:TLIVE_GLOBAL_ROOT = (npm root -g).Trim()
+          # `npm root -g` can in principle emit more than one line, which makes
+          # PowerShell 7+ treat the captured value as a string[] — .Trim() would
+          # then enumerate silently instead of throwing, and $env:TLIVE_GLOBAL_ROOT
+          # would end up joined with a space into a corrupted path. Out-String
+          # collapses it to a single string first.
+          $env:TLIVE_GLOBAL_ROOT = (npm root -g | Out-String).Trim()
           node .github/scripts/smoke-pty.mjs
       - name: daemon start / status / stop over the named pipe
         shell: pwsh
         run: |
+          # pwsh does not halt on a native (non-PowerShell) command's non-zero
+          # exit, and GitHub Actions only inspects $LASTEXITCODE once, after the
+          # whole script runs — so without explicit gates the step's verdict
+          # would come from `tlive stop` alone, which exits 0 even when nothing
+          # was running (stop is deliberately idempotent so `stop && start`
+          # chains work). Gate every command, and assert on `status`'s actual
+          # text rather than just its exit code: match the "running (pid ...)"
+          # line status.ts prints, not a bare "running" substring — "not
+          # running" also contains the word "running".
           tlive start
-          tlive status
+          if ($LASTEXITCODE -ne 0) { throw "tlive start failed ($LASTEXITCODE)" }
+          $s = tlive status | Out-String
+          if ($LASTEXITCODE -ne 0) { throw "tlive status failed ($LASTEXITCODE)" }
+          Write-Host $s
+          if ($s -notmatch 'daemon:\s+running \(pid') { throw "daemon not reported running:`n$s" }
           tlive stop
+          if ($LASTEXITCODE -ne 0) { throw "tlive stop failed ($LASTEXITCODE)" }
       - name: stop the daemon even if a step above failed
         if: always()
         shell: pwsh
