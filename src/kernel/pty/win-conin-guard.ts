@@ -2,12 +2,12 @@
 // Containment for an upstream node-pty defect on Windows.
 //
 // node-pty opens two pipes to the ConPTY. The read side (conout) gets an
-// 'error' listener in windowsTerminal.ts:90; the write side (conin) is
-// constructed in windowsPtyAgent.ts:79 with none. A net.Socket without an
-// 'error' listener turns any emitted error into an uncaught exception, so a
+// 'error' listener in lib/windowsTerminal.js:90; the write side (conin) is
+// constructed in lib/windowsPtyAgent.js:79-84 with none. A net.Socket without
+// an 'error' listener turns any emitted error into an uncaught exception, so a
 // failing pty write takes the whole daemon down. Two triggers reach it: EAGAIN
 // when conin's buffer fills under backpressure, and a write racing kill()'s
-// _inSocket.destroy() (windowsPtyAgent.ts:176).
+// _inSocket.destroy() (lib/windowsPtyAgent.js:176).
 //
 // Reaching through the private _agent is deliberate — Terminal.on() forwards to
 // the conout socket, so there is no public route to conin. Verified against
