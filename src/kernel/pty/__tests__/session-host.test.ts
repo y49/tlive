@@ -224,4 +224,32 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
     await host.stop();
   });
 
+  // Regression: stop() killed the pty but left the handle in place, so a client
+  // Data frame already queued could still reach a pty whose win32 conin socket
+  // had just been destroyed — an uncaught 'write EAGAIN'. See #59.
+  it('clears the pty handle on stop so late input cannot reach a killed pty', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tlive-dispose-'));
+    const host = new SessionHost({
+      id: 'd1', cmd: process.execPath, args: ['-e', 'process.stdin.pipe(process.stdout)'],
+      cwd: dir, sockPath: sessSock(dir, 'd'), attachLocal: false,
+    });
+    await host.start();
+    expect((host as unknown as { pty: unknown }).pty).not.toBeNull();
+
+    await host.stop();
+    expect((host as unknown as { pty: unknown }).pty).toBeNull();
+  });
+
+  it('clears the pty handle when the child exits on its own', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tlive-exit-'));
+    const host = new SessionHost({
+      id: 'd2', cmd: process.execPath, args: ['-e', 'process.exit(0)'],
+      cwd: dir, sockPath: sessSock(dir, 'e'), attachLocal: false,
+    });
+    const exited = new Promise<number>((resolve) => host.onExit(resolve));
+    await host.start();
+    await exited;
+    expect((host as unknown as { pty: unknown }).pty).toBeNull();
+  });
+
 });

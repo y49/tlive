@@ -105,6 +105,8 @@ export class SessionHost {
     });
 
     this.pty.onExit(({ exitCode }) => {
+      // The child is gone; drop the handle so nothing can write to it.
+      this.pty = null;
       this.cleanup();
       this.onExitCb?.(exitCode);
     });
@@ -145,7 +147,16 @@ export class SessionHost {
 
   async stop(): Promise<void> {
     this.cleanup();
-    try { this.pty?.kill(); } catch { /* already dead */ }
+    this.disposePty();
+  }
+
+  /** Kill the child and drop the handle. Every write/resize site uses `this.pty?.`,
+   *  so clearing it makes late input a no-op instead of a write to a dead pipe. */
+  private disposePty(): void {
+    const pty = this.pty;
+    this.pty = null;
+    if (!pty) return;
+    try { pty.kill(); } catch { /* already dead */ }
   }
 
   private onLocalInput = (chunk: Buffer): void => {
