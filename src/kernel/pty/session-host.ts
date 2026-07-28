@@ -12,6 +12,7 @@ import { Terminal as HeadlessTerminal } from '@xterm/headless';
 import { SerializeAddon } from '@xterm/addon-serialize';
 import { isPipePath } from '../ipc/client.js';
 import { FrameDecoder, FrameType, encodeData, encodeSize, parseDims } from '../web/stream-protocol.js';
+import { guardWindowsConinSocket } from './win-conin-guard.js';
 
 export interface SessionHostOpts {
   id: string;
@@ -84,6 +85,9 @@ export class SessionHost {
       // lets scripts detect the wrapper and lets `tlive run` refuse to nest.
       env: { ...(this.opts.env ?? process.env), TLIVE_SESSION: this.opts.id } as Record<string, string>,
     });
+    // node-pty leaves the win32 conin socket without an 'error' listener; an
+    // unguarded write failure there is an uncaught exception. See the module.
+    guardWindowsConinSocket(this.pty);
 
     this.shadow = new HeadlessTerminal({ cols: size.cols, rows: size.rows, scrollback: 1000, allowProposedApi: true });
     this.serializer = new SerializeAddon();
