@@ -162,6 +162,7 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
       const t = setTimeout(() => reject(new Error('probe never saw EARLY-SCREEN')), 8000);
       const pdec = new FrameDecoder();
       let acc = '';
+      let resolved = false;
       const probe = createConnection(sockPath, () => { probe.write(encodeAttach(80, 24)); });
       probe.on('error', reject);
       probe.on('data', (chunk: Buffer) => {
@@ -171,9 +172,12 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
             if (acc.includes('EARLY-SCREEN')) {
               clearTimeout(t);
               probe.end();
-              // Small delay to ensure the probe socket is fully torn down on the
-              // server side before the late joiner tries to connect.
-              setTimeout(resolve, 10);
+              // The client-side 'close' event fires when the socket is closed on this
+              // end, but the server still needs to process the close, call removeClient,
+              // and complete applySize. A small additional delay covers that window.
+              probe.on('close', () => {
+                if (!resolved) { resolved = true; setTimeout(resolve, 20); }
+              });
             }
           }
         }
