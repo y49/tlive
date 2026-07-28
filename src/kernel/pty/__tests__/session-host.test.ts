@@ -1,9 +1,17 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createConnection } from 'node:net';
 import { mkdtempSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionHost, authoritativeSize } from '../session-host';
+
+// Auto-mocked for the wiring test below: on Linux guardWindowsConinSocket is
+// a no-op by design (see win-conin-guard.ts), so no black-box test can see
+// whether session-host.ts still calls it. Every other test in this file
+// spawns real ptys and never asserts on the guard, so replacing it with a
+// no-op spy for the whole file doesn't change their behavior.
+vi.mock('../win-conin-guard.js');
+import { guardWindowsConinSocket } from '../win-conin-guard.js';
 
 // Per-session socket: fs path on POSIX (directly in `dir`, no subdir), named
 // pipe on win32. basename(dir) is unique per mkdtemp → collision-free pipe.
@@ -304,6 +312,26 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
     await host.start();
     await exited;
     expect((host as unknown as { pty: unknown }).pty).toBeNull();
+  });
+
+  // Regression guard for #59: guardWindowsConinSocket() is a no-op on Linux
+  // by design, so nothing black-box can tell whether start() still calls it —
+  // dropping the call here would leave the whole suite green. Assert the
+  // wiring directly via the mocked import instead.
+  it('wires guardWindowsConinSocket into start()', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tlive-guard-'));
+    const host = new SessionHost({
+      id: 'guard-1', cmd: process.execPath, args: ['-e', 'setInterval(()=>{},1000)'],
+      cwd: dir, sockPath: sessSock(dir, 'g'), attachLocal: false,
+    });
+    // Captured immediately before the action under test, not asserted as an
+    // absolute count: other tests in this file also call start() against the
+    // same auto-mocked import, so only the delta from this one call is
+    // meaningful.
+    const before = vi.mocked(guardWindowsConinSocket).mock.calls.length;
+    await host.start();
+    expect(vi.mocked(guardWindowsConinSocket).mock.calls.length).toBe(before + 1);
+    await host.stop();
   });
 
 });
