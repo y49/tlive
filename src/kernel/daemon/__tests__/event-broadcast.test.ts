@@ -352,7 +352,9 @@ describe('daemon → /ws/events downstream broadcast', () => {
     // skipped entirely once `suppressed` resolves true (bootstrap.ts's
     // 'hook.continue.request' case returns before reaching it). Waiting on
     // continueId would hang for the full 5s `until()` timeout every run.
-    // This is the one remaining fixed wait in this file. The margin is widened
+    // This is the one fixed sleep in this file that has no daemon-observable
+    // substitute (the other fixed waits elsewhere in this file are deliberate
+    // absence assertions, not stand-ins for this). The margin is widened
     // (150ms → 600ms) as the only mitigation available while the daemon
     // exposes no grace-registration signal: too short and the suppression
     // never arms, failing this test outright on the `toBeLessThan(4000)` below
