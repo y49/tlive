@@ -254,16 +254,18 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
     const flips: boolean[] = [];
     host.onActivity((a) => flips.push(a));
     await host.start();
-    // Poll interval is 1s, first tick at ~1000ms. Give it a bit past
-    // the first tick to ensure onActivity(true) has fired if the child
-    // had emitted anything (it hasn't). This is an absence assertion —
-    // a fixed delay proves that no true flip occurred.
+    // Not an absence-assertion violation: the `false` flip below is a genuine
+    // arrival (the first poll tick, with no output yet, always reports idle),
+    // so until() has something real to wait on. The `not.toContain(true)`
+    // check afterwards is then made against state that can no longer change,
+    // because this test's child never writes — there is no later tick that
+    // could still flip it to running.
     // Note: ConPTY emits initialisation sequences before any child output,
     // so a pty with no output does not exist on Windows and the assertion
     // is therefore meaningless rather than merely flaky. This is why the test
     // is skipped there.
-    await new Promise((r) => setTimeout(r, 1200));
-    expect(flips).not.toContain(true);  // never reported running
+    await until(() => { expect(flips).toContain(false); }); // a tick demonstrably ran…
+    expect(flips).not.toContain(true);                      // …and it reported idle
     await host.stop();
   });
 
@@ -279,10 +281,11 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
     const flips: boolean[] = [];
     host.onActivity((a) => flips.push(a));
     await host.start();
-    // within ~1s: running (true); after IDLE_MS(1.5s)+poll: idle (false)
-    await new Promise((r) => setTimeout(r, 3200));
-    expect(flips[0]).toBe(true);        // saw output → running
-    expect(flips).toContain(false);     // then went idle
+    // Both are arrivals — wait on each instead of a fixed sleep. (flips[0] is
+    // no longer guaranteed to be `true` by construction: it now races the
+    // child's first byte against the poll tick at spawn+~1000ms.)
+    await until(() => { expect(flips).toContain(true); });
+    await until(() => { expect(flips).toContain(false); });
     await host.stop();
   });
 
