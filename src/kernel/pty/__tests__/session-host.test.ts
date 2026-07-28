@@ -149,9 +149,10 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
     });
     // The snapshot path is only under test if EARLY-SCREEN reaches the shadow
     // terminal BEFORE the client attaches — otherwise the live output carries it
-    // and the test passes without exercising the snapshot at all. onActivity
-    // fires on the host's first observed pty output, so wait for that rather
-    // than guessing. It must be registered before start() creates the timer.
+    // and the test passes without exercising the snapshot at all. onActivity now
+    // fires (true) only when the host observes actual pty output, so wait for that
+    // to order the output ahead of the client's attach. It must be registered before
+    // start() creates the timer.
     const sawOutput = new Promise<void>((resolve) => {
       host.onActivity((active) => { if (active) resolve(); });
     });
@@ -211,6 +212,26 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
     await host.stop();
   });
 
+  it('a silent child (no output) does not report as running', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tlive-host-'));
+    const sockPath = sessSock(dir, 's');
+    // child that consumes stdin but produces no output
+    const host = new SessionHost({
+      id: 'act-silent', cmd: process.execPath,
+      args: ['-e', 'process.stdin.resume(); setInterval(()=>{},1000);'],
+      cwd: dir, sockPath, attachLocal: false,
+    });
+    const flips: boolean[] = [];
+    host.onActivity((a) => flips.push(a));
+    await host.start();
+    // Poll interval is 1s, first tick at ~1000ms. Give it a bit past
+    // the first tick to ensure onActivity(true) has fired if the child
+    // had emitted anything (it hasn't). This is an absence assertion —
+    // a fixed delay proves that no true flip occurred.
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(flips).not.toContain(true);  // never reported running
+    await host.stop();
+  });
 
   it('reports running on output then idle after silence', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'tlive-host-'));

@@ -58,7 +58,7 @@ export class SessionHost {
   private shadow: HeadlessTerminal | null = null;
   private serializer: SerializeAddon | null = null;
   // Vendor-neutral activity: recent pty output = running, silence = idle.
-  private lastOutputAt = Date.now();
+  private lastOutputAt: number | null = null;
   private activeState: boolean | null = null;
   private activityTimer: ReturnType<typeof setInterval> | null = null;
   private onActivityCb: ((active: boolean) => void) | null = null;
@@ -113,7 +113,7 @@ export class SessionHost {
 
     // Poll output-activity; report only on a running↔idle flip.
     this.activityTimer = setInterval(() => {
-      const active = Date.now() - this.lastOutputAt < SessionHost.IDLE_MS;
+      const active = this.lastOutputAt !== null && Date.now() - this.lastOutputAt < SessionHost.IDLE_MS;
       if (active !== this.activeState) { this.activeState = active; this.onActivityCb?.(active); }
     }, 1000);
     this.activityTimer.unref?.();
