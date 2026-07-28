@@ -11,8 +11,9 @@
 //
 // Reaching through the private _agent is deliberate — Terminal.on() forwards to
 // the conout socket, so there is no public route to conin. Verified against
-// node-pty@1.2.0-beta.14. Delete this once an upstream release carries the
-// listener; re-check the internal shape on every node-pty bump.
+// node-pty@1.2.0-beta.14. Reported upstream as
+// https://github.com/microsoft/node-pty/issues/942 — delete this once a release
+// carries the listener; re-check the internal shape on every node-pty bump.
 
 import type { IPty } from 'node-pty';
 
