@@ -1,6 +1,7 @@
 // src/kernel/config/loader.ts
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { ShimMode } from '../hook/normalizer.js';
 
 export interface AdapterCreds {
   telegram?: { token: string; chatIdAllowList?: string[] };
@@ -31,9 +32,9 @@ export interface PolicyConfig { autoAllow?: string[]; autoDeny?: string[]; ask?:
  *  以下三个会改变"没装 tlive 时的行为",是明确的取舍开关:
  *  autoApprove: 不写 = 关(什么都不自动放行)。一旦设置就会抹掉 CC 本该弹出
  *  的确认框 —— PermissionRequest 只在 ask 路径触发,见 policy-engine。
- *  holdSubagents: true 会让被 hold 的异步子代理失去本地框(见 permission-router)。
+ *  (子代理拦不拦已并入姿态梯子:`tlive mode all`,见 kernel/config/mode.ts。)
  *  timeoutAction: 'deny' 会在窗口耗尽时替你拒绝(默认 'defer' 回落 CC 原生)。 */
-export interface ApprovalsConfig { windowSec?: number; continueWindowSec?: number; continueGraceSec?: number; approvalGraceSec?: number; desktopNotify?: boolean; autoApprove?: 'readonly' | 'safe'; holdSubagents?: boolean; timeoutAction?: 'defer' | 'deny' }
+export interface ApprovalsConfig { windowSec?: number; continueWindowSec?: number; continueGraceSec?: number; approvalGraceSec?: number; desktopNotify?: boolean; autoApprove?: 'readonly' | 'safe'; timeoutAction?: 'defer' | 'deny' }
 
 export interface KernelConfig {
   allowedSenders: Array<{ channel: 'telegram' | 'feishu'; userId: string }>;
@@ -42,10 +43,9 @@ export interface KernelConfig {
   policy?: PolicyConfig;
   approvals?: ApprovalsConfig;
   daemon?: { socketPath?: string; healthPort?: number; autoStart?: boolean };
-  /** tlive 姿态:'full' = 远程审批 + 监看(卖点全开);'notify' = 只监看/通知,
-   *  绝不 gating 任何审批(shim 默认,安全);'off' = 全关 kill switch。
-   *  缺省时 shim 按 'notify' 处理(见 hook.ts readMode)。 */
-  mode?: 'off' | 'notify' | 'full';
+  /** 姿态梯子:off | notify | full | all,见 kernel/config/mode.ts。
+   *  缺省时按 'notify' 处理(见 hook.ts readMode / effectiveMode)。 */
+  mode?: ShimMode;
 }
 
 const DEFAULT: KernelConfig = { allowedSenders: [], adapters: {} };

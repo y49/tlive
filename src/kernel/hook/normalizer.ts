@@ -143,17 +143,20 @@ export function permissionRequestDecisionOut(decision: 'allow' | 'deny' | 'defer
 }
 
 
-/** tlive 姿态开关。full = 远程审批 + 监看(卖点全开);notify = 只监看/通知,
- *  PermissionRequest 绝不 gating(默认,安全:tlive 物理上无法 hold 任何审批);
- *  off = 全关 kill switch。shim 按此短路(见 modeShortCircuit)。 */
-export type ShimMode = 'off' | 'notify' | 'full';
+/** tlive 姿态梯子,单调递增:每一级都做前一级做的事,再多做一点。
+ *  off = 全关 kill switch;notify = 只监看/通知,PermissionRequest 绝不 gating
+ *  (默认,安全);full = hold 主会话审批(终端框并行,先答先得);all = 子代理
+ *  审批也 hold(hold 期间子代理**没有**终端框,所以这是"没人在键盘前"的姿态)。
+ *  shim 按此短路(见 modeShortCircuit);daemon 按此决定子代理拦不拦。 */
+export type ShimMode = 'off' | 'notify' | 'full' | 'all';
 
 /** Resolve a config `mode` value to the effective posture — the single source of
  *  the `notify` default. Unset / unknown / malformed all fall back to the safe
- *  `notify` (watch + notify, never gate). Used by both the shim (readMode) and
- *  `tlive status` so the displayed posture always matches the enforced one. */
+ *  `notify` (watch + notify, never gate). Used by the shim (readMode), the
+ *  daemon (currentMode) and `tlive status`, so the displayed posture always
+ *  matches the enforced one. */
 export function effectiveMode(m: unknown): ShimMode {
-  return m === 'off' || m === 'full' ? m : 'notify';
+  return m === 'off' || m === 'full' || m === 'all' ? m : 'notify';
 }
 
 /** session-start additionalContext(CC-only,Codex hooks 已退役)。分级引导:

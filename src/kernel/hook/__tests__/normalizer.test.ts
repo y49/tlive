@@ -208,3 +208,17 @@ describe('subagent 监看事件', () => {
     expect(n.delta).toBe(1);
   });
 });
+
+describe('effectiveMode — the posture ladder', () => {
+  it('accepts all four rungs verbatim', () => {
+    expect(effectiveMode('off')).toBe('off');
+    expect(effectiveMode('notify')).toBe('notify');
+    expect(effectiveMode('full')).toBe('full');
+    expect(effectiveMode('all')).toBe('all');
+  });
+  it('unset / unknown / malformed still falls back to notify (the safe rung)', () => {
+    expect(effectiveMode(undefined)).toBe('notify');
+    expect(effectiveMode('ALL')).toBe('notify');
+    expect(effectiveMode(3)).toBe('notify');
+  });
+});
