@@ -1229,6 +1229,108 @@ describe('sub-agent pass-through tells you what is blocked', () => {
     expect((await findSession(sock, 's3'))?.pending).toBeUndefined(); // s3's own card still retires
     void heldMain; // resolved by the daemon's own shutdown() → settleAllPending
   });
+
+  // Regression: the desktop-clear condition must be ONE predicate evaluated
+  // identically everywhere — not three separate copies. A copy that forgets
+  // passthruWaiting closes a still-outstanding sub-agent toast the INSTANT
+  // something else the daemon tracks resolves, anywhere. This drives that
+  // through onResolved specifically: s1's sub-agent dialog is untouched
+  // (nothing retires it in this test) while a genuinely separate, genuinely
+  // held main-session approval on s2 gets answered via IM.
+  it("a held approval resolving on ANOTHER session must not close the toast while a sub-agent pass-through is still outstanding (onResolved)", async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const notes: Array<{ title: string; body: string }> = [];
+    const clears: number[] = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+
+    // s1: sub-agent pass-through — still outstanding for the rest of this test.
+    await request(
+      {
+        kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', agentId: 'a-77',
+        toolName: 'Bash', input: { command: 'rm -rf /tmp/scratch' }, timeoutSec: 60,
+      },
+      { socketPath: sock, timeoutMs: 5000 },
+    );
+    await until(() => { expect(notes).toHaveLength(1); });
+
+    // s2: a genuine held MAIN-session approval, answered via IM → onResolved fires.
+    const pending = request(
+      { kind: 'hook.permission.request', cwd: '/w2', sessionId: 's2', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
+      { socketPath: sock, timeoutMs: 10_000 },
+    );
+    held(pending);
+    // sent[] also carries s1's pass-through IM notice (its own "mode:all"
+    // button) — find the actual approvable card, not just sent[0].
+    await vi.waitFor(() => {
+      expect((sent as Array<{ buttons?: Array<{ id: string }> }>).some((m) => m.buttons?.some((b) => b.id.startsWith('approve:')))).toBe(true);
+    }, { timeout: 3000, interval: 10 });
+    const card = (sent as Array<{ buttons?: Array<{ id: string; label: string }> }>).find((m) => m.buttons?.some((b) => b.id.startsWith('approve:')))!;
+    adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: card.buttons!.find((b) => b.id.startsWith('approve:'))!.id, ts: 0 });
+    await pending;
+
+    // s2's own approval just resolved — s1's sub-agent dialog is still
+    // unanswered at the terminal, so the toast must NOT have closed.
+    expect(clears).toEqual([]);
+
+    // Only once s1's notice actually retires does the toast close.
+    await request(
+      { kind: 'hook.event', event: { event: 'activity', cwd: '/w', sessionId: 's1', agentId: 'a-77', toolName: 'Bash', result: {} } },
+      { socketPath: sock, timeoutMs: 2000 },
+    );
+    await until(() => { expect(clears.length).toBeGreaterThan(0); });
+  });
+
+  // Mirrors the test above for the OTHER pre-existing copy of the condition:
+  // clearLocalPrompt (the notify-mode / full-mode-defer CC-native dialog
+  // tracker) must not close the toast either, while a sub-agent pass-through
+  // elsewhere is still outstanding. mode: 'notify' is required to get a
+  // tracked local prompt at all — 'full' treats permission_prompt as
+  // redundant and never calls localPrompts.note in the first place.
+  it('clearing a local prompt on ANOTHER session must not close the toast while a sub-agent pass-through is still outstanding (clearLocalPrompt)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'notify' }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const notes: Array<{ title: string; body: string }> = [];
+    const clears: number[] = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+
+    // s1: sub-agent pass-through — still outstanding for the rest of this test.
+    await request(
+      {
+        kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', agentId: 'a-77',
+        toolName: 'Bash', input: { command: 'rm -rf /tmp/scratch' }, timeoutSec: 60,
+      },
+      { socketPath: sock, timeoutMs: 5000 },
+    );
+    await until(() => { expect(notes).toHaveLength(1); });
+
+    // s2: a notify-mode CC-native dialog (no held request), tracked…
+    await request(
+      { kind: 'hook.notify', cwd: '/w2', sessionId: 's2', level: 'info', message: 'Claude needs your permission to use Bash', permissionPrompt: true },
+      { socketPath: sock, timeoutMs: 2000 },
+    );
+    await until(() => { expect(notes.length).toBeGreaterThanOrEqual(2); });
+
+    // …then answered at the keyboard → clearLocalPrompt fires.
+    await request(
+      { kind: 'hook.event', event: { event: 'activity', cwd: '/w2', sessionId: 's2', toolName: 'Bash', result: {} } },
+      { socketPath: sock, timeoutMs: 2000 },
+    );
+    await new Promise((r) => setTimeout(r, 100));
+    // s1's sub-agent dialog is still unanswered — the toast must NOT have closed.
+    expect(clears).toEqual([]);
+
+    // Only once s1's notice actually retires does the toast close.
+    await request(
+      { kind: 'hook.event', event: { event: 'activity', cwd: '/w', sessionId: 's1', agentId: 'a-77', toolName: 'Bash', result: {} } },
+      { socketPath: sock, timeoutMs: 2000 },
+    );
+    await until(() => { expect(clears.length).toBeGreaterThan(0); });
+  });
 });
 
 // Telegram caps callback_data at 64 BYTES and rejects the ENTIRE sendMessage

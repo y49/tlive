@@ -276,7 +276,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const clearLocalPrompt = (key: string, sessionId: string | undefined, cwd: string): void => {
     if (!localPrompts.clear({ key, ...(sessionId ? { sessionId } : {}) })) return;
     if (sessions.get(key)?.pending?.local) sessions.upsert({ key, cwd, pending: null });
-    if (permissionRouter.pendingCount() === 0 && localPrompts.count() === 0) void desktop.clear();
+    if (nothingWaiting()) void desktop.clear();
   };
 
   // Same lifetime as the ask flow's *pending* window, but never consumed by an
@@ -455,6 +455,18 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
    *  a card to edit. */
   const passthruWaiting = new Set<string>(); // passthruKey(key, agentId, toolName)
 
+  /** The single "is anything at all waiting for the user" predicate behind the
+   *  desktop toast's lifetime. THREE surfaces feed it today (a held approval /
+   *  a tracked CC-native local prompt / an outstanding sub-agent pass-through)
+   *  and every one of them MUST be represented here — this used to be three
+   *  separate copies of the same condition, and the copy at two of the three
+   *  call sites silently forgot passthruWaiting, so a main-session approval
+   *  resolving (or a local prompt clearing) anywhere closed a still-waiting
+   *  sub-agent's toast. The next surface that gets its own waiting-tracker
+   *  must be added HERE, not at whichever call site happens to need it. */
+  const nothingWaiting = (): boolean =>
+    permissionRouter.pendingCount() === 0 && localPrompts.count() === 0 && passthruWaiting.size === 0;
+
   /** The sub-agent's tool ran, so its dialog was answered at the keyboard. Mark
    *  the notice so it stops reading as "still waiting", clear its read-only
    *  dashboard card, and close the desktop toast once nothing else is waiting. */
@@ -463,11 +475,13 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     passthruWaiting.delete(id);
     // Same guard as onResolved: only clear the registry's ONE pending slot if
     // THIS notice still owns it — a main-session held approval (or a
-    // different pass-through that raced in) must survive untouched.
+    // different pass-through that raced in) must survive untouched. Silent —
+    // no self-broadcast: this event's own hook.event handler broadcasts the
+    // merged view right after (mirrors clearLocalPrompt's doc comment above).
     if (sessions.get(key)?.pending?.requestId === passthruRequestId(agentId, toolName)) {
-      events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd, pending: null }) });
+      sessions.upsert({ key, cwd, pending: null });
     }
-    if (permissionRouter.pendingCount() === 0 && localPrompts.count() === 0 && passthruWaiting.size === 0) void desktop.clear();
+    if (nothingWaiting()) void desktop.clear();
     const notices = passthruNotices.get(id);
     if (!notices) return;
     passthruNotices.delete(id);
@@ -619,7 +633,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // can't pin the toast; a genuine separate local prompt for another
       // session key is untouched.
       localPrompts.clear({ key });
-      if (permissionRouter.pendingCount() === 0 && localPrompts.count() === 0) void desktop.clear();
+      if (nothingWaiting()) void desktop.clear();
       askFlow.end(requestId); askOwner.delete(requestId); // no leak — covers defer/timeout/local-answer paths that skip asksubmit:/askskip: entirely
       const isAsk = askRequestIds.delete(requestId); // true only for an AskUserQuestion card (Minor 4)
       // Only touch the session view if THIS request still owns the pending slot —
