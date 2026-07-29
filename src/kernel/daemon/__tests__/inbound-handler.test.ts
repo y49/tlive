@@ -36,6 +36,8 @@ const baseDeps = (over: Partial<InboundHandlerDeps> = {}): InboundHandlerDeps =>
     setMuted: vi.fn(),
     setTrust: vi.fn(),
     setAutoApprove: vi.fn(),
+    getMode: () => 'full',
+    setMode: vi.fn(),
     addAllowTool: vi.fn(),
     resolveReply: () => undefined,
     sessionInfo: () => undefined,
@@ -739,5 +741,40 @@ describe('handback: callback (Answer at the terminal instead)', () => {
     }));
     await h.handle(envelope({ text: 'handback:gone' }));
     expect(msgs[0].text).toBe(STALE_CARD_NOTICE);
+  });
+});
+
+describe('/mode from IM', () => {
+  it('a typed rung writes the posture and reports the transition', async () => {
+    const setMode = vi.fn();
+    const msgs: Array<{ kind: string; text?: string }> = [];
+    const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter(msgs), getMode: () => 'full', setMode }));
+    await h.handle(envelope({ text: '/mode all' }));
+    expect(setMode).toHaveBeenCalledWith('all');
+    expect(msgs[0].text).toContain('full → all');
+  });
+
+  it('the mode:<level> button goes through the same setter', async () => {
+    const setMode = vi.fn();
+    const msgs: Array<{ kind: string; text?: string }> = [];
+    const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter(msgs), getMode: () => 'notify', setMode }));
+    await h.handle(envelope({ text: 'mode:full' }));
+    expect(setMode).toHaveBeenCalledWith('full');
+  });
+
+  it('an unknown level in a callback is ignored, not applied', async () => {
+    const setMode = vi.fn();
+    const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter([]), setMode }));
+    await h.handle(envelope({ text: 'mode:root' }));
+    expect(setMode).not.toHaveBeenCalled();
+  });
+
+  it('bare /mode replies with the four rungs and marks the current one', async () => {
+    const msgs: Array<{ kind: string; body?: string; buttons?: Array<{ id: string; label: string }> }> = [];
+    const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter(msgs as Array<{ kind: string; text?: string }>), getMode: () => 'full' }));
+    await h.handle(envelope({ text: '/mode' }));
+    expect(msgs[0].kind).toBe('card');
+    expect(msgs[0].buttons?.map((b) => b.id)).toEqual(['mode:off', 'mode:notify', 'mode:full', 'mode:all']);
+    expect(msgs[0].buttons?.find((b) => b.id === 'mode:full')?.label).toMatch(/current/i);
   });
 });

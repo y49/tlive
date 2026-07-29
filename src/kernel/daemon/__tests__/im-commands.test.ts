@@ -43,3 +43,20 @@ describe('parseImCommand (mute/help/trust/safe)', () => {
     expect(parseImCommand('/desktop off')).toEqual({ kind: 'unknown', name: 'desktop' });
   });
 });
+
+describe('/mode — the posture ladder from the phone', () => {
+  it('recognizes every rung', () => {
+    expect(parseImCommand('/mode off')).toEqual({ kind: 'mode', mode: 'off' });
+    expect(parseImCommand('/mode notify')).toEqual({ kind: 'mode', mode: 'notify' });
+    expect(parseImCommand('/mode full')).toEqual({ kind: 'mode', mode: 'full' });
+    expect(parseImCommand('/mode all')).toEqual({ kind: 'mode', mode: 'all' });
+  });
+  it('bare /mode (menu tap) or a bad arg → the ladder card, not "unknown"', () => {
+    expect(parseImCommand('/mode')).toEqual({ kind: 'mode-prompt' });
+    expect(parseImCommand('/mode ALL')).toEqual({ kind: 'mode-prompt' });
+    expect(parseImCommand('/mode maybe')).toEqual({ kind: 'mode-prompt' });
+  });
+  it('strips @botname', () => {
+    expect(parseImCommand('/mode@tlive_bot all')).toEqual({ kind: 'mode', mode: 'all' });
+  });
+});

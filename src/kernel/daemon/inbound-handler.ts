@@ -10,6 +10,8 @@ import type { AskFlow, AskStep } from './ask-flow.js';
 import { parseImCommand } from './im-commands.js';
 import { STALE_CARD_NOTICE } from './bootstrap.js';
 import { SAFE_TOGGLE_MESSAGE } from '../permission/policy-engine.js';
+import { MODES, MODE_DESC } from '../config/mode.js';
+import type { ShimMode } from '../hook/normalizer.js';
 
 export interface InboundHandlerDeps {
   senderGuard: SenderGuard;
@@ -25,6 +27,10 @@ export interface InboundHandlerDeps {
   setTrust: (trusted: boolean) => void;
   /** Toggle `safe` auto-approve (auto-allow non-dangerous ops; `/safe on|off`). */
   setAutoApprove: (safe: boolean) => void;
+  /** Current posture, for cards that must not lie about which rung is on. */
+  getMode: () => ShimMode;
+  /** Persist a posture (config.json — the shim reads it on the next hook). */
+  setMode: (mode: ShimMode) => void;
   /** Grant "always allow <tool>" (in-memory). */
   addAllowTool: (tool: string) => void;
   /** AskUserQuestion progress for every pending request: the parsed batch, the
@@ -70,6 +76,15 @@ function parseSetCallback(text: string): { which: 'mute' | 'trust' | 'safe'; on:
     return { which, on: state === 'on' };
   }
   return null;
+}
+
+/** `mode:<level>` — a rung button from the ladder card (or from a sub-agent
+ *  card's one-tap posture switch). Unknown levels are ignored rather than
+ *  guessed: a posture is not something to approximate. */
+function parseModeCallback(text: string): ShimMode | null {
+  if (!text.startsWith('mode:')) return null;
+  const level = text.slice('mode:'.length);
+  return MODES.includes(level as ShimMode) ? (level as ShimMode) : null;
 }
 
 export class InboundHandler {
@@ -203,6 +218,12 @@ export class InboundHandler {
         : set.which === 'trust' ? { kind: 'trust' as const, enabled: set.on }
         : { kind: 'safe' as const, enabled: set.on };
       await this.runCommand(env, cmd);
+      return;
+    }
+
+    const mode = parseModeCallback(env.text);
+    if (mode) {
+      await this.runCommand(env, { kind: 'mode', mode });
       return;
     }
 
@@ -354,6 +375,27 @@ export class InboundHandler {
         this.deps.setAutoApprove(cmd.enabled);
         await this.reply(env, { kind: 'text', text: cmd.enabled ? SAFE_TOGGLE_MESSAGE.on : SAFE_TOGGLE_MESSAGE.off });
         return;
+      case 'mode': {
+        const prev = this.deps.getMode();
+        this.deps.setMode(cmd.mode);
+        await this.reply(env, {
+          kind: 'text',
+          text: prev === cmd.mode
+            ? `Mode unchanged — ${MODE_DESC[cmd.mode]}`
+            : `Mode: ${prev} → ${cmd.mode}\n${MODE_DESC[cmd.mode]}`,
+        });
+        return;
+      }
+      case 'mode-prompt': {
+        const cur = this.deps.getMode();
+        await this.reply(env, {
+          kind: 'card',
+          title: 'tlive · /mode',
+          body: [`Current: **${cur}**`, '', ...MODES.map((m) => `\`${m}\` — ${MODE_DESC[m].replace(`${m} — `, '')}`)].join('\n'),
+          buttons: MODES.map((m) => ({ id: `mode:${m}`, label: m === cur ? `${m} (current)` : m })),
+        });
+        return;
+      }
       case 'toggle-prompt': {
         // Bare /mute /trust /safe (a menu tap sends the command with no arg). Reply
         // with explicit on/off buttons instead of "Unknown command" — the tap is now
@@ -381,6 +423,7 @@ export class InboundHandler {
             '`/mute on|off` — mute / unmute IM notifications (on = quiet)',
             '`/trust on|off` — pause / resume approvals (auto-allow all)',
             '`/safe on|off` — auto-allow routine ops, still ask for dangerous / unknown',
+            '`/mode off|notify|full|all` — posture: how much tlive intercepts (bare `/mode` shows the ladder)',
             '`/help` — this help',
             '',
             '**Reply to a session** — quote-reply its message and your text is injected into that terminal (needs a `tlive run` wrapper). With a single active session, just send text.',
