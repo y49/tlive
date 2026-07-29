@@ -1284,3 +1284,69 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     expect(sent).toHaveLength(0);
   });
 });
+
+describe('sub-agent card affordances', () => {
+  it('on mode all, a held sub-agent card offers a way back to the terminal and a posture switch', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      mode: 'all',
+      web: { enabled: false },
+      approvals: { approvalGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [interactiveAdapter('telegram', sent)] });
+    const pending = held(request({ kind: 'hook.permission.request', cwd: '/proj', sessionId: 's1', toolName: 'Bash', input: { command: 'date' }, agentId: 'agentA' },
+      { socketPath: daemonSocketPath(tmp), timeoutMs: 4000 }));
+    await waitForSent(sent);
+
+    const card = sent[0] as Extract<OutgoingMessage, { kind: 'card' }>;
+    const ids = card.buttons!.map((b) => b.id);
+    expect(ids.some((i) => i.startsWith('handback:'))).toBe(true);
+    expect(ids).toContain('mode:full');
+
+    h.permissionRouter.cancel({ key: 's1' });
+    await pending;
+  });
+
+  it('on mode full, the sub-agent pass-through notice offers to start holding them', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      mode: 'full',
+      web: { enabled: false },
+      approvals: { approvalGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [interactiveAdapter('telegram', sent)] });
+    const r = await request({ kind: 'hook.permission.request', cwd: '/proj', sessionId: 's1', toolName: 'Read', input: { file_path: '/etc/hosts' }, agentId: 'agentA' },
+      { socketPath: daemonSocketPath(tmp), timeoutMs: 4000 });
+    expect(r.kind === 'hook.permission.result' && r.decision).toBe('defer'); // still transparent
+    await waitForSent(sent);
+
+    const notice = sent[0] as Extract<OutgoingMessage, { kind: 'card' }>;
+    expect(notice.buttons?.map((b) => b.id)).toEqual(['mode:all']);
+    // The notice must NOT offer Allow/Deny — that dialog can only be answered at
+    // the keyboard, and an affordance that cannot work is worse than none.
+    expect(notice.buttons?.some((b) => b.id.startsWith('approve:'))).toBe(false);
+  });
+
+  it('a main-session card keeps exactly its old button set', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      mode: 'full',
+      web: { enabled: false },
+      approvals: { approvalGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [interactiveAdapter('telegram', sent)] });
+    const pending = held(request({ kind: 'hook.permission.request', cwd: '/proj', sessionId: 's1', toolName: 'Bash', input: { command: 'date' } },
+      { socketPath: daemonSocketPath(tmp), timeoutMs: 4000 }));
+    await waitForSent(sent);
+
+    const card = sent[0] as Extract<OutgoingMessage, { kind: 'card' }>;
+    const ids = card.buttons!.map((b) => b.id.split(':')[0]);
+    expect(ids).toEqual(['approve', 'deny', 'allowtool', 'pause']);
+
+    h.permissionRouter.cancel({ key: 's1' });
+    await pending;
+  });
+});

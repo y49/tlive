@@ -29,6 +29,7 @@ import { connectCodexRpc } from '../codex/rpc.js';
 import { startCompanion, type Companion } from '../codex/companion.js';
 import { excerptForCard } from './excerpt.js';
 import { TURN_FINISHED_SENTINEL, effectiveMode, type ShimMode } from '../hook/normalizer.js';
+import { writeMode } from '../config/mode.js';
 
 export interface DaemonHandle {
   shutdown(): Promise<void>;
@@ -369,7 +370,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
 
   const sendToChat = async (
     target: PermChat,
-    msg: { title?: string; body?: string; text?: string; requestId?: string; toolName?: string; cwd?: string; ask?: AskContext; onSent?: (s: { channel: string; messageId: string }) => void },
+    msg: { title?: string; body?: string; text?: string; requestId?: string; toolName?: string; cwd?: string; ask?: AskContext; agentId?: string; buttons?: Array<{ id: string; label: string }>; onSent?: (s: { channel: string; messageId: string }) => void },
   ): Promise<void> => {
     const adapter = (opts.imAdapters ?? []).find((a) => a.channel === target.channel);
     if (!adapter) return;
@@ -389,7 +390,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         // multiSelect question gets checkboxes + Submit(N). A freshly sent
         // card is always at the batch's first question with nothing ticked —
         // every later repaint goes through inbound-handler's editAskCards.
-        ...(msg.requestId ? { buttons: msg.ask
+        // Explicit buttons win (the pass-through notice has no requestId yet must
+        // still carry its one-tap posture switch). Otherwise: the standard set,
+        // plus — for a HELD sub-agent, whose terminal dialog does not exist while
+        // we hold it — a way to get that dialog back and a way to stop holding
+        // sub-agents at all.
+        ...(msg.buttons ? { buttons: msg.buttons } : msg.requestId ? { buttons: msg.ask
           ? askButtons(msg.requestId, msg.ask.batch, 0, [])
           : [
               { id: `approve:${msg.requestId}`, label: 'Allow' },
@@ -400,6 +406,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               // pending request (permissionRouter.toolNameFor).
               ...(msg.toolName ? [{ id: `allowtool:${msg.requestId}`, label: `Always allow ${msg.toolName}` }] : []),
               { id: `pause:${msg.requestId}`, label: 'Pause approvals' },
+              ...(msg.agentId ? [
+                { id: `handback:${msg.requestId}`, label: 'Answer at the terminal instead' },
+                { id: 'mode:full', label: 'Stop holding sub-agents' },
+              ] : []),
             ],
         } : {}),
         ...(msg.ask && msg.requestId ? (() => {
@@ -513,6 +523,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       for (const t of configuredChats()) {
         void sendToChat(t, {
           title: `${toolName} · sub-agent`, body: notice, cwd: key,
+          // The one gap this notice cannot close: THIS dialog can only be answered
+          // at the keyboard. What it can do is stop the next one from being lost —
+          // one tap moves the posture up so the rest of this run comes to you.
+          buttons: [{ id: 'mode:all', label: 'Hold sub-agents from now on' }],
           onSent: (s) => {
             const id = passthruKey(key, agentId, toolName);
             const list = passthruNotices.get(id) ?? [];
@@ -1076,6 +1090,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     takeLatestContinueId: () => { const id = latestContinueId; latestContinueId = null; return id; },
     setMuted: (m: boolean) => runtimeSet('mute', m),
     setTrust: (t: boolean) => runtimeSet('trust', t),
+    getMode: () => currentMode(),
+    setMode: (m) => { writeMode(opts.home, m); logJson('mode.set', { mode: m }); },
     setAutoApprove: (safe: boolean) => runtimeSet('safe', safe),
     addAllowTool: (tool: string) => { policyState.allowTools?.add(tool); },
     askFlow,

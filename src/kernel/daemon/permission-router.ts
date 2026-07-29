@@ -24,7 +24,7 @@ export interface PermissionRouterDeps {
    *  (Task 10) additionally selects the checkbox/Submit(N)/Skip layout over
    *  the single-pick numbered buttons — both are opaque booleans/arrays to
    *  this vendor-neutral layer, it never inspects toolName itself. */
-  sendToChat: (target: PermChat, card: { title: string; body: string; requestId: string; toolName: string; cwd: string; ask?: AskContext }) => Promise<void>;
+  sendToChat: (target: PermChat, card: { title: string; body: string; requestId: string; toolName: string; cwd: string; ask?: AskContext; agentId?: string }) => Promise<void>;
   /** `key` — the session's registry identity (see requestPermission's `key` opt), NOT the real cwd.
    *  Mutes the IM card ONLY (desktop toast / dashboard stay live) — it no longer
    *  defers the whole approval on its own (see requestPermission). */
@@ -249,7 +249,7 @@ export class PermissionRouter {
           // exactly how an oversized Telegram callback_data (see toolNameFor)
           // went unnoticed. Still non-fatal: the local dialog is unaffected and
           // the other targets/dashboard may well have gone out.
-          void this.deps.sendToChat(t, { title, body, requestId, toolName: opts.toolName, cwd: opts.key, ...(ask ? { ask } : {}) })
+          void this.deps.sendToChat(t, { title, body, requestId, toolName: opts.toolName, cwd: opts.key, ...(ask ? { ask } : {}), ...(opts.agentId ? { agentId: opts.agentId } : {}) })
             .catch((e: unknown) => {
               this.deps.log?.('permission.card.undelivered', {
                 ...who, requestId, channel: t.channel, error: e instanceof Error ? e.message : String(e),
