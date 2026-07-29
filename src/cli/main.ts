@@ -20,8 +20,8 @@ Usage: tlive <subcommand> [args]   |   tlive --version
   mode off|notify|full|all  posture: off = do nothing; notify (default) = watch
                      + notify only, never gate approvals; full = remote
                      approval for the main session; all = also holds
-                     sub-agent approvals (no terminal dialog until answered —
-                     see README)
+                     sub-agent approvals (no terminal dialog until the window
+                     ends — see README)
   mute on|off        mute / unmute IM notifications — on = quiet (same as IM /mute)
   trust on|off       pause approvals (auto-allow ALL) / resume (IM /trust)
   safe on|off        auto-allow routine ops, still ask for dangerous (IM /safe)

@@ -161,9 +161,11 @@ export function effectiveMode(m: unknown): ShimMode {
 
 /** session-start additionalContext(CC-only,Codex hooks 已退役)。分级引导:
  *  - IM 未配置 → 先引导配 IM(优先,没 IM 谈不上远程)。
- *  - IM 已配置但 mode≠full → 提示远程审批当前是关的,引导用 `tlive mode full` 打开
- *    (默认 notify 下的"卖点在一步之外"提示,兜住手动配了 IM 却没走 setup 的缝)。
- *  - IM 已配置且 full → {}(不打扰)。 */
+ *  - IM 已配置但 mode 既非 full 也非 all(即仍在默认的 notify)→ 提示远程审批
+ *    当前是关的,引导用 `tlive mode full` 打开(默认 notify 下的"卖点在一步之外"
+ *    提示,兜住手动配了 IM 却没走 setup 的缝)。full/all 都已经是"远程审批开着",
+ *    这里绝不能建议从 all 降级到 full——那是用户离开键盘前特意选的姿态。
+ *  - IM 已配置且 full 或 all → {}(不打扰)。 */
 export function sessionStartOut(vendor: HookVendor, imConfigured: boolean, mode: ShimMode): string {
   if (vendor !== 'claude') return '{}';
   if (!imConfigured) {
@@ -174,7 +176,7 @@ export function sessionStartOut(vendor: HookVendor, imConfigured: boolean, mode:
       },
     });
   }
-  if (mode !== 'full') {
+  if (mode !== 'full' && mode !== 'all') {
     return JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'SessionStart',

@@ -234,9 +234,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // notifier itself is created enabled so a config-off start can still be
   // switched on without a restart.
   let desktopOn = cfg.approvals?.desktopNotify ?? true;
-  /** Posture, same resolution the shim uses. Only `notify` still needs the bare
-   *  "answer in the terminal" IM text (see the permissionPrompt handler). */
-  const mode = effectiveMode(cfg.mode);
   /** 姿态是 config-backed 的(shim 每个 hook 事件都重读),所以 daemon 绝不能
    *  缓存它:`tlive mode all` 或 IM 的 /mode 必须改变**下一次**审批的行为,不需要
    *  重启。此前 cfg 只在 bootstrap 读一次,子代理分支于是永远停在启动时的姿态。
@@ -926,23 +923,28 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // answerable card with the read-only one below — a wrong guess costs
             // a missed toast, never a decision.
             const heldOwnsIt = permissionRouter.hasPendingFor({ key, sessionId: req.sessionId });
-            // Posture, unlike heldOwnsIt, is exact. In `full` mode every request
-            // tlive saw was either held or handed back, and the one handed-back
-            // case that produces a dialog — a sub-agent pass-through — already
-            // pushed a notice carrying the tool and input this event lacks (see
-            // onPassthrough). So the whole chain below is redundant here, and
-            // building it anyway is what produced a card nothing could retire:
-            // retiring needs the answer, and the only signal is the sub-agent's
-            // PostToolUse, which this path must ignore because a sibling's
-            // activity must not clear the main session's reminder. Don't create
-            // it and there is nothing to retire.
-            const redundant = mode === 'full';
+            // Posture, unlike heldOwnsIt, is exact — and read LIVE (never a
+            // boot-time value): the posture is remotely settable (`tlive mode`,
+            // IM's `/mode`), so this must track the CURRENT rung, not whatever
+            // was in config.json when the daemon started. In every holding rung
+            // (`full`, `all`) every request tlive saw was either held or handed
+            // back, and the one handed-back case that produces a dialog — a
+            // sub-agent pass-through — already pushed a notice carrying the tool
+            // and input this event lacks (see onPassthrough). So the whole chain
+            // below is redundant there, and building it anyway is what produced a
+            // card nothing could retire: retiring needs the answer, and the only
+            // signal is the sub-agent's PostToolUse, which this path must ignore
+            // because a sibling's activity must not clear the main session's
+            // reminder. `notify` is the only non-holding rung reachable here
+            // (`off` short-circuits in the shim before any IPC) — there this
+            // chain is the ONLY signal a dialog is waiting, so it must run.
+            const redundant = currentMode() !== 'notify';
             // The two arms look identical from outside — one means "tlive is
             // gating this and the card owns every surface", the other means
             // "tlive is NOT gating this, the terminal is the only answer path".
             // Confusing them is exactly how a pass-through got mistaken for a
             // held approval, so the log says which.
-            logJson('permission.localPrompt', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), heldOwnsIt, action: heldOwnsIt ? 'suppressed' : redundant ? 'full-mode-passthrough' : 'tracked' });
+            logJson('permission.localPrompt', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), heldOwnsIt, action: heldOwnsIt ? 'suppressed' : redundant ? 'holding-mode-passthrough' : 'tracked' });
             if (!heldOwnsIt && !redundant) {
               localPrompts.note(key, req.sessionId);
               // Desktop first, immediately — the waiting slot (ping/clear

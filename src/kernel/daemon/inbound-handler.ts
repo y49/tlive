@@ -378,12 +378,18 @@ export class InboundHandler {
       case 'mode': {
         const prev = this.deps.getMode();
         this.deps.setMode(cmd.mode);
-        await this.reply(env, {
-          kind: 'text',
-          text: prev === cmd.mode
-            ? `Mode unchanged — ${MODE_DESC[cmd.mode]}`
-            : `Mode: ${prev} → ${cmd.mode}\n${MODE_DESC[cmd.mode]}`,
-        });
+        const text = prev === cmd.mode
+          ? `Mode unchanged — ${MODE_DESC[cmd.mode]}`
+          : `Mode: ${prev} → ${cmd.mode}\n${MODE_DESC[cmd.mode]}`;
+        // 'all → full' only changes the posture for requests from here on — the
+        // sub-agent request(s) already held under 'all' stay held, with no
+        // terminal dialog, which is the whole reason their card exists; a user
+        // tapping this button because they just got back to the keyboard would
+        // otherwise reasonably assume it hands that one back too.
+        const staleHoldNotice = prev === 'all' && cmd.mode === 'full'
+          ? ' Already-held sub-agent requests stay held — use "Answer at the terminal instead" on their card to release one.'
+          : '';
+        await this.reply(env, { kind: 'text', text: text + staleHoldNotice });
         return;
       }
       case 'mode-prompt': {
