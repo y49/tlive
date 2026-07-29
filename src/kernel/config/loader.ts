@@ -25,7 +25,7 @@ export interface PolicyConfig { autoAllow?: string[]; autoDeny?: string[]; ask?:
  *  主会话挂起期间 CC 照常并行渲染本地框(实测:每次 hold 起 6 秒必有
  *  permission_prompt,且有 by=local-terminal 的答复),它只是给"人在电脑前但
  *  没盯着这个终端"的场景一个提醒。真正没有本地框的只有被 hold 的异步子代理,
- *  见 permission-router 的 holdSubagents。
+ *  见 permission-router 的 holdSubagents 回调(由姿态 all 驱动,见 kernel/config/mode.ts)。
  *  continueWindowSec: async Stop hook 后台等续跑回复的时长(默认 1800)。
  *  continueGraceSec: turn 结束后等这么久再推续跑卡(默认 15)。
  *  approvalGraceSec: 审批卡推送前的静默期(默认 10;0=立即发)。

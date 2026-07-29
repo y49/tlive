@@ -28,7 +28,7 @@ import { ensureCodexAppServer, codexAppServerSockPath } from '../codex/spawn.js'
 import { connectCodexRpc } from '../codex/rpc.js';
 import { startCompanion, type Companion } from '../codex/companion.js';
 import { excerptForCard } from './excerpt.js';
-import { TURN_FINISHED_SENTINEL, effectiveMode } from '../hook/normalizer.js';
+import { TURN_FINISHED_SENTINEL, effectiveMode, type ShimMode } from '../hook/normalizer.js';
 
 export interface DaemonHandle {
   shutdown(): Promise<void>;
@@ -236,6 +236,13 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   /** Posture, same resolution the shim uses. Only `notify` still needs the bare
    *  "answer in the terminal" IM text (see the permissionPrompt handler). */
   const mode = effectiveMode(cfg.mode);
+  /** 姿态是 config-backed 的(shim 每个 hook 事件都重读),所以 daemon 绝不能
+   *  缓存它:`tlive mode all` 或 IM 的 /mode 必须改变**下一次**审批的行为,不需要
+   *  重启。此前 cfg 只在 bootstrap 读一次,子代理分支于是永远停在启动时的姿态。
+   *  读不了配置(被删/正被写坏)时回落启动值,而不是静默改姿态。 */
+  const currentMode = (): ShimMode => {
+    try { return effectiveMode(loadConfig(opts.home).mode); } catch { return effectiveMode(cfg.mode); }
+  };
   const desktop = opts.desktopNotifier ?? createDesktopNotifier({
     action: {
       label: 'Open dashboard',
@@ -475,9 +482,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       return renderApprovalCard({ toolName: req.toolName, input: req.input });
     },
     graceSec: () => Math.max(cfg.approvals?.approvalGraceSec ?? 10, 0),
-    // Sub-agents pass through by default (tlive transparent — no tlive-introduced
-    // block); opt in to hold + remote-answer sub-agent approvals. See permission-router.
-    holdSubagents: () => cfg.approvals?.holdSubagents ?? false,
+    // Sub-agents pass through on 'full' (tlive transparent — no tlive-introduced
+    // block); the 'all' rung opts into holding + remotely answering them, at the
+    // cost of their terminal dialog. See permission-router's holdSubagents doc.
+    holdSubagents: () => currentMode() === 'all',
     // Opt-in: on a held approval's timeout, deny (→ turn ends → continue card can
     // redirect) instead of the default defer (→ CC-native local fallback).
     timeoutAction: () => cfg.approvals?.timeoutAction ?? 'defer',
