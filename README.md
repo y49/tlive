@@ -77,21 +77,29 @@ continue" line makes the distinction moot for what you actually do.
 
 ## What's in the box
 
-- **Posture — `notify` (default) / `full` / `off`.** One coarse switch that
-  sits above every fine toggle. **`notify`** (default) watches and notifies
-  but the shim can never hold or block an approval — every prompt stays 100%
-  native (your local terminal dialog, or CC's own auto-deny when headless);
-  when a prompt is waiting at the terminal you still get told (desktop toast,
-  read-only dashboard card, graced IM text — pointers back to the terminal,
-  never a decision).
-  **`full`** turns on remote approval: tlive holds each tool call so you can
-  answer it from IM / desktop / dashboard (everything the *Approvals* bullet
-  below describes). **`off`** makes every hook a no-op (kill switch — no
-  gating, notifications, monitoring, or daemon autostart). Flip it live with
-  `tlive mode off|notify|full`; the shim re-reads config on the next hook, so
-  no restart or new session is needed, and `tlive status` shows the effective
-  mode. Remote approval is opt-in by design — a freshly-installed tool must
-  never be able to silently hang a workflow.
+- **Posture — `off` / `notify` (default) / `full` / `all`.** One coarse
+  switch that sits above every fine toggle, in escalation order (how much
+  tlive intercepts). **`off`** makes every hook a no-op (kill switch — no
+  gating, notifications, monitoring, or daemon autostart). **`notify`**
+  (default) watches and notifies but the shim can never hold or block an
+  approval — every prompt stays 100% native (your local terminal dialog, or
+  CC's own auto-deny when headless); when a prompt is waiting at the terminal
+  you still get told (desktop toast, read-only dashboard card, graced IM
+  text — pointers back to the terminal, never a decision). **`full`** turns
+  on remote approval for the main session: tlive holds each tool call so you
+  can answer it from IM / desktop / dashboard (everything the *Approvals*
+  bullet below describes), in parallel with the terminal dialog — first
+  answer wins. Sub-agent prompts still pass through to the terminal.
+  **`all`** holds sub-agent approvals too — the trade is that **a held
+  sub-agent has no terminal dialog until the window ends**, because Claude
+  Code awaits the hook before deciding whether to build one; use it only when
+  nobody is at the keyboard, and `tlive mode full` goes back. Flip postures
+  live with `tlive mode off|notify|full|all` (or `/mode` from IM — a bare
+  `/mode` replies with a card listing the ladder and marking the current
+  rung); the shim re-reads config on the next hook, so no restart or new
+  session is needed, and `tlive status` shows the effective mode. Remote
+  approval is opt-in by design — a freshly-installed tool must never be able
+  to silently hang a workflow.
 - **Approvals** *(remote approval — `mode: full`)* — a tool call that needs
   approval is held so you can answer it from IM buttons or the web card:
   - **Parallel, first-answer-wins** — on Claude Code the `PermissionRequest`
@@ -112,12 +120,14 @@ continue" line makes the distinction moot for what you actually do.
   - **Power toggles** — **"Always allow \<tool\>"** grants a per-tool pass
     (in-memory, cleared on restart; on Claude Code it answers the native dialog
     for you remotely); `/trust on|off` pauses approvals entirely.
-  - **Sub-agents pass through by default** — tlive returns `{}` and lets CC
-    handle a backgrounded/async sub-agent natively, so its terminal dialog still
-    appears exactly as it would without tlive. Holding one instead would remove
-    that dialog (CC resolves an async agent's hook *before* it builds the box),
-    leaving remote as the only answer path — that is what
-    `approvals.holdSubagents: true` opts into.
+  - **Sub-agents pass through by default** — on `full`, tlive returns `{}` and
+    lets CC handle a backgrounded/async sub-agent natively, so its terminal
+    dialog still appears exactly as it would without tlive. **`tlive mode
+    all`** holds sub-agent approvals too, but the trade is real: CC resolves
+    an async agent's hook *before* it decides whether to build a dialog, so a
+    held sub-agent has **no** terminal box until the window ends — remote
+    becomes the only answer path. Worth it only when nobody is at the
+    keyboard; `tlive mode full` goes back.
 - **Answer `AskUserQuestion` from IM or the dashboard (Claude Code only)** —
   CC fires a `PermissionRequest` for its own question tool; tlive relays it as
   a single-select or multi-select card (checkboxes, a live `Submit (N)` count,
@@ -289,7 +299,7 @@ tlive status           health, effective mode, web URLs + QR, config paths
 tlive logs [-f]        tail the daemon log
 tlive run <cmd> …      wrap a process: local terminal + web terminal
 tlive url              print the dashboard URL + QR (when a full-screen app hid the run banner)
-tlive mode off|notify|full   set posture (see "What's in the box"); takes effect on the next hook
+tlive mode off|notify|full|all   set posture (see "What's in the box"); takes effect on the next hook
 tlive hook <event>     hook shim (called by Claude Code, not by you;
                         Codex has no hooks — see the app-server companion)
 ```
@@ -300,9 +310,10 @@ frozen surface (locked by `tests/contract/`); `mode` and the runtime toggles
 
 IM commands: `/mute on|off` (silence IM notifications), `/trust on|off` (pause
 approvals — auto-allow everything), `/safe on|off` (auto-allow routine ops),
-`/help`. Tapping a bare command from the client's command menu replies with
-on/off buttons instead of an error. Quote-reply any session message to type
-into that session.
+`/mode off|notify|full|all` (set posture; a bare `/mode` replies with the
+ladder), `/help`. Tapping a bare command from the client's command menu
+replies with on/off buttons instead of an error. Quote-reply any session
+message to type into that session.
 
 ## Config (`~/.tlive/config.json`)
 
@@ -311,8 +322,10 @@ into that session.
 
 ```jsonc
 {
-  // posture: "off" | "notify" (default) | "full" (remote approval on).
-  // Also set live with `tlive mode …`; unset/unknown falls back to notify.
+  // posture: "off" | "notify" (default) | "full" | "all" (remote approval;
+  // "all" also holds sub-agent prompts — see "What's in the box"). Also set
+  // live with `tlive mode …` or `/mode` from IM; unset/unknown falls back to
+  // notify.
   "mode": "notify",
   "adapters": {
     "telegram": { "token": "…", "chatIdAllowList": ["123"] },
@@ -353,14 +366,6 @@ into that session.
     // /safe on|off. Never crosses the danger floor — only /trust on auto-allows
     // dangerous ops.
     // "autoApprove": "readonly",
-    // hold a backgrounded/async sub-agent's approval for a remote answer too.
-    // Default false, and changing it COSTS YOU THE TERMINAL: for an async agent
-    // CC waits for the hook's decision *before* building the dialog, so a held
-    // sub-agent request has no local box to fall back on — IM/dashboard becomes
-    // the only way to answer it, and an unanswered one waits out the whole
-    // window. Sub-agents have run in the background by default since Claude Code
-    // 2.1.198, so this applies to most of them. Only relevant in mode: full.
-    "holdSubagents": false,
     // what a HELD approval does when its window times out with nobody
     // answering: "defer" (default) → pass-through {} (CC-native fallback);
     // "deny" → deny with a "timed out" message so the turn can end and the

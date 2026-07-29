@@ -156,6 +156,7 @@ export class TelegramAdapter implements IMAdapter {
       { command: 'mute', description: 'on|off — mute IM notifications (on = quiet); desktop is separate' },
       { command: 'trust', description: 'on|off — pause approvals (auto-allow all) / resume' },
       { command: 'safe', description: 'on|off — auto-allow routine ops, still ask for dangerous' },
+      { command: 'mode', description: 'off|notify|full|all — how much tlive intercepts' },
       { command: 'help', description: 'help and command list' },
     ]).catch(() => undefined);
     // Use grammy's polling but tie to our abort controller via custom client.

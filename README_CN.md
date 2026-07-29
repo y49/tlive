@@ -68,16 +68,21 @@ IM 消息带 `label · ` 前缀(会话目录名),但不再用图标区分包装/
 
 ## 功能一览
 
-- **姿态 —— `notify`(默认)/ `full` / `off`。** 一个坐在所有细旋钮之上的
-  粗开关。**`notify`**(默认)只监看 + 通知,但 shim 物理上无法 hold 或
-  阻塞任何审批——每个提示都保持 100% 原生(你本地终端的对话框,或无头时
-  CC 自己的 auto-deny);提示在终端等你时仍会提醒(桌面通知、dashboard
-  只读卡、grace 后的 IM 文本——只是指回终端的路标,绝不代答)。
-  **`full`** 开启远程审批:tlive hold 住每个工具调用,
-  让你在 IM / 桌面 / dashboard 上作答(即下方*审批*那条描述的一切)。
-  **`off`** 让每个 hook 都成 no-op(kill switch——不 gating、不通知、不监看、
-  不懒启动 daemon)。用 `tlive mode off|notify|full` 实时切换;shim 每个 hook
-  都重读 config,无需重启也无需新会话,`tlive status` 会显示当前生效的 mode。
+- **姿态 —— `off` / `notify`(默认)/ `full` / `all`。** 一个坐在所有细旋钮
+  之上的粗开关,按"tlive 拦多少"升序排列。**`off`** 让每个 hook 都成
+  no-op(kill switch——不 gating、不通知、不监看、不懒启动 daemon)。
+  **`notify`**(默认)只监看 + 通知,但 shim 物理上无法 hold 或阻塞任何
+  审批——每个提示都保持 100% 原生(你本地终端的对话框,或无头时 CC 自己的
+  auto-deny);提示在终端等你时仍会提醒(桌面通知、dashboard 只读卡、grace
+  后的 IM 文本——只是指回终端的路标,绝不代答)。**`full`** 为主会话开启
+  远程审批:tlive hold 住每个工具调用,让你在 IM / 桌面 / dashboard 上作答
+  (即下方*审批*那条描述的一切),与本地终端对话框并行竞速——先答先得;
+  子代理的提示仍照常透传给终端。**`all`** 连子代理审批也一并 hold 住——
+  代价是**被 hold 的子代理在窗口结束前没有终端框**,因为 Claude Code 会先
+  等 hook 决定要不要建框——只在没人守着键盘时才划算,`tlive mode full`
+  可以切回去。用 `tlive mode off|notify|full|all` 实时切换姿态(或在 IM 里
+  发 `/mode`——裸发也会回一张列出梯子并标出当前档的卡);shim 每个 hook 都
+  重读 config,无需重启也无需新会话,`tlive status` 会显示当前生效的 mode。
   远程审批设计成 opt-in——刚装好的工具绝不该能悄悄挂起你的工作流。
 - **审批** *(远程审批 —— `mode: full`)* —— 需要审批的工具调用会被 hold 住,
   让你从 IM 按钮或 web 卡作答:
@@ -94,10 +99,12 @@ IM 消息带 `label · ` 前缀(会话目录名),但不再用图标区分包装/
     expandable 折叠——用较新 Telegram 客户端渲染最佳。
   - **高危开关** —— **"总是允许 \<工具\>"** 按工具放行(内存态、重启清零;
     Claude Code 上远程替你点掉原生对话);`/trust on|off` 整体暂停审批。
-  - **子代理默认透传** —— tlive 返回 `{}` 交给 CC 原生处理,所以它的终端框和
-    没装 tlive 时完全一样地弹出。反过来 hold 住它就会抹掉那个框(对异步 agent,
-    CC 会在建框之前先解析 hook),只剩远程一条答复路径 ——
-    `approvals.holdSubagents: true` 就是选择这个代价。
+  - **子代理默认透传** —— 在 `full` 下,tlive 返回 `{}` 交给 CC 原生处理,
+    所以它的终端框和没装 tlive 时完全一样地弹出。**`tlive mode all`** 连
+    子代理审批也一并 hold 住,但代价是真实的:对异步 agent,CC 会在决定
+    要不要建框之前先解析 hook,所以被 hold 的子代理在窗口结束前**没有**
+    终端框——远程成了唯一答复路径。只有没人守着键盘时才划算,
+    `tlive mode full` 可以切回去。
 - **远程回答 `AskUserQuestion`(仅 Claude Code)** —— CC 为自己的提问工具
   fire `PermissionRequest`;tlive 把它转成单选或多选卡(复选框、实时
   `Submit (N)` 计数、`Skip`)而非 Allow/Deny,IM 和 dashboard 会话卡都能答。
@@ -238,7 +245,7 @@ tlive status           健康态、当前生效 mode、web 地址 + 二维码、
 tlive logs [-f]        看 daemon 日志
 tlive run <cmd> …      包装进程:本地终端 + web 终端
 tlive url              打印 dashboard 地址 + 二维码(全屏应用盖住 run banner 时用)
-tlive mode off|notify|full   设置姿态(见"功能一览");下一个 hook 即生效
+tlive mode off|notify|full|all   设置姿态(见"功能一览");下一个 hook 即生效
 tlive hook <event>     hook shim(Claude Code 调用,不是给你用的;
                         Codex 没有 hook——见 app-server companion)
 ```
@@ -248,9 +255,10 @@ tlive hook <event>     hook shim(Claude Code 调用,不是给你用的;
 (`on|off`)、`desktop`(`on|off`)是加法命令。
 
 IM 命令:`/mute on|off`(静音 IM 通知)、`/trust on|off`(暂停审批——全部
-自动放行)、`/safe on|off`(自动放行日常操作)、`/help`。在客户端命令菜单里
-点一下裸命令,会回一组 on/off 按钮而不是报错。引用任意会话消息回复 =
-打字进那个会话。
+自动放行)、`/safe on|off`(自动放行日常操作)、`/mode off|notify|full|all`
+(设置姿态;裸发 `/mode` 会回梯子卡)、`/help`。在客户端命令菜单里点一下裸
+命令,会回一组 on/off 按钮而不是报错。引用任意会话消息回复 = 打字进那个
+会话。
 
 ## 配置(`~/.tlive/config.json`)
 
@@ -259,8 +267,9 @@ IM 命令:`/mute on|off`(静音 IM 通知)、`/trust on|off`(暂停审批——�
 
 ```jsonc
 {
-  // 姿态:"off" | "notify"(默认)| "full"(开远程审批)。
-  // 也可用 `tlive mode …` 实时设置;未设 / 未知值都回落 notify。
+  // 姿态:"off" | "notify"(默认)| "full" | "all"(远程审批,"all" 连子代理
+  // 提示也一并 hold 住——见"功能一览")。也可用 `tlive mode …` 或 IM 里的
+  // `/mode` 实时设置;未设 / 未知值都回落 notify。
   "mode": "notify",
   "adapters": {
     "telegram": { "token": "…", "chatIdAllowList": ["123"] },
@@ -294,12 +303,6 @@ IM 命令:`/mute on|off`(静音 IM 通知)、`/trust on|off`(暂停审批——�
     // 用于自主/agent 驱动场景减少卡量。可用 /safe on|off 实时切换。
     // 绝不越过危险地板——只有 /trust on 才会自动放行危险操作。
     // "autoApprove": "readonly",
-    // 是否连后台/异步子代理的审批也 hold 住等远程作答。默认 false,
-    // **改成 true 会让你失去终端**:对异步 agent,CC 会在建框之前先等 hook 的
-    // 决定,所以被 hold 的子代理请求没有本地框可兜底 —— IM/dashboard 成为唯一
-    // 答复路径,没人应答就会耗掉整个窗口。自 Claude Code 2.1.198 起子代理默认
-    // 后台运行,所以这适用于绝大多数子代理。仅在 mode: full 下有意义。
-    "holdSubagents": false,
     // 一个被 hold 的审批在窗口超时、无人应答时怎么办:
     //  "defer"(默认)→ 透传 {}(回落 CC 原生);
     //  "deny"        → 带一句"已超时"的拒绝,好让 turn 结束、续跑卡改道 agent。

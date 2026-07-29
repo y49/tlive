@@ -17,8 +17,11 @@ Usage: tlive <subcommand> [args]   |   tlive --version
   run <cmd> [args]   wrap a process: local terminal + web terminal
   url                print the web dashboard URL + a QR code (for scanning)
   hook [--codex] <event>  hook shim (invoked by Claude/Codex hooks; --codex = Codex decision wire)
-  mode off|notify|full  posture: notify (default) = watch + notify, never gate approvals;
-                     full = remote approval on; off = do nothing
+  mode off|notify|full|all  posture: off = do nothing; notify (default) = watch
+                     + notify only, never gate approvals; full = remote
+                     approval for the main session; all = also holds
+                     sub-agent approvals (no terminal dialog until answered —
+                     see README)
   mute on|off        mute / unmute IM notifications — on = quiet (same as IM /mute)
   trust on|off       pause approvals (auto-allow ALL) / resume (IM /trust)
   safe on|off        auto-allow routine ops, still ask for dangerous (IM /safe)

@@ -5,10 +5,10 @@
 > `tests/contract/` 锁定。改动任一接口 = breaking change = bump major。
 >
 > **默认姿态 `notify`**:只监看 / 通知,shim 把每个 `PermissionRequest` 短路成
-> `{}`,tlive 物理上不 hold 任何审批。下文"审批"一节描述的 gating 只在
-> **`mode: full`**(远程审批 opt-in)下发生;`mode: off` 则每个 hook 都 no-op。
-> mode 语义见 `README.md`,由 `normalizer.ts` 的 `effectiveMode`
-> 单点决定(notify 默认)。
+> `{}`,tlive 物理上不 hold 任何审批。下文"审批"一节描述的 gating 在
+> **`mode: full`**(远程审批 opt-in)及 **`mode: all`**(连子代理也 hold 住)
+> 下发生;`mode: off` 则每个 hook 都 no-op。mode 语义见 `README.md`,由
+> `normalizer.ts` 的 `effectiveMode` 单点决定(notify 默认)。
 >
 > v1.0 的 SDK-driver 冻结面(`RuntimeAdapter` / MCP 三工具等)已在 v2 移除——
 > tlive 不再驱动/拥有会话。
@@ -98,11 +98,12 @@ continueDecisionOut(reply: string | null): object   // reply → {decision:'bloc
 Claude 的原始 hook JSON 在这里归一。加一个新 AI runtime = 把它的 hook 事件
 映射进这套归一模型(hook 式集成)或走 companion 式集成(见下),kernel 不变。
 
-**审批(Claude Code)**(下述 gating 仅 `mode: full`;默认 `notify` 下 shim
-把 `PermissionRequest` 短路成 `{}`,以下一律不发生)。**带 `agent_id` 的
-子代理请求默认透传**(→`{}`,交 CC 原生;被 hold 的子代理没有并行本地框可
-兜底)——opt-in `approvals.holdSubagents:true` 才 hold 住等远程答;`safe`/
-`trust` 的自动放行在此闸之前,不受影响。gating 走 `PermissionRequest` hook
+**审批(Claude Code)**(下述主会话 gating 在 `mode: full`/`all` 下发生;
+默认 `notify` 下 shim 把 `PermissionRequest` 短路成 `{}`,以下一律不发生)。
+**带 `agent_id` 的子代理请求默认透传**(→`{}`,交 CC 原生;被 hold 的子代理
+没有并行本地框可兜底)——只有 `mode: all` 才 hold 住等远程答(第四档,取代
+已删除的 `approvals.holdSubagents`);`safe`/`trust` 的自动放行在此闸之前,
+不受影响。gating 走 `PermissionRequest` hook
 ——它与本地权限对话**并行**(先答先得),窗口默认顶格(`approvals.windowSec`,默认 86200s
 ≈24h,clamp 60~86200,**两家共用**;hooks.json `timeout: 86400`,shim
 IPC=窗+100s,daemon clamp 24h。超时 ≠ 拒绝——本地框永不超时仍在等,短窗口
@@ -261,7 +262,7 @@ File: `src/kernel/contracts/cli-surface.ts`
 
 ```
 核心 8:      setup, start, stop, status, logs, run, url, hook
-加法命令:    mode (off|notify|full 姿态,持久化到 config)
+加法命令:    mode (off|notify|full|all 姿态,持久化到 config)
              mute, trust, safe, desktop (on|off 运行时开关,与 IM 命令同一 setter)
 ```
 
