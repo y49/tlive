@@ -491,6 +491,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       void adapter.edit(n.messageId, {
         kind: 'card',
         title: `${toolName} · sub-agent · ran at the terminal`,
+        // n.body is the BASE body only (onPassthrough stores it without the
+        // "waiting" suffix) — the title now says the tool ran, so the body
+        // must not still claim it's waiting (cards must not lie). The tool
+        // name/input in the base body is kept, not dropped, so you can still
+        // see what ran.
         body: n.body,
       }).catch(() => undefined);
     }
@@ -571,6 +576,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // IM card stays mute-gated (/mute is IM-only) — the desktop toast and
       // dashboard card above must fire regardless of it.
       if (!(muted || sessions.get(key)?.muted)) {
+        // The waiting sentence is appended only to THIS live notice — the
+        // suffix is not stored below. retirePassthruNotice's edit reuses the
+        // stored base `body`, so once the title says the tool ran, the body
+        // does not keep contradicting it by still saying "waiting" (cards
+        // must not lie). The base body itself (tool + input) is kept, not
+        // dropped, so the retired card still shows what ran.
         const notice = `${body}\n\n_Waiting at the terminal — a sub-agent's prompt can only be answered there._`;
         for (const t of configuredChats()) {
           void sendToChat(t, {
@@ -582,7 +593,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             onSent: (s) => {
               const id = passthruKey(key, agentId, toolName);
               const list = passthruNotices.get(id) ?? [];
-              list.push({ channel: s.channel, messageId: s.messageId, body: notice });
+              list.push({ channel: s.channel, messageId: s.messageId, body }); // base body — no "waiting" suffix
               passthruNotices.set(id, list);
             },
           })

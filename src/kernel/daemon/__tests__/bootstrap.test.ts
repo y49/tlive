@@ -1099,6 +1099,43 @@ describe('sub-agent pass-through tells you what is blocked', () => {
     expect(JSON.stringify(edits[0].msg)).toMatch(/ran at the terminal/i);
   });
 
+  // Cards must not lie: the title says the tool RAN, so the body must not
+  // still say it is WAITING to be answered (real Telegram screenshot — the
+  // retirement edit used to reuse the exact same body text, waiting sentence
+  // included). The tool/input content must survive the edit though — that's
+  // the whole point of keeping the body at all, so you can look back and see
+  // what ran.
+  it('the retirement edit body does not still say "waiting" once the title says the tool ran', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const sent: OutgoingMessage[] = [];
+    const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
+    const adapter = interactiveAdapter('telegram', sent, edits);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const sock = daemonSocketPath(tmp);
+
+    await request(
+      {
+        kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', agentId: 'a-77',
+        toolName: 'Bash', input: { command: 'rm -rf /tmp/scratch' }, timeoutSec: 60,
+      },
+      { socketPath: sock, timeoutMs: 5000 },
+    );
+    await waitForSent(sent);
+
+    await request(
+      { kind: 'hook.event', event: { event: 'activity', cwd: '/w', sessionId: 's1', agentId: 'a-77', toolName: 'Bash', result: {} } },
+      { socketPath: sock, timeoutMs: 2000 },
+    );
+    await until(() => { expect(edits.length).toBeGreaterThanOrEqual(1); });
+
+    const card = edits[0].msg as { title?: string; body?: string };
+    expect(card.title).toContain('Bash'); // "<tool> · sub-agent · ran at the terminal"
+    expect(card.title).toContain('ran at the terminal');
+    expect(card.body).not.toContain('Waiting at the terminal');
+    // the tool content survives the edit — that's the point of keeping body at all.
+    expect(card.body).toContain('rm -rf /tmp/scratch');
+  });
+
   it('leaves the notice alone when a DIFFERENT sub-agent runs the same tool', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
     const sent: OutgoingMessage[] = [];
