@@ -7,6 +7,7 @@ import { request, daemonSocketPath } from '../../ipc/client';
 import type { IMAdapter, IMChannel, OutgoingMessage, IncomingEnvelope } from '../../contracts/im-adapter';
 import { SessionRegistry } from '../../web/session-registry';
 import { until } from '../../__tests__/wait.js';
+import { writeMode } from '../../config/mode.js';
 
 // #45 — robustness helpers for this file's "held request" pattern
 // (const pending = request(...); …asserts…; await pending). On a slow/jittery
@@ -1193,6 +1194,54 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     expect(sent).toHaveLength(0);
   });
 
+  // Mirrors the 'full mode' test above for the top rung: 'all' is ALSO a
+  // holding posture (every request tlive saw was held or handed back), so it
+  // must behave identically. Before the fix, `redundant` was computed from
+  // `mode === 'full'` alone, so 'all' fell through as `redundant = false` and
+  // built the chain anyway in a posture where it must not run (see the
+  // comment above `redundant` in bootstrap.ts).
+  it('all mode: a permission_prompt with nothing held ALSO creates no card, toast or IM text', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'all' }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+
+    await new Promise((r) => setTimeout(r, 80));
+    expect(notes).toEqual([]);
+    expect((await findSession(sock, 's1'))?.pending ?? null).toBeNull();
+    expect(sent).toHaveLength(0);
+  });
+
+  // The regression this describe block exists to guard against: the posture is
+  // remotely settable (`tlive mode`, IM's `/mode`) and must never be cached at
+  // boot. Boot in `full`, then flip to `notify` — exactly "tap `notify` on the
+  // ladder card while a boot-time-`full` daemon is still running" — and this
+  // chain must run per the CURRENT posture, not the boot one. The old
+  // `const mode = effectiveMode(cfg.mode)` (read once at boot) would have left
+  // `redundant` stuck `true` here, silently re-opening issue #49.
+  it('a posture change made AFTER boot changes whether this chain runs — not the boot-time posture', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'full' }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+
+    writeMode(tmp, 'notify');
+
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+
+    // Now on 'notify' — the chain must run: it is the only signal a dialog is waiting.
+    expect(notes).toHaveLength(1);
+    expect((await findSession(sock, 's1'))?.pending?.local).toBe(true);
+    await waitForSent(sent);
+    expect((sent[0] as { text: string }).text).toContain('answer in the terminal');
+  });
+
   it('notify mode still sends the IM text — there it is the only signal a dialog is waiting', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'notify' }));
     const sent: OutgoingMessage[] = [];
@@ -1282,6 +1331,51 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     expect((await findSession(sock, 's1'))?.pending?.local).toBe(true);
     await new Promise((r) => setTimeout(r, 80));
     expect(sent).toHaveLength(0);
+  });
+});
+
+// bootstrap.ts's IPC layer maps BOTH 'local' and 'handback' to the wire
+// decision 'defer' (permission-router.ts keeps them as distinct Decision
+// values only so the settled card can tell them apart — see OUTCOME). Today
+// only a type error would catch that mapping line being removed, and at
+// runtime the shim would silently receive a `decision` it does not
+// understand. Assert the wire AND the settlement label directly.
+describe('handback (Answer at the terminal instead)', () => {
+  it('maps to defer on the wire, and settles the card as "Handed back to the terminal" — not "Timed out"', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      mode: 'all',
+      web: { enabled: false },
+      approvals: { approvalGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
+    const adapter = interactiveAdapter('telegram', sent, edits);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const sock = daemonSocketPath(tmp);
+
+    const pending = held(request(
+      { kind: 'hook.permission.request', cwd: '/proj', sessionId: 's1', agentId: 'agentA', toolName: 'Bash', input: { command: 'date' }, timeoutSec: 60 },
+      { socketPath: sock, timeoutMs: 10_000 },
+    ));
+    await waitForSent(sent);
+
+    const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+    const handbackBtn = card.buttons!.find((b) => b.id.startsWith('handback:'))!;
+    adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: handbackBtn.id, ts: 0 });
+
+    // The wire: CC must see a plain pass-through, exactly like a timeout/local
+    // answer — never a decision it doesn't recognize, never an auto-allow.
+    const r = await pending;
+    expect(r).toEqual({ kind: 'hook.permission.result', decision: 'defer' });
+
+    // The card: the distinct label is the entire justification for 'handback'
+    // existing as its own Decision instead of just reusing 'defer' (whose
+    // settlement label is "Timed out" — a lie here, nobody waited it out).
+    expect(edits).toHaveLength(1);
+    const edited = edits[0].msg as { title?: string };
+    expect(edited.title).toContain('Handed back to the terminal');
+    expect(edited.title).not.toContain('Timed out');
   });
 });
 

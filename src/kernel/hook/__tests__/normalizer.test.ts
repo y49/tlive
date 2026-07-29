@@ -178,6 +178,9 @@ describe('sessionStartOut(欢迎提示)', () => {
     expect(o.hookSpecificOutput.additionalContext).toContain('帮我配置 tlive');
   });
   it('claude + 已配置 + full → {}', () => expect(sessionStartOut('claude', true, 'full')).toBe('{}'));
+  it('claude + 已配置 + all → {}(all 也是"远程审批开着",不是该被提醒"关了"的状态)', () => {
+    expect(sessionStartOut('claude', true, 'all')).toBe('{}');
+  });
   it('claude + 已配置 + notify → 提示远程审批是关的(引导 tlive mode full)', () => {
     const o = JSON.parse(sessionStartOut('claude', true, 'notify'));
     expect(o.hookSpecificOutput.hookEventName).toBe('SessionStart');

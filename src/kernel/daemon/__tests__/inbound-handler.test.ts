@@ -124,6 +124,7 @@ describe('InboundHandler', () => {
     expect(card.body).toContain('`/mute on|off`');
     expect(card.body).toContain('`/trust on|off`');
     expect(card.body).toContain('`/safe on|off`');
+    expect(card.body).toContain('/mode');
     expect(card.body).not.toContain('/desktop'); // machine-local, dropped from IM
   });
 
@@ -763,6 +764,27 @@ describe('/mode from IM', () => {
     const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter(msgs), getMode: () => 'notify', setMode }));
     await h.handle(envelope({ text: 'mode:full' }));
     expect(setMode).toHaveBeenCalledWith('full');
+  });
+
+  it('all → full via the sub-agent card button warns that already-held sub-agent requests stay held', async () => {
+    // The button lives on a HELD sub-agent card (bootstrap.ts: `mode:full`,
+    // 'Stop holding sub-agents'). It only changes the posture for requests from
+    // here on — the one in hand stays held with no terminal dialog, which is
+    // why the card exists at all. Silence here reads as "and give me this one
+    // back too", which is false.
+    const setMode = vi.fn();
+    const msgs: Array<{ kind: string; text?: string }> = [];
+    const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter(msgs), getMode: () => 'all', setMode }));
+    await h.handle(envelope({ text: 'mode:full' }));
+    expect(msgs[0].text).toContain('stay held');
+    expect(msgs[0].text).toContain('Answer at the terminal instead');
+  });
+
+  it('a same-rung tap and every OTHER transition carry no stale-hold notice', async () => {
+    const msgs: Array<{ kind: string; text?: string }> = [];
+    const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter(msgs), getMode: () => 'notify' }));
+    await h.handle(envelope({ text: 'mode:full' })); // notify → full, not all → full
+    expect(msgs[0].text).not.toContain('stay held');
   });
 
   it('an unknown level in a callback is ignored, not applied', async () => {
