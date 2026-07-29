@@ -8,10 +8,13 @@ import type { AskBatch } from '../permission/ask-renderer.js';
 export interface AskContext { batch: AskBatch; input: unknown }
 
 /** 'local' = 用户在本地终端答的;IPC 层映射成 'defer'(shim 输出 pass-through {})—— 绝不 auto-allow。
+ *  'handback' = 用户在卡上点了 "Answer at the terminal instead":同样映射成
+ *           'defer',让 CC 当场把框建到终端里。与 'defer' 分开只为一件事——
+ *           卡不能撒谎:超时是 "Timed out",这个是 "Handed back to the terminal"。
  *  'gone'  = 调用方(shim)在等待中异常死亡(会话被 Ctrl+C / 终端关闭)。终态,
  *           **不产生任何 wire 输出**(shim 已死,本就送不出去),仅用于把卡
  *           改写成 "Session ended" —— 卡必须说真话。 */
-export type Decision = 'allow' | 'deny' | 'defer' | 'local' | 'gone';
+export type Decision = 'allow' | 'deny' | 'defer' | 'local' | 'gone' | 'handback';
 export interface PermChat { channel: string; chatId: string }
 
 export interface PermissionRouterDeps {
@@ -78,7 +81,8 @@ export interface PermissionRouterDeps {
    *  无头 auto-deny)。理由:被后台化的子 agent 在同步 hook 被 hold 期间**没有**
    *  并行本地框(只有主会话有,先答先得 —— 真机实测),所以 hold 一个子 agent 会
    *  引入一个 CC 自己根本不会有的阻塞,且超时前没有本地兜底。tlive 因此默认对
-   *  子 agent 完全透明;想手机远程批子 agent 的人 opt-in 打开(approvals.holdSubagents)。
+   *  子 agent 完全透明;想手机远程批子 agent 的人切到顶档 posture(`mode: all`,
+   *  见 src/kernel/config/mode.ts)opt-in 打开。
    *
    *  机制(从 CC 二进制读出,2.1.216–2.1.220 一致):CC 给"能弹框的异步 agent"
    *  的权限上下文置 `awaitAutomatedChecksBeforeDialog`,于是它**先 await 完
@@ -163,7 +167,8 @@ export class PermissionRouter {
     // parallel local dialog until the window times out — a block CC never has on its
     // own. defer → shim {} → CC-native (local dialog if interactive, else auto-deny).
     // Runs AFTER the policy allow-check, so a safe/trusted sub-agent tool still
-    // auto-allows; opt-in holdSubagents makes sub-agent approvals remotely answerable.
+    // auto-allows; the top posture rung (`mode: all`) makes sub-agent approvals
+    // remotely answerable instead.
     if (opts.agentId && !(this.deps.holdSubagents?.() ?? false)) {
       outcome('subagent-passthrough');
       // Handed back — but say what was handed back, while we still hold the
@@ -325,6 +330,20 @@ export class PermissionRouter {
     this.pending.delete(requestId);
     this.resolvedBy.set(requestId, 'remote');
     e.resolve({ decision: approved ? 'allow' : 'deny', ...(message ? { message } : {}), ...(updatedInput !== undefined ? { updatedInput } : {}) });
+    return true;
+  }
+
+  /** "Answer at the terminal instead" — hand ONE held request back to CC now
+   *  instead of waiting out the window. The shim then writes {} and CC builds
+   *  the dialog in the terminal (实测:defer 之后框立刻出现). Returns false when
+   *  the card is already stale, so the caller can say so rather than going quiet.
+   *  Never auto-allows: handing back is a pass-through, not a decision. */
+  handBack(requestId: string): boolean {
+    const e = this.pending.get(requestId);
+    if (!e) return false;
+    this.pending.delete(requestId);
+    this.resolvedBy.set(requestId, 'handed-back');
+    e.resolve({ decision: 'handback' });
     return true;
   }
 

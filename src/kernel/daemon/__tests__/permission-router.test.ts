@@ -487,7 +487,8 @@ describe('sub-agent pass-through (tlive stays transparent for sub-agents by defa
   // Holding a sub-agent would therefore introduce a block CC never has on its own,
   // with no local fallback until the window times out. So the default is pass-through
   // (defer → shim outputs {} → CC-native: local dialog if interactive, else auto-deny).
-  // Remote sub-agent approval is opt-in via approvals.holdSubagents.
+  // Remote sub-agent approval is opt-in via the top posture rung (`mode: all`,
+  // see src/kernel/config/mode.ts).
   it('a sub-agent request (agentId present) passes through to defer by default — no card, no onPending, even when an answer surface exists', async () => {
     const send = vi.fn().mockResolvedValue(undefined);
     const pend: unknown[] = [];
@@ -524,6 +525,20 @@ describe('sub-agent pass-through (tlive stays transparent for sub-agents by defa
     const res = await r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Read', input: {}, agentId: 'agentA' });
     expect(res.decision).toBe('allow');
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('handBack resolves a held request as handback (wire = defer, card = not a timeout)', async () => {
+    let id = '';
+    const r = new PermissionRouter(base({ holdSubagents: () => true, sendToChat: async (_t: unknown, c: { requestId: string }) => { id = c.requestId; } }));
+    const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, agentId: 'agentA', timeoutSec: 60 });
+    await new Promise((res) => setTimeout(res, 10));
+    expect(r.handBack(id)).toBe(true);
+    expect((await p).decision).toBe('handback');
+  });
+
+  it('handBack on an unknown/settled request reports false instead of inventing a decision', () => {
+    const r = new PermissionRouter(base({}));
+    expect(r.handBack('nope')).toBe(false);
   });
 });
 

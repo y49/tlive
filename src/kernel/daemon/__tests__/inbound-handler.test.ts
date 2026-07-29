@@ -7,6 +7,7 @@ import { createEditQueue } from '../edit-queue.js';
 import type { IncomingEnvelope, IMAdapter, OutgoingMessage } from '../../contracts/im-adapter.js';
 import type { PermissionRouter } from '../permission-router.js';
 import type { ContinueBroker } from '../../permission/continue-broker.js';
+import { STALE_CARD_NOTICE } from '../bootstrap.js';
 
 const envelope = (over: Partial<IncomingEnvelope> = {}): IncomingEnvelope => ({
   channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'm1', text: '', ts: 0, ...over,
@@ -714,5 +715,29 @@ describe('attachment injection', () => {
     const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter(msgs) }));
     await h.handle(envelope({ text: '' }));
     expect(msgs).toHaveLength(0);
+  });
+});
+
+describe('handback: callback (Answer at the terminal instead)', () => {
+  it('hands the request back and says so', async () => {
+    const handBack = vi.fn().mockReturnValue(true);
+    const msgs: Array<{ kind: string; text?: string }> = [];
+    const h = new InboundHandler(baseDeps({
+      imBy: () => makeAdapter(msgs),
+      permissionRouter: { handBack, answer: vi.fn() } as unknown as PermissionRouter,
+    }));
+    await h.handle(envelope({ text: 'handback:req-1' }));
+    expect(handBack).toHaveBeenCalledWith('req-1');
+    expect(msgs[0].text).toMatch(/terminal/i);
+  });
+
+  it('a stale handback says so instead of going silent', async () => {
+    const msgs: Array<{ kind: string; text?: string }> = [];
+    const h = new InboundHandler(baseDeps({
+      imBy: () => makeAdapter(msgs),
+      permissionRouter: { handBack: vi.fn().mockReturnValue(false), answer: vi.fn() } as unknown as PermissionRouter,
+    }));
+    await h.handle(envelope({ text: 'handback:gone' }));
+    expect(msgs[0].text).toBe(STALE_CARD_NOTICE);
   });
 });

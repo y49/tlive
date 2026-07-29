@@ -452,7 +452,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   }, 30_000);
   sweeper.unref();
 
-  const OUTCOME: Record<string, string> = { allow: 'Allowed', deny: 'Denied', defer: 'Timed out', local: 'Answered in terminal', gone: 'Session ended' };
+  const OUTCOME: Record<string, string> = { allow: 'Allowed', deny: 'Denied', defer: 'Timed out', local: 'Answered in terminal', gone: 'Session ended', handback: 'Handed back to the terminal' };
 
   const permissionRouter = new PermissionRouter({
     configuredChats,
@@ -828,11 +828,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // nothing to reply to, and inventing a decision would itself be an
           // auto-allow path. No wire output at all.
           if (r.decision === 'gone') return;
-          // 'local' (answered in the terminal) maps to 'defer' on the wire: the shim
-          // outputs pass-through {} — a no-op for a dialog that is already gone.
+          // 'local' (answered in the terminal) and 'handback' (you asked for the
+          // dialog back) both map to 'defer' on the wire: the shim outputs
+          // pass-through {} — CC then owns the prompt, which is the point.
           reply({
             kind: 'hook.permission.result',
-            decision: r.decision === 'local' ? 'defer' : r.decision,
+            decision: r.decision === 'local' || r.decision === 'handback' ? 'defer' : r.decision,
             ...(r.message ? { message: r.message } : {}),
             ...(r.updatedInput !== undefined ? { updatedInput: r.updatedInput } : {}),
           });

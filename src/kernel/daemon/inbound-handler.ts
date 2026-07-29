@@ -117,6 +117,18 @@ export class InboundHandler {
       return;
     }
 
+    if (env.text.startsWith('handback:')) {
+      // "Answer at the terminal instead" — release THIS held request so CC builds
+      // its dialog in the terminal. Pass-through, never an approval.
+      const requestId = env.text.slice('handback:'.length);
+      if (this.deps.permissionRouter.handBack(requestId)) {
+        await this.reply(env, { kind: 'text', text: 'Handed back — the prompt is now waiting in the terminal.' });
+      } else {
+        await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
+      }
+      return;
+    }
+
     if (env.text.startsWith('ask:')) {
       // ask:<requestId>:<optionIndex> — a picked single-select option. Strict
       // digits-only match rejects '' and non-numeric input; `Number('')` is 0,
