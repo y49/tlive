@@ -6,16 +6,15 @@
 // the loop (the CC plugin's slash commands are prompts by design; this is
 // the one-liner they can shell out to).
 import { request } from '../../kernel/ipc/client.js';
+import { SAFE_TOGGLE_MESSAGE } from '../../kernel/permission/policy-engine.js';
 
 export type ToggleKey = 'mute' | 'trust' | 'safe' | 'desktop';
 
-const CONFIRM: Record<ToggleKey, [on: string, off: string]> = {
+export const CONFIRM: Record<ToggleKey, [on: string, off: string]> = {
   mute: ['IM notifications muted', 'IM notifications on'],
   trust: ['Approvals paused (everything auto-allowed)', 'Approvals resumed'],
-  safe: [
-    'Safe auto-approve ON — routine ops run without a card; dangerous ops, MCP/unknown tools, and questions still ask.',
-    'Safe auto-approve OFF — back to asking for everything except read-only tools.',
-  ],
+  // Shared with the IM /safe command — see SAFE_TOGGLE_MESSAGE.
+  safe: [SAFE_TOGGLE_MESSAGE.on, SAFE_TOGGLE_MESSAGE.off],
   desktop: ['Desktop notifications on', 'Desktop notifications off (IM cards unaffected)'],
 };
 

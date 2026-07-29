@@ -613,6 +613,29 @@ describe('PermissionRouter diagnostics', () => {
     expect(remote.find((l) => l.event === 'permission.resolved')?.fields.by).toBe('remote');
   });
 
+  // A card that fails to send leaves the request held with one fewer answer
+  // surface than the `held` line claimed, and the send was fire-and-forget with
+  // `.catch(() => undefined)` — so the single real cause of "the card never
+  // arrived" produced no evidence anywhere. That is how an oversized Telegram
+  // callback_data (any tool name over 17 chars) stayed invisible.
+  it('logs a card that could not be delivered instead of swallowing it', async () => {
+    const log: Array<{ event: string; fields: Record<string, unknown> }> = [];
+    const r = new PermissionRouter({
+      ...base(log),
+      sendToChat: async () => { throw new Error('BUTTON_DATA_INVALID'); },
+    });
+    const p = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'mcp__x__y', input: {}, timeoutSec: 60 });
+    await vi.waitFor(() => {
+      const fail = log.find((l) => l.event === 'permission.card.undelivered');
+      expect(fail).toBeDefined();
+      expect(String(fail!.fields.error)).toContain('BUTTON_DATA_INVALID');
+      expect(fail!.fields.channel).toBe('telegram');
+    });
+    const rid = log.find((l) => l.fields.reason === 'held')!.fields.requestId as string;
+    r.answer(rid, true);
+    await p;
+  });
+
   it('never puts the tool input in the log', async () => {
     const log: Array<{ event: string; fields: Record<string, unknown> }> = [];
     const r = new PermissionRouter(base(log));

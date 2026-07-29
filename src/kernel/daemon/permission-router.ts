@@ -64,7 +64,14 @@ export interface PermissionRouterDeps {
    *  无头 auto-deny)。理由:被后台化的子 agent 在同步 hook 被 hold 期间**没有**
    *  并行本地框(只有主会话有,先答先得 —— 真机实测),所以 hold 一个子 agent 会
    *  引入一个 CC 自己根本不会有的阻塞,且超时前没有本地兜底。tlive 因此默认对
-   *  子 agent 完全透明;想手机远程批子 agent 的人 opt-in 打开(approvals.holdSubagents)。 */
+   *  子 agent 完全透明;想手机远程批子 agent 的人 opt-in 打开(approvals.holdSubagents)。
+   *
+   *  机制(从 CC 二进制读出,2.1.216–2.1.220 一致):CC 给"能弹框的异步 agent"
+   *  的权限上下文置 `awaitAutomatedChecksBeforeDialog`,于是它**先 await 完
+   *  PermissionRequest hook 再决定要不要建框** —— hook 给了决定,框就永不渲染。
+   *  主会话不设这个 flag:hook 跑在与框并行的后台任务里,由一个 claim 闩锁先答
+   *  先得,所以主会话 hold 住不会失去终端。又:自 CC 2.1.198 起子代理默认后台
+   *  运行(`status: "async_launched"`),所以这条几乎覆盖所有子代理。 */
   holdSubagents?: () => boolean;
   /** 超时动作(opt-in)。默认(缺省/`'defer'`)= 超时落回 `{}`(CC 原生:本地框
    *  继续等 / 无头 auto-deny),绝不自动决定。`'deny'` = 超时即拒(带"timed out"
@@ -210,7 +217,19 @@ export class PermissionRouter {
           // lookup and reply-routing map (bootstrap.ts's sessionTag/rememberMsg)
           // both index by registry key, same convention as hook.notify/
           // hook.continue.request elsewhere in bootstrap.ts.
-          void this.deps.sendToChat(t, { title, body, requestId, toolName: opts.toolName, cwd: opts.key, ...(ask ? { ask } : {}) }).catch(() => undefined);
+          // A failed send used to be swallowed outright. It must be logged: the
+          // request stays held with one fewer answer surface than the `held` line
+          // above advertised, and without this line the single most likely cause
+          // of "the card never arrived" leaves no trace anywhere — which is
+          // exactly how an oversized Telegram callback_data (see toolNameFor)
+          // went unnoticed. Still non-fatal: the local dialog is unaffected and
+          // the other targets/dashboard may well have gone out.
+          void this.deps.sendToChat(t, { title, body, requestId, toolName: opts.toolName, cwd: opts.key, ...(ask ? { ask } : {}) })
+            .catch((e: unknown) => {
+              this.deps.log?.('permission.card.undelivered', {
+                ...who, requestId, channel: t.channel, error: e instanceof Error ? e.message : String(e),
+              });
+            });
         }
       };
       const grace = this.deps.graceSec();
@@ -231,10 +250,28 @@ export class PermissionRouter {
     return this.pending.size;
   }
 
+  /** Tool name of a still-pending request, for the "Always allow <tool>" button.
+   *  That button cannot carry the name in its own payload: Telegram caps
+   *  callback_data at 64 bytes and rejects the WHOLE message if any button is
+   *  over, which `allowtool:<uuid>:<toolName>` is for every name longer than 17
+   *  characters — i.e. every `mcp__<server>__<tool>`. The requestId identifies
+   *  the request anyway, so the name is looked up here instead. Undefined once
+   *  the request has been answered or abandoned; callers must read it BEFORE
+   *  answer(), which drops the entry. */
+  toolNameFor(requestId: string): string | undefined {
+    return this.pending.get(requestId)?.toolName;
+  }
+
   /** True when a held request exists for this session — the daemon's dedupe
    *  test for an incoming Notification(permission_prompt): a held card already
    *  owns every answer surface, so the notification adds nothing (issue #49).
-   *  sessionId matching is the same conservative wildcard as cancel()'s. */
+   *  sessionId matching is the same conservative wildcard as cancel()'s.
+   *
+   *  Deliberately session-wide, with no agentId parameter: the caller's event
+   *  (permission_prompt) has no agent_id to pass, and CC reports the main
+   *  session's id for sub-agent hooks too, so nothing finer is knowable. Read
+   *  this as "some card is live under this key", not "the card for THAT dialog".
+   *  Callers must therefore only use it where a wrong answer is cosmetic. */
   hasPendingFor(opts: { key: string; sessionId?: string }): boolean {
     for (const e of this.pending.values()) {
       if (e.key !== opts.key) continue;

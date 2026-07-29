@@ -16,14 +16,23 @@ export interface PolicyConfig { autoAllow?: string[]; autoDeny?: string[]; ask?:
 /** windowSec: 远程审批窗口(秒)。默认 86200(≈24h,clamp 上限)—— CC 的
  *  PermissionRequest hook 与本地对话框并行,不阻塞终端,长窗零成本;窗口越短
  *  你越可能被迫回电脑,而"不必回电脑"正是 tlive 的全部价值。两家(CC/Codex)
- *  共用此值。desktopNotify: 审批卡发出时在 daemon 本机弹一条桌面通知
- *  (Linux notify-send),指向手机卡/dashboard —— 补后台命令 hook 挂起期间
- *  CC 不渲染本地框的缺口(默认 true;非 Linux 或无 notify-send 静默降级)。
- *  上限 86200 给 shim IPC 的 +100s 留余量,保证
+ *  共用此值。上限 86200 给 shim IPC 的 +100s 留余量,保证
  *  窗口 < shim IPC < vendor timeout(86400)。
+ *  desktopNotify: 审批卡发出时在 daemon 本机弹一条桌面通知
+ *  (Linux notify-send),指向手机卡/dashboard(默认 true;非 Linux 或无
+ *  notify-send 静默降级)。注意它**不是**用来补"hook 挂起期间没有本地框"——
+ *  主会话挂起期间 CC 照常并行渲染本地框(实测:每次 hold 起 6 秒必有
+ *  permission_prompt,且有 by=local-terminal 的答复),它只是给"人在电脑前但
+ *  没盯着这个终端"的场景一个提醒。真正没有本地框的只有被 hold 的异步子代理,
+ *  见 permission-router 的 holdSubagents。
  *  continueWindowSec: async Stop hook 后台等续跑回复的时长(默认 1800)。
  *  continueGraceSec: turn 结束后等这么久再推续跑卡(默认 15)。
- *  approvalGraceSec: 审批卡推送前的静默期(默认 10;0=立即发)。 */
+ *  approvalGraceSec: 审批卡推送前的静默期(默认 10;0=立即发)。
+ *  以下三个会改变"没装 tlive 时的行为",是明确的取舍开关:
+ *  autoApprove: 不写 = 关(什么都不自动放行)。一旦设置就会抹掉 CC 本该弹出
+ *  的确认框 —— PermissionRequest 只在 ask 路径触发,见 policy-engine。
+ *  holdSubagents: true 会让被 hold 的异步子代理失去本地框(见 permission-router)。
+ *  timeoutAction: 'deny' 会在窗口耗尽时替你拒绝(默认 'defer' 回落 CC 原生)。 */
 export interface ApprovalsConfig { windowSec?: number; continueWindowSec?: number; continueGraceSec?: number; approvalGraceSec?: number; desktopNotify?: boolean; autoApprove?: 'readonly' | 'safe'; holdSubagents?: boolean; timeoutAction?: 'defer' | 'deny' }
 
 export interface KernelConfig {

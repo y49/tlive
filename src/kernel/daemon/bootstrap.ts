@@ -28,7 +28,7 @@ import { ensureCodexAppServer, codexAppServerSockPath } from '../codex/spawn.js'
 import { connectCodexRpc } from '../codex/rpc.js';
 import { startCompanion, type Companion } from '../codex/companion.js';
 import { excerptForCard } from './excerpt.js';
-import { TURN_FINISHED_SENTINEL } from '../hook/normalizer.js';
+import { TURN_FINISHED_SENTINEL, effectiveMode } from '../hook/normalizer.js';
 
 export interface DaemonHandle {
   shutdown(): Promise<void>;
@@ -163,7 +163,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const policyState: PolicyState = {
     trustUntilRevoked: false,
     allowTools: new Set<string>(),
-    autoApprove: cfg.approvals?.autoApprove === 'safe' ? 'safe' : 'readonly',
+    // Absent = off. Anything auto-allowed here removes a dialog CC was about to
+    // show (PermissionRequest fires only on the ask path), so opting in is the
+    // user's call — see policy-engine's READ_ONLY_TOOLS note.
+    ...(cfg.approvals?.autoApprove ? { autoApprove: cfg.approvals.autoApprove } : {}),
   };
 
   const configuredChats = (): PermChat[] => {
@@ -230,6 +233,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // notifier itself is created enabled so a config-off start can still be
   // switched on without a restart.
   let desktopOn = cfg.approvals?.desktopNotify ?? true;
+  /** Posture, same resolution the shim uses. Only `notify` still needs the bare
+   *  "answer in the terminal" IM text (see the permissionPrompt handler). */
+  const mode = effectiveMode(cfg.mode);
   const desktop = opts.desktopNotifier ?? createDesktopNotifier({
     action: {
       label: 'Open dashboard',
@@ -371,7 +377,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           : [
               { id: `approve:${msg.requestId}`, label: 'Allow' },
               { id: `deny:${msg.requestId}`, label: 'Deny' },
-              ...(msg.toolName ? [{ id: `allowtool:${msg.requestId}:${msg.toolName}`, label: `Always allow ${msg.toolName}` }] : []),
+              // Payload is requestId-only — the tool name goes in the LABEL, not
+              // the callback data, which Telegram caps at 64 bytes and over which
+              // it rejects the entire card. The daemon resolves the name from the
+              // pending request (permissionRouter.toolNameFor).
+              ...(msg.toolName ? [{ id: `allowtool:${msg.requestId}`, label: `Always allow ${msg.toolName}` }] : []),
               { id: `pause:${msg.requestId}`, label: 'Pause approvals' },
             ],
         } : {}),
@@ -701,7 +711,13 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const runtimeSet = (key: 'mute' | 'trust' | 'safe' | 'desktop', enabled: boolean): void => {
     if (key === 'mute') muted = enabled; // /mute on ⇒ muted (quiet)
     else if (key === 'trust') policyState.trustUntilRevoked = enabled;
-    else if (key === 'safe') policyState.autoApprove = enabled ? 'safe' : 'readonly';
+    // `/safe off` reverts to whatever the config asked for, not to a hard-coded
+    // 'readonly' — that used to silently switch read-only auto-allow ON for a
+    // user who had never opted into any auto-approval.
+    else if (key === 'safe') {
+      const base = cfg.approvals?.autoApprove === 'readonly' ? 'readonly' : undefined;
+      policyState.autoApprove = enabled ? 'safe' : base;
+    }
     else { desktopOn = enabled; if (!enabled) void desktop.clear(); }
   };
 
@@ -811,6 +827,16 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // mode, or the router deferred on arrival — this is the ONLY
             // signal anyone gets: run the local-waiting chain. Never carries
             // a decision; never-auto-allow untouched.
+            //
+            // heldOwnsIt is a PROXY and cannot be made exact: this notification
+            // carries no tool_name and no agent_id (CC builds Notification input
+            // without a tool-use context, so agent_id is always absent), and its
+            // session_id is the main session's even when the dialog belongs to a
+            // sub-agent. So "is a held card already covering this dialog?" is
+            // unanswerable in principle. It is used only to avoid clobbering an
+            // answerable card with the read-only one below — a wrong guess costs
+            // a missed toast, never a decision. The IM push is NOT gated on it
+            // (see pushIm): posture is an exact signal where this one isn't.
             const heldOwnsIt = permissionRouter.hasPendingFor({ key, sessionId: req.sessionId });
             // The two arms look identical from outside — one means "tlive is
             // gating this and the card owns every surface", the other means
@@ -829,11 +855,25 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               // IM text rides the approval-card grace: answered at the
               // keyboard within the window → never sent (zero spam at the
               // keyboard, same contract as the held-card push).
+              //
+              // …and in `full` mode it is not sent at all. Reaching here in full
+              // mode means tlive SAW this request and chose to hand it back
+              // (sub-agent pass-through, policy allow, no answer surface).
+              // "Handed back" is defined as "behave as if tlive were not
+              // installed", and a bare un-answerable "go look at your terminal"
+              // text is a message the no-hook baseline never sends. It also
+              // cannot be attributed: CC's Notification input carries neither
+              // agent_id nor tool_name, so we cannot even say which dialog it
+              // belongs to. In `notify` mode the opposite holds — tlive never
+              // gates, so this text is the ONLY signal a dialog is waiting.
+              // Desktop + dashboard above are tlive's own surfaces (not CC
+              // output) and stay in both postures.
               const pushIm = (): void => {
                 // Each bail-out is logged with its own tag: "no IM text arrived"
                 // has four different causes and they are not interchangeable.
                 const note = (outcome: string, extra?: Record<string, unknown>): void =>
                   logJson('permission.localPrompt.im', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), outcome, ...extra });
+                if (mode === 'full') return note('full-mode-passthrough');
                 if (!localPrompts.has(key, req.sessionId)) return note('answered-in-grace');
                 if (permissionRouter.hasPendingFor({ key, sessionId: req.sessionId })) return note('raced-held-card');
                 if (muted || sessions.get(key)?.muted) return note('muted');
@@ -881,8 +921,14 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // Local terminal answered a permission dialog → release the parallel
           // remote card (CC dual-channel: PostToolUse = approved locally,
           // PermissionDenied = denied locally, a new prompt = dialog long gone).
-          // sessionId/agentId narrow the match so sibling sub-agents sharing
-          // key+tool keep their own pending cards.
+          // agentId — NOT sessionId — is what narrows this. CC builds every
+          // hook's base input with the MAIN session id (createBaseHookInput
+          // takes an explicit sessionId and the tool-event callers pass none, so
+          // it falls back to the current session), and puts sub-agent identity
+          // only in agent_id. So `sessionId` here is identical for the main
+          // thread and every sub-agent under it and discriminates nothing;
+          // matchAgent is the only field that keeps sibling sub-agents sharing
+          // key+tool from cancelling each other's cards.
           if (ev.event === 'activity') {
             // 精确关联:回答者身份(agent_id 缺失 = 主会话)必须与 pending 一致
             permissionRouter.cancel({ key, toolName: ev.toolName, sessionId: ev.sessionId, matchAgent: ev.agentId ?? null });

@@ -94,9 +94,10 @@ IM 消息带 `label · ` 前缀(会话目录名),但不再用图标区分包装/
     expandable 折叠——用较新 Telegram 客户端渲染最佳。
   - **高危开关** —— **"总是允许 \<工具\>"** 按工具放行(内存态、重启清零;
     Claude Code 上远程替你点掉原生对话);`/trust on|off` 整体暂停审批。
-  - **子代理默认透传** —— 后台/异步子代理没有并行本地框可兜底,所以 tlive
-    返回 `{}` 交给 CC 原生处理;想连子代理也 hold 住等远程作答,设
-    `approvals.holdSubagents: true`。
+  - **子代理默认透传** —— tlive 返回 `{}` 交给 CC 原生处理,所以它的终端框和
+    没装 tlive 时完全一样地弹出。反过来 hold 住它就会抹掉那个框(对异步 agent,
+    CC 会在建框之前先解析 hook),只剩远程一条答复路径 ——
+    `approvals.holdSubagents: true` 就是选择这个代价。
 - **远程回答 `AskUserQuestion`(仅 Claude Code)** —— CC 为自己的提问工具
   fire `PermissionRequest`;tlive 把它转成单选或多选卡(复选框、实时
   `Submit (N)` 计数、`Skip`)而非 Allow/Deny,IM 和 dashboard 会话卡都能答。
@@ -282,16 +283,22 @@ IM 命令:`/mute on|off`(静音 IM 通知)、`/trust on|off`(暂停审批——�
     // 审批卡发出时在 daemon 本机弹桌面通知(Linux notify-send)——后台命令
     // hook 挂起期间 CC 不弹本地框,这是"人在电脑前"指向手机卡/dashboard 的入口
     "desktopNotify": true,    // 默认 true;无 notify-send 时静默降级
-    // 多少操作不发卡直接自动放行:
-    //  "readonly"(默认)—— 只放行 Read/Glob/Grep,其余都问
-    //  "safe"          —— 额外放行日常操作(非危险 Bash、非敏感路径的编辑);
-    //                     危险操作(rm -rf/sudo/curl|sh/敏感路径写入…)、
-    //                     MCP/未知工具、AskUserQuestion 仍然发卡
-    // 用于自主/agent 驱动、没有本地框的场景减少卡量。可用 /safe on|off 实时切换。
+    // 多少操作不发卡直接自动放行。不写(默认)= 一个都不放:CC 原本会问你的,
+    // 依然会问你。一旦设置就会**改变 CC 问你什么** —— 这个 hook 只在框即将
+    // 弹出时才触发,所以在这里自动放行 = 抹掉一个你本该看到的确认框。
+    //  不写(默认)—— 不自动放行任何东西
+    //  "readonly" —— 额外放行 Read/Glob/Grep
+    //  "safe"     —— 额外放行日常操作(非危险 Bash、非敏感路径的编辑);
+    //                危险操作(rm -rf/sudo/curl|sh/敏感路径写入…)、
+    //                MCP/未知工具、AskUserQuestion 仍然发卡
+    // 用于自主/agent 驱动场景减少卡量。可用 /safe on|off 实时切换。
     // 绝不越过危险地板——只有 /trust on 才会自动放行危险操作。
-    "autoApprove": "readonly",
-    // 是否连后台/异步子代理的审批也 hold 住等远程作答
-    //(默认 false:子代理透传给 CC 原生处理)。仅在 mode: full 下有意义。
+    // "autoApprove": "readonly",
+    // 是否连后台/异步子代理的审批也 hold 住等远程作答。默认 false,
+    // **改成 true 会让你失去终端**:对异步 agent,CC 会在建框之前先等 hook 的
+    // 决定,所以被 hold 的子代理请求没有本地框可兜底 —— IM/dashboard 成为唯一
+    // 答复路径,没人应答就会耗掉整个窗口。自 Claude Code 2.1.198 起子代理默认
+    // 后台运行,所以这适用于绝大多数子代理。仅在 mode: full 下有意义。
     "holdSubagents": false,
     // 一个被 hold 的审批在窗口超时、无人应答时怎么办:
     //  "defer"(默认)→ 透传 {}(回落 CC 原生);

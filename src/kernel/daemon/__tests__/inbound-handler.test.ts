@@ -499,18 +499,46 @@ describe('reply-to routing & injection', () => {
     expect(msgs.some((m) => m.text?.includes('引用'))).toBe(true);
   });
 
-  it('allowtool:<rid>:<tool> grants the tool and approves the request', async () => {
+  // The payload is requestId-only: Telegram caps callback_data at 64 bytes and
+  // rejects the whole card if a button is over, which `:<toolName>` was for every
+  // name longer than 17 characters. The name is resolved from the pending request.
+  it('allowtool:<rid> grants the tool named by the pending request and approves it', async () => {
     const addAllowTool = vi.fn();
     const permAnswer = vi.fn().mockReturnValue(true); // hit — a live pending
     const msgs: Array<{ kind: string; text?: string }> = [];
     const h = new InboundHandler(baseDeps({
       imBy: () => makeAdapter(msgs),
       addAllowTool,
-      permissionRouter: { answer: permAnswer, requestPermission: vi.fn() } as never,
+      permissionRouter: {
+        answer: permAnswer,
+        requestPermission: vi.fn(),
+        toolNameFor: (rid: string) => (rid === 'rid-1' ? 'mcp__codegraph__codegraph_status' : undefined),
+      } as never,
     }));
-    await h.handle(envelope({ text: 'allowtool:rid-1:Edit' }));
-    expect(addAllowTool).toHaveBeenCalledWith('Edit');
+    await h.handle(envelope({ text: 'allowtool:rid-1' }));
+    expect(addAllowTool).toHaveBeenCalledWith('mcp__codegraph__codegraph_status');
     expect(permAnswer).toHaveBeenCalledWith('rid-1', true);
+  });
+
+  it('allowtool: for a request that is already gone grants nothing and says the card is stale', async () => {
+    const addAllowTool = vi.fn();
+    const permAnswer = vi.fn().mockReturnValue(false);
+    const msgs: Array<{ kind: string; text?: string }> = [];
+    const h = new InboundHandler(baseDeps({
+      imBy: () => makeAdapter(msgs),
+      addAllowTool,
+      permissionRouter: {
+        answer: permAnswer,
+        requestPermission: vi.fn(),
+        toolNameFor: () => undefined,
+      } as never,
+    }));
+    await h.handle(envelope({ text: 'allowtool:rid-gone' }));
+    // Nothing to grant: without the payload suffix there is no way to know which
+    // tool a dead card meant, and guessing would hand out a standing allow.
+    expect(addAllowTool).not.toHaveBeenCalled();
+    expect(permAnswer).not.toHaveBeenCalled();
+    expect(msgs.some((m) => (m.text ?? '').length > 0)).toBe(true);
   });
 });
 

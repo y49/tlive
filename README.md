@@ -112,10 +112,12 @@ continue" line makes the distinction moot for what you actually do.
   - **Power toggles** — **"Always allow \<tool\>"** grants a per-tool pass
     (in-memory, cleared on restart; on Claude Code it answers the native dialog
     for you remotely); `/trust on|off` pauses approvals entirely.
-  - **Sub-agents pass through by default** — a backgrounded/async sub-agent has
-    no parallel local dialog to fall back on, so tlive returns `{}` and lets CC
-    handle it natively; hold them for a remote answer with
-    `approvals.holdSubagents: true`.
+  - **Sub-agents pass through by default** — tlive returns `{}` and lets CC
+    handle a backgrounded/async sub-agent natively, so its terminal dialog still
+    appears exactly as it would without tlive. Holding one instead would remove
+    that dialog (CC resolves an async agent's hook *before* it builds the box),
+    leaving remote as the only answer path — that is what
+    `approvals.holdSubagents: true` opts into.
 - **Answer `AskUserQuestion` from IM or the dashboard (Claude Code only)** —
   CC fires a `PermissionRequest` for its own question tool; tlive relays it as
   a single-select or multi-select card (checkboxes, a live `Submit (N)` count,
@@ -337,19 +339,27 @@ into that session.
     // background tool calls render no local dialog while the hook pends, so
     // this is the at-the-computer pointer to the phone card / dashboard
     "desktopNotify": true,    // default true; silent no-op without notify-send
-    // how much auto-approves without a card:
-    //  "readonly" (default) — only Read/Glob/Grep; everything else asks
-    //  "safe"               — also auto-allow routine ops (non-dangerous Bash,
-    //                         edits to non-sensitive paths); dangerous ops
-    //                         (rm -rf, sudo, curl|sh, sensitive-path writes…),
-    //                         MCP/unknown tools, and AskUserQuestion still ask.
-    // Cuts the card volume for autonomous / agent-driven runs where there's no
-    // local dialog. Toggle live with /safe on|off. Never crosses the danger
-    // floor — only /trust on auto-allows dangerous ops.
-    "autoApprove": "readonly",
-    // hold a backgrounded/async sub-agent's approval for a remote answer too
-    // (default false: sub-agents pass through to CC-native handling). Only
-    // relevant in mode: full.
+    // how much auto-approves without a card. OMITTED (the default) = nothing:
+    // every request CC would have asked about still gets asked. Setting this
+    // CHANGES WHAT CC ASKS YOU — the hook only fires when a dialog was about to
+    // appear, so an auto-allow here removes a prompt you would have seen.
+    //  omitted (default) — nothing is auto-allowed
+    //  "readonly"        — also auto-allow Read/Glob/Grep
+    //  "safe"            — also auto-allow routine ops (non-dangerous Bash,
+    //                      edits to non-sensitive paths); dangerous ops
+    //                      (rm -rf, sudo, curl|sh, sensitive-path writes…),
+    //                      MCP/unknown tools, and AskUserQuestion still ask.
+    // Cuts the card volume for autonomous / agent-driven runs. Toggle live with
+    // /safe on|off. Never crosses the danger floor — only /trust on auto-allows
+    // dangerous ops.
+    // "autoApprove": "readonly",
+    // hold a backgrounded/async sub-agent's approval for a remote answer too.
+    // Default false, and changing it COSTS YOU THE TERMINAL: for an async agent
+    // CC waits for the hook's decision *before* building the dialog, so a held
+    // sub-agent request has no local box to fall back on — IM/dashboard becomes
+    // the only way to answer it, and an unanswered one waits out the whole
+    // window. Sub-agents have run in the background by default since Claude Code
+    // 2.1.198, so this applies to most of them. Only relevant in mode: full.
     "holdSubagents": false,
     // what a HELD approval does when its window times out with nobody
     // answering: "defer" (default) → pass-through {} (CC-native fallback);

@@ -21,8 +21,15 @@ function fieldMatches(a: string | undefined, b: string | undefined): boolean {
 }
 
 export class LocalPrompts {
-  // One slot per session key: CC's permission dialog is modal, so a session
-  // has at most one dialog up — a re-note replaces the previous entry.
+  // One slot per session key, and that is a deliberate under-approximation, not
+  // a claim that only one dialog can exist. A backgrounded sub-agent's dialog is
+  // live at the same time as the main thread's, so a session really can have
+  // several up at once — but the only event that reaches us here (CC's
+  // permission_prompt Notification) carries neither tool_name nor agent_id, and
+  // its session_id is the main session's either way. There is nothing to key a
+  // second slot on. Consequence: with concurrent dialogs, a re-note replaces the
+  // previous entry and one clear retires both, so a reminder can be dropped
+  // early. That only ever loses a reminder — decisions never flow through here.
   private byKey = new Map<string, { sessionId?: string }>();
 
   note(key: string, sessionId?: string): void {

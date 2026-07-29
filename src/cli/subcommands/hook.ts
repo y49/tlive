@@ -55,6 +55,21 @@ const USAGE = `Usage: tlive hook [--codex] <${HOOK_EVENT_NAMES.join('|')}>\n`;
 // 保留 re-export 以免动既有调用点。
 export { approvalWindow };
 
+/** Budget for the observational hooks — everything except permission-request
+ *  (its own approval window) and stop (async, off the terminal's clock).
+ *
+ *  These run synchronously: CC waits for the hook process to exit before it
+ *  continues, and post-tool-use fires on EVERY tool call. So this number is a
+ *  direct tax on the terminal whenever the daemon is slow to answer. A healthy
+ *  local socket round trip is sub-millisecond, so this stays generous by three
+ *  orders of magnitude while capping an unresponsive daemon's damage at ~1.5s per
+ *  event. The trade-off is explicit: raising it buys delivery of monitoring
+ *  events (which carry no decision) at the cost of terminal responsiveness, and
+ *  a dropped monitoring event is always the cheaper loss. Note a MISSING daemon
+ *  costs nothing either way — the connect fails immediately; only a daemon that
+ *  accepts and then stalls can spend this budget. */
+export const OBSERVE_IPC_TIMEOUT_MS = 1_500;
+
 /** 续跑窗口(秒):async Stop hook 在后台等回复的时长。默认 1800(30min);
  *  async 不占终端,所以窗口可以很长。clamp [30, 86400]。 */
 export function continueWindow(approvals?: { continueWindowSec?: number }): number {
@@ -168,7 +183,7 @@ export async function runHook(argv: string[]): Promise<void> {
       // 就走本地等待通知链。曾经在这里无条件吞掉,notify 模式下权限框零通知。
       await request(
         { kind: 'hook.notify', cwd: att.cwd, sessionId: att.sessionId, level, message: att.message, ...(wrappedId ? { wrappedId } : {}), ...(att.droppable ? { droppable: true } : {}), ...(att.permissionPrompt ? { permissionPrompt: true } : {}) },
-        { timeoutMs: 4_000 },
+        { timeoutMs: OBSERVE_IPC_TIMEOUT_MS },
       ).catch(() => undefined);
       process.stdout.write('{}');
       return;
@@ -208,7 +223,7 @@ export async function runHook(argv: string[]): Promise<void> {
     // post-tool-use / user-prompt-submit / session-start / session-end → monitoring
     await request(
       { kind: 'hook.event', event: n as MonitorEvent, ...(wrappedId ? { wrappedId } : {}) },
-      { timeoutMs: 4_000 },
+      { timeoutMs: OBSERVE_IPC_TIMEOUT_MS },
     ).catch(() => {
       if (event === 'session-start') {
         const home = process.env.TLIVE_HOME ?? join(homedir(), '.tlive');

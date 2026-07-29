@@ -9,6 +9,7 @@ import type { SenderGuard } from './sender-guard.js';
 import type { AskFlow, AskStep } from './ask-flow.js';
 import { parseImCommand } from './im-commands.js';
 import { STALE_CARD_NOTICE } from './bootstrap.js';
+import { SAFE_TOGGLE_MESSAGE } from '../permission/policy-engine.js';
 
 export interface InboundHandlerDeps {
   senderGuard: SenderGuard;
@@ -92,19 +93,26 @@ export class InboundHandler {
     }
 
     if (env.text.startsWith('allowtool:')) {
-      // allowtool:<requestId>:<toolName> — grant "always allow" AND approve the in-hand request
-      const rest = env.text.slice('allowtool:'.length);
-      const sep = rest.indexOf(':');
-      if (sep > 0) {
-        const requestId = rest.slice(0, sep);
-        const tool = rest.slice(sep + 1);
-        // addAllowTool 同样是全局、与这条具体请求是否还活着无关——先落地。
-        this.deps.addAllowTool(tool);
-        if (this.deps.permissionRouter.answer(requestId, true)) {
-          await this.reply(env, { kind: 'text', text: `Approved. ${tool} will be auto-allowed from now on (until daemon restart; unaffected by /trust off).` });
-        } else {
-          await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
-        }
+      // allowtool:<requestId> — grant "always allow <tool>" AND approve the
+      // request in hand. The tool name is NOT in the payload: Telegram caps
+      // callback_data at 64 bytes and rejects the whole card when a button is
+      // over, which the old `:<toolName>` suffix was for every name longer than
+      // 17 characters (every mcp__server__tool). Resolve it from the pending
+      // request instead — read BEFORE answer(), which drops the entry.
+      const requestId = env.text.slice('allowtool:'.length);
+      const tool = requestId ? this.deps.permissionRouter.toolNameFor(requestId) : undefined;
+      // No pending request ⇒ no way to know which tool was meant, so unlike the
+      // old payload-carried name there is nothing to grant globally here. A card
+      // this stale can no longer approve anything either, so say so and stop.
+      if (!tool) {
+        await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
+        return;
+      }
+      this.deps.addAllowTool(tool);
+      if (this.deps.permissionRouter.answer(requestId, true)) {
+        await this.reply(env, { kind: 'text', text: `Approved. ${tool} will be auto-allowed from now on (until daemon restart; unaffected by /trust off).` });
+      } else {
+        await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
       }
       return;
     }
@@ -332,9 +340,7 @@ export class InboundHandler {
         return;
       case 'safe':
         this.deps.setAutoApprove(cmd.enabled);
-        await this.reply(env, { kind: 'text', text: cmd.enabled
-          ? 'Safe auto-approve ON — routine ops run without a card; dangerous ops, MCP/unknown tools, and questions still ask.'
-          : 'Safe auto-approve OFF — back to asking for everything except read-only tools.' });
+        await this.reply(env, { kind: 'text', text: cmd.enabled ? SAFE_TOGGLE_MESSAGE.on : SAFE_TOGGLE_MESSAGE.off });
         return;
       case 'toggle-prompt': {
         // Bare /mute /trust /safe (a menu tap sends the command with no arg). Reply

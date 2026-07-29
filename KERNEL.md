@@ -111,8 +111,13 @@ UserPromptSubmit(同 key)/ Stop(同 key)cancel 挂起请求(resolve 为
 'local',wire 上映射回 'defer' → shim 输出 `{}` pass-through)。
 PermissionDenied(同 key+tool)只覆盖规则型拒绝——真机实测:用户在对话框点
 "No" **不会** fire 它,本地拒绝靠 UserPromptSubmit/Stop 扫尾(最晚 turn 结束
-时释放)。`notification` 的 `permission_prompt` 类型在 CC shim 直接丢弃
-(并行卡已覆盖那个时刻,再发提醒就是每张卡都重复一条)。
+时释放)。`notification` 的 `permission_prompt` 类型由 shim **打标透传**,发不发
+由 daemon 判:`full` 模式下**永不**推 IM 文本 —— 走到那里说明 tlive 看过这个
+请求并主动放手了(子代理透传 / policy 放行 / 无答复面),而"放手"的定义就是
+"表现得像没装 tlive",裸推一条你答不了的"去终端答"是基线里不存在的消息;况且
+它无法归属(CC 的 Notification 输入既无 `agent_id` 也无 `tool_name`)。`notify`
+模式相反:tlive 从不门控,这条是"有框在等"的**唯一**信号,照发。桌面提醒和
+dashboard 只读卡属于 tlive 自己的界面(不是 CC 的输出),两种姿态下都保留。
 
 **`AskUserQuestion` (Claude Code only — Codex has no equivalent concept).**
 CC fires a `PermissionRequest` for its own question tool, same as any other

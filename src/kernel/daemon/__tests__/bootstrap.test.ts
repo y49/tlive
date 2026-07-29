@@ -956,6 +956,65 @@ describe('Codex resume handler → continue card (regression: sentinel mismatch)
   });
 });
 
+// Telegram caps callback_data at 64 BYTES and rejects the ENTIRE sendMessage
+// (BUTTON_DATA_INVALID) when any button exceeds it. `allowtool:<uuid>:<toolName>`
+// spends 47 bytes before the name, so any tool named longer than 17 characters
+// used to take the whole approval card down with it — and permission-router
+// swallows send failures, so the request simply hung with no answer surface and
+// nothing in the log. MCP tools (`mcp__<server>__<tool>`) are always over.
+describe('approval card button ids fit the IM callback-data limit', () => {
+  const CALLBACK_DATA_MAX_BYTES = 64;
+  const CFG = {
+    web: { enabled: false },
+    approvals: { approvalGraceSec: 0 },
+    adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+  };
+
+  it('holds for a long MCP tool name without producing an unsendable button', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const sock = daemonSocketPath(tmp);
+    const pending = request(
+      {
+        kind: 'hook.permission.request', cwd: '/w', sessionId: 's1',
+        toolName: 'mcp__codegraph__codegraph_status', input: {}, timeoutSec: 60,
+      },
+      { socketPath: sock, timeoutMs: 10_000 },
+    );
+    held(pending);
+    await waitForSent(sent);
+    const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
+    const tooLong = (card.buttons ?? [])
+      .filter((b) => Buffer.byteLength(b.id, 'utf8') > CALLBACK_DATA_MAX_BYTES)
+      .map((b) => `${b.id} (${Buffer.byteLength(b.id, 'utf8')}B)`);
+    expect(tooLong).toEqual([]);
+    // The label still names the tool — only the callback payload is trimmed.
+    expect(card.buttons?.some((b) => b.label.includes('mcp__codegraph__codegraph_status'))).toBe(true);
+  });
+});
+
+// PermissionRequest fires only when CC is about to show a dialog, so an
+// auto-allow here deletes a prompt the user would have seen. That must be opt-in.
+describe('read-only auto-allow wiring', () => {
+  const REQ = { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Read', input: { file_path: '/etc/hosts' }, timeoutSec: 60 } as const;
+
+  it('default config does not auto-allow Read — it falls back to CC (defer)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    h = await bootstrapDaemon({ home: tmp });
+    const r = await request(REQ, { socketPath: daemonSocketPath(tmp), timeoutMs: 5000 });
+    expect(r).toEqual({ kind: 'hook.permission.result', decision: 'defer' });
+  });
+
+  it("approvals.autoApprove 'readonly' opts back in", async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { autoApprove: 'readonly' } }));
+    h = await bootstrapDaemon({ home: tmp });
+    const r = await request(REQ, { socketPath: daemonSocketPath(tmp), timeoutMs: 5000 });
+    expect(r).toEqual({ kind: 'hook.permission.result', decision: 'allow' });
+  });
+});
+
 describe('permission_prompt forwarding — the notify-mode / immediate-defer notification chain (issue #49)', () => {
   const CFG = {
     web: { enabled: false },
@@ -992,6 +1051,43 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     // IM: plain text (grace 0 here), pointing back at the terminal.
     await waitForSent(sent);
     expect(sent[0]).toMatchObject({ kind: 'text' });
+    expect((sent[0] as { text: string }).text).toContain('answer in the terminal');
+  });
+
+  // The baseline contract. In `full` mode every permission request tlive sees
+  // ends up either held (an answerable card owns IM) or deliberately passed
+  // through (sub-agent pass-through / policy allow). "Passed through" means "act
+  // as if tlive were not installed" — so an un-answerable "go look at your
+  // terminal" text is a message the baseline never sends, and it cannot be
+  // attributed anyway (CC's Notification input carries no agent_id and no
+  // tool_name). Desktop + dashboard are tlive's own surfaces, not additions to
+  // CC's output, so they stay.
+  it('full mode + no held card (tlive passed through) → desktop + dashboard, but NO IM text', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'full' }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+
+    expect(notes).toHaveLength(1);
+    expect((await findSession(sock, 's1'))?.pending?.local).toBe(true);
+    await new Promise((r) => setTimeout(r, 80));
+    expect(sent).toHaveLength(0);
+  });
+
+  it('notify mode still sends the IM text — there it is the only signal a dialog is waiting', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'notify' }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const sock = daemonSocketPath(tmp);
+
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+
+    await waitForSent(sent);
     expect((sent[0] as { text: string }).text).toContain('answer in the terminal');
   });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { decide, READ_ONLY_TOOLS } from '../policy-engine';
+import { decide, READ_ONLY_TOOLS, SAFE_TOGGLE_MESSAGE } from '../policy-engine';
 
 describe('PolicyEngine.decide', () => {
   const ask = { trustUntilRevoked: false };
@@ -7,9 +7,9 @@ describe('PolicyEngine.decide', () => {
     expect(decide({ toolName: 'Bash' }, ask)).toEqual({ decision: 'ask' });
     expect(decide({ toolName: 'Write' }, ask)).toEqual({ decision: 'ask' });
   });
-  it('read-only tools → allow (reason read-only)', () => {
+  it('read-only tools → allow (reason read-only) once opted in', () => {
     for (const t of ['Read', 'Glob', 'Grep']) {
-      expect(decide({ toolName: t }, ask)).toEqual({ decision: 'allow', reason: 'read-only' });
+      expect(decide({ toolName: t }, { ...ask, autoApprove: 'readonly' })).toEqual({ decision: 'allow', reason: 'read-only' });
     }
   });
   it('WebFetch/WebSearch are NOT read-only → ask', () => {
@@ -63,6 +63,43 @@ describe('safe auto-approve', () => {
   it('readonly (default) does NOT auto-allow ordinary Bash', () => {
     expect(decide({ toolName: 'Bash', input: { command: 'touch /tmp/x' } }, { trustUntilRevoked: false }).decision).toBe('ask');
     expect(decide({ toolName: 'Bash', input: { command: 'touch /tmp/x' } }, { trustUntilRevoked: false, autoApprove: 'readonly' }).decision).toBe('ask');
+  });
+});
+
+// The baseline contract: installing tlive must not remove a permission dialog
+// the user would otherwise have seen. CC fires PermissionRequest ONLY when it is
+// about to show one (docs: "Runs when the user is shown a permission dialog"),
+// so anything auto-allowed here is a prompt deleted from under the user — never
+// "friction the `*` matcher added". That makes read-only auto-allow opt-in.
+describe('read-only auto-allow is opt-in', () => {
+  it('default (no autoApprove) keeps read-only tools asking', () => {
+    for (const t of ['Read', 'Glob', 'Grep']) {
+      expect(decide({ toolName: t }, { trustUntilRevoked: false }).decision).toBe('ask');
+    }
+  });
+
+  it("autoApprove 'readonly' opts in", () => {
+    for (const t of ['Read', 'Glob', 'Grep']) {
+      expect(decide({ toolName: t }, { trustUntilRevoked: false, autoApprove: 'readonly' }))
+        .toEqual({ decision: 'allow', reason: 'read-only' });
+    }
+  });
+
+  it("autoApprove 'safe' still covers read-only tools", () => {
+    expect(decide({ toolName: 'Read' }, { trustUntilRevoked: false, autoApprove: 'safe' }).decision).toBe('allow');
+  });
+});
+
+// `/safe off` used to be described as "back to asking for everything except
+// read-only tools", which was true only while read-only was auto-allowed
+// unconditionally. It no longer is, so the wording must not promise it.
+describe('SAFE_TOGGLE_MESSAGE', () => {
+  it('does not promise a read-only exception the default no longer grants', () => {
+    expect(SAFE_TOGGLE_MESSAGE.off).not.toMatch(/except read-only/i);
+  });
+
+  it('names the config knob that does grant it', () => {
+    expect(SAFE_TOGGLE_MESSAGE.off).toMatch(/autoApprove/);
   });
 });
 
