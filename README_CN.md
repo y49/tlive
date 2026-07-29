@@ -84,7 +84,7 @@ IM 消息带 `label · ` 前缀(会话目录名),但不再用图标区分包装/
   发 `/mode`——裸发也会回一张列出梯子并标出当前档的卡);shim 每个 hook 都
   重读 config,无需重启也无需新会话,`tlive status` 会显示当前生效的 mode。
   远程审批设计成 opt-in——刚装好的工具绝不该能悄悄挂起你的工作流。
-- **审批** *(远程审批 —— `mode: full`)* —— 需要审批的工具调用会被 hold 住,
+- **审批** *(远程审批 —— `mode: full` 或 `all`)* —— 需要审批的工具调用会被 hold 住,
   让你从 IM 按钮或 web 卡作答:
   - **并行、先答先得** —— Claude Code 上 `PermissionRequest` hook 与本地权限
     对话并行;两边都活,键盘上答掉后远程卡几秒内自动收尾("已在终端处理")。
@@ -284,6 +284,9 @@ IM 命令:`/mute on|off`(静音 IM 通知)、`/trust on|off`(暂停审批——�
     "autoStart": true         // 默认 true;设 false 关闭 session-start 懒启动
   },
   "approvals": {
+    // `holdSubagents` 已删除 —— 由 `tlive mode all` 取代(如果你的配置里还有
+    // `"holdSubagents": true`:这个键现在是死的,会被静默忽略,想继续 hold
+    // 子代理审批请改用 `tlive mode all`)。
     // 远程审批窗口(秒),两家共用。远程通道与本地提示并行,窗口开长
     // 也不费事——超时不批也不拒,只是把你逼回键盘而已。
     "windowSec": 86200,       // 默认约 24 小时(同时是上限;最小 60)

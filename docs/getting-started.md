@@ -134,6 +134,15 @@ call:
 2. You tap **Allow** or **Deny** on your phone (or answer at the keyboard).
 3. The hook returns the decision to Claude; Claude continues or aborts.
 
+**`all`** (`tlive mode all`) — everything in `full`, plus sub-agent approvals:
+
+1. Sub-agent tool calls are held and made remotely answerable too, exactly
+   like a main-session approval — with one trade: Claude Code decides whether
+   to build a sub-agent's local dialog only *after* the hook returns, so a
+   held sub-agent has **no** terminal prompt until the window ends (a timeout,
+   or the phone/dashboard answer). Use it when nobody is at the keyboard;
+   `tlive mode full` goes back to passing sub-agent prompts straight through.
+
 Nothing is ever auto-approved or blanket-denied: if the daemon is unreachable,
 the window expires, or no chat is configured, the hook falls back to `{}` and
 control returns to the local terminal as if tlive weren't there.

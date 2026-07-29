@@ -15,7 +15,7 @@ Guide the user through tlive setup. Execute in order, showing each result:
    b. Have the user send the bot a message and confirm the reply arrives
       (proves the inbound path, not just the config).
    c. Ask the user to check the bot's command menu shows
-      /mute /trust /safe /help (a stale client cache → close and
+      /mute /trust /safe /mode /help (a stale client cache → close and
       reopen the chat).
    d. Desktop notifications: explain they fire on the computer only for things
       that need you to act — a pending approval, or the idle "waiting for your

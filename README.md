@@ -100,7 +100,7 @@ continue" line makes the distinction moot for what you actually do.
   session is needed, and `tlive status` shows the effective mode. Remote
   approval is opt-in by design — a freshly-installed tool must never be able
   to silently hang a workflow.
-- **Approvals** *(remote approval — `mode: full`)* — a tool call that needs
+- **Approvals** *(remote approval — `mode: full` or `all`)* — a tool call that needs
   approval is held so you can answer it from IM buttons or the web card:
   - **Parallel, first-answer-wins** — on Claude Code the `PermissionRequest`
     hook fires alongside the local permission dialog; both are live, and
@@ -340,6 +340,10 @@ message to type into that session.
     "autoStart": true         // default true; false disables session-start lazy-start
   },
   "approvals": {
+    // `holdSubagents` was removed — `tlive mode all` replaces it (upgrading
+    // from a config with `"holdSubagents": true`: that key is now dead and
+    // silently ignored, so switch to `tlive mode all` to keep holding
+    // sub-agent approvals).
     // remote-approval window in seconds, shared by both vendors. The remote
     // channel runs parallel to the local prompt, so a long window costs
     // nothing — timing out never approves or denies anything, it only

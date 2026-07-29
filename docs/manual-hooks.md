@@ -39,14 +39,17 @@ overwriting).
 }
 ```
 
-Approval gating only happens in `mode: full` (remote approval — opt-in via
-`tlive mode full`); tlive's default posture is `notify`, where the shim passes
-every `PermissionRequest` through untouched and prompts stay 100% local. When
-it is on, approval gating on Claude Code rides `PermissionRequest`, which runs
-in PARALLEL with the local permission dialog: both are live, first answer wins,
-and a local answer releases the remote card within seconds. The 24-hour
-`timeout` is what keeps the remote card answerable while you're away from the
-keyboard.
+Approval gating only happens in `mode: full` or `mode: all` (remote approval —
+opt-in via `tlive mode full`, or `tlive mode all` to also hold sub-agent
+approvals); tlive's default posture is `notify`, where the shim passes every
+`PermissionRequest` through untouched and prompts stay 100% local. When it is
+on, approval gating on Claude Code rides `PermissionRequest`, which runs in
+PARALLEL with the local permission dialog for a main-session request: both are
+live, first answer wins, and a local answer releases the remote card within
+seconds. (A held sub-agent request under `all` is the one exception — Claude
+Code decides whether to build its dialog only after the hook returns, so there
+is no local dialog to race until the window ends.) The 24-hour `timeout` is
+what keeps the remote card answerable while you're away from the keyboard.
 
 `tlive hook <event>` must resolve on `PATH` (the same binary `tlive setup`
 installs). No further action needed on the Claude Code side — hooks fire as

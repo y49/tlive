@@ -66,7 +66,8 @@ sessions (disable via `daemon.autoStart: false`).
   (rm -rf, sudo, .env/.ssh writes…) still asks and no config can lower it.
   `/trust on` pauses approvals entirely (high risk — pair with allowedSenders).
 - Runtime switches flip the same state from either entrance: IM commands
-  (/mute /trust /safe) and the CLI (`tlive mute|trust|safe on|off`). `/mute on`
+  (/mute /trust /safe on|off, /mode for the posture ladder) and the CLI
+  (`tlive mute|trust|safe on|off`, `tlive mode off|notify|full|all`). `/mute on`
   = go quiet; it silences IM notifications ONLY. The desktop toast is a separate,
   independent surface (IM ⊥ desktop): CLI-only `tlive desktop on|off`, no IM
   command, unaffected by `/mute`. It fires only for things that need you to act:
