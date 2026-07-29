@@ -239,7 +239,17 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   /** 姿态是 config-backed 的(shim 每个 hook 事件都重读),所以 daemon 绝不能
    *  缓存它:`tlive mode all` 或 IM 的 /mode 必须改变**下一次**审批的行为,不需要
    *  重启。此前 cfg 只在 bootstrap 读一次,子代理分支于是永远停在启动时的姿态。
-   *  读不了配置(被删/正被写坏)时回落启动值,而不是静默改姿态。 */
+   *
+   *  文件缺失 ≠ 读不出来,两者故意分两条路:文件不存在时 loadConfig 走正常的
+   *  DEFAULT 分支(不抛),cfg.mode 是 undefined,effectiveMode 落到 'notify' ——
+   *  这和 shim 的 readMode() 对同一份(缺席的)config.json 算出来的结果完全一样
+   *  (single source of truth,两边不会因为文件在不在而分裂)。而且这条路根本
+   *  摸不到:modeShortCircuit 一旦解出 'notify' 就在 IPC 之前把 permission-request
+   *  短路成 `{}`,daemon 这一层永远收不到那次请求,所以这里返回什么都不影响真实
+   *  的 hook 链路,只有绕开 shim 直接打 IPC 的调用方(如测试)才会观察到它。
+   *  catch 分支管的是另一种情形——文件在但 JSON.parse 抛了(写到一半/写坏)——
+   *  这才回落到启动时的 cfg.mode,当一次性的抗抖动,不是"删了配置就该记住上次
+   *  姿态"。 */
   const currentMode = (): ShimMode => {
     try { return effectiveMode(loadConfig(opts.home).mode); } catch { return effectiveMode(cfg.mode); }
   };

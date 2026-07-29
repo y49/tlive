@@ -1,6 +1,6 @@
 // src/kernel/daemon/__tests__/session-ipc.test.ts
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { bootstrapDaemon, type DaemonHandle } from '../bootstrap';
@@ -155,6 +155,31 @@ describe('parent-session teardown must be agent-scoped (backgrounded sub-agent a
     await until(() => { expect(h.permissionRouter.pendingCount()).toBe(1); });
     h.permissionRouter.cancel({ key: 'parent' });
     await held;
+  });
+
+  it('config.json deleted after boot resolves like a fresh install (notify), not the boot-time mode', async () => {
+    // Deleting config.json is not "config unreadable, so guess the last known
+    // posture" — loadConfig's DEFAULT branch for a missing file never throws,
+    // so currentMode() takes the SAME path the hook shim's readMode() does for
+    // the identical (absent) file and lands on the same 'notify' default —
+    // daemon and shim can never disagree over whether the file exists. This
+    // request only reaches the daemon because it bypasses the shim (direct
+    // IPC): in the real `tlive hook` path, modeShortCircuit('notify', …) would
+    // already have short-circuited the permission-request to `{}` before any
+    // IPC was even attempted, so this daemon-side value is unobservable there.
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      mode: 'all',
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+      approvals: { approvalGraceSec: 0, continueGraceSec: 0, continueWindowSec: 30 },
+    }));
+    h = await bootstrapDaemon({ home: tmp });
+
+    rmSync(join(tmp, 'config.json'));
+
+    const res = await request({ kind: 'hook.permission.request', cwd: '/proj', sessionId: 'parent', toolName: 'Bash', input: { command: 'date' }, agentId: 'subA' },
+      { socketPath: sock, timeoutMs: 4000 });
+    expect(res.kind === 'hook.permission.result' && res.decision).toBe('defer');
+    expect(h.permissionRouter.pendingCount()).toBe(0);
   });
 });
 
