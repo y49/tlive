@@ -1063,6 +1063,172 @@ describe('sub-agent pass-through tells you what is blocked', () => {
     await new Promise((r) => setTimeout(r, 120));
     expect(edits).toEqual([]);
   });
+
+  async function findSession(sock: string, id: string) {
+    const r = await request({ kind: 'session.list' }, { socketPath: sock, timeoutMs: 2000 });
+    if (r.kind !== 'session.list') throw new Error('bad reply');
+    return r.sessions.find((s) => s.id === id);
+  }
+
+  // The IM notice (above) is only half the gap: with no IM configured, or
+  // `/mute` on, or the user simply not looking at their phone, a blocked
+  // sub-agent used to produce NO signal at all. The desktop toast is
+  // precisely the "at this machine, not watching the terminal" channel.
+  it('fires ONE desktop ping naming the tool when a sub-agent request passes through', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+
+    await request(
+      {
+        kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', agentId: 'a-77',
+        toolName: 'Bash', input: { command: 'rm -rf /tmp/scratch' }, timeoutSec: 60,
+      },
+      { socketPath: sock, timeoutMs: 5000 },
+    );
+
+    await until(() => { expect(notes).toHaveLength(1); });
+    expect(notes[0].title).toContain('Bash');
+    expect(notes[0].title).toContain('sub-agent');
+    expect(notes[0].body).toContain('Waiting at the terminal');
+  });
+
+  // IM ⊥ desktop: `/mute` is an IM-only switch. The old early-return at the
+  // top of onPassthrough killed the WHOLE announcement on mute, which broke
+  // that rule for this notice specifically.
+  it('IM mute silences the card, but the desktop ping still fires (IM ⊥ desktop)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+
+    await request({ kind: 'daemon.set', key: 'mute', enabled: true }, { socketPath: sock, timeoutMs: 2000 }); // /mute on
+
+    await request(
+      {
+        kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', agentId: 'a-77',
+        toolName: 'Bash', input: { command: 'rm -rf /tmp/scratch' }, timeoutSec: 60,
+      },
+      { socketPath: sock, timeoutMs: 5000 },
+    );
+
+    await until(() => { expect(notes).toHaveLength(1); }); // desktop unaffected by IM mute…
+    await new Promise((r) => setTimeout(r, 80));
+    expect(sent).toHaveLength(0); // …but the IM card never went out
+  });
+
+  // Reuses the same read-only shape as the notify-mode local-prompt card
+  // (`local: true`) — there is no held request behind it, so Allow/Deny would
+  // be a button that cannot work. The registry holds ONE pending slot per
+  // session key, so a sub-agent notice must never evict an already-held
+  // main-session approval.
+  it('upserts a read-only dashboard card, but never evicts an already-held main-session approval', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const sock = daemonSocketPath(tmp);
+
+    // Fresh session, nothing held — the pass-through alone creates the card.
+    await request(
+      {
+        kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', agentId: 'a-77',
+        toolName: 'Bash', input: { command: 'rm -rf /tmp/scratch' }, timeoutSec: 60,
+      },
+      { socketPath: sock, timeoutMs: 5000 },
+    );
+    const s1 = await findSession(sock, 's1');
+    expect(s1?.pending?.local).toBe(true);
+    expect(s1?.pending?.title).toContain('sub-agent');
+    expect(s1?.pending?.requestId).toContain('a-77');
+
+    // A held MAIN-session approval (no agentId) already owns 's2' — a
+    // sub-agent notice for the SAME key must not steal the pending slot.
+    const heldMain = held(request(
+      { kind: 'hook.permission.request', cwd: '/w2', sessionId: 's2', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
+      { socketPath: sock, timeoutMs: 10_000 },
+    ));
+    await waitForSent(sent);
+    const before = await findSession(sock, 's2');
+    const heldRequestId = before?.pending?.requestId;
+    expect(heldRequestId).toBeTruthy();
+    expect(before?.pending?.local).toBeUndefined(); // the answerable card
+
+    await request(
+      {
+        kind: 'hook.permission.request', cwd: '/w2', sessionId: 's2', agentId: 'a-88',
+        toolName: 'Read', input: { file_path: '/etc/hosts' }, timeoutSec: 60,
+      },
+      { socketPath: sock, timeoutMs: 5000 },
+    );
+    const after = await findSession(sock, 's2');
+    expect(after?.pending?.requestId).toBe(heldRequestId); // untouched — never overwritten
+    void heldMain; // resolved by the daemon's own shutdown() → settleAllPending
+  });
+
+  // Retirement (measured live: the sub-agent's PostToolUse carrying the same
+  // (agentId, toolName) pair) must close BOTH the dashboard card and the
+  // desktop toast when nothing else is waiting — and must not close the toast
+  // early when a held approval elsewhere is still pending, since the toast is
+  // one shared machine-wide slot.
+  it('a matching PostToolUse clears the dashboard card and closes the toast — but not while a held approval is still pending', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const notes: Array<{ title: string; body: string }> = [];
+    const clears: number[] = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+
+    // Nothing else pending: retirement closes both surfaces.
+    await request(
+      {
+        kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', agentId: 'a-77',
+        toolName: 'Bash', input: { command: 'rm -rf /tmp/scratch' }, timeoutSec: 60,
+      },
+      { socketPath: sock, timeoutMs: 5000 },
+    );
+    await until(() => { expect(notes).toHaveLength(1); });
+    await request(
+      { kind: 'hook.event', event: { event: 'activity', cwd: '/w', sessionId: 's1', agentId: 'a-77', toolName: 'Bash', result: {} } },
+      { socketPath: sock, timeoutMs: 2000 },
+    );
+    await until(() => { expect(clears.length).toBeGreaterThan(0); });
+    expect((await findSession(sock, 's1'))?.pending).toBeUndefined();
+
+    // A held main-session approval on a DIFFERENT session is still
+    // outstanding when THIS session's sub-agent notice retires.
+    const heldMain = held(request(
+      { kind: 'hook.permission.request', cwd: '/w2', sessionId: 's2', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
+      { socketPath: sock, timeoutMs: 10_000 },
+    ));
+    await until(() => { expect(notes.length).toBeGreaterThanOrEqual(2); });
+    clears.length = 0;
+
+    await request(
+      {
+        kind: 'hook.permission.request', cwd: '/w3', sessionId: 's3', agentId: 'a-99',
+        toolName: 'Read', input: { file_path: '/etc/hosts' }, timeoutSec: 60,
+      },
+      { socketPath: sock, timeoutMs: 5000 },
+    );
+    await until(() => { expect(notes.length).toBeGreaterThanOrEqual(3); });
+    expect((await findSession(sock, 's3'))?.pending?.local).toBe(true);
+
+    await request(
+      { kind: 'hook.event', event: { event: 'activity', cwd: '/w3', sessionId: 's3', agentId: 'a-99', toolName: 'Read', result: {} } },
+      { socketPath: sock, timeoutMs: 2000 },
+    );
+    await new Promise((r) => setTimeout(r, 100));
+    expect(clears).toEqual([]); // s2's held approval still pending → toast stays open
+    expect((await findSession(sock, 's3'))?.pending).toBeUndefined(); // s3's own card still retires
+    void heldMain; // resolved by the daemon's own shutdown() → settleAllPending
+  });
 });
 
 // Telegram caps callback_data at 64 BYTES and rejects the ENTIRE sendMessage

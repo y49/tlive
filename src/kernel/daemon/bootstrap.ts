@@ -445,10 +445,29 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const passthruNotices = new Map<string, Array<{ channel: string; messageId: string; body: string }>>();
   const passthruKey = (key: string, agentId: string, toolName: string): string => `${key}\u0000${agentId}\u0000${toolName}`;
 
+  /** requestId for the dashboard's read-only pending card on a pass-through. */
+  const passthruRequestId = (agentId: string, toolName: string): string => `passthru:${agentId}:${toolName}`;
+
+  /** Sub-agent dialogs handed back to the terminal and not yet observed running.
+   *  Separate from passthruNotices (which only has entries when an IM card was
+   *  actually sent) because the desktop toast must work with no IM at all — this
+   *  is what lets retirePassthruNotice close the toast even when there was never
+   *  a card to edit. */
+  const passthruWaiting = new Set<string>(); // passthruKey(key, agentId, toolName)
+
   /** The sub-agent's tool ran, so its dialog was answered at the keyboard. Mark
-   *  the notice so it stops reading as "still waiting". */
-  const retirePassthruNotice = (key: string, agentId: string, toolName: string): void => {
+   *  the notice so it stops reading as "still waiting", clear its read-only
+   *  dashboard card, and close the desktop toast once nothing else is waiting. */
+  const retirePassthruNotice = (key: string, cwd: string, agentId: string, toolName: string): void => {
     const id = passthruKey(key, agentId, toolName);
+    passthruWaiting.delete(id);
+    // Same guard as onResolved: only clear the registry's ONE pending slot if
+    // THIS notice still owns it — a main-session held approval (or a
+    // different pass-through that raced in) must survive untouched.
+    if (sessions.get(key)?.pending?.requestId === passthruRequestId(agentId, toolName)) {
+      events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd, pending: null }) });
+    }
+    if (permissionRouter.pendingCount() === 0 && localPrompts.count() === 0 && passthruWaiting.size === 0) void desktop.clear();
     const notices = passthruNotices.get(id);
     if (!notices) return;
     passthruNotices.delete(id);
@@ -515,27 +534,44 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     // affordance that cannot work is worse than none (see onPassthrough).
     onPassthrough: ({ key, cwd, agentId, toolName, title, body }) => {
       logJson('permission.passthrough.notice', { key, agentId, toolName });
-      if (muted || sessions.get(key)?.muted) return;
-      const notice = `${body}\n\n_Waiting at the terminal — a sub-agent's prompt can only be answered there._`;
-      for (const t of configuredChats()) {
-        void sendToChat(t, {
-          title: `${toolName} · sub-agent`, body: notice, cwd: key,
-          // The one gap this notice cannot close: THIS dialog can only be answered
-          // at the keyboard. What it can do is stop the next one from being lost —
-          // one tap moves the posture up so the rest of this run comes to you.
-          buttons: [{ id: 'mode:all', label: 'Hold sub-agents from now on' }],
-          onSent: (s) => {
-            const id = passthruKey(key, agentId, toolName);
-            const list = passthruNotices.get(id) ?? [];
-            list.push({ channel: s.channel, messageId: s.messageId, body: notice });
-            passthruNotices.set(id, list);
-          },
-        })
-          .catch((e: unknown) => {
-            logJson('permission.passthrough.undelivered', { key, agentId, toolName, channel: t.channel, error: e instanceof Error ? e.message : String(e) });
-          });
+      void title; // the IM/dashboard titles below are the sub-agent-specific "<tool> · sub-agent", not the generic card title
+      passthruWaiting.add(passthruKey(key, agentId, toolName));
+      // Desktop toast: the "at this machine, not watching the terminal" signal.
+      // Gated ONLY by desktopOn — never by IM mute (IM ⊥ desktop), so it fires
+      // with no IM configured at all, exactly like onPending's ping below.
+      if (desktopOn) void desktop.ping(`${sessionTag(key)}${toolName} · sub-agent`, 'Waiting at the terminal — answer it there.');
+      // Dashboard: read-only pending (local: true) — there is no held request
+      // behind this, so Allow/Deny would be a button that cannot work (same
+      // rule as the notify-mode local-prompt card). ONE pending slot per
+      // session key: never evict an already-held main-session approval.
+      if (!sessions.get(key)?.pending) {
+        events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd, status: 'waiting-approval', pending: {
+          requestId: passthruRequestId(agentId, toolName), title: `${toolName} · sub-agent`, body, local: true,
+        } }) });
       }
-      void cwd; // the registry key is what routes replies; cwd is display-only here
+      // IM card stays mute-gated (/mute is IM-only) — the desktop toast and
+      // dashboard card above must fire regardless of it.
+      if (!(muted || sessions.get(key)?.muted)) {
+        const notice = `${body}\n\n_Waiting at the terminal — a sub-agent's prompt can only be answered there._`;
+        for (const t of configuredChats()) {
+          void sendToChat(t, {
+            title: `${toolName} · sub-agent`, body: notice, cwd: key,
+            // The one gap this notice cannot close: THIS dialog can only be answered
+            // at the keyboard. What it can do is stop the next one from being lost —
+            // one tap moves the posture up so the rest of this run comes to you.
+            buttons: [{ id: 'mode:all', label: 'Hold sub-agents from now on' }],
+            onSent: (s) => {
+              const id = passthruKey(key, agentId, toolName);
+              const list = passthruNotices.get(id) ?? [];
+              list.push({ channel: s.channel, messageId: s.messageId, body: notice });
+              passthruNotices.set(id, list);
+            },
+          })
+            .catch((e: unknown) => {
+              logJson('permission.passthrough.undelivered', { key, agentId, toolName, channel: t.channel, error: e instanceof Error ? e.message : String(e) });
+            });
+        }
+      }
     },
     onPending: ({ key, cwd, requestId, title, body, toolName, ask }) => {
       // Desktop ping FIRST — this notification is for the person AT this
@@ -1024,7 +1060,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // This sub-agent's tool ran ⇒ its dialog was answered at the keyboard.
             // agentId is required, not optional: parallel sub-agents share key +
             // toolName, so matching without it would retire a sibling's notice.
-            if (ev.agentId) retirePassthruNotice(key, ev.agentId, ev.toolName);
+            if (ev.agentId) retirePassthruNotice(key, ev.cwd, ev.agentId, ev.toolName);
             // Main-session tool ran → the CC-native dialog (if we tracked one)
             // was answered. Sub-agent activity doesn't touch it: a backgrounded
             // agent runs in parallel with a still-waiting main dialog. No
