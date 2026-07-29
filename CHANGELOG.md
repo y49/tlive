@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.1.0](https://github.com/y49/tlive/compare/v2.0.0...v2.1.0) (2026-07-29)
+
+
+### Features
+
+* **daemon:** log why each permission request was or wasn't held ([4ffac3f](https://github.com/y49/tlive/commit/4ffac3f94bd5c6b7375a2f69f5920feccbc799b1))
+
+
+### Bug Fixes
+
+* **permissions:** stop tlive from changing what CC asks, and from hiding why ([5523fef](https://github.com/y49/tlive/commit/5523fefad9f9f2531c81929d11bb1d0bff53efe7))
+* **pty:** close the shadow-terminal lag so an attaching client loses no bytes ([ee2f6af](https://github.com/y49/tlive/commit/ee2f6af2e2feecba84194a19419ef640d7251ac1)), closes [#64](https://github.com/y49/tlive/issues/64)
+* **pty:** guard node-pty's unlistened win32 conin socket, and harden Windows CI ([#63](https://github.com/y49/tlive/issues/63)) ([77f8535](https://github.com/y49/tlive/commit/77f85358880df10a163fa24277cd604e7c4088fb))
+
 ## [2.0.0](https://github.com/y49/tlive/compare/v2.0.0-beta.0...v2.0.0) (2026-07-27)
 
 
