@@ -50,6 +50,20 @@ export interface PermissionRouterDeps {
    *  (label = basename(cwd)). Conflating them here is exactly the bug this
    *  split fixes (see resolveKey in bootstrap.ts). */
   onPending?: (p: { key: string; cwd: string; requestId: string; title: string; body: string; toolName: string; ask?: AskContext }) => void;
+  /** Fired when a request is handed straight back to the vendor instead of being
+   *  held — today only the sub-agent pass-through. The point is that tlive is
+   *  holding the whole request at that instant (tool, input, agentId) while the
+   *  only other signal the user would get, CC's permission_prompt notification,
+   *  carries neither tool name nor agentId and so can say nothing useful. Without
+   *  this the blocked sub-agent is invisible.
+   *
+   *  Informational only: the dialog it refers to can be answered at the keyboard
+   *  and nowhere else, because CC awaits the hook before building the dialog, so
+   *  by the time it exists this hook invocation is over. Consumers must not offer
+   *  an Allow/Deny affordance for it. `agentId` + `toolName` are carried because
+   *  together they are the one pair that also comes back on the sub-agent's
+   *  PostToolUse, which is how the notice gets retired. */
+  onPassthrough?: (p: { key: string; cwd: string; agentId: string; toolName: string; title: string; body: string }) => void;
   /** Fired when the request resolves (answered / timed out / deferred after a card). Same key/cwd split as onPending.
    *  message:带理由的拒绝所携带的文本(引用回复而来)—— 供回写区分
    *  `Denied` 与 `Denied with guidance`。
@@ -152,6 +166,12 @@ export class PermissionRouter {
     // auto-allows; opt-in holdSubagents makes sub-agent approvals remotely answerable.
     if (opts.agentId && !(this.deps.holdSubagents?.() ?? false)) {
       outcome('subagent-passthrough');
+      // Handed back — but say what was handed back, while we still hold the
+      // details. See onPassthrough for why this is the only chance to.
+      if (this.deps.onPassthrough) {
+        const { title, body } = this.deps.renderCard({ toolName: opts.toolName, input: opts.input });
+        this.deps.onPassthrough({ key: opts.key, cwd: opts.cwd, agentId: opts.agentId, toolName: opts.toolName, title, body });
+      }
       return { decision: 'defer' };
     }
 

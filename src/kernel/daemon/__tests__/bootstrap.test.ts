@@ -956,6 +956,114 @@ describe('Codex resume handler → continue card (regression: sentinel mismatch)
   });
 });
 
+// A sub-agent's request is handed straight back to CC so its terminal dialog
+// appears undelayed — but tlive holds the full request in its hands at that
+// moment (tool name, whole input, agentId) and used to throw all of it away. The
+// only thing the user then got was CC's own permission_prompt notification, which
+// carries no tool name and no agentId, so it could say nothing useful and could
+// not be attributed; full mode suppresses it for that reason. Result: a blocked
+// sub-agent was invisible. Push what we already know instead.
+//
+// No Allow/Deny buttons: that dialog can only be answered at the keyboard (CC
+// awaits the hook before building it, so the hook invocation is over by the time
+// the dialog exists). Buttons that cannot work are worse than none.
+describe('sub-agent pass-through tells you what is blocked', () => {
+  const CFG = {
+    mode: 'full',
+    web: { enabled: false },
+    approvals: { approvalGraceSec: 0 },
+    adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+  };
+
+  it('pushes the tool and its input, without answer buttons', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const sock = daemonSocketPath(tmp);
+
+    const r = await request(
+      {
+        kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', agentId: 'a-77',
+        toolName: 'Bash', input: { command: 'rm -rf /tmp/scratch' }, timeoutSec: 60,
+      },
+      { socketPath: sock, timeoutMs: 5000 },
+    );
+    // Handed back untouched — the terminal dialog must not be delayed.
+    expect(r).toEqual({ kind: 'hook.permission.result', decision: 'defer' });
+
+    await waitForSent(sent);
+    const msg = sent[0] as { kind: string; title?: string; body?: string; text?: string; buttons?: Array<{ id: string }> };
+    const shown = `${msg.title ?? ''}\n${msg.body ?? ''}\n${msg.text ?? ''}`;
+    expect(shown).toContain('Bash');                    // what tool
+    expect(shown).toContain('rm -rf /tmp/scratch');      // and what it wants to do
+    // Nothing that pretends to be answerable from here.
+    const ids = (msg.buttons ?? []).map((b) => b.id);
+    expect(ids.filter((id) => id.startsWith('approve:') || id.startsWith('deny:'))).toEqual([]);
+  });
+
+  // The notice has to retire itself, or it becomes a card that still says
+  // "waiting" long after the thing was answered. (agentId, toolName) is what
+  // makes that possible: measured on a live session, the sub-agent's PostToolUse
+  // comes back carrying the SAME pair the pass-through carried, so the two ends
+  // can be matched. Note the notification path could never do this — CC's
+  // permission_prompt has no agentId at all.
+  it('retires the notice once that sub-agent tool actually runs', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const sent: OutgoingMessage[] = [];
+    const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
+    const adapter = interactiveAdapter('telegram', sent, edits);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const sock = daemonSocketPath(tmp);
+
+    await request(
+      {
+        kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', agentId: 'a-77',
+        toolName: 'Bash', input: { command: 'rm -rf /tmp/scratch' }, timeoutSec: 60,
+      },
+      { socketPath: sock, timeoutMs: 5000 },
+    );
+    await waitForSent(sent);
+
+    // The answer happened at the keyboard; the tool then ran, which is the only
+    // thing tlive ever learns about the outcome.
+    await request(
+      { kind: 'hook.event', event: { event: 'activity', cwd: '/w', sessionId: 's1', agentId: 'a-77', toolName: 'Bash', result: {} } },
+      { socketPath: sock, timeoutMs: 2000 },
+    );
+
+    await until(() => { expect(edits.length).toBeGreaterThanOrEqual(1); });
+    expect(JSON.stringify(edits[0].msg)).toMatch(/ran at the terminal/i);
+  });
+
+  it('leaves the notice alone when a DIFFERENT sub-agent runs the same tool', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const sent: OutgoingMessage[] = [];
+    const edits: Array<{ messageId: string; msg: OutgoingMessage }> = [];
+    const adapter = interactiveAdapter('telegram', sent, edits);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const sock = daemonSocketPath(tmp);
+
+    await request(
+      {
+        kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', agentId: 'a-77',
+        toolName: 'Bash', input: { command: 'rm -rf /tmp/scratch' }, timeoutSec: 60,
+      },
+      { socketPath: sock, timeoutMs: 5000 },
+    );
+    await waitForSent(sent);
+
+    // A sibling sub-agent's Bash. Parallel sub-agents share key + toolName, so
+    // ignoring agentId here would retire the wrong notice.
+    await request(
+      { kind: 'hook.event', event: { event: 'activity', cwd: '/w', sessionId: 's1', agentId: 'a-99', toolName: 'Bash', result: {} } },
+      { socketPath: sock, timeoutMs: 2000 },
+    );
+    await new Promise((r) => setTimeout(r, 120));
+    expect(edits).toEqual([]);
+  });
+});
+
 // Telegram caps callback_data at 64 BYTES and rejects the ENTIRE sendMessage
 // (BUTTON_DATA_INVALID) when any button exceeds it. `allowtool:<uuid>:<toolName>`
 // spends 47 bytes before the name, so any tool named longer than 17 characters
@@ -1054,15 +1162,22 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     expect((sent[0] as { text: string }).text).toContain('answer in the terminal');
   });
 
-  // The baseline contract. In `full` mode every permission request tlive sees
-  // ends up either held (an answerable card owns IM) or deliberately passed
-  // through (sub-agent pass-through / policy allow). "Passed through" means "act
-  // as if tlive were not installed" — so an un-answerable "go look at your
-  // terminal" text is a message the baseline never sends, and it cannot be
-  // attributed anyway (CC's Notification input carries no agent_id and no
-  // tool_name). Desktop + dashboard are tlive's own surfaces, not additions to
-  // CC's output, so they stay.
-  it('full mode + no held card (tlive passed through) → desktop + dashboard, but NO IM text', async () => {
+  // In `full` mode every request tlive sees ends up either held (an answerable
+  // card owns every surface) or deliberately handed back. So a permission_prompt
+  // arriving with nothing held means tlive handed that one back — and for the
+  // only case that produces a dialog, a sub-agent pass-through, tlive has already
+  // pushed a notice naming the tool and its input. This event adds nothing: it
+  // carries no tool_name and no agent_id, so it cannot even say which dialog it
+  // means.
+  //
+  // Building the chain from it anyway is what produced a card that never went
+  // away: retiring it needs the answer, and the only signal tlive gets is the
+  // sub-agent's PostToolUse, which is skipped here precisely because it carries an
+  // agentId (a sibling's activity must not retire the main session's reminder).
+  // Measured live: a workflow session sat at `status: active` with a "Permission
+  // needed" card still on it, because every event in that session was a
+  // sub-agent's. Don't create it, and there is nothing to retire.
+  it('full mode: a permission_prompt with nothing held creates no card, toast or IM text', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'full' }));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
@@ -1072,9 +1187,9 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
 
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
 
-    expect(notes).toHaveLength(1);
-    expect((await findSession(sock, 's1'))?.pending?.local).toBe(true);
     await new Promise((r) => setTimeout(r, 80));
+    expect(notes).toEqual([]);
+    expect((await findSession(sock, 's1'))?.pending ?? null).toBeNull();
     expect(sent).toHaveLength(0);
   });
 

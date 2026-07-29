@@ -352,7 +352,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
 
   const sendToChat = async (
     target: PermChat,
-    msg: { title?: string; body?: string; text?: string; requestId?: string; toolName?: string; cwd?: string; ask?: AskContext },
+    msg: { title?: string; body?: string; text?: string; requestId?: string; toolName?: string; cwd?: string; ask?: AskContext; onSent?: (s: { channel: string; messageId: string }) => void },
   ): Promise<void> => {
     const adapter = (opts.imAdapters ?? []).find((a) => a.channel === target.channel);
     if (!adapter) return;
@@ -407,6 +407,36 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       }
     }
     if (msg.cwd) rememberMsg(target.channel, sent.messageId, msg.cwd);
+    // Reported rather than returned: the return type is part of the router's dep
+    // contract (Promise<void>), and only this one caller needs the id back.
+    msg.onSent?.({ channel: target.channel, messageId: sent.messageId });
+  };
+
+  /** Sub-agent pass-through notices, so each can retire itself when that
+   *  sub-agent's tool actually runs. Keyed by (key, agentId, toolName) — the one
+   *  pair carried by BOTH the pass-through and the later PostToolUse, verified on
+   *  a live session. Kept separate from `sentCards` on purpose: these carry no
+   *  requestId, answer nothing, and must stay out of the reply-routing and
+   *  stale-card machinery that indexes real approvals. */
+  const passthruNotices = new Map<string, Array<{ channel: string; messageId: string; body: string }>>();
+  const passthruKey = (key: string, agentId: string, toolName: string): string => `${key} ${agentId} ${toolName}`;
+
+  /** The sub-agent's tool ran, so its dialog was answered at the keyboard. Mark
+   *  the notice so it stops reading as "still waiting". */
+  const retirePassthruNotice = (key: string, agentId: string, toolName: string): void => {
+    const id = passthruKey(key, agentId, toolName);
+    const notices = passthruNotices.get(id);
+    if (!notices) return;
+    passthruNotices.delete(id);
+    for (const n of notices) {
+      const adapter = (opts.imAdapters ?? []).find((a) => a.channel === n.channel);
+      if (!adapter) continue;
+      void adapter.edit(n.messageId, {
+        kind: 'card',
+        title: `${toolName} · sub-agent · ran at the terminal`,
+        body: n.body,
+      }).catch(() => undefined);
+    }
   };
 
   // Reap wrapped sessions whose `tlive run` process died without unregistering (kill -9 / crash).
@@ -452,6 +482,32 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     // redirect) instead of the default defer (→ CC-native local fallback).
     timeoutAction: () => cfg.approvals?.timeoutAction ?? 'defer',
     log: logJson,
+    // A sub-agent's approval was handed back to CC (its terminal dialog is what
+    // answers it). Say what is blocked while we still know — CC's own
+    // permission_prompt notification carries no tool name and no agentId, so it
+    // could never say this, which is why full mode drops it. Deliberately NO
+    // requestId: sendToChat only attaches Allow/Deny when one is present, and an
+    // affordance that cannot work is worse than none (see onPassthrough).
+    onPassthrough: ({ key, cwd, agentId, toolName, title, body }) => {
+      logJson('permission.passthrough.notice', { key, agentId, toolName });
+      if (muted || sessions.get(key)?.muted) return;
+      const notice = `${body}\n\n_Waiting at the terminal — a sub-agent's prompt can only be answered there._`;
+      for (const t of configuredChats()) {
+        void sendToChat(t, {
+          title: `${toolName} · sub-agent`, body: notice, cwd: key,
+          onSent: (s) => {
+            const id = passthruKey(key, agentId, toolName);
+            const list = passthruNotices.get(id) ?? [];
+            list.push({ channel: s.channel, messageId: s.messageId, body: notice });
+            passthruNotices.set(id, list);
+          },
+        })
+          .catch((e: unknown) => {
+            logJson('permission.passthrough.undelivered', { key, agentId, toolName, channel: t.channel, error: e instanceof Error ? e.message : String(e) });
+          });
+      }
+      void cwd; // the registry key is what routes replies; cwd is display-only here
+    },
     onPending: ({ key, cwd, requestId, title, body, toolName, ask }) => {
       // Desktop ping FIRST — this notification is for the person AT this
       // machine, so it must be immediate (the IM card's grace delay exists to
@@ -835,16 +891,26 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // sub-agent. So "is a held card already covering this dialog?" is
             // unanswerable in principle. It is used only to avoid clobbering an
             // answerable card with the read-only one below — a wrong guess costs
-            // a missed toast, never a decision. The IM push is NOT gated on it
-            // (see pushIm): posture is an exact signal where this one isn't.
+            // a missed toast, never a decision.
             const heldOwnsIt = permissionRouter.hasPendingFor({ key, sessionId: req.sessionId });
+            // Posture, unlike heldOwnsIt, is exact. In `full` mode every request
+            // tlive saw was either held or handed back, and the one handed-back
+            // case that produces a dialog — a sub-agent pass-through — already
+            // pushed a notice carrying the tool and input this event lacks (see
+            // onPassthrough). So the whole chain below is redundant here, and
+            // building it anyway is what produced a card nothing could retire:
+            // retiring needs the answer, and the only signal is the sub-agent's
+            // PostToolUse, which this path must ignore because a sibling's
+            // activity must not clear the main session's reminder. Don't create
+            // it and there is nothing to retire.
+            const redundant = mode === 'full';
             // The two arms look identical from outside — one means "tlive is
             // gating this and the card owns every surface", the other means
             // "tlive is NOT gating this, the terminal is the only answer path".
             // Confusing them is exactly how a pass-through got mistaken for a
             // held approval, so the log says which.
-            logJson('permission.localPrompt', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), heldOwnsIt, action: heldOwnsIt ? 'suppressed' : 'tracked' });
-            if (!heldOwnsIt) {
+            logJson('permission.localPrompt', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), heldOwnsIt, action: heldOwnsIt ? 'suppressed' : redundant ? 'full-mode-passthrough' : 'tracked' });
+            if (!heldOwnsIt && !redundant) {
               localPrompts.note(key, req.sessionId);
               // Desktop first, immediately — the waiting slot (ping/clear
               // lifecycle), not an info banner: the dialog IS a waiting state.
@@ -854,26 +920,14 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'waiting-approval', pending: { requestId: `local:${key}`, title: 'Permission needed', body: req.message, local: true } }) });
               // IM text rides the approval-card grace: answered at the
               // keyboard within the window → never sent (zero spam at the
-              // keyboard, same contract as the held-card push).
-              //
-              // …and in `full` mode it is not sent at all. Reaching here in full
-              // mode means tlive SAW this request and chose to hand it back
-              // (sub-agent pass-through, policy allow, no answer surface).
-              // "Handed back" is defined as "behave as if tlive were not
-              // installed", and a bare un-answerable "go look at your terminal"
-              // text is a message the no-hook baseline never sends. It also
-              // cannot be attributed: CC's Notification input carries neither
-              // agent_id nor tool_name, so we cannot even say which dialog it
-              // belongs to. In `notify` mode the opposite holds — tlive never
-              // gates, so this text is the ONLY signal a dialog is waiting.
-              // Desktop + dashboard above are tlive's own surfaces (not CC
-              // output) and stay in both postures.
+              // keyboard, same contract as the held-card push). Only `notify`
+              // mode reaches here, and there this text is the ONLY signal that a
+              // dialog is waiting — see the posture note above.
               const pushIm = (): void => {
                 // Each bail-out is logged with its own tag: "no IM text arrived"
                 // has four different causes and they are not interchangeable.
                 const note = (outcome: string, extra?: Record<string, unknown>): void =>
                   logJson('permission.localPrompt.im', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), outcome, ...extra });
-                if (mode === 'full') return note('full-mode-passthrough');
                 if (!localPrompts.has(key, req.sessionId)) return note('answered-in-grace');
                 if (permissionRouter.hasPendingFor({ key, sessionId: req.sessionId })) return note('raced-held-card');
                 if (muted || sessions.get(key)?.muted) return note('muted');
@@ -932,6 +986,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           if (ev.event === 'activity') {
             // 精确关联:回答者身份(agent_id 缺失 = 主会话)必须与 pending 一致
             permissionRouter.cancel({ key, toolName: ev.toolName, sessionId: ev.sessionId, matchAgent: ev.agentId ?? null });
+            // This sub-agent's tool ran ⇒ its dialog was answered at the keyboard.
+            // agentId is required, not optional: parallel sub-agents share key +
+            // toolName, so matching without it would retire a sibling's notice.
+            if (ev.agentId) retirePassthruNotice(key, ev.agentId, ev.toolName);
             // Main-session tool ran → the CC-native dialog (if we tracked one)
             // was answered. Sub-agent activity doesn't touch it: a backgrounded
             // agent runs in parallel with a still-waiting main dialog. No
