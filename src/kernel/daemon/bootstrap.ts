@@ -954,6 +954,15 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         }
         case 'hook.notify': {
           const key = resolveKey(req.sessionId, req.cwd, req.wrappedId);
+          // A notify can be the FIRST thing the daemon ever hears about this
+          // session (e.g. right after a daemon restart, for a session that was
+          // already running) — register it before anything below renders a
+          // `sessionTag(key)` label, or the very first line ever sent for this
+          // session goes out with no label at all (the one thing that line
+          // cannot answer on its own). Guarded so a pre-existing entry (mute
+          // state, continueId, pending) is never clobbered — only a genuine
+          // miss gets this bare upsert; an existing session keeps its full state.
+          if (!sessions.get(key)) sessions.upsert({ key, cwd: req.cwd });
           const s = sessions.get(key);
           if (req.permissionPrompt) {
             // A CC-native permission dialog is up (issue #49). A held request

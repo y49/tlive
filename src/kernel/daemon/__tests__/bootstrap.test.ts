@@ -489,6 +489,41 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     expect(sent).toHaveLength(0);  // …IM stays silent
   });
 
+  it('a notify for a session the daemon has never seen still carries the "<label> · " tag — first contact must not render before the session is registered', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const sock = daemonSocketPath(tmp);
+    // Mirrors a daemon restart: the registry is empty, and this notify is the
+    // FIRST thing the daemon ever hears about this session (started earlier).
+    expect(h.sessions.get('s-unseen')).toBeUndefined();
+    await request(
+      { kind: 'hook.notify', cwd: '/unseen-project', sessionId: 's-unseen', level: 'info', message: 'Claude is waiting for your input' },
+      { socketPath: sock, timeoutMs: 2000 },
+    );
+    await waitForSent(sent);
+    const msg = sent[0] as { kind: 'text'; text: string };
+    expect(msg.text.startsWith('unseen-project · ')).toBe(true);
+  });
+
+  it('a pre-existing registry entry (muted, with a pending approval) survives a notify unclobbered', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    h = await bootstrapDaemon({ home: tmp });
+    const key = 's-existing';
+    h.sessions.upsert({ key, cwd: '/existing-project', pending: { requestId: 'r1', title: 'Old pending', body: 'body' } });
+    h.sessions.setMuted(key, true);
+    await request(
+      { kind: 'hook.notify', cwd: '/existing-project', sessionId: key, level: 'info', message: 'Claude is waiting for your input' },
+      { socketPath: daemonSocketPath(tmp), timeoutMs: 2000 },
+    );
+    expect(h.sessions.get(key)?.muted).toBe(true);
+    expect(h.sessions.get(key)?.pending?.requestId).toBe('r1');
+  });
+
   it('the settled card keeps its body — you can still see WHAT was approved (live feedback)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },
