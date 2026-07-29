@@ -41,7 +41,13 @@ export function authoritativeSize(sources: SizeSource[]): { cols: number; rows: 
   return { cols: clamp(best.cols), rows: clamp(best.rows) };
 }
 
-interface Client extends SizeSource { socket: Socket; attached?: boolean }
+interface Client extends SizeSource {
+  socket: Socket;
+  attached?: boolean;
+  /** Frames held back while this client's attach snapshot is being built.
+   *  Present = holding. See snapshotOnFirstAttach. */
+  pending?: Buffer[];
+}
 
 export class SessionHost {
   private pty: IPty | null = null;
@@ -101,7 +107,7 @@ export class SessionHost {
       if (this.attachLocal) process.stdout.write(buf);
       this.shadow?.write(data);
       const frame = encodeData(buf);
-      for (const c of this.clients) { if (c.attached && c.socket.writable) c.socket.write(frame); }
+      for (const c of this.clients) this.sendToClient(c, frame);
     });
 
     this.pty.onExit(({ exitCode }) => {
@@ -191,19 +197,80 @@ export class SessionHost {
           const applied = this.applySize();
           // Late-joiner guarantee: if the broadcast didn't fire (size unchanged), tell this client directly.
           if (!applied.broadcast && socket.writable) socket.write(encodeSize(applied.cols, applied.rows));
-          // Screen rebuild: Size first (grid set), then the serialized current screen.
-          if (firstAttach && socket.writable && this.serializer) {
-            try {
-              const snap = this.serializer.serialize();
-              if (snap.length > 0) socket.write(encodeData(Buffer.from(snap, 'utf8')));
-            } catch { /* serialize is best-effort; live output follows anyway */ }
-          }
+          // Screen rebuild: Size first (grid set — written above, ahead of the
+          // hold), then the serialized current screen, then any live frames that
+          // arrived while it was being built.
+          if (firstAttach && socket.writable) this.snapshotOnFirstAttach(client);
         } else if (f.type === FrameType.Detach) {
           this.removeClient(client);
         }
       }
     });
     socket.on('close', () => this.removeClient(client));
+  }
+
+  /** Write one frame to one client — or hold it back while that client's attach
+   *  snapshot is still in flight, so the snapshot can never be spliced in behind
+   *  bytes that come after it. */
+  private sendToClient(c: Client, frame: Buffer): void {
+    if (!c.attached || !c.socket.writable) return;
+    if (c.pending) { c.pending.push(frame); return; }
+    c.socket.write(frame);
+  }
+
+  /** Rebuild the screen for a newly attached client without losing bytes (#64).
+   *
+   *  `shadow.write(data)` is asynchronous: xterm queues the chunk and parses it
+   *  on a later macrotask, yielding periodically while output keeps flowing. The
+   *  broadcast to sockets, by contrast, is synchronous. So at attach time the
+   *  serializer can be arbitrarily far behind the wire, and serialising straight
+   *  away gives a snapshot that ends at some offset P while the live frames this
+   *  client then receives start at Q > P — everything in between is lost, with
+   *  no error and no gap marker. If nothing had been parsed yet, the snapshot was
+   *  empty instead and the old `length > 0` guard dropped the frame entirely,
+   *  leaving the tab blank for as long as the session stayed quiet.
+   *
+   *  Two things are therefore needed, and neither works alone:
+   *
+   *  1. A parse barrier. An empty write takes its place in xterm's queue behind
+   *     every chunk already queued, and its callback fires once the parser has
+   *     consumed them — so inside the callback the serialized screen accounts for
+   *     exactly the bytes broadcast before this call, no more and no less.
+   *  2. Holding this client's live frames from now until the snapshot is on the
+   *     wire. Without it the barrier only moves the gap: bytes broadcast while we
+   *     wait would arrive before the snapshot that already contains their
+   *     predecessors, so the client would render them out of order.
+   *
+   *  The hold is bounded by xterm's drain of an already-queued backlog, which
+   *  xterm itself caps (it throws rather than let pending data grow unbounded),
+   *  and the buffer is released on every path — including a serialize failure,
+   *  where dropping it would turn a cosmetic error into lost output. */
+  private snapshotOnFirstAttach(client: Client): void {
+    const shadow = this.shadow;
+    const serializer = this.serializer;
+    if (!shadow || !serializer) return;
+    client.pending = [];
+    const release = (): void => {
+      const held = client.pending;
+      client.pending = undefined;
+      if (!held || !client.socket.writable) return;
+      for (const f of held) client.socket.write(f);
+    };
+    try {
+      shadow.write('', () => {
+        try {
+          const snap = serializer.serialize();
+          // A `length > 0` check is sound HERE and only here: past the barrier,
+          // empty means the screen really is empty, not "not parsed yet".
+          if (snap.length > 0 && client.socket.writable) {
+            client.socket.write(encodeData(Buffer.from(snap, 'utf8')));
+          }
+        } catch { /* serialize is best-effort; the held bytes still go out */ }
+        finally { release(); }
+      });
+    } catch {
+      release(); // barrier could not be queued — never strand the held frames
+    }
   }
 
   private removeClient(client: Client): void {
@@ -226,7 +293,7 @@ export class SessionHost {
     try { this.pty?.resize(next.cols, next.rows); } catch { /* pty gone */ }
     try { this.shadow?.resize(next.cols, next.rows); } catch { /* headless quirk */ }
     const frame = encodeSize(next.cols, next.rows);
-    for (const c of this.clients) { if (c.attached && c.socket.writable) c.socket.write(frame); }
+    for (const c of this.clients) this.sendToClient(c, frame);
     return { cols: next.cols, rows: next.rows, broadcast: true };
   }
 

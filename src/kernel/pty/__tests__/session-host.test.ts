@@ -173,19 +173,31 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
     await new Promise<void>((r) => probe.once('connect', () => r()));
     probe.write(encodeAttach(80, 24));
 
-    // The precondition the snapshot path needs: EARLY-SCREEN must have reached the
-    // shadow terminal BEFORE the client under test attaches. Otherwise the snapshot
-    // is empty, the live stream carries the string anyway, and this test passes
-    // without touching the snapshot path at all.
+    // The precondition the snapshot path needs: EARLY-SCREEN must already be on
+    // the wire before the client under test attaches, so the live stream cannot
+    // be what carries it and only the snapshot path can satisfy the assertion.
     //
-    // Seeing EARLY-SCREEN arrive on a live client does NOT establish that: pty.onData
-    // broadcasts to sockets synchronously, but xterm's write buffer parses on a later
-    // macrotask, so serialize() can still return '' while those bytes are already on
-    // the wire. Wait on the shadow's own content instead — the thing the snapshot is
-    // built from. (onActivity is no use either: on Windows ConPTY emits initialisation
-    // sequences before the child writes anything, so a flip says nothing about output.)
-    const internals = host as unknown as { serializer: { serialize(): string } | null };
-    await until(() => { expect(internals.serializer?.serialize() ?? '').toContain('EARLY-SCREEN'); });
+    // Waiting on the probe is enough BECAUSE the host now flushes the parser
+    // before serialising (#64). Bytes on the wire do not imply the shadow parsed
+    // them — pty.onData broadcasts synchronously while xterm's write buffer
+    // parses on a later macrotask — so this used to be unsound and the test had
+    // to peek at host.serializer to know when attaching was safe. The flush makes
+    // it deterministic from out here, so the internals reach-in is gone.
+    //
+    // This is NOT the #64 regression guard, and must not be mistaken for one:
+    // measured with the flush removed, the parser still wins this particular race
+    // and the test passes anyway. The single macrotask it takes to connect and
+    // deliver an Attach frame is usually enough for a lone small write to parse.
+    // The deterministic reproduction needs sustained output — see the gap test
+    // below, which fails immediately without the flush.
+    // (onActivity is no use either: on Windows ConPTY emits initialisation
+    // sequences before the child writes anything, so a flip says nothing.)
+    const pdec = new FrameDecoder();
+    let probeSaw = '';
+    probe.on('data', (chunk: Buffer) => {
+      for (const f of pdec.push(chunk)) if (f.type === FrameType.Data) probeSaw += f.payload.toString('utf8');
+    });
+    await until(() => { expect(probeSaw).toContain('EARLY-SCREEN'); });
 
     const dec = new FrameDecoder();
     const got = await new Promise<string>((resolve, reject) => {
@@ -213,6 +225,78 @@ describe('SessionHost (socket-only, attachLocal:false)', () => {
     await host.stop();
   });
 
+
+  // #64. The shadow terminal is fed with `shadow.write(data)` and no callback,
+  // so xterm parses on a later macrotask and yields periodically during
+  // sustained output — while the broadcast to sockets is synchronous. A client
+  // attaching mid-output therefore gets a snapshot built from a stale buffer:
+  // either empty (blank tab forever, because the `length > 0` guard turns "not
+  // parsed yet" into "send nothing") or ending at some offset P while the live
+  // bytes it then receives start at Q > P, silently losing everything between.
+  //
+  // Numbered markers make that reconcilable: the client's whole stream must
+  // contain an unbroken run. Concatenating before extracting is deliberate — a
+  // marker split across the snapshot/live boundary is completed by the live
+  // tail, so only whole markers are counted and write boundaries don't matter.
+  it('a client attaching DURING sustained output gets the screen with no gap and no empty first frame', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tlive-host-'));
+    const sockPath = sessSock(dir, 's');
+    const LAST = 20_000;
+    const child = [
+      'let n = 0;',
+      'const t = setInterval(() => {',
+      "  let s = '';",
+      "  for (let i = 0; i < 200; i++) s += 'L' + String(++n).padStart(6, '0') + '|\\n';",
+      '  process.stdout.write(s);',
+      `  if (n >= ${LAST}) clearInterval(t);`,
+      '}, 1);',
+      'setInterval(() => {}, 1000);',
+    ].join('\n');
+    const host = new SessionHost({
+      id: 'gap-1', cmd: process.execPath, args: ['-e', child],
+      cwd: dir, sockPath, attachLocal: false,
+    });
+    await host.start();
+
+    // Probe: a client already watching. Bytes arriving here prove they are on
+    // the wire — which is exactly NOT proof the shadow parsed them. That is the
+    // bug, so it is also the right trigger for attaching mid-burst.
+    const probe = createConnection(sockPath);
+    probe.on('error', () => { /* teardown race, not a test failure */ });
+    await new Promise<void>((r) => probe.once('connect', () => r()));
+    const pdec = new FrameDecoder();
+    let probeBytes = 0;
+    probe.on('data', (chunk: Buffer) => {
+      for (const f of pdec.push(chunk)) if (f.type === FrameType.Data) probeBytes += f.payload.length;
+    });
+    probe.write(encodeAttach(80, 24));
+    await until(() => { expect(probeBytes).toBeGreaterThan(50_000); });
+
+    const dec = new FrameDecoder();
+    const frames: string[] = [];
+    const sock = createConnection(sockPath);
+    sock.on('error', () => { /* teardown race, not a test failure */ });
+    await new Promise<void>((r) => sock.once('connect', () => r()));
+    sock.on('data', (chunk: Buffer) => {
+      for (const f of dec.push(chunk)) if (f.type === FrameType.Data) frames.push(f.payload.toString('utf8'));
+    });
+    sock.write(encodeAttach(80, 24));
+
+    await until(() => { expect(frames.join('')).toContain(`L${String(LAST).padStart(6, '0')}|`); });
+
+    // Failure mode 1: the first Data frame on a first attach is the snapshot,
+    // and it must carry real screen content rather than being skipped.
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames[0]).toMatch(/L\d{6}\|/);
+
+    // Failure mode 2: no run of markers may be missing across the boundary.
+    const nums = [...frames.join('').matchAll(/L(\d{6})\|/g)].map((m) => Number(m[1]));
+    const breaks = nums.slice(1).map((n, i) => [nums[i], n]).filter(([a, b]) => b !== a + 1);
+    expect(breaks).toEqual([]);
+
+    probe.end(); sock.end();
+    await host.stop();
+  });
 
   it('injects TLIVE_SESSION=<id> into the wrapped process env', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'tlive-host-'));
