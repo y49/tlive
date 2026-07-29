@@ -582,7 +582,13 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         // does not keep contradicting it by still saying "waiting" (cards
         // must not lie). The base body itself (tool + input) is kept, not
         // dropped, so the retired card still shows what ran.
-        const notice = `${body}\n\n_Waiting at the terminal — a sub-agent's prompt can only be answered there._`;
+        //
+        // *…*, not _..._: telegram-html.ts deliberately does not support
+        // underscore emphasis (ordinary snake_case/file_path content would
+        // turn italic), so the raw underscores used to leak into the message
+        // verbatim (real Telegram screenshot). `*single*` is what the
+        // renderer actually converts to <i>.
+        const notice = `${body}\n\n*Waiting at the terminal — a sub-agent's prompt can only be answered there.*`;
         for (const t of configuredChats()) {
           void sendToChat(t, {
             title: `${toolName} · sub-agent`, body: notice, cwd: key,

@@ -8,6 +8,7 @@ import type { IMAdapter, IMChannel, OutgoingMessage, IncomingEnvelope } from '..
 import { SessionRegistry } from '../../web/session-registry';
 import { until } from '../../__tests__/wait.js';
 import { writeMode } from '../../config/mode.js';
+import { mdToTelegramHtml } from '../../../adapters/im/telegram-html.js';
 
 // #45 — robustness helpers for this file's "held request" pattern
 // (const pending = request(...); …asserts…; await pending). On a slow/jittery
@@ -1218,6 +1219,34 @@ describe('sub-agent pass-through tells you what is blocked', () => {
 
     await until(() => { expect(notes).toHaveLength(1); });
     expect(notes[0].title.startsWith('fresh-subagent-project · ')).toBe(true);
+  });
+
+  // The waiting sentence uses *italic* (telegram-html.ts's supported emphasis),
+  // NOT _italic_ — the renderer deliberately does not support underscore
+  // emphasis (ordinary snake_case/file_path content would turn italic), so the
+  // raw underscores used to leak into the message verbatim (real Telegram
+  // screenshot). Runs the actual live notice body through the real converter
+  // rather than asserting on the raw source string, so this cannot regress
+  // silently if the sentence is ever reworded.
+  it('the live notice body renders to <i>…</i> through the Telegram converter — no stray underscore reaches the user', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    const sock = daemonSocketPath(tmp);
+
+    await request(
+      {
+        kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', agentId: 'a-77',
+        toolName: 'Bash', input: { command: 'rm -rf /tmp/scratch' }, timeoutSec: 60,
+      },
+      { socketPath: sock, timeoutMs: 5000 },
+    );
+    await waitForSent(sent);
+    const card = sent[0] as { kind: 'card'; body?: string };
+    const html = mdToTelegramHtml(card.body ?? '');
+    expect(html).toContain('<i>');
+    expect(html).not.toContain('_');
   });
 
   // IM ⊥ desktop: `/mute` is an IM-only switch. The old early-return at the
