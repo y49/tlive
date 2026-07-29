@@ -746,12 +746,15 @@ describe('handback: callback (Answer at the terminal instead)', () => {
 
 describe('/mode from IM', () => {
   it('a typed rung writes the posture and reports the transition', async () => {
+    // getMode deliberately differs from baseDeps' own default ('full') so a
+    // hardcoded `prev` cannot coincidentally match — the assertion below only
+    // passes if runCommand actually reads this.deps.getMode().
     const setMode = vi.fn();
     const msgs: Array<{ kind: string; text?: string }> = [];
-    const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter(msgs), getMode: () => 'full', setMode }));
+    const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter(msgs), getMode: () => 'notify', setMode }));
     await h.handle(envelope({ text: '/mode all' }));
     expect(setMode).toHaveBeenCalledWith('all');
-    expect(msgs[0].text).toContain('full → all');
+    expect(msgs[0].text).toContain('notify → all');
   });
 
   it('the mode:<level> button goes through the same setter', async () => {
@@ -776,5 +779,16 @@ describe('/mode from IM', () => {
     expect(msgs[0].kind).toBe('card');
     expect(msgs[0].buttons?.map((b) => b.id)).toEqual(['mode:off', 'mode:notify', 'mode:full', 'mode:all']);
     expect(msgs[0].buttons?.find((b) => b.id === 'mode:full')?.label).toMatch(/current/i);
+  });
+
+  it('the "current" marker tracks the injected getMode, not a fixed rung — a different current moves the marker to a different button', async () => {
+    // getMode returns 'notify' here, NOT 'full' (baseDeps' own default), so this
+    // only passes if the mode-prompt branch actually calls this.deps.getMode()
+    // rather than being hardcoded to whatever the default fixture happens to be.
+    const msgs: Array<{ kind: string; body?: string; buttons?: Array<{ id: string; label: string }> }> = [];
+    const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter(msgs as Array<{ kind: string; text?: string }>), getMode: () => 'notify' }));
+    await h.handle(envelope({ text: '/mode' }));
+    expect(msgs[0].buttons?.find((b) => b.id === 'mode:notify')?.label).toMatch(/current/i);
+    expect(msgs[0].buttons?.find((b) => b.id === 'mode:full')?.label).not.toMatch(/current/i);
   });
 });
