@@ -938,6 +938,33 @@ describe('quoting a live approval card = deny with guidance (Task 7)', () => {
     expect(editedTitle).toContain('Denied');
     expect(editedTitle).not.toContain('Denied with guidance');
   });
+
+  // Mirrors the hook.notify first-contact fix above, one call site over:
+  // onPending's desktop ping also renders sessionTag(key) — and used to do so
+  // BEFORE its own final `sessions.upsert(...)` registered the session, so a
+  // session's very first tool-permission request (e.g. right after a daemon
+  // restart) produced an unlabelled toast.
+  it('the first-ever permission request for a never-before-seen session still carries the "<label> · " toast prefix (onPending)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      approvals: { approvalGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+    // Mirrors a daemon restart: the registry is empty before this request.
+    expect(h.sessions.get('s-fresh')).toBeUndefined();
+    const pending = request(
+      { kind: 'hook.permission.request', cwd: '/fresh-project', sessionId: 's-fresh', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
+      { socketPath: sock, timeoutMs: 10_000 },
+    );
+    held(pending);
+    await until(() => { expect(notes).toHaveLength(1); });
+    expect(notes[0].title.startsWith('fresh-project · ')).toBe(true);
+  });
 });
 
 // Regression: the Codex resume path (makeCodexResumeHandler → ContinueBroker →
@@ -1129,6 +1156,31 @@ describe('sub-agent pass-through tells you what is blocked', () => {
     expect(notes[0].title).toContain('Bash');
     expect(notes[0].title).toContain('sub-agent');
     expect(notes[0].body).toContain('Waiting at the terminal');
+  });
+
+  // Same call-site-ordering bug as onPending above, the other flagged site:
+  // onPassthrough's desktop ping also renders sessionTag(key) before its own
+  // guarded upsert registered the session, so a sub-agent's first-ever
+  // pass-through (e.g. right after a daemon restart) produced an unlabelled toast.
+  it('a sub-agent pass-through for a never-before-seen session still carries the "<label> · " toast prefix', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+    expect(h.sessions.get('s1')).toBeUndefined();
+
+    await request(
+      {
+        kind: 'hook.permission.request', cwd: '/fresh-subagent-project', sessionId: 's1', agentId: 'a-77',
+        toolName: 'Bash', input: { command: 'rm -rf /tmp/scratch' }, timeoutSec: 60,
+      },
+      { socketPath: sock, timeoutMs: 5000 },
+    );
+
+    await until(() => { expect(notes).toHaveLength(1); });
+    expect(notes[0].title.startsWith('fresh-subagent-project · ')).toBe(true);
   });
 
   // IM ⊥ desktop: `/mute` is an IM-only switch. The old early-return at the

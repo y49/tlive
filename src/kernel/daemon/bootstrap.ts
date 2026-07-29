@@ -550,6 +550,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       logJson('permission.passthrough.notice', { key, agentId, toolName });
       void title; // the IM/dashboard titles below are the sub-agent-specific "<tool> · sub-agent", not the generic card title
       passthruWaiting.add(passthruKey(key, agentId, toolName));
+      // A sub-agent pass-through can be the FIRST thing the daemon ever hears
+      // about this session (e.g. right after a daemon restart) — register it
+      // before the desktop ping below renders a `sessionTag(key)` label, same
+      // fix as hook.notify's. Guarded so a pre-existing entry is never clobbered.
+      if (!sessions.get(key)) sessions.upsert({ key, cwd });
       // Desktop toast: the "at this machine, not watching the terminal" signal.
       // Gated ONLY by desktopOn — never by IM mute (IM ⊥ desktop), so it fires
       // with no IM configured at all, exactly like onPending's ping below.
@@ -588,6 +593,13 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       }
     },
     onPending: ({ key, cwd, requestId, title, body, toolName, ask }) => {
+      // A permission request can be the FIRST thing the daemon ever hears
+      // about this session (e.g. right after a daemon restart) — register it
+      // before the desktop ping below renders a `sessionTag(key)` label, same
+      // fix as hook.notify's and onPassthrough's. Guarded so a pre-existing
+      // entry is never clobbered; the final upsert below still carries the
+      // full status/pending patch.
+      if (!sessions.get(key)) sessions.upsert({ key, cwd });
       // Desktop ping FIRST — this notification is for the person AT this
       // machine, so it must be immediate (the IM card's grace delay exists to
       // spare the phone when you answer at the keyboard — delaying the local
