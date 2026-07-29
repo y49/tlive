@@ -419,7 +419,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
    *  requestId, answer nothing, and must stay out of the reply-routing and
    *  stale-card machinery that indexes real approvals. */
   const passthruNotices = new Map<string, Array<{ channel: string; messageId: string; body: string }>>();
-  const passthruKey = (key: string, agentId: string, toolName: string): string => `${key} ${agentId} ${toolName}`;
+  const passthruKey = (key: string, agentId: string, toolName: string): string => `${key}\u0000${agentId}\u0000${toolName}`;
 
   /** The sub-agent's tool ran, so its dialog was answered at the keyboard. Mark
    *  the notice so it stops reading as "still waiting". */
