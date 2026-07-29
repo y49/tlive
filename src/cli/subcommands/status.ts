@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { request } from '../../kernel/ipc/client.js';
 import { loadConfig } from '../../kernel/config/loader.js';
 import { effectiveMode } from '../../kernel/hook/normalizer.js';
+import { MODE_DESC } from '../../kernel/config/mode.js';
 import { resolveWebUrls, printWebBanner } from '../web-url.js';
 import { pluginHealth, defaultRunner } from '../../kernel/integrations/plugin-install.js';
 
@@ -38,11 +39,6 @@ export async function runStatus(_argv: string[]): Promise<void> {
   const cfg = loadConfig(home);
   // Posture line — the single most useful diagnostic for "why didn't I get a card?".
   // Shows the EFFECTIVE mode (same notify-default the shim enforces via effectiveMode).
-  const MODE_DESC: Record<'off' | 'notify' | 'full', string> = {
-    full: 'full — remote approval ON (holds tool approvals for IM/desktop/dashboard)',
-    notify: 'notify — watch + notify only; remote approval OFF (enable: tlive mode full)',
-    off: 'off — tlive disabled (hooks are no-ops)',
-  };
   process.stdout.write(`mode:     ${MODE_DESC[effectiveMode(cfg.mode)]}\n`);
 
   const dests: string[] = [];

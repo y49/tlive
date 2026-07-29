@@ -13,6 +13,7 @@ describe('shouldOfferFull', () => {
   });
   it('does not re-offer when remote approval is already on', () => {
     expect(shouldOfferFull('full', true)).toBe(false);
+    expect(shouldOfferFull('all', true)).toBe(false); // 'all' is ABOVE full — offering would downgrade
   });
 });
 

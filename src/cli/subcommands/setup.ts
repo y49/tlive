@@ -30,7 +30,9 @@ export function resolveVendorSelection(detected: VendorSelection, answer: string
 // Only offer it when there's a channel to approve to and remote approval isn't
 // already on — and never downgrade an existing `full`.
 export function shouldOfferFull(currentMode: unknown, hasChannel: boolean): boolean {
-  return hasChannel && currentMode !== 'full';
+  // 'all' is a HIGHER rung than 'full' — offering "enable remote approval" to
+  // someone already on 'all' would be offering a downgrade.
+  return hasChannel && currentMode !== 'full' && currentMode !== 'all';
 }
 
 // Enabling remote approval is an opt-in escalation, so ONLY an explicit yes
