@@ -22,7 +22,7 @@ describe('TelegramAdapter', () => {
     await a.start();
     expect(setMyCommands).toHaveBeenCalledOnce();
     const cmds = (setMyCommands.mock.calls[0] as any[])[0] as Array<{ command: string }>;
-    expect(cmds.map((c) => c.command)).toEqual(['mute', 'trust', 'safe', 'help']);
+    expect(cmds.map((c) => c.command)).toEqual(['mute', 'trust', 'safe', 'mode', 'help']);
     await a.stop();
   });
 
