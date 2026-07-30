@@ -261,10 +261,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       },
     },
   });
-  // Startup counterpart to shutdown's clear: a daemon killed with -9 cannot run
-  // its own teardown, so the first thing a fresh daemon does is retract any
-  // toast a predecessor stranded. Safe unconditionally — nothing can be on the
-  // board yet.
+  // Today this is a no-op in production: `desktop` is a fresh notifier with no
+  // `lastId` yet, so there is nothing to retract (desktop-notify.ts's clear()
+  // returns immediately without one). It stops being a no-op once a later task
+  // persists the notification id across restarts and loads it back in here —
+  // only THEN can this call reach a toast a `kill -9`'d predecessor stranded.
   void desktop.clear();
 
   // CC-native dialogs tlive is NOT holding, known only via
@@ -908,7 +909,13 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       const base = cfg.approvals?.autoApprove === 'readonly' ? 'readonly' : undefined;
       policyState.autoApprove = enabled ? 'safe' : base;
     }
-    else { desktopOn = enabled; if (!enabled) void desktop.clear(); }
+    // Turning ON must reflect whatever the board already holds (entries kept
+    // accumulating while off — see refreshDesktop's doc comment) — otherwise
+    // two approvals that arrived while off stay silently un-toasted until some
+    // unrelated add/remove happens to trigger a repaint. Turning OFF is a direct
+    // `.clear()` (not `refreshDesktop()`, which early-returns once desktopOn is
+    // false and so could never do this).
+    else { desktopOn = enabled; if (enabled) refreshDesktop(); else void desktop.clear(); }
   };
 
   const ipc: IpcServer = await startIpcServer({

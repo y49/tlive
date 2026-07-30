@@ -398,6 +398,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const clears: number[] = [];
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
+    clears.length = 0; // discard the daemon's own startup clear (unrelated to this scenario)
     const off = await request({ kind: 'daemon.set', key: 'desktop', enabled: false }, { socketPath: sock, timeoutMs: 2000 });
     expect(off.kind).toBe('ack');
     expect(clears.length).toBeGreaterThan(0); // turning off clears any live toast
@@ -411,6 +412,55 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
     adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: card.buttons!.find((b) => b.id.startsWith('approve:'))!.id, ts: 0 });
     await pending;
+  });
+
+  // The board tracks what is waiting regardless of the desktopOn switch (see
+  // refreshDesktop's doc comment) — so re-enabling it must immediately reflect
+  // whatever accumulated while it was off, not wait for some unrelated
+  // add/remove to happen to trigger a repaint.
+  it('daemon.set desktop on re-renders the toast for whatever accumulated on the board while it was off', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      approvals: { approvalGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+
+    await request({ kind: 'daemon.set', key: 'desktop', enabled: false }, { socketPath: sock, timeoutMs: 2000 });
+    notes.length = 0; // discard anything from before the switch was flipped off
+
+    // Two approvals arrive while the toast is off — the board accumulates
+    // them, but nothing is rendered (asserted by the "desktop off" test above).
+    const pendingA = request(
+      { kind: 'hook.permission.request', cwd: '/w/a', sessionId: 's1', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
+      { socketPath: sock, timeoutMs: 10_000 },
+    );
+    held(pendingA);
+    await until(() => { expect(sent.length).toBeGreaterThanOrEqual(1); });
+    const pendingB = request(
+      { kind: 'hook.permission.request', cwd: '/w/b', sessionId: 's2', toolName: 'Read', input: { file_path: '/w/b/x' }, timeoutSec: 60 },
+      { socketPath: sock, timeoutMs: 10_000 },
+    );
+    held(pendingB);
+    await until(() => { expect(sent.length).toBeGreaterThanOrEqual(2); });
+    expect(notes).toHaveLength(0); // still off — nothing rendered yet
+
+    const on = await request({ kind: 'daemon.set', key: 'desktop', enabled: true }, { socketPath: sock, timeoutMs: 2000 });
+    expect(on.kind).toBe('ack');
+    // Flipping back on must immediately reflect the board, not wait for the
+    // next unrelated add/remove.
+    await until(() => { expect(notes).toHaveLength(1); });
+    expect(notes[0].title).toBe('2 sessions need you');
+
+    for (const s of sent as Array<{ kind: 'card'; buttons?: Array<{ id: string; label: string }> }>) {
+      const approve = s.buttons?.find((b) => b.id.startsWith('approve:'));
+      if (approve) adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: `x-${approve.id}`, text: approve.id, ts: 0 });
+    }
+    await pendingA; await pendingB;
   });
 
   it('two configured chats with a slow adapter still get ONE desktop ping per request (regression: per-chat concurrent pushes each fired a toast)', async () => {
