@@ -340,7 +340,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
     const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
     const pending = request(
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'touch /x' }, timeoutSec: 60 },
@@ -367,7 +367,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
     const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
     const pending = request(
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
@@ -396,7 +396,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
     const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
     const off = await request({ kind: 'daemon.set', key: 'desktop', enabled: false }, { socketPath: sock, timeoutMs: 2000 });
     expect(off.kind).toBe('ack');
@@ -430,7 +430,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     }
     const notes: Array<{ title: string; body: string }> = [];
     const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [tg, fs], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [tg, fs], desktopNotifier: { ping: async () => {}, render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
     const pending = request(
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'touch /x' }, timeoutSec: 60 },
@@ -452,7 +452,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const infos: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, clear: async () => {}, info: async (title, body) => { infos.push({ title, body }); } } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async () => {}, clear: async () => {}, info: async (title, body) => { infos.push({ title, body }); } } });
     // Drive the real, shared continueBroker directly (same instance the CC Stop
     // and Codex turn/completed paths both funnel through). Floating request with
     // a tiny window; we only assert the notification surfaces, not the reply.
@@ -465,7 +465,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
   it('info-level notify ("Claude is waiting for your input") fires a desktop banner; error-level (failures) does NOT', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
     const infos: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { ping: async () => {}, clear: async () => {}, info: async (title, body) => { infos.push({ title, body }); } } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { ping: async () => {}, render: async () => {}, clear: async () => {}, info: async (title, body) => { infos.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
     expect(infos).toHaveLength(1);
@@ -482,7 +482,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const infos: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, clear: async () => {}, info: async (t, b) => { infos.push({ title: t, body: b }); } } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async () => {}, clear: async () => {}, info: async (t, b) => { infos.push({ title: t, body: b }); } } });
     const sock = daemonSocketPath(tmp);
     await request({ kind: 'daemon.set', key: 'mute', enabled: true }, { socketPath: sock, timeoutMs: 2000 }); // /mute on
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
@@ -954,7 +954,7 @@ describe('quoting a live approval card = deny with guidance (Task 7)', () => {
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
     // Mirrors a daemon restart: the registry is empty before this request.
     expect(h.sessions.get('s-fresh')).toBeUndefined();
@@ -1179,7 +1179,7 @@ describe('sub-agent pass-through tells you what is blocked', () => {
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
     await request(
@@ -1205,7 +1205,7 @@ describe('sub-agent pass-through tells you what is blocked', () => {
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
     expect(h.sessions.get('s1')).toBeUndefined();
 
@@ -1257,7 +1257,7 @@ describe('sub-agent pass-through tells you what is blocked', () => {
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'daemon.set', key: 'mute', enabled: true }, { socketPath: sock, timeoutMs: 2000 }); // /mute on
@@ -1335,7 +1335,7 @@ describe('sub-agent pass-through tells you what is blocked', () => {
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
     const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
     // Nothing else pending: retirement closes both surfaces.
@@ -1396,8 +1396,9 @@ describe('sub-agent pass-through tells you what is blocked', () => {
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
     const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
+    clears.length = 0; // discard the daemon's own startup clear (stray-toast retraction, unrelated to this scenario)
 
     // s1: sub-agent pass-through — still outstanding for the rest of this test.
     await request(
@@ -1448,8 +1449,9 @@ describe('sub-agent pass-through tells you what is blocked', () => {
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
     const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); }, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
+    clears.length = 0; // discard the daemon's own startup clear (stray-toast retraction, unrelated to this scenario)
 
     // s1: sub-agent pass-through — still outstanding for the rest of this test.
     await request(
@@ -1564,15 +1566,17 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
 
-    // Desktop: the waiting slot (ping), speaking to the person at the machine.
+    // Desktop: the waiting slot (board-driven render), speaking to the person
+    // at the machine. Single-entry wording is "<label> · <what>" / the
+    // WaitingBoard localPrompt body (see waiting-board.ts's BODY table).
     expect(notes).toHaveLength(1);
-    expect(notes[0].title).toContain('Permission needed');
-    expect(notes[0].body).toContain('answer in the terminal');
+    expect(notes[0].title).toContain('permission');
+    expect(notes[0].body).toContain('answer it there');
     // Dashboard: read-only pending — waiting-approval, marked local.
     const s = await findSession(sock, 's1');
     expect(s?.status).toBe('waiting-approval');
@@ -1604,7 +1608,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
@@ -1626,7 +1630,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
@@ -1649,7 +1653,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
     writeMode(tmp, 'notify');
@@ -1681,7 +1685,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
     const pending = request(
@@ -1708,7 +1712,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, clear: async () => { clears.push(1); }, info: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async () => {}, clear: async () => { clears.push(1); }, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
@@ -1727,7 +1731,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, clear: async () => {}, info: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async () => {}, clear: async () => {}, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
@@ -1742,7 +1746,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { ping: async () => {}, render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {}, info: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'daemon.set', key: 'mute', enabled: true }, { socketPath: sock, timeoutMs: 2000 });
@@ -1871,5 +1875,128 @@ describe('sub-agent card affordances', () => {
 
     h.permissionRouter.cancel({ key: 's1' });
     await pending;
+  });
+});
+
+// Task 3: the board (src/kernel/daemon/waiting-board.ts) is now the ONLY
+// input to the desktop toast — `passthruWaiting` and the old three-term
+// `nothingWaiting()` predicate are gone. These tests drive the router
+// directly (no IPC round-trip needed for the toast's own logic) and assert
+// on `render`, not `ping` — `refreshDesktop` never calls `ping`.
+describe('WaitingBoard drives the ONE desktop toast (Task 3)', () => {
+  const CFG = {
+    web: { enabled: false },
+    approvals: { approvalGraceSec: 0 },
+    adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+  };
+
+  function fakeAdapter(): IMAdapter {
+    return {
+      channel: 'telegram',
+      async start() { /* noop */ },
+      async stop() { /* noop */ },
+      async send() { return { messageId: 'm1' }; },
+      async edit() { /* noop */ },
+      onInbound() { /* noop */ },
+      isConnected() { return 'connected' as const; },
+    };
+  }
+
+  /** The requestId of the first genuinely HELD (answerable) request the
+   *  registry knows about — skips read-only `pending.local` entries (a
+   *  sub-agent pass-through's placeholder, or a tracked CC-native dialog),
+   *  which carry a requestId nothing can `answer()`. */
+  function firstPendingId(h: DaemonHandle): string {
+    const found = h.sessions.list().find((s) => s.pending?.requestId && !s.pending.local);
+    if (!found?.pending) throw new Error('firstPendingId: no held (non-local) pending request found');
+    return found.pending.requestId;
+  }
+
+  /** Drive a sub-agent pass-through the same way `hook.permission.request`
+   *  with an `agentId` does under the default (non-`all`) posture — straight
+   *  to `PermissionRouter.requestPermission`, matching this describe's other
+   *  direct-router calls. Resolves once the pass-through's synchronous
+   *  onPassthrough side effects (board entry, IM notice) have run. */
+  async function sendPassthrough(h: DaemonHandle, opts: { key: string; cwd: string; agentId: string; toolName: string }): Promise<void> {
+    await h.permissionRouter.requestPermission({
+      key: opts.key, cwd: opts.cwd, toolName: opts.toolName, input: {}, agentId: opts.agentId, timeoutSec: 60,
+    });
+  }
+
+  it('two sessions waiting render ONE aggregated toast, and answering one re-renders the rest', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const renders: Array<{ title: string; body: string }> = [];
+    const clears: number[] = [];
+    const adapter = fakeAdapter();
+    h = await bootstrapDaemon({
+      home: tmp, imAdapters: [adapter],
+      desktopNotifier: {
+        ping: async () => {},
+        render: async (title, body) => { renders.push({ title, body }); },
+        info: async () => {},
+        clear: async () => { clears.push(1); },
+      },
+    });
+    clears.length = 0; // discard the daemon's own startup clear (unrelated to this scenario)
+    const a = h.permissionRouter.requestPermission({ key: '/w/a', cwd: '/w/a', toolName: 'Bash', input: { command: 'ls' } });
+    const b = h.permissionRouter.requestPermission({ key: '/w/b', cwd: '/w/b', toolName: 'Read', input: { file_path: '/w/b/x' } });
+    await until(() => { expect(renders.at(-1)!.title).toBe('2 sessions need you'); });
+    expect(renders.at(-1)!.body.split('\n')).toHaveLength(2);
+
+    h.permissionRouter.answer(firstPendingId(h), true);
+    await until(() => { expect(renders.at(-1)!.title).not.toBe('2 sessions need you'); });
+    expect(renders.at(-1)!.body.split('\n')).toHaveLength(1);
+    expect(clears).toHaveLength(0); // still one waiting — do NOT clear
+
+    // Clean up the still-outstanding request so the test doesn't hang waiting
+    // for `b` — its default timeout (580s) far outlives this test.
+    h.permissionRouter.answer(firstPendingId(h), true);
+    await a; await b;
+  });
+
+  // This is the regression test the whole task exists to protect: two of the
+  // three old call sites forgot `passthruWaiting`, so a main-session approval
+  // resolving ANYWHERE closed a still-waiting sub-agent's toast. With the
+  // predicate derived from the board, there is no separate copy left to forget.
+  it('answering one session does not close a still-waiting sub-agent toast (the predicate is the board)', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const clears: number[] = [];
+    const renders: Array<{ title: string }> = [];
+    const adapter = fakeAdapter();
+    h = await bootstrapDaemon({
+      home: tmp, imAdapters: [adapter],
+      desktopNotifier: {
+        ping: async () => {},
+        render: async (title) => { renders.push({ title }); },
+        info: async () => {},
+        clear: async () => { clears.push(1); },
+      },
+    });
+    clears.length = 0; // discard the daemon's own startup clear (unrelated to this scenario)
+    // A sub-agent pass-through is outstanding …
+    await sendPassthrough(h, { key: '/w/a', cwd: '/w/a', agentId: 'ag1', toolName: 'Read' });
+    // … while an unrelated main-session approval arrives and is answered.
+    const p = h.permissionRouter.requestPermission({ key: '/w/b', cwd: '/w/b', toolName: 'Bash', input: { command: 'ls' } });
+    await until(() => { expect(renders.length).toBeGreaterThan(1); });
+    h.permissionRouter.answer(firstPendingId(h), true);
+    await until(() => { expect(renders.at(-1)!.title).toContain('sub-agent'); });
+    expect(clears).toHaveLength(0);
+    await p;
+  });
+
+  it('clears the toast once — and only once — nothing at all is waiting', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const clears: number[] = [];
+    const adapter = fakeAdapter();
+    h = await bootstrapDaemon({
+      home: tmp, imAdapters: [adapter],
+      desktopNotifier: { ping: async () => {}, render: async () => {}, info: async () => {}, clear: async () => { clears.push(1); } },
+    });
+    clears.length = 0; // discard the daemon's own startup clear (unrelated to this scenario)
+    const p = h.permissionRouter.requestPermission({ key: '/w/a', cwd: '/w/a', toolName: 'Bash', input: { command: 'ls' } });
+    await until(() => { expect(h.permissionRouter.pendingCount()).toBe(1); });
+    h.permissionRouter.answer(firstPendingId(h), true);
+    await until(() => { expect(clears).toHaveLength(1); });
+    await p;
   });
 });

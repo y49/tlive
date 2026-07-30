@@ -30,6 +30,7 @@ import { startCompanion, type Companion } from '../codex/companion.js';
 import { excerptForCard } from './excerpt.js';
 import { TURN_FINISHED_SENTINEL, effectiveMode, type ShimMode } from '../hook/normalizer.js';
 import { writeMode } from '../config/mode.js';
+import { WaitingBoard, renderBoard } from './waiting-board.js';
 
 export interface DaemonHandle {
   shutdown(): Promise<void>;
@@ -260,6 +261,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       },
     },
   });
+  // Startup counterpart to shutdown's clear: a daemon killed with -9 cannot run
+  // its own teardown, so the first thing a fresh daemon does is retract any
+  // toast a predecessor stranded. Safe unconditionally — nothing can be on the
+  // board yet.
+  void desktop.clear();
 
   // CC-native dialogs tlive is NOT holding, known only via
   // Notification(permission_prompt): notify mode, or a full-mode immediate
@@ -276,7 +282,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const clearLocalPrompt = (key: string, sessionId: string | undefined, cwd: string): void => {
     if (!localPrompts.clear({ key, ...(sessionId ? { sessionId } : {}) })) return;
     if (sessions.get(key)?.pending?.local) sessions.upsert({ key, cwd, pending: null });
-    if (nothingWaiting()) void desktop.clear();
+    board.remove(localBoardId(key));
+    refreshDesktop();
   };
 
   // Same lifetime as the ask flow's *pending* window, but never consumed by an
@@ -356,13 +363,18 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     }) });
   };
 
+  /** Bare session label ('' when the registry has never seen this key). The
+   *  board wants it unadorned; `sessionTag` adds the ' · ' separator. */
+  const sessionLabel = (cwd: string | undefined): string => {
+    if (!cwd) return '';
+    return sessions.get(cwd)?.label ?? '';
+  };
+
   /** `<label> · ` prefix. wrapped/hook-only 不再用图标区分 —— 续跑卡自带
    *  "Reply to continue" 引导,该区分对用户的实际操作没有影响。 */
   const sessionTag = (cwd: string | undefined): string => {
-    if (!cwd) return '';
-    const s = sessions.get(cwd);
-    if (!s) return '';
-    return `${s.label} · `;
+    const label = sessionLabel(cwd);
+    return label ? `${label} · ` : '';
   };
 
   const sendToChat = async (
@@ -454,31 +466,37 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   /** requestId for the dashboard's read-only pending card on a pass-through. */
   const passthruRequestId = (agentId: string, toolName: string): string => `passthru:${agentId}:${toolName}`;
 
-  /** Sub-agent dialogs handed back to the terminal and not yet observed running.
-   *  Separate from passthruNotices (which only has entries when an IM card was
-   *  actually sent) because the desktop toast must work with no IM at all — this
-   *  is what lets retirePassthruNotice close the toast even when there was never
-   *  a card to edit. */
-  const passthruWaiting = new Set<string>(); // passthruKey(key, agentId, toolName)
+  /** Everything currently waiting for the user, and the only input to the
+   *  desktop toast. This REPLACES both `passthruWaiting` and the old
+   *  three-term `nothingWaiting()` predicate: those were the same fact stored
+   *  twice, and the copy is what let one session's resolution close another
+   *  session's toast. A new waiting category is added by putting it here —
+   *  there is no separate predicate left to forget to update. */
+  const board = new WaitingBoard();
 
-  /** The single "is anything at all waiting for the user" predicate behind the
-   *  desktop toast's lifetime. THREE surfaces feed it today (a held approval /
-   *  a tracked CC-native local prompt / an outstanding sub-agent pass-through)
-   *  and every one of them MUST be represented here — this used to be three
-   *  separate copies of the same condition, and the copy at two of the three
-   *  call sites silently forgot passthruWaiting, so a main-session approval
-   *  resolving (or a local prompt clearing) anywhere closed a still-waiting
-   *  sub-agent's toast. The next surface that gets its own waiting-tracker
-   *  must be added HERE, not at whichever call site happens to need it. */
-  const nothingWaiting = (): boolean =>
-    permissionRouter.pendingCount() === 0 && localPrompts.count() === 0 && passthruWaiting.size === 0;
+  /** Project the board onto the machine's one toast. Every registration and
+   *  every retirement ends with this call; nothing else touches `desktop`.
+   *  `desktopOn` lives HERE, not at each call site: it is a rendering
+   *  toggle, orthogonal to what is waiting (the board tracks that
+   *  regardless of the switch, so re-enabling mid-wait can still reflect
+   *  reality) — gating it per call site would reintroduce exactly the
+   *  per-site branching this refactor removes. */
+  const refreshDesktop = (): void => {
+    if (!desktopOn) return;
+    const view = renderBoard(board.entries());
+    if (!view) void desktop.clear();
+    else void desktop.render(view.title, view.body);
+  };
+
+  /** Board id for a tracked CC-native dialog — one slot per session key, exactly
+   *  matching LocalPrompts' own single-slot approximation. */
+  const localBoardId = (key: string): string => `local:${key}`;
 
   /** The sub-agent's tool ran, so its dialog was answered at the keyboard. Mark
    *  the notice so it stops reading as "still waiting", clear its read-only
    *  dashboard card, and close the desktop toast once nothing else is waiting. */
   const retirePassthruNotice = (key: string, cwd: string, agentId: string, toolName: string): void => {
     const id = passthruKey(key, agentId, toolName);
-    passthruWaiting.delete(id);
     // Same guard as onResolved: only clear the registry's ONE pending slot if
     // THIS notice still owns it — a main-session held approval (or a
     // different pass-through that raced in) must survive untouched. Silent —
@@ -487,7 +505,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     if (sessions.get(key)?.pending?.requestId === passthruRequestId(agentId, toolName)) {
       sessions.upsert({ key, cwd, pending: null });
     }
-    if (nothingWaiting()) void desktop.clear();
+    board.remove(id);
+    refreshDesktop();
     const notices = passthruNotices.get(id);
     if (!notices) return;
     passthruNotices.delete(id);
@@ -560,17 +579,21 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     onPassthrough: ({ key, cwd, agentId, toolName, title, body }) => {
       logJson('permission.passthrough.notice', { key, agentId, toolName });
       void title; // the IM/dashboard titles below are the sub-agent-specific "<tool> · sub-agent", not the generic card title
-      passthruWaiting.add(passthruKey(key, agentId, toolName));
       // A sub-agent pass-through can be the FIRST thing the daemon ever hears
       // about this session (e.g. right after a daemon restart) — register it
-      // before the desktop ping below renders a `sessionTag(key)` label, same
+      // before the board entry below renders a `sessionLabel(key)` label, same
       // fix as hook.notify's. The guard skips a no-op write for an already-known
       // session (upsert's patch merge would preserve its state either way).
       if (!sessions.get(key)) sessions.upsert({ key, cwd });
       // Desktop toast: the "at this machine, not watching the terminal" signal.
-      // Gated ONLY by desktopOn — never by IM mute (IM ⊥ desktop), so it fires
-      // with no IM configured at all, exactly like onPending's ping below.
-      if (desktopOn) void desktop.ping(`${sessionTag(key)}${toolName} · sub-agent`, 'Waiting at the terminal — answer it there.');
+      // Gated ONLY by desktopOn (inside refreshDesktop) — never by IM mute (IM
+      // ⊥ desktop), so it fires with no IM configured at all, exactly like
+      // onPending's board entry below.
+      board.add({
+        id: passthruKey(key, agentId, toolName), key, label: sessionLabel(key),
+        kind: 'subagent', what: `${toolName} · sub-agent`,
+      });
+      refreshDesktop();
       // Dashboard: read-only pending (local: true) — there is no held request
       // behind this, so Allow/Deny would be a button that cannot work (same
       // rule as the notify-mode local-prompt card). ONE pending slot per
@@ -625,23 +648,16 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // either way); the final upsert below still carries the full
       // status/pending patch.
       if (!sessions.get(key)) sessions.upsert({ key, cwd });
-      // Desktop ping FIRST — this notification is for the person AT this
+      // Board entry FIRST — this notification is for the person AT this
       // machine, so it must be immediate (the IM card's grace delay exists to
       // spare the phone when you answer at the keyboard — delaying the local
       // pointer by the same 10s was backwards) and must not depend on any IM
       // channel being configured. onPending fires exactly once per request =
       // dedup by construction. Answering (any channel, incl. locally within
-      // grace) drops pendingCount to 0 → onResolved clears the toast.
-      {
-        // Body speaks to the person AT this machine (not "answer on your
-        // phone" — they're right here): the Linux toast carries an "Open
-        // dashboard" button, and the dashboard is the local answer surface.
-        const waiting = permissionRouter.pendingCount();
-        if (desktopOn) void desktop.ping(
-          `${sessionTag(key)}${title}`,
-          waiting > 1 ? `${waiting} approvals waiting — click to open and answer` : 'Approval needed — click to open and answer',
-        );
-      }
+      // grace) retires this entry → onResolved's refreshDesktop clears/shrinks
+      // the toast.
+      board.add({ id: requestId, key, label: sessionLabel(key), kind: 'held', what: toolName });
+      refreshDesktop();
       if (ask) {
         askFlow.begin(requestId, ask.batch, ask.input);
         askOwner.set(requestId, { key, cwd });
@@ -670,7 +686,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // can't pin the toast; a genuine separate local prompt for another
       // session key is untouched.
       localPrompts.clear({ key });
-      if (nothingWaiting()) void desktop.clear();
+      board.remove(requestId);
+      board.remove(localBoardId(key)); // the raced permission_prompt tracked the SAME dialog
+      refreshDesktop();
       askFlow.end(requestId); askOwner.delete(requestId); // no leak — covers defer/timeout/local-answer paths that skip asksubmit:/askskip: entirely
       const isAsk = askRequestIds.delete(requestId); // true only for an AskUserQuestion card (Minor 4)
       // Only touch the session view if THIS request still owns the pending slot —
@@ -1045,9 +1063,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             logJson('permission.localPrompt', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), heldOwnsIt, action: heldOwnsIt ? 'suppressed' : redundant ? 'holding-mode-passthrough' : 'tracked' });
             if (!heldOwnsIt && !redundant) {
               localPrompts.note(key, req.sessionId);
-              // Desktop first, immediately — the waiting slot (ping/clear
+              // Board first, immediately — the waiting slot (add/remove
               // lifecycle), not an info banner: the dialog IS a waiting state.
-              if (desktopOn) void desktop.ping(`${sessionTag(key)}Permission needed`, `${req.message} — answer in the terminal`);
+              board.add({ id: localBoardId(key), key, label: sessionLabel(key), kind: 'localPrompt', what: 'permission' });
+              refreshDesktop();
               // Dashboard: read-only waiting-approval card (pending.local) —
               // visible from anywhere, answerable only at the terminal.
               events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'waiting-approval', pending: { requestId: `local:${key}`, title: 'Permission needed', body: req.message, local: true } }) });
@@ -1240,6 +1259,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       codexCompanion?.stop();
       custody?.stop();
       for (const a of opts.imAdapters ?? []) await a.stop();
+      // A resident toast outlives the process that drew it. Close it on the way
+      // out, or a daemon restart leaves a permanent "waiting" banner nothing owns.
+      await desktop.clear();
       if (web) await web.close();
       await ipc.close();
     } finally {
