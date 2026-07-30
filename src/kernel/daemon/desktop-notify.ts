@@ -214,7 +214,6 @@ export function createDesktopNotifier(opts?: {
       if (!lastId) return;
       const id = lastId;
       lastId = null;
-      idStore?.write(null);
       // notify-send cannot close; go straight to the DBus spec method. If
       // gdbus is absent the toast still self-expires (transient) — degraded,
       // not broken.
@@ -225,6 +224,14 @@ export function createDesktopNotifier(opts?: {
         '--method', 'org.freedesktop.Notifications.CloseNotification',
         id,
       ]);
+      // Persisted AFTER the close resolves, not before: the close is a spawned
+      // process in flight for the whole await, and a `kill -9` mid-flight must
+      // leave the OLD id on disk. A stale id makes the next process's
+      // CloseNotification a harmless best-effort no-op on an already-closed
+      // toast (its result is already ignored); persisting null too early would
+      // instead strand an UNCLOSED toast with no id anywhere that can reach it
+      // — exactly the hole this task exists to close.
+      idStore?.write(null);
     }),
     // A fresh FYI toast: NOT enqueued and NOT tracked — it never touches
     // lastId/liveProc, so it can't race the waiting slot's id capture and the

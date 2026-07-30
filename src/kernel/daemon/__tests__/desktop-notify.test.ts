@@ -205,6 +205,21 @@ describe('toast id survives a daemon restart', () => {
     expect(store.peek()).toBeNull();
   });
 
+  it('persists null only AFTER the close resolves, so a mid-clear crash leaves the stale id (not a lost one) on disk', async () => {
+    const events: string[] = [];
+    const store = {
+      read: () => '42' as string | null,
+      write: (id: string | null) => { events.push(`write(${id === null ? 'null' : id})`); },
+    };
+    const n = createDesktopNotifier({
+      platform: 'linux', hasCmd: () => true, idStore: store,
+      spawner: async (_cmd, args) => { events.push(`gdbus(${args[args.length - 1]})`); return ''; },
+      streamSpawner: () => ({ firstLine: Promise.resolve('9'), onLine: () => undefined, kill: () => undefined }),
+    });
+    await n.clear();
+    expect(events).toEqual(['gdbus(42)', 'write(null)']);
+  });
+
   it('rendering records the new id so the NEXT process can close it', async () => {
     const store = makeStore();
     const n = createDesktopNotifier({
