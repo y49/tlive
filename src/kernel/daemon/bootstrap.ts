@@ -558,7 +558,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // A sub-agent pass-through can be the FIRST thing the daemon ever hears
       // about this session (e.g. right after a daemon restart) — register it
       // before the desktop ping below renders a `sessionTag(key)` label, same
-      // fix as hook.notify's. Guarded so a pre-existing entry is never clobbered.
+      // fix as hook.notify's. The guard skips a no-op write for an already-known
+      // session (upsert's patch merge would preserve its state either way).
       if (!sessions.get(key)) sessions.upsert({ key, cwd });
       // Desktop toast: the "at this machine, not watching the terminal" signal.
       // Gated ONLY by desktopOn — never by IM mute (IM ⊥ desktop), so it fires
@@ -613,9 +614,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // A permission request can be the FIRST thing the daemon ever hears
       // about this session (e.g. right after a daemon restart) — register it
       // before the desktop ping below renders a `sessionTag(key)` label, same
-      // fix as hook.notify's and onPassthrough's. Guarded so a pre-existing
-      // entry is never clobbered; the final upsert below still carries the
-      // full status/pending patch.
+      // fix as hook.notify's and onPassthrough's. The guard skips a no-op write
+      // for an already-known session (upsert's patch merge preserves its state
+      // either way); the final upsert below still carries the full
+      // status/pending patch.
       if (!sessions.get(key)) sessions.upsert({ key, cwd });
       // Desktop ping FIRST — this notification is for the person AT this
       // machine, so it must be immediate (the IM card's grace delay exists to
@@ -988,9 +990,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // already running) — register it before anything below renders a
           // `sessionTag(key)` label, or the very first line ever sent for this
           // session goes out with no label at all (the one thing that line
-          // cannot answer on its own). Guarded so a pre-existing entry (mute
-          // state, continueId, pending) is never clobbered — only a genuine
-          // miss gets this bare upsert; an existing session keeps its full state.
+          // cannot answer on its own). The guard is an optimization, not a
+          // safety belt: only a genuine miss gets this bare upsert, but an
+          // existing entry would survive one anyway — `muted` is not an
+          // UpsertPatch field at all, and continueId/pending/status fall back
+          // to the previous value when the patch omits them.
           if (!sessions.get(key)) sessions.upsert({ key, cwd: req.cwd });
           const s = sessions.get(key);
           if (req.permissionPrompt) {
