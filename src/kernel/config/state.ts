@@ -22,7 +22,23 @@ const statePath = (home: string): string => join(home, 'state.json');
 export function readState(home: string): DaemonState {
   const p = statePath(home);
   if (!existsSync(p)) return {};
-  try { return JSON.parse(readFileSync(p, 'utf-8')) as DaemonState; } catch { return {}; }
+
+  // Guard the read: file may be unreadable or vanish after existsSync (TOCTOU race).
+  // Degrading to {} costs at most one re-sent explanation message.
+  let raw: string;
+  try {
+    raw = readFileSync(p, 'utf-8');
+  } catch {
+    return {};
+  }
+
+  // Guard the parse: file exists but contains invalid JSON (half-written or corrupt).
+  // Degrading to {} costs at most one re-sent explanation message.
+  try {
+    return JSON.parse(raw) as DaemonState;
+  } catch {
+    return {};
+  }
 }
 
 function writeState(home: string, next: DaemonState): void {
