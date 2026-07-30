@@ -185,6 +185,48 @@ describe('resident waiting toast', () => {
   });
 });
 
+describe('toast id survives a daemon restart', () => {
+  const makeStore = (seed: string | null = null) => {
+    let v = seed;
+    return { read: () => v, write: (id: string | null) => { v = id; }, peek: () => v };
+  };
+
+  it('a fresh notifier can close a toast the previous process left behind', async () => {
+    const store = makeStore('42');
+    const closed: string[][] = [];
+    const n = createDesktopNotifier({
+      platform: 'linux', hasCmd: () => true, idStore: store,
+      spawner: async (_cmd, args) => { closed.push(args); return ''; },
+      streamSpawner: () => ({ firstLine: Promise.resolve('9'), onLine: () => undefined, kill: () => undefined }),
+    });
+    await n.clear();
+    // Without the seed this returns early and never reaches gdbus.
+    expect(closed[0]).toContain('42');
+    expect(store.peek()).toBeNull();
+  });
+
+  it('rendering records the new id so the NEXT process can close it', async () => {
+    const store = makeStore();
+    const n = createDesktopNotifier({
+      platform: 'linux', hasCmd: () => true, idStore: store,
+      spawner: async () => '',
+      streamSpawner: () => ({ firstLine: Promise.resolve('7'), onLine: () => undefined, kill: () => undefined }),
+    });
+    await n.render('t', 'b');
+    expect(store.peek()).toBe('7');
+  });
+
+  it('works with no store at all — persistence is optional, not required', async () => {
+    const n = createDesktopNotifier({
+      platform: 'linux', hasCmd: () => true,
+      spawner: async () => '',
+      streamSpawner: () => ({ firstLine: Promise.resolve('7'), onLine: () => undefined, kill: () => undefined }),
+    });
+    await expect(n.render('t', 'b')).resolves.toBeUndefined();
+    await expect(n.clear()).resolves.toBeUndefined();
+  });
+});
+
 describe('vitest backstop', () => {
   it('returns a no-op notifier under vitest when no spawner is injected', async () => {
     // Guards the developer's real desktop: 35 bootstrap tests never inject the

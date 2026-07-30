@@ -105,6 +105,13 @@ const defaultStreamSpawner: StreamSpawner = (cmd, args) => {
   }
 };
 
+/** Where the live toast's id survives a daemon restart. Absent → no
+ *  persistence (tests, and platforms with no resident slot). */
+export interface ToastIdStore {
+  read(): string | null;
+  write(id: string | null): void;
+}
+
 export interface DesktopNotifier {
   /** Show (or replace) THE interactive waiting toast (a pending approval).
    *  Single-slot + cleared by clear() — "exists exactly while you're needed". */
@@ -136,6 +143,9 @@ export function createDesktopNotifier(opts?: {
   streamSpawner?: StreamSpawner;
   /** Toast button; clicking runs `run` (bootstrap: open the dashboard). */
   action?: { label: string; run: () => void };
+  /** Persists the linux slot's notify-send id across a restart. Absent →
+   *  in-memory only, same as before this seam existed. */
+  idStore?: ToastIdStore;
 }): DesktopNotifier {
   const enabled = opts?.enabled ?? true;
   const platform = opts?.platform ?? process.platform;
@@ -154,7 +164,11 @@ export function createDesktopNotifier(opts?: {
   const sp = opts?.spawner ?? defaultSpawner;
   const ss = opts?.streamSpawner ?? defaultStreamSpawner;
   const action = opts?.action;
-  let lastId: string | null = null;
+  const idStore = opts?.idStore;
+  // Seed from the previous process's id (if any) — this single line is what
+  // makes the startup clear() below real: a fresh process otherwise has no
+  // way to know a predecessor left a toast up, and would silently no-op.
+  let lastId: string | null = idStore?.read() ?? null;
   let liveProc: PingProc | null = null;
   let generation = 0;
   let chain: Promise<void> = Promise.resolve();
@@ -190,7 +204,7 @@ export function createDesktopNotifier(opts?: {
     const id = (await proc.firstLine)?.trim();
     // Old notify-send without --print-id prints nothing → keep stacking
     // behavior rather than passing garbage to --replace-id.
-    if (id && /^\d+$/.test(id)) lastId = id;
+    if (id && /^\d+$/.test(id)) { lastId = id; idStore?.write(id); }
   });
   return {
     ping: showSlot,
@@ -200,6 +214,7 @@ export function createDesktopNotifier(opts?: {
       if (!lastId) return;
       const id = lastId;
       lastId = null;
+      idStore?.write(null);
       // notify-send cannot close; go straight to the DBus spec method. If
       // gdbus is absent the toast still self-expires (transient) — degraded,
       // not broken.

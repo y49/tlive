@@ -30,6 +30,7 @@ import { startCompanion, type Companion } from '../codex/companion.js';
 import { excerptForCard } from './excerpt.js';
 import { TURN_FINISHED_SENTINEL, effectiveMode, type ShimMode } from '../hook/normalizer.js';
 import { writeMode } from '../config/mode.js';
+import { readToastId, writeToastId } from '../config/state.js';
 import { WaitingBoard, renderBoard } from './waiting-board.js';
 
 export interface DaemonHandle {
@@ -260,12 +261,16 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         try { spawnChild('xdg-open', [webUrl], { detached: true, stdio: 'ignore' }).unref(); } catch { /* best-effort */ }
       },
     },
+    // Backed by Task 6's state file, so the linux slot's notify-send id
+    // survives a restart (or a `kill -9`) instead of dying with the process
+    // that rendered it.
+    idStore: { read: () => readToastId(opts.home), write: (id) => writeToastId(opts.home, id) },
   });
-  // Today this is a no-op in production: `desktop` is a fresh notifier with no
-  // `lastId` yet, so there is nothing to retract (desktop-notify.ts's clear()
-  // returns immediately without one). It stops being a no-op once a later task
-  // persists the notification id across restarts and loads it back in here —
-  // only THEN can this call reach a toast a `kill -9`'d predecessor stranded.
+  // Genuinely retracts a predecessor's toast now, not a no-op: `idStore.read()`
+  // above seeds `lastId` from the state file, so if a prior daemon rendered a
+  // toast and was killed before it could clear(), THIS call is what finally
+  // closes it — the gap the old 15s expiry used to self-heal before the toast
+  // became resident.
   void desktop.clear();
 
   // CC-native dialogs tlive is NOT holding, known only via

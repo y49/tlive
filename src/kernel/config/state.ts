@@ -12,6 +12,11 @@ export interface DaemonState {
   /** `<channel>:<chatId>` for every chat already told that notify mode keeps
    *  IM quiet. Append-only; membership is the whole semantics. */
   notifyExplainedChats?: string[];
+  /** The linux desktop toast's current notify-send id, or null when nothing is
+   *  live. Survives a daemon restart (or a `kill -9`) so the NEXT process can
+   *  still close a toast its predecessor left behind — without this, clear()
+   *  at startup has no id to act on and the toast is stranded forever. */
+  toastId?: string | null;
 }
 
 const statePath = (home: string): string => join(home, 'state.json');
@@ -55,4 +60,19 @@ export function markNotifyExplained(home: string, chatKey: string): void {
   const chats = state.notifyExplainedChats ?? [];
   if (chats.includes(chatKey)) return;
   writeState(home, { ...state, notifyExplainedChats: [...chats, chatKey] });
+}
+
+export function readToastId(home: string): string | null {
+  return readState(home).toastId ?? null;
+}
+
+/** Read-modify-write, same shape as `markNotifyExplained` — kept inside this
+ *  module rather than exposing a generic `writeState` so the "every
+ *  read-modify-write here must stay fully synchronous" rule lives in one
+ *  place. `toastId` changes on every render, far more often than
+ *  `notifyExplainedChats`, so this is the field most likely to race a
+ *  concurrent writer if that rule is ever broken. */
+export function writeToastId(home: string, id: string | null): void {
+  const state = readState(home);
+  writeState(home, { ...state, toastId: id });
 }
