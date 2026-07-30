@@ -275,6 +275,19 @@ export class PermissionRouter {
     return this.pending.size;
   }
 
+  /** Held requests carrying an agentId — i.e. sub-agent requests currently held
+   *  under the `all` posture. Used to gate the "dropping out of `all` leaves
+   *  already-held sub-agent requests stranded" IM notice: `all` is the only
+   *  rung that holds sub-agent requests at all, so a lower rung can only ever
+   *  strand ones that were held before the switch. A held main-session request
+   *  (no agentId) is never counted — it always has a parallel local dialog, so
+   *  a posture drop never strands it. */
+  heldSubagentCount(): number {
+    let n = 0;
+    for (const e of this.pending.values()) if (e.agentId) n++;
+    return n;
+  }
+
   /** Tool name of a still-pending request, for the "Always allow <tool>" button.
    *  That button cannot carry the name in its own payload: Telegram caps
    *  callback_data at 64 bytes and rejects the WHOLE message if any button is

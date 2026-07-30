@@ -31,6 +31,12 @@ export interface InboundHandlerDeps {
   getMode: () => ShimMode;
   /** Persist a posture (config.json — the shim reads it on the next hook). */
   setMode: (mode: ShimMode) => void;
+  /** How many currently-held requests carry an agentId (sub-agent requests
+   *  held under the `all` posture). Gates the "leaving `all` strands
+   *  already-held sub-agent requests" notice — a card must not claim a
+   *  consequence that is not actually true, so the notice only shows when
+   *  this is > 0. */
+  heldSubagentCount: () => number;
   /** Grant "always allow <tool>" (in-memory). */
   addAllowTool: (tool: string) => void;
   /** AskUserQuestion progress for every pending request: the parsed batch, the
@@ -381,13 +387,17 @@ export class InboundHandler {
         const text = prev === cmd.mode
           ? `Mode unchanged — ${MODE_DESC[cmd.mode]}`
           : `Mode: ${prev} → ${cmd.mode}\n${MODE_DESC[cmd.mode]}`;
-        // 'all → full' only changes the posture for requests from here on — the
-        // sub-agent request(s) already held under 'all' stay held, with no
-        // terminal dialog, which is the whole reason their card exists; a user
-        // tapping this button because they just got back to the keyboard would
-        // otherwise reasonably assume it hands that one back too.
-        const staleHoldNotice = prev === 'all' && cmd.mode === 'full'
-          ? ' Already-held sub-agent requests stay held — use "Answer at the terminal instead" on their card to release one.'
+        // Leaving 'all' for ANY lower rung — not just a drop to 'full' — has the
+        // same consequence: a posture only governs requests from here on, so
+        // whatever was already held under 'all' stays held, with no terminal
+        // dialog, which is the whole reason its card exists; a user tapping this
+        // button because they just got back to the keyboard would otherwise
+        // reasonably assume it hands those back too. But the notice must not
+        // claim a consequence that isn't actually true — only show it when
+        // something is actually still held.
+        const heldCount = prev === 'all' && cmd.mode !== 'all' ? this.deps.heldSubagentCount() : 0;
+        const staleHoldNotice = heldCount > 0
+          ? ` ${heldCount} already-held sub-agent request${heldCount === 1 ? '' : 's'} stay${heldCount === 1 ? 's' : ''} held — use "Answer at the terminal instead" on ${heldCount === 1 ? 'its' : 'their'} card to release ${heldCount === 1 ? 'it' : 'one'}.`
           : '';
         await this.reply(env, { kind: 'text', text: text + staleHoldNotice });
         return;

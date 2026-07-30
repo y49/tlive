@@ -228,6 +228,34 @@ describe('PermissionRouter web-only gate + cancel + per-request timeout', () => 
   });
 });
 
+describe('heldSubagentCount() — held requests carrying an agentId (Task 13 defect 1)', () => {
+  it('is 0 when nothing is held', () => {
+    const r = new PermissionRouter(base());
+    expect(r.heldSubagentCount()).toBe(0);
+  });
+
+  it('counts only held sub-agent requests — a held main-session request (no agentId) is not counted', async () => {
+    const r = new PermissionRouter(base({ configuredChats: () => [], hasWebClients: () => true, holdSubagents: () => true }));
+    const pMain = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {} }); // main-session, no agentId
+    const pSub = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Read', input: {}, agentId: 'agentA' }); // held sub-agent
+    await new Promise((res) => setImmediate(res));
+    expect(r.heldSubagentCount()).toBe(1);
+    r.cancel({ key: '/w' });
+    await pMain; await pSub;
+    expect(r.heldSubagentCount()).toBe(0); // both released — nothing held anymore
+  });
+
+  it('counts every held sub-agent request when more than one is held', async () => {
+    const r = new PermissionRouter(base({ configuredChats: () => [], hasWebClients: () => true, holdSubagents: () => true }));
+    const pA = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, agentId: 'agentA' });
+    const pB = r.requestPermission({ key: '/w', cwd: '/w', toolName: 'Bash', input: {}, agentId: 'agentB' });
+    await new Promise((res) => setImmediate(res));
+    expect(r.heldSubagentCount()).toBe(2);
+    r.cancel({ key: '/w' });
+    await pA; await pB;
+  });
+});
+
 describe('PermissionRouter answer message passthrough', () => {
   it('carries the answer message through to the decision', async () => {
     let pendingId = '';
