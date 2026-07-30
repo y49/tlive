@@ -17,8 +17,11 @@
 //   be there when you get back. It used to self-expire with a `transient`
 //   hint so an expired toast would evaporate instead of falling into the
 //   desktop's notification tray as an "answered long ago, still shows Waiting
-//   for approval" zombie; that treatment is retired now that clear() (below)
-//   is the sole, reliable way the toast goes away.
+//   for approval" zombie; clear() (below) replaces that treatment for the
+//   normal path. Trade-off: unlike the old 15s expiry, this is not
+//   self-healing if the daemon dies with a toast up — it stays resident
+//   until dismissed by hand. A later task closes that gap with clear()
+//   calls on daemon shutdown and startup.
 // - clear(): when the last pending approval resolves, the live toast is
 //   actively closed over DBus (CloseNotification) — answered means gone.
 // - info(): a SEPARATE one-shot banner for the idle "waiting for your input"
