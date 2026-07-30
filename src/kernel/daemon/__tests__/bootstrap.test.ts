@@ -1818,6 +1818,11 @@ describe('sub-agent card affordances', () => {
     const ids = card.buttons!.map((b) => b.id);
     expect(ids.some((i) => i.startsWith('handback:'))).toBe(true);
     expect(ids).toContain('mode:full');
+    // Task 13 defect 2: a HELD sub-agent card must mark itself as such — it has
+    // no parallel terminal dialog while held, unlike a main-session card, and
+    // the two must not read as indistinguishable (matches the pass-through
+    // notice's own `${toolName} · sub-agent` idiom).
+    expect(card.title).toContain('sub-agent');
 
     h.permissionRouter.cancel({ key: 's1' });
     await pending;
@@ -1860,6 +1865,9 @@ describe('sub-agent card affordances', () => {
     const card = sent[0] as Extract<OutgoingMessage, { kind: 'card' }>;
     const ids = card.buttons!.map((b) => b.id.split(':')[0]);
     expect(ids).toEqual(['approve', 'deny', 'allowtool', 'pause']);
+    // Task 13 defect 2: a main-session card has a live parallel terminal dialog
+    // (first answer wins) — it must NOT be marked as a sub-agent card.
+    expect(card.title).not.toContain('sub-agent');
 
     h.permissionRouter.cancel({ key: 's1' });
     await pending;

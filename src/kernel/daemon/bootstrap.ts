@@ -377,7 +377,13 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       const text = `${tag}${msg.text}`;
       sent = await adapter.send({ kind: 'text', text });
     } else {
-      const title = msg.title ? `${tag}${msg.title}` : undefined;
+      // A HELD sub-agent card (agentId present) has no parallel terminal dialog
+      // while it's held — unlike a main-session card, answering remotely is the
+      // only way (short of handing it back). Mark it as such, matching the
+      // pass-through notice's own `${toolName} · sub-agent` idiom, so the two
+      // never read as indistinguishable. Tag prefix behaviour is unchanged:
+      // tag still comes first, this only appends after the title.
+      const title = msg.title ? `${tag}${msg.title}${msg.agentId ? ' · sub-agent' : ''}` : undefined;
       const body = msg.body ?? '';
       sent = await adapter.send({
         kind: 'card',
@@ -1186,6 +1192,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     setTrust: (t: boolean) => runtimeSet('trust', t),
     getMode: () => currentMode(),
     setMode: (m) => { writeMode(opts.home, m); logJson('mode.set', { mode: m }); },
+    heldSubagentCount: () => permissionRouter.heldSubagentCount(),
     setAutoApprove: (safe: boolean) => runtimeSet('safe', safe),
     addAllowTool: (tool: string) => { policyState.allowTools?.add(tool); },
     askFlow,
