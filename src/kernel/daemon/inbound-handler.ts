@@ -397,7 +397,7 @@ export class InboundHandler {
         // something is actually still held.
         const heldCount = prev === 'all' && cmd.mode !== 'all' ? this.deps.heldSubagentCount() : 0;
         const staleHoldNotice = heldCount > 0
-          ? ` ${heldCount} already-held sub-agent request${heldCount === 1 ? '' : 's'} stay${heldCount === 1 ? 's' : ''} held — use "Answer at the terminal instead" on ${heldCount === 1 ? 'its' : 'their'} card to release ${heldCount === 1 ? 'it' : 'one'}.`
+          ? ` ${heldCount} already-held sub-agent request${heldCount === 1 ? '' : 's'} stay${heldCount === 1 ? 's' : ''} held — use "Answer at the terminal instead" on ${heldCount === 1 ? 'its' : 'each'} card to release ${heldCount === 1 ? 'it' : 'one'}.`
           : '';
         await this.reply(env, { kind: 'text', text: text + staleHoldNotice });
         return;

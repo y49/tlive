@@ -788,6 +788,13 @@ describe('/mode from IM', () => {
     expect(msgs[0].text).toContain('Answer at the terminal instead');
   });
 
+  it('all → off ALSO warns when a sub-agent request is still held — any departure from `all` strands held requests', async () => {
+    const msgs: Array<{ kind: string; text?: string }> = [];
+    const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter(msgs), getMode: () => 'all', heldSubagentCount: () => 3 }));
+    await h.handle(envelope({ text: 'mode:off' }));
+    expect(msgs[0].text).toContain('Answer at the terminal instead');
+  });
+
   it('leaving `all` with NO sub-agent request actually held carries no stale-hold notice — a card must not claim a consequence that is not true', async () => {
     const msgs: Array<{ kind: string; text?: string }> = [];
     const h = new InboundHandler(baseDeps({ imBy: () => makeAdapter(msgs), getMode: () => 'all', heldSubagentCount: () => 0 }));
