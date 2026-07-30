@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.0.0](https://github.com/y49/tlive/compare/v2.1.0...v3.0.0) (2026-07-30)
+
+
+### ⚠ BREAKING CHANGES
+
+* **mode:** approvals.holdSubagents is removed. Run `tlive mode all` to hold sub-agent approvals for a remote answer, and `tlive mode full` to go back. A stale key in config.json is ignored.
+
+### Features
+
+* **mode:** posture ladder off|notify|full|all, settable from IM ([#67](https://github.com/y49/tlive/issues/67)) ([5925c83](https://github.com/y49/tlive/commit/5925c83ab7e9c318edc8cb49c0661001a5ae5242))
+
 ## [2.1.0](https://github.com/y49/tlive/compare/v2.0.0...v2.1.0) (2026-07-29)
 
 
