@@ -26,10 +26,10 @@ describe('createDesktopNotifier', () => {
   const linux = { platform: 'linux' as const, hasCmd: () => true };
   const noopSpawner = async () => '';
 
-  it('pings notify-send with app name, resident expiry, and no transient hint (the toast must survive a coffee break, not evaporate)', async () => {
+  it('renders via notify-send with app name, resident expiry, and no transient hint (the toast must survive a coffee break, not evaporate)', async () => {
     const { procs, ss } = fakeProcs();
     const n = createDesktopNotifier({ ...linux, streamSpawner: ss, spawner: noopSpawner });
-    await n.ping('tlive · Bash', 'Waiting for approval');
+    await n.render('tlive · Bash', 'Waiting for approval');
     expect(procs).toHaveLength(1);
     expect(procs[0].cmd).toBe('notify-send');
     expect(procs[0].args).toContain('--app-name=tlive');
@@ -40,11 +40,11 @@ describe('createDesktopNotifier', () => {
     expect(procs[0].args.some((a) => a.startsWith('--action='))).toBe(false); // no action configured
   });
 
-  it('occupies a single notification slot: second ping replaces the first (--replace-id) and kills the superseded waiter', async () => {
+  it('occupies a single notification slot: second render replaces the first (--replace-id) and kills the superseded waiter', async () => {
     const { procs, ss } = fakeProcs();
     const n = createDesktopNotifier({ ...linux, streamSpawner: ss, spawner: noopSpawner });
-    await n.ping('a', 'b');
-    await n.ping('c', 'd');
+    await n.render('a', 'b');
+    await n.render('c', 'd');
     expect(procs[0].args).toContain('--print-id');
     expect(procs[0].args.some((a) => a.startsWith('--replace-id='))).toBe(false);
     expect(procs[1].args).toContain('--replace-id=42');
@@ -55,9 +55,9 @@ describe('createDesktopNotifier', () => {
     const { procs, ss } = fakeProcs();
     const run = vi.fn();
     const n = createDesktopNotifier({ ...linux, streamSpawner: ss, spawner: noopSpawner, action: { label: 'Open dashboard', run } });
-    await n.ping('a', 'b');
+    await n.render('a', 'b');
     expect(procs[0].args).toContain('--action=answer=Open dashboard');
-    await n.ping('c', 'd'); // supersedes the first
+    await n.render('c', 'd'); // supersedes the first
     procs[0].emit('answer'); // stale click from the replaced waiter
     expect(run).not.toHaveBeenCalled();
     procs[1].emit('answer'); // live click
@@ -68,7 +68,7 @@ describe('createDesktopNotifier', () => {
     const { procs, ss } = fakeProcs();
     const gdbus = vi.fn(async () => '');
     const n = createDesktopNotifier({ ...linux, streamSpawner: ss, spawner: gdbus });
-    await n.ping('a', 'b');
+    await n.render('a', 'b');
     await n.clear();
     expect(gdbus).toHaveBeenCalledOnce();
     const [cmd, args] = gdbus.mock.calls[0] as unknown as [string, string[]];
@@ -76,8 +76,8 @@ describe('createDesktopNotifier', () => {
     expect(args).toContain('org.freedesktop.Notifications.CloseNotification');
     expect(args).toContain('42');
     expect(procs[0].killed).toBe(true);
-    // Next ping starts a fresh slot — no --replace-id pointing at a closed toast.
-    await n.ping('c', 'd');
+    // Next render starts a fresh slot — no --replace-id pointing at a closed toast.
+    await n.render('c', 'd');
     expect(procs[1].args.some((a) => a.startsWith('--replace-id='))).toBe(false);
   });
 
@@ -99,54 +99,17 @@ describe('createDesktopNotifier', () => {
     const argsSeen: string[][] = [];
     const wrapped: StreamSpawner = (cmd, args) => { argsSeen.push(args); return ss(cmd, args); };
     const n = createDesktopNotifier({ ...linux, streamSpawner: wrapped, spawner: noopSpawner });
-    await n.ping('a', 'b');
-    await n.ping('c', 'd');
+    await n.render('a', 'b');
+    await n.render('c', 'd');
     expect(argsSeen[1].some((a) => a.startsWith('--replace-id='))).toBe(false);
-  });
-
-  it('info() fires a fresh one-shot banner (transient, --print-id, but NEVER --replace-id — it is not the waiting slot)', async () => {
-    const { procs, ss } = fakeProcs();
-    const n = createDesktopNotifier({ ...linux, streamSpawner: ss, spawner: noopSpawner });
-    await n.info('myproj · Turn finished', 'Built the feature');
-    expect(procs).toHaveLength(1);
-    expect(procs[0].cmd).toBe('notify-send');
-    expect(procs[0].args).toContain('--hint=int:transient:1');
-    expect(procs[0].args).toContain('--print-id');
-    expect(procs[0].args).toContain('myproj · Turn finished');
-    expect(procs[0].args).toContain('Built the feature');
-    expect(procs[0].args.some((a) => a.startsWith('--replace-id='))).toBe(false);
-  });
-
-  it('info() lives outside the waiting slot: it neither replaces the pending toast nor gets closed by clear()', async () => {
-    const { procs, ss } = fakeProcs();
-    const gdbus = vi.fn(async () => '');
-    const n = createDesktopNotifier({ ...linux, streamSpawner: ss, spawner: gdbus });
-    await n.ping('a', 'b');            // waiting slot → id 42
-    await n.info('c', 'd');            // FYI banner → id 43, independent
-    expect(procs[1].args.some((a) => a.startsWith('--replace-id='))).toBe(false); // did NOT replace 42
-    expect(procs[0].killed).toBe(false); // the waiting waiter is untouched by an info banner
-    await n.clear();                   // closes the WAITING slot (42), not the banner
-    const [, args] = gdbus.mock.calls[0] as unknown as [string, string[]];
-    expect(args).toContain('42');
-    expect(args).not.toContain('43');
-  });
-
-  it('info() wires the click-to-open action just like ping()', async () => {
-    const { procs, ss } = fakeProcs();
-    const run = vi.fn();
-    const n = createDesktopNotifier({ ...linux, streamSpawner: ss, spawner: noopSpawner, action: { label: 'Open dashboard', run } });
-    await n.info('myproj · Turn finished', 'done');
-    expect(procs[0].args).toContain('--action=answer=Open dashboard');
-    procs[0].emit('answer');
-    expect(run).toHaveBeenCalledOnce();
   });
 
   it('is a silent no-op when disabled / on unsupported platforms / without notify-send', async () => {
     const { procs, ss } = fakeProcs();
     const sp = vi.fn(async () => '');
-    await createDesktopNotifier({ ...linux, enabled: false, streamSpawner: ss, spawner: sp }).ping('t', 'b');
-    await createDesktopNotifier({ platform: 'freebsd', hasCmd: () => true, streamSpawner: ss, spawner: sp }).ping('t', 'b');
-    await createDesktopNotifier({ platform: 'linux', hasCmd: () => false, streamSpawner: ss, spawner: sp }).ping('t', 'b');
+    await createDesktopNotifier({ ...linux, enabled: false, streamSpawner: ss, spawner: sp }).render('t', 'b');
+    await createDesktopNotifier({ platform: 'freebsd', hasCmd: () => true, streamSpawner: ss, spawner: sp }).render('t', 'b');
+    await createDesktopNotifier({ platform: 'linux', hasCmd: () => false, streamSpawner: ss, spawner: sp }).render('t', 'b');
     expect(procs).toHaveLength(0);
     expect(sp).not.toHaveBeenCalled();
   });
@@ -266,35 +229,26 @@ describe('vitest backstop', () => {
   });
 });
 
-describe('darwin backend (osascript, ping-only)', () => {
-  it('pings via display notification with escaped quotes; clear is a no-op', async () => {
+describe('darwin backend (osascript, no slot)', () => {
+  it('renders via display notification with escaped quotes; clear is a no-op', async () => {
     const calls: Array<[string, string[]]> = [];
     const sp = async (cmd: string, args: string[]) => { calls.push([cmd, args]); return ''; };
     const n = createDesktopNotifier({ platform: 'darwin', hasCmd: () => true, spawner: sp });
-    await n.ping('tlive · Bash', 'say "hi"');
+    await n.render('tlive · Bash', 'say "hi"');
     expect(calls).toHaveLength(1);
     expect(calls[0][0]).toBe('osascript');
     expect(calls[0][1][1]).toBe('display notification "say \\"hi\\"" with title "tlive · Bash"');
     await n.clear();
     expect(calls).toHaveLength(1); // not scriptable on macOS
   });
-
-  it('info() is just another display notification (no slot on macOS)', async () => {
-    const calls: Array<[string, string[]]> = [];
-    const sp = async (cmd: string, args: string[]) => { calls.push([cmd, args]); return ''; };
-    const n = createDesktopNotifier({ platform: 'darwin', hasCmd: () => true, spawner: sp });
-    await n.info('myproj · Turn finished', 'done');
-    expect(calls[0][0]).toBe('osascript');
-    expect(calls[0][1][1]).toContain('display notification "done" with title "myproj · Turn finished"');
-  });
 });
 
 describe('win32 backend (PowerShell WinRT toast)', () => {
-  it('pings a tagged toast (single slot) and clears via History.Remove', async () => {
+  it('renders a tagged toast (single slot) and clears via History.Remove', async () => {
     const calls: Array<[string, string[]]> = [];
     const sp = async (cmd: string, args: string[]) => { calls.push([cmd, args]); return ''; };
     const n = createDesktopNotifier({ platform: 'win32', hasCmd: () => true, spawner: sp });
-    await n.ping('tlive · Bash', 'a<b>&"c"');
+    await n.render('tlive · Bash', 'a<b>&"c"');
     expect(calls[0][0]).toBe('powershell');
     const script = calls[0][1][calls[0][1].length - 1];
     expect(script).toContain("$t.Tag = 'tlive'");
@@ -304,19 +258,9 @@ describe('win32 backend (PowerShell WinRT toast)', () => {
     expect(clearScript).toContain("History.Remove('tlive', 'tlive'");
   });
 
-  it('info() uses a distinct tag so clearing the waiting slot never nukes the FYI banner', async () => {
-    const calls: Array<[string, string[]]> = [];
-    const sp = async (cmd: string, args: string[]) => { calls.push([cmd, args]); return ''; };
-    const n = createDesktopNotifier({ platform: 'win32', hasCmd: () => true, spawner: sp });
-    await n.info('myproj · Turn finished', 'done');
-    const script = calls[0][1][calls[0][1].length - 1];
-    expect(script).toContain("$t.Tag = 'tlive-info'");
-    expect(script).not.toContain("$t.Tag = 'tlive'");
-  });
-
   it('degrades to a no-op without powershell on PATH', async () => {
     const sp = vi.fn(async () => '');
-    await createDesktopNotifier({ platform: 'win32', hasCmd: () => false, spawner: sp }).ping('t', 'b');
+    await createDesktopNotifier({ platform: 'win32', hasCmd: () => false, spawner: sp }).render('t', 'b');
     expect(sp).not.toHaveBeenCalled();
   });
 });

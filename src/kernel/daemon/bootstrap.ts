@@ -498,6 +498,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
    *  matching LocalPrompts' own single-slot approximation. */
   const localBoardId = (key: string): string => `local:${key}`;
 
+  /** Board id for an idle "waiting for your input" reminder — one per session. */
+  const idleBoardId = (key: string): string => `idle:${key}`;
+
   /** The sub-agent's tool ran, so its dialog was answered at the keyboard. Mark
    *  the notice so it stops reading as "still waiting", clear its read-only
    *  dashboard card, and close the desktop toast once nothing else is waiting. */
@@ -1122,13 +1125,17 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               : req.level === 'error' ? `⚠️ ${req.message}` : req.message;
             await Promise.all(configuredChats().map((t) => sendToChat(t, { text, cwd: key })));
           }
-          // "等待你" FYI banner on the machine — INDEPENDENT of IM mute (IM ⊥
-          // desktop): it is gated only by its own `desktopOn` switch. Info-level
-          // only: the sole info-level notify CC produces (permission_prompt is
-          // dropped at the shim) is "Claude is waiting for your input", exactly
-          // the case a desktop poke helps. error-level (tool/stop failures) is
-          // deliberately NOT banner'd — it would be noise at the keyboard; IM only.
-          if (desktopOn && req.level === 'info') void desktop.info(`${sessionTag(key)}Waiting`, req.message);
+          // Idle IS a waiting state ("you must type something or nothing
+          // happens"), so it belongs in the waiting slot rather than the old
+          // fire-and-forget banner — that banner never replaced and never
+          // recycled, which is why two idle sessions used to sit stacked on the
+          // desktop forever. error level stays off the desktop on purpose: a
+          // failed tool is not blocking anyone, and it would be noise at the
+          // keyboard. It still goes to IM, where it is diagnosable.
+          if (req.level === 'info') {
+            board.add({ id: idleBoardId(key), key, label: sessionLabel(key), kind: 'idle', what: 'your input' });
+            refreshDesktop();
+          }
           events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.message }, key));
           reply({ kind: 'ack' });
           return;
@@ -1160,7 +1167,17 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // toolName narrowing — the notification never told us the tool
             // (message text only); a rare parallel-tool clear only retires the
             // reminder early, never a decision (issue #49).
-            if (!ev.agentId) clearLocalPrompt(key, ev.sessionId, ev.cwd);
+            if (!ev.agentId) {
+              clearLocalPrompt(key, ev.sessionId, ev.cwd);
+              // The toast is resident now, so an idle reminder that outlives its
+              // cause is a banner that never goes away — work resuming is proof
+              // the session is no longer waiting on the user. Over-retiring only
+              // ever drops a reminder, never a decision. Same agentId guard as
+              // clearLocalPrompt above: a backgrounded sub-agent's activity is
+              // not proof the parent session stopped waiting.
+              board.remove(idleBoardId(key));
+              refreshDesktop();
+            }
           } else if (ev.event === 'permission-denied') {
             permissionRouter.cancel({ key, toolName: ev.toolName, sessionId: ev.sessionId, matchAgent: null });
             clearLocalPrompt(key, ev.sessionId, ev.cwd);
@@ -1170,6 +1187,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // (它仍真在等,且无本地答路 —— 清掉 = 保证被 deny),不得被父 prompt 清场。
             permissionRouter.cancel({ key, sessionId: ev.sessionId, matchAgent: null });
             clearLocalPrompt(key, ev.sessionId, ev.cwd);
+            // New input at the terminal is proof the session is no longer idle
+            // — retire the resident reminder before it outlives its cause.
+            board.remove(idleBoardId(key));
+            refreshDesktop();
             // 用户在键盘前开始了新一轮 → 取消上一 turn 还在 grace 里的续跑卡
             const g = continueGrace.get(key);
             if (g) { continueGrace.delete(key); g(); }
@@ -1178,6 +1199,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // toast lifecycle can close (the registry entry is removed by
             // applyMonitorEvent below anyway).
             clearLocalPrompt(key, ev.sessionId, ev.cwd);
+            // Same reason: the idle reminder must not strand for a session
+            // that no longer exists.
+            board.remove(idleBoardId(key));
+            refreshDesktop();
           }
           events.broadcast(applyMonitorEvent(sessions, ev, key));
           reply({ kind: 'ack' });

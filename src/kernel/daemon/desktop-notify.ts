@@ -9,8 +9,11 @@
 // them. It never carries a decision itself — never-auto-allow untouched.
 //
 // Lifecycle model (Warp-style): the notification exists exactly while
-// something is waiting for the user, and disappears when nothing is.
-// - ONE notification slot total: every ping/render replaces the previous
+// something is waiting for the user, and disappears when nothing is. Every
+// reason to wait — a held approval, a sub-agent pass-through, a CC-native
+// dialog, or idle "waiting for your input" — is a WaitingBoard entry, and
+// this file only ever projects that board onto ONE toast.
+// - ONE notification slot total: every render replaces the previous
 //   toast via --print-id/--replace-id (a burst used to stack dozens of toasts).
 // - RESIDENT, not transient: the slot's toast never expires on its own
 //   (--expire-time=0) — step away for five minutes and the signal must still
@@ -24,12 +27,6 @@
 //   calls on daemon shutdown and startup.
 // - clear(): when the last pending approval resolves, the live toast is
 //   actively closed over DBus (CloseNotification) — answered means gone.
-// - info(): a SEPARATE one-shot banner for the idle "waiting for your input"
-//   nudge — low-frequency and actionable (a per-turn "finished" toast would
-//   flood, so completion stays on IM, not here). It lives outside the waiting
-//   slot entirely — never replaces or clears the waiting toast, and (unlike
-//   the slot) still self-expires via the `transient` hint, since nothing
-//   ever calls clear() on it.
 // - CLICK TO ANSWER: an optional `action` renders a button on the toast
 //   (freedesktop actions via `notify-send --action`); clicking it runs the
 //   callback — bootstrap wires it to open the tlive dashboard, so the toast
@@ -37,7 +34,7 @@
 //   with --action, --print-id emits the id IMMEDIATELY (~4ms), then the
 //   process waits and prints the action name on click / exits on expiry.
 // - Sends are serialized so a burst can't race past the id capture and fork
-//   into parallel slots. A replaced ping/render's waiter is killed and its
+//   into parallel slots. A replaced render's waiter is killed and its
 //   callbacks ignored, so a click can never fire twice through a superseded
 //   process.
 //
@@ -46,7 +43,7 @@
 // - linux: notify-send — full model (single resident slot, close, action).
 // - win32: PowerShell WinRT toast — single slot via Tag replace + active
 //   clear via ToastNotificationManager History. No click action (v1).
-// - darwin: osascript `display notification` — ping only; banners
+// - darwin: osascript `display notification` — single toast; banners
 //   auto-dismiss, Notification Center accumulation is macOS-managed.
 // Missing binary anywhere → silent no-op — the card and dashboard remain
 // the canonical channels. win32/darwin paths are spec-derived, not yet
@@ -113,26 +110,16 @@ export interface ToastIdStore {
 }
 
 export interface DesktopNotifier {
-  /** Show (or replace) THE interactive waiting toast (a pending approval).
-   *  Single-slot + cleared by clear() — "exists exactly while you're needed". */
-  ping(title: string, body: string): Promise<void>;
   /** Show (or replace) THE waiting toast. Resident: it stays until clear().
    *  Single slot — a machine shows one toast listing everything that waits. */
   render(title: string, body: string): Promise<void>;
   /** Close the waiting toast — nothing is waiting anymore. */
   clear(): Promise<void>;
-  /** Fire a one-shot banner for a low-frequency, genuinely-actionable poke —
-   *  the idle "waiting for your input" nudge (NOT per-turn completion, which
-   *  would flood). Independent of the waiting slot: a fresh toast every time,
-   *  never replaces or clears ping()'s slot, and self-expires (transient). */
-  info(title: string, body: string): Promise<void>;
 }
 
 const NOOP: DesktopNotifier = {
-  ping: async () => {},
   render: async () => {},
   clear: async () => {},
-  info: async () => {},
 };
 
 export function createDesktopNotifier(opts?: {
@@ -207,7 +194,6 @@ export function createDesktopNotifier(opts?: {
     if (id && /^\d+$/.test(id)) { lastId = id; idStore?.write(id); }
   });
   return {
-    ping: showSlot,
     render: showSlot,
     clear: () => enqueue(async () => {
       dropLiveProc();
@@ -233,39 +219,18 @@ export function createDesktopNotifier(opts?: {
       // — exactly the hole this task exists to close.
       idStore?.write(null);
     }),
-    // A fresh FYI toast: NOT enqueued and NOT tracked — it never touches
-    // lastId/liveProc, so it can't race the waiting slot's id capture and the
-    // waiting slot's clear() can't close it. No --replace-id (each is its own
-    // toast); transient + 15s expiry means it self-reaps. The action (open
-    // dashboard) is wired like ping's, but with no supersede/generation dance
-    // — each info toast is independent and short-lived.
-    info: async (title, body) => {
-      const proc = ss('notify-send', [
-        '--app-name=tlive',
-        '--expire-time=15000',
-        '--hint=int:transient:1',
-        '--print-id',
-        ...(action ? [`--action=answer=${action.label}`] : []),
-        title,
-        body,
-      ]);
-      if (action) proc.onLine((line) => { if (line.trim() === 'answer') action.run(); });
-    },
   };
 }
 
-/** macOS: built-in osascript. Ping-only — banners auto-dismiss; there is no
+/** macOS: built-in osascript. No slot — banners auto-dismiss; there is no
  *  scriptable replace/close for Notification Center entries. */
 function darwinNotifier(sp: Spawner): DesktopNotifier {
   const esc = (v: string): string => v.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const show = (title: string, body: string): Promise<string | null> =>
     sp('osascript', ['-e', `display notification "${esc(body)}" with title "${esc(title)}"`]);
   return {
-    ping: async (title, body) => { await show(title, body); },
     render: async (title, body) => { await show(title, body); },
     clear: async () => { /* not scriptable on macOS */ },
-    // No slot on macOS anyway — an FYI banner is just another display notification.
-    info: async (title, body) => { await show(title, body); },
   };
 }
 
@@ -300,11 +265,7 @@ function win32Notifier(sp: Spawner): DesktopNotifier {
   const run = (script: string): Promise<string | null> =>
     sp('powershell', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script]);
   return {
-    ping: async (title, body) => { await run(win32ToastScript(title, body)); },
     render: async (title, body) => { await run(win32ToastScript(title, body)); },
     clear: async () => { await run(win32ClearScript()); },
-    // A distinct Tag/Group so clear() (which removes the 'tlive' waiting slot)
-    // never nukes an FYI banner; info toasts replace each other, not the slot.
-    info: async (title, body) => { await run(win32ToastScript(title, body, 'tlive-info')); },
   };
 }
