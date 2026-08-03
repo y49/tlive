@@ -247,6 +247,30 @@ describe('a new waiting thing raises a banner', () => {
     expect(calls[1]).toContain('--replace-id=101');
     expect(closes).toHaveLength(0);
   });
+
+  // Coverage gap flagged in review round 1: none of the three tests above
+  // inject an idStore while alerting, so a regression in the close-branch
+  // that stopped persisting the fresh id (e.g. an early return added inside
+  // `if (alert && lastId)`) would leave a killed daemon's toast unclosable
+  // again — the exact bug an earlier task already fixed once — with nothing
+  // in the suite to catch it.
+  it('alert persists the NEW id after closing the old one — a killed daemon must still be able to close the fresh toast', async () => {
+    let stored: string | null = '999'; // seeded as if a previous process left this toast up
+    const idStore = { read: () => stored, write: (id: string | null) => { stored = id; } };
+    const calls: string[][] = []; const closes: string[][] = [];
+    const n = createDesktopNotifier({
+      platform: 'linux', hasCmd: () => true, idStore,
+      spawner: async (_cmd, args) => { closes.push(args); return ''; },
+      streamSpawner: (_cmd, args) => {
+        calls.push(args);
+        return { firstLine: Promise.resolve(String(200 + calls.length)), onLine: () => undefined, kill: () => undefined };
+      },
+    });
+    await n.render('a', 'b', { alert: true });
+    expect(closes).toHaveLength(1);
+    expect(closes[0]).toContain('999'); // the OLD id was closed
+    expect(stored).toBe('201');         // the store now holds the NEW id — not '999', not null
+  });
 });
 
 describe('vitest backstop', () => {

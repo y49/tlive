@@ -2324,4 +2324,50 @@ describe('WaitingBoard drives the ONE desktop toast (Task 3)', () => {
     h.permissionRouter.answer(firstPendingId(h), true);
     await a; await b;
   });
+
+  // Coverage gap flagged in review round 1: the test above only ever adds
+  // entries with fresh (router-generated UUID) requestIds, which never
+  // repeat across requests — so it cannot fail even if `refreshDesktop`'s
+  // empty-board reset (`lastBoardIds = new Set()`) were deleted; a brand-new
+  // UUID is never "in" the remembered set regardless of whether that set was
+  // ever cleared. Verified: temporarily commenting out the reset line still
+  // left that test green.
+  //
+  // The idle reminder's board id (`idle:<key>`, deterministic per session —
+  // see `idleBoardId` in bootstrap.ts) is what actually reuses an id across
+  // separate waiting episodes, so it is the real repro: retire it fully
+  // (board empties → clear()), then have the SAME session go idle again.
+  // Without the reset, that returning id would still read as "already seen"
+  // and stay silent — the exact silent-forever bug this task exists to fix,
+  // returning through the empty-board door instead of the --replace-id door.
+  it('an idle reminder that returns after the board fully emptied alerts again, even though it reuses the same board id', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    const renders: Array<{ title: string; alert: boolean }> = [];
+    const clears: number[] = [];
+    h = await bootstrapDaemon({
+      home: tmp, imAdapters: [],
+      desktopNotifier: {
+        render: async (title, _b, o) => { renders.push({ title, alert: !!o?.alert }); },
+        clear: async () => { clears.push(1); },
+      },
+    });
+    const sock = daemonSocketPath(tmp);
+    clears.length = 0; // discard the daemon's own startup clear (unrelated to this scenario)
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
+    await until(() => { expect(renders.length).toBeGreaterThan(0); });
+    expect(renders[0]!.alert).toBe(true);                       // first arrival → alert
+    // The user types → the idle reminder retires, and (nothing else waiting) the board empties.
+    // (clearLocalPrompt's own unconditional refreshDesktop — a no-op local-prompt
+    // removal that fires regardless — can interleave one harmless extra silent
+    // render here before the idle entry itself is removed; asserting on the
+    // COUNT rather than a fixed index keeps this test robust to that.)
+    await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/w', sessionId: 's1', prompt: 'go on' } }, { socketPath: sock, timeoutMs: 2000 });
+    await until(() => { expect(clears).toHaveLength(1); });     // board fully emptied → remembered set reset
+    const rendersBeforeReturn = renders.length;
+    // The SAME session goes idle again — same board id (`idle:/w`) as before,
+    // but this is a genuinely new waiting episode after a full empty.
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
+    await until(() => { expect(renders.length).toBeGreaterThan(rendersBeforeReturn); });
+    expect(renders.at(-1)!.alert).toBe(true);                   // must alert again, not read as "already seen"
+  });
 });
