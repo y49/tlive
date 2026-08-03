@@ -49,6 +49,13 @@ export interface BootstrapOpts {
   ensureAppServer?: typeof ensureCodexAppServer;
   /** Test seam for the desktop notifier; production uses createDesktopNotifier. */
   desktopNotifier?: import('./desktop-notify.js').DesktopNotifier;
+  /** Test seam for refreshDesktop's `desktop.render`/`desktop.clear` lines,
+   *  mirroring how `desktopNotifier` itself is injected. Production always
+   *  writes those lines through `logJson` (daemon.log) regardless of whether
+   *  this is set — it does not replace that, only lets a test observe the
+   *  same two lines without spying on console.log. It does not see any other
+   *  diagnostic line this file emits. */
+  onLog?: (msg: string, fields: Record<string, unknown>) => void;
 }
 
 /** A Stop hook should not sit waiting when nothing can answer: no IM chat
@@ -261,6 +268,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     // survives a restart (or a `kill -9`) instead of dying with the process
     // that rendered it.
     idStore: { read: () => readToastId(opts.home), write: (id) => writeToastId(opts.home, id) },
+    // One `desktop.channel` line, once, at factory time — the whole answer to
+    // "why do I never get toasts" without a probe fired at the user's screen.
+    log: logJson,
   });
   // The startup retraction of a predecessor's toast (idStore.read() above
   // seeds `lastId`) does NOT happen here — see the `void desktop.clear()`
@@ -499,6 +509,15 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
    *  id of a long-resolved entry could still read as "already seen" forever. */
   let lastBoardIds = new Set<string>();
 
+  /** Routes refreshDesktop's two projection lines through both the real log
+   *  (`logJson` → daemon.log) and, if provided, the `onLog` test seam — so a
+   *  test can observe them without spying on console.log. Deliberately
+   *  narrow: it does not touch any other diagnostic line in this file. */
+  const logDesktop = (msg: string, fields: Record<string, unknown> = {}): void => {
+    logJson(msg, fields);
+    opts.onLog?.(msg, fields);
+  };
+
   /** Project the board onto the machine's one toast. Every registration and
    *  every retirement ends with this call; apart from the two direct
    *  `desktop.clear()` calls (startup and shutdown), nothing else touches
@@ -511,19 +530,32 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
    *  which desktop.render() turns into close-then-post-fresh so the server
    *  raises a banner. A board that only shrank, or whose entries only
    *  reworded (no new id), renders with no alert — answering one of several
-   *  things waiting must not re-pop. */
+   *  things waiting must not re-pop.
+   *
+   *  Also logs each projection (`desktop.render`/`desktop.clear`) — the only
+   *  two lines that make the desktop channel observable at all; see Task 10's
+   *  header comment on `BootstrapOpts.onLog` for why. */
   const refreshDesktop = (): void => {
     const entries = board.entries();
     const view = renderBoard(entries);
     if (!view) {
       lastBoardIds = new Set();
       void desktop.clear();
+      logDesktop('desktop.clear');
       return;
     }
     const ids = new Set(entries.map((e) => e.id));
     const alert = entries.some((e) => !lastBoardIds.has(e.id));
     lastBoardIds = ids;
     void desktop.render(view.title, view.body, { alert });
+    // Entry ids/labels/tool names are deliberately excluded — the registry
+    // and the permission logs already carry those, and a per-render dump of
+    // them would bloat a log that is already several MB a session for no
+    // new information. `alert` is the one field that answers "did this raise
+    // a banner": a run of `alert:false` after an `alert:true` is a toast
+    // being silently updated in place instead of re-raised.
+    const kinds = [...new Set(entries.map((e) => e.kind))].sort();
+    logDesktop('desktop.render', { alert, count: entries.length, kinds });
   };
 
   /** Board id for a tracked CC-native dialog — one slot per session key, exactly

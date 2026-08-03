@@ -2371,3 +2371,57 @@ describe('WaitingBoard drives the ONE desktop toast (Task 3)', () => {
     expect(renders.at(-1)!.alert).toBe(true);                   // must alert again, not read as "already seen"
   });
 });
+
+// Task 10: the desktop toast was the one surface that left no trace at all —
+// a 4.3 MB daemon.log from a real session contained zero lines matching
+// `desktop|toast|notify-send`. These tests lock the two lines that make it
+// observable: `desktop.channel` (factory time, covered directly in
+// desktop-notify.test.ts) and refreshDesktop's own `desktop.render`/
+// `desktop.clear` per projection, asserted here through `onLog`.
+describe('desktop channel + projection logging is observable from the log alone (Task 10)', () => {
+  /** Drive the idle "waiting for your input" board entry the same way the CC
+   *  hook layer does — a plain `hook.notify` IPC call (level: 'info', no
+   *  permissionPrompt) — matching every other `hook.notify` call in this file,
+   *  just named at this call site for readability. */
+  async function notifyIdle(handle: DaemonHandle, opts: { cwd: string; sessionId: string }): Promise<void> {
+    await request(
+      { kind: 'hook.notify', cwd: opts.cwd, sessionId: opts.sessionId, level: 'info', message: 'Claude is waiting for your input' },
+      { socketPath: handle.ipcSocketPath, timeoutMs: 2000 },
+    );
+  }
+
+  it('logs every projection with the alert flag — the field that explains a silent channel', async () => {
+    // A run of alert:false after one alert:true is the signature of a toast being
+    // updated in place instead of re-raised, which is invisible without this line.
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    const lines: Array<{ msg: string; fields: Record<string, unknown> }> = [];
+    h = await bootstrapDaemon({
+      home: tmp, imAdapters: [],
+      desktopNotifier: { render: async () => {}, clear: async () => {} },
+      onLog: (msg, fields) => { lines.push({ msg, fields }); },
+    });
+    await notifyIdle(h, { cwd: '/w/a', sessionId: 's1' });
+    await until(() => { expect(lines.some((l) => l.msg === 'desktop.render')).toBe(true); });
+    const rendered = lines.filter((l) => l.msg === 'desktop.render');
+    expect(rendered).toHaveLength(1);
+    expect(rendered[0]!.fields).toEqual({ alert: true, count: 1, kinds: ['idle'] });
+  });
+
+  // Deferred Minor from Task 9's review: a board entry re-added under the SAME
+  // id (a re-render of the same dialog) must not raise a banner. Guarded until
+  // now only indirectly, through WaitingBoard.add's Map-upsert test plus code
+  // reading — this drives it through refreshDesktop itself.
+  it('a same-id re-render with new text does not alert', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    const renders: Array<{ alert: boolean }> = [];
+    h = await bootstrapDaemon({
+      home: tmp, imAdapters: [],
+      desktopNotifier: { render: async (_t, _b, o) => { renders.push({ alert: !!o?.alert }); }, clear: async () => {} },
+    });
+    await notifyIdle(h, { cwd: '/w/a', sessionId: 's1' });
+    await until(() => { expect(renders.length).toBe(1); });
+    await notifyIdle(h, { cwd: '/w/a', sessionId: 's1' }); // same idle:<key> id, re-registered
+    await until(() => { expect(renders.length).toBe(2); });
+    expect(renders.map((r) => r.alert)).toEqual([true, false]);
+  });
+});

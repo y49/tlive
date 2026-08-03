@@ -284,15 +284,22 @@ describe('vitest backstop', () => {
     // and fire a genuine notify-send on the developer's desktop — while
     // render()/clear() would STILL resolve to undefined either way (notify-send
     // is fire-and-forget from the caller's perspective), so those two
-    // assertions alone can never fail even when the backstop is broken. A
-    // `hasCmd` spy can: the no-op path returns before any platform branching,
-    // so it is provably never consulted — same pattern as the sibling "silent
-    // no-op" test below (`expect(sp).not.toHaveBeenCalled()`).
-    const hasCmd = vi.fn(() => true);
-    const n = createDesktopNotifier({ platform: 'linux', hasCmd });
+    // assertions alone can never fail even when the backstop is broken.
+    //
+    // Task 10 superseded the old proxy for this ("hasCmd is never consulted" —
+    // no longer true: `desktop.channel`'s reason must reflect the REAL cause
+    // when there is one, so hasCmd IS now checked before the vitest backstop)
+    // with a direct one: the log line says `active: false, reason: 'vitest'`
+    // outright, so a regressed backstop shows up as `active: true` right here
+    // instead of escaping detection.
+    const lines: Array<{ fields: Record<string, unknown> }> = [];
+    const n = createDesktopNotifier({
+      platform: 'linux', hasCmd: () => true,
+      log: (_msg, fields) => { lines.push({ fields }); },
+    });
     await expect(n.render('t', 'b')).resolves.toBeUndefined();
     await expect(n.clear()).resolves.toBeUndefined();
-    expect(hasCmd).not.toHaveBeenCalled();
+    expect(lines).toEqual([{ fields: { active: false, platform: 'linux', reason: 'vitest' } }]);
   });
 
   it('an injected spawner still exercises the REAL implementation under vitest', async () => {
@@ -307,6 +314,47 @@ describe('vitest backstop', () => {
     });
     await n.render('t', 'b');
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe('channel observability (Task 10) — the one line that answers "why do I never get toasts"', () => {
+  it('reports once whether the channel is live, and why not when it is not', async () => {
+    const lines: Array<{ msg: string; fields: Record<string, unknown> }> = [];
+    const log = (msg: string, fields: Record<string, unknown>): void => { lines.push({ msg, fields }); };
+    createDesktopNotifier({ platform: 'linux', hasCmd: () => false, log });
+    expect(lines).toEqual([{ msg: 'desktop.channel', fields: { active: false, platform: 'linux', reason: 'no-notify-send' } }]);
+  });
+
+  it('reports an active channel exactly once, not per render', async () => {
+    const lines: string[] = [];
+    const n = createDesktopNotifier({
+      platform: 'linux', hasCmd: () => true,
+      log: (msg) => { lines.push(msg); },
+      spawner: async () => '',
+      streamSpawner: () => ({ firstLine: Promise.resolve('7'), onLine: () => undefined, kill: () => undefined }),
+    });
+    await n.render('a', 'b');
+    await n.render('c', 'd');
+    expect(lines).toEqual(['desktop.channel']);
+  });
+
+  it('reports disabled and vitest no-ops with their own reasons, not silently', async () => {
+    const lines: Array<{ fields: Record<string, unknown> }> = [];
+    const log = (_msg: string, fields: Record<string, unknown>): void => { lines.push({ fields }); };
+    createDesktopNotifier({ platform: 'linux', hasCmd: () => true, enabled: false, log });
+    // No spawner injected → the VITEST backstop fires (this suite runs under vitest).
+    createDesktopNotifier({ platform: 'linux', hasCmd: () => true, log });
+    expect(lines).toEqual([
+      { fields: { active: false, platform: 'linux', reason: 'disabled' } },
+      { fields: { active: false, platform: 'linux', reason: 'vitest' } },
+    ]);
+  });
+
+  it('reports unsupported-platform for a platform with no backend at all', async () => {
+    const lines: Array<{ fields: Record<string, unknown> }> = [];
+    const log = (_msg: string, fields: Record<string, unknown>): void => { lines.push({ fields }); };
+    createDesktopNotifier({ platform: 'freebsd', hasCmd: () => true, log });
+    expect(lines).toEqual([{ fields: { active: false, platform: 'freebsd', reason: 'unsupported-platform' } }]);
   });
 });
 

@@ -150,21 +150,54 @@ export function createDesktopNotifier(opts?: {
   /** Persists the linux slot's notify-send id across a restart. Absent →
    *  in-memory only, same as before this seam existed. */
   idStore?: ToastIdStore;
+  /** Optional, injected exactly like `idStore` — this factory must NOT import
+   *  a logger itself (it is dumb IO whose tests inject every side effect).
+   *  Fired exactly ONCE per call, on every return path including the no-op
+   *  ones: a channel that silently resolved to a no-op is precisely the case
+   *  worth knowing about (bootstrap.ts passes its `logJson`). */
+  log?: (msg: string, fields: Record<string, unknown>) => void;
 }): DesktopNotifier {
   const enabled = opts?.enabled ?? true;
   const platform = opts?.platform ?? process.platform;
   const hasCmd = opts?.hasCmd ?? commandOnPath;
-  if (!enabled) return NOOP;
+  const log = opts?.log;
+  // The whole answer to "why do I never get toasts", from the log alone, with
+  // no probe fired at the user's screen. `reason` is only meaningful (and only
+  // included) when the channel is NOT active — an active channel needs no
+  // justification.
+  const channel = (active: boolean, reason?: string): void => {
+    log?.('desktop.channel', { active, platform, ...(reason ? { reason } : {}) });
+  };
+  if (!enabled) { channel(false, 'disabled'); return NOOP; }
   // Backstop, not politeness: most bootstrap tests never inject the notifier
   // seam, so without this a full `pnpm test` fires real toasts carrying fixture
   // session names onto the developer's desktop. Injecting a spawner is the
   // explicit "I am testing the real implementation" signal, and must still
   // reach the code below — an unconditional no-op would disable this file's
   // own tests silently. Precedent: bootstrap's forceExit VITEST guard.
-  if (process.env.VITEST && !opts?.spawner) return NOOP;
-  if (platform === 'darwin') return hasCmd('osascript') ? darwinNotifier(opts?.spawner ?? defaultSpawner) : NOOP;
-  if (platform === 'win32') return hasCmd('powershell') ? win32Notifier(opts?.spawner ?? defaultSpawner) : NOOP;
-  if (platform !== 'linux' || !hasCmd('notify-send')) return NOOP;
+  //
+  // Checked AFTER platform/hasCmd below, deliberately: this guard is test-only
+  // scaffolding, and its own reason must never mask the REAL one (e.g.
+  // 'no-notify-send') that would apply in production regardless of vitest —
+  // the log line exists so a human can act on it, and "vitest" is not
+  // something a real user can act on.
+  const vitestBackstop = (): boolean => Boolean(process.env.VITEST) && !opts?.spawner;
+  if (platform === 'darwin') {
+    if (!hasCmd('osascript')) { channel(false, 'no-notify-send'); return NOOP; }
+    if (vitestBackstop()) { channel(false, 'vitest'); return NOOP; }
+    channel(true);
+    return darwinNotifier(opts?.spawner ?? defaultSpawner);
+  }
+  if (platform === 'win32') {
+    if (!hasCmd('powershell')) { channel(false, 'no-notify-send'); return NOOP; }
+    if (vitestBackstop()) { channel(false, 'vitest'); return NOOP; }
+    channel(true);
+    return win32Notifier(opts?.spawner ?? defaultSpawner);
+  }
+  if (platform !== 'linux') { channel(false, 'unsupported-platform'); return NOOP; }
+  if (!hasCmd('notify-send')) { channel(false, 'no-notify-send'); return NOOP; }
+  if (vitestBackstop()) { channel(false, 'vitest'); return NOOP; }
+  channel(true);
   const sp = opts?.spawner ?? defaultSpawner;
   const ss = opts?.streamSpawner ?? defaultStreamSpawner;
   const action = opts?.action;
