@@ -205,6 +205,50 @@ describe('toast id survives a daemon restart', () => {
   });
 });
 
+describe('a new waiting thing raises a banner', () => {
+  const linux = (calls: string[][], closes: string[][]) => createDesktopNotifier({
+    platform: 'linux', hasCmd: () => true,
+    spawner: async (_cmd, args) => { closes.push(args); return ''; },
+    streamSpawner: (_cmd, args) => {
+      calls.push(args);
+      return { firstLine: Promise.resolve(String(100 + calls.length)), onLine: () => undefined, kill: () => undefined };
+    },
+  });
+
+  it('alert posts a FRESH notification — a replaced one never pops on a persistent server', async () => {
+    const calls: string[][] = []; const closes: string[][] = [];
+    const n = linux(calls, closes);
+    await n.render('a', 'b');                      // first: nothing to replace
+    await n.render('c', 'd', { alert: true });     // must NOT carry --replace-id
+    expect(calls[1]!.some((a) => a.startsWith('--replace-id'))).toBe(false);
+  });
+
+  it('alert closes the previous notification BEFORE posting, so nothing is orphaned', async () => {
+    const order: string[] = []; const calls: string[][] = [];
+    const n = createDesktopNotifier({
+      platform: 'linux', hasCmd: () => true,
+      spawner: async (_cmd, args) => { order.push(`close(${args.at(-1)})`); return ''; },
+      streamSpawner: (_cmd, args) => {
+        calls.push(args); order.push('post');
+        return { firstLine: Promise.resolve(String(100 + calls.length)), onLine: () => undefined, kill: () => undefined };
+      },
+    });
+    await n.render('a', 'b');
+    order.length = 0;
+    await n.render('c', 'd', { alert: true });
+    expect(order).toEqual(['close(101)', 'post']);
+  });
+
+  it('without alert it still replaces in place — answering one of several must not re-pop', async () => {
+    const calls: string[][] = []; const closes: string[][] = [];
+    const n = linux(calls, closes);
+    await n.render('a', 'b');
+    await n.render('c', 'd');
+    expect(calls[1]).toContain('--replace-id=101');
+    expect(closes).toHaveLength(0);
+  });
+});
+
 describe('vitest backstop', () => {
   it('returns a no-op notifier under vitest when no spawner is injected', async () => {
     // Guards the developer's real desktop: 35 bootstrap tests never inject the

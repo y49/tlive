@@ -27,6 +27,17 @@
 //   calls on daemon shutdown and startup.
 // - clear(): when the last pending approval resolves, the live toast is
 //   actively closed over DBus (CloseNotification) — answered means gone.
+// - ALERT vs silent update: on a server advertising the `persistence`
+//   capability (quickshell, GNOME, most modern shells), a resident toast
+//   becomes a permanent panel entry, and --replace-id then updates that
+//   entry IN PLACE AND SILENTLY — no banner, no sound (measured live: a
+//   fresh notification popped, a --replace-id update of it did not, a fresh
+//   one after that popped again). So render()'s `alert` option exists: when
+//   something NEW needs the user, the caller (bootstrap's `refreshDesktop`)
+//   passes `{ alert: true }`, which closes the previous toast first, then
+//   posts a FRESH one with no --replace-id, forcing a banner. Answering one
+//   of several still waiting, or the set only shrinking/re-wording, renders
+//   with no `alert` — today's silent in-place update.
 // - CLICK TO ANSWER: an optional `action` renders a button on the toast
 //   (freedesktop actions via `notify-send --action`); clicking it runs the
 //   callback — bootstrap wires it to open the tlive dashboard, so the toast
@@ -111,14 +122,20 @@ export interface ToastIdStore {
 
 export interface DesktopNotifier {
   /** Show (or replace) THE waiting toast. Resident: it stays until clear().
-   *  Single slot — a machine shows one toast listing everything that waits. */
-  render(title: string, body: string): Promise<void>;
+   *  Single slot — a machine shows one toast listing everything that waits.
+   *  `alert: true` means something NEW needs the user: close the previous
+   *  toast, then post a FRESH one with no replace-id, so a notification
+   *  server that treats a resident toast as a permanent panel entry (the
+   *  `persistence` capability — quickshell, GNOME, most modern shells) still
+   *  raises a banner. Omitted/false is today's silent in-place update — the
+   *  set only shrank or its text changed, nothing new is waiting. */
+  render(title: string, body: string, opts?: { alert?: boolean }): Promise<void>;
   /** Close the waiting toast — nothing is waiting anymore. */
   clear(): Promise<void>;
 }
 
 const NOOP: DesktopNotifier = {
-  render: async () => {},
+  render: async (_title, _body, _opts) => {},
   clear: async () => {},
 };
 
@@ -168,7 +185,17 @@ export function createDesktopNotifier(opts?: {
     liveProc?.kill();
     liveProc = null;
   };
-  const slotArgs = (title: string, body: string): string[] => [
+  // The one gdbus argument list that closes a notification by id. Shared by
+  // clear() and the alert path below — a second copy of this array is exactly
+  // the kind of drift this branch has spent its whole life removing.
+  const closeArgs = (id: string): string[] => [
+    'call', '--session',
+    '--dest', 'org.freedesktop.Notifications',
+    '--object-path', '/org/freedesktop/Notifications',
+    '--method', 'org.freedesktop.Notifications.CloseNotification',
+    id,
+  ];
+  const slotArgs = (title: string, body: string, alert: boolean): string[] => [
     '--app-name=tlive',
     // Resident, and NOT transient. The 15s+transient pair used to treat tray
     // zombies whose real cause was having no reliable way to close a toast;
@@ -177,15 +204,29 @@ export function createDesktopNotifier(opts?: {
     // serve: step away for five minutes and the signal must still be there.
     '--expire-time=0',
     '--print-id',
-    ...(lastId ? [`--replace-id=${lastId}`] : []),
+    // alert → deliberately no --replace-id, even if a lastId is still on hand:
+    // this must land as a FRESH notification so a persistent notification
+    // server raises a banner instead of silently updating a panel entry.
+    ...(!alert && lastId ? [`--replace-id=${lastId}`] : []),
     ...(action ? [`--action=answer=${action.label}`] : []),
     title,
     body,
   ];
-  const showSlot = (title: string, body: string): Promise<void> => enqueue(async () => {
+  const showSlot = (title: string, body: string, opts?: { alert?: boolean }): Promise<void> => enqueue(async () => {
+    const alert = opts?.alert ?? false;
     dropLiveProc();
+    if (alert && lastId) {
+      // Close first, then post. If the process dies between the two, nothing
+      // is on screen and no id is persisted — safe. Posting first and closing
+      // after would orphan the old notification on a crash; the old entry is
+      // a silent panel row anyway, so the sub-10ms gap is invisible.
+      const staleId = lastId;
+      lastId = null;
+      await sp('gdbus', closeArgs(staleId));
+      idStore?.write(null);
+    }
     const gen = generation;
-    const proc = ss('notify-send', slotArgs(title, body));
+    const proc = ss('notify-send', slotArgs(title, body, alert));
     liveProc = proc;
     if (action) proc.onLine((line) => { if (generation === gen && line.trim() === 'answer') action.run(); });
     const id = (await proc.firstLine)?.trim();
@@ -203,13 +244,7 @@ export function createDesktopNotifier(opts?: {
       // notify-send cannot close; go straight to the DBus spec method. If
       // gdbus is absent the toast still self-expires (transient) — degraded,
       // not broken.
-      await sp('gdbus', [
-        'call', '--session',
-        '--dest', 'org.freedesktop.Notifications',
-        '--object-path', '/org/freedesktop/Notifications',
-        '--method', 'org.freedesktop.Notifications.CloseNotification',
-        id,
-      ]);
+      await sp('gdbus', closeArgs(id));
       // Persisted AFTER the close resolves, not before: the close is a spawned
       // process in flight for the whole await, and a `kill -9` mid-flight must
       // leave the OLD id on disk. A stale id makes the next process's
@@ -223,13 +258,15 @@ export function createDesktopNotifier(opts?: {
 }
 
 /** macOS: built-in osascript. No slot — banners auto-dismiss; there is no
- *  scriptable replace/close for Notification Center entries. */
+ *  scriptable replace/close for Notification Center entries, so `opts.alert`
+ *  is accepted (for the shared interface) and ignored: every render here is
+ *  already a fresh banner. */
 function darwinNotifier(sp: Spawner): DesktopNotifier {
   const esc = (v: string): string => v.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const show = (title: string, body: string): Promise<string | null> =>
     sp('osascript', ['-e', `display notification "${esc(body)}" with title "${esc(title)}"`]);
   return {
-    render: async (title, body) => { await show(title, body); },
+    render: async (title, body, _opts) => { await show(title, body); },
     clear: async () => { /* not scriptable on macOS */ },
   };
 }
@@ -261,11 +298,14 @@ export function win32ClearScript(): string {
   ].join('; ');
 }
 
+// `opts.alert` is accepted (for the shared interface) and ignored here: this
+// backend is spec-derived and unverified on real hardware, and this task's
+// fix must not be the first blind change to it.
 function win32Notifier(sp: Spawner): DesktopNotifier {
   const run = (script: string): Promise<string | null> =>
     sp('powershell', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script]);
   return {
-    render: async (title, body) => { await run(win32ToastScript(title, body)); },
+    render: async (title, body, _opts) => { await run(win32ToastScript(title, body)); },
     clear: async () => { await run(win32ClearScript()); },
   };
 }

@@ -2288,4 +2288,40 @@ describe('WaitingBoard drives the ONE desktop toast (Task 3)', () => {
     h.permissionRouter.answer(firstPendingId(h), true);
     await p;
   });
+
+  // Task 9: the toast is resident, so on a server advertising the
+  // `persistence` capability, --replace-id updates it in place and silently
+  // — no banner. The decision lives in `refreshDesktop`, so prove it end to
+  // end: a NEW waiting thing must alert; answering one of several must not.
+  it('a second session needing you re-alerts; answering one of them does not', async () => {
+    // port 0 → ephemeral: this test needs a real answer surface (web enabled)
+    // so the router HOLDS the request instead of resolving it immediately as
+    // unanswerable, but the fixed default port collides with a real tlive
+    // daemon that may already be running on this machine (same fix as "a
+    // dashboard URL alone…" above).
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 } }));
+    const renders: Array<{ title: string; alert: boolean }> = [];
+    h = await bootstrapDaemon({
+      home: tmp, imAdapters: [],
+      desktopNotifier: {
+        render: async (title, _b, o) => { renders.push({ title, alert: !!o?.alert }); },
+        clear: async () => {},
+      },
+    });
+    const a = h.permissionRouter.requestPermission({ key: '/w/a', cwd: '/w/a', toolName: 'Bash', input: { command: 'ls' } });
+    await until(() => { expect(renders).toHaveLength(1); });
+    expect(renders[0]!.alert).toBe(true);                       // first thing waiting → alert
+    const b = h.permissionRouter.requestPermission({ key: '/w/b', cwd: '/w/b', toolName: 'Read', input: { file_path: '/w/b/x' } });
+    await until(() => { expect(renders).toHaveLength(2); });
+    expect(renders[1]!.alert).toBe(true);                       // a NEW one → alert
+    h.permissionRouter.answer(firstPendingId(h), true);
+    await until(() => { expect(renders).toHaveLength(3); });
+    expect(renders[2]!.alert).toBe(false);                      // one answered → silent
+    // Clean up the still-outstanding request so the test doesn't hang waiting
+    // for the other of `a`/`b` — its default timeout (580s) far outlives this
+    // test (same pattern as "two sessions waiting render ONE aggregated
+    // toast" above).
+    h.permissionRouter.answer(firstPendingId(h), true);
+    await a; await b;
+  });
 });

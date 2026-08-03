@@ -492,14 +492,38 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
    *  there is no separate predicate left to forget to update. */
   const board = new WaitingBoard();
 
+  /** The board entry ids present at the LAST render — the only state needed
+   *  to tell "something NEW needs the user" from "the set only shrank or its
+   *  text changed". Reset to empty whenever the board empties (clear()), so
+   *  the next thing to arrive alerts again from a clean slate — otherwise the
+   *  id of a long-resolved entry could still read as "already seen" forever. */
+  let lastBoardIds = new Set<string>();
+
   /** Project the board onto the machine's one toast. Every registration and
    *  every retirement ends with this call; apart from the two direct
    *  `desktop.clear()` calls (startup and shutdown), nothing else touches
-   *  `desktop` — there is no runtime toggle left to gate it. */
+   *  `desktop` — there is no runtime toggle left to gate it.
+   *
+   *  Alert vs silent update (measured live — a resident toast on a server
+   *  advertising the `persistence` capability turns --replace-id into a
+   *  silent panel edit, no banner): an id present now that was absent from
+   *  the last render is something new waiting for the user → `alert: true`,
+   *  which desktop.render() turns into close-then-post-fresh so the server
+   *  raises a banner. A board that only shrank, or whose entries only
+   *  reworded (no new id), renders with no alert — answering one of several
+   *  things waiting must not re-pop. */
   const refreshDesktop = (): void => {
-    const view = renderBoard(board.entries());
-    if (!view) void desktop.clear();
-    else void desktop.render(view.title, view.body);
+    const entries = board.entries();
+    const view = renderBoard(entries);
+    if (!view) {
+      lastBoardIds = new Set();
+      void desktop.clear();
+      return;
+    }
+    const ids = new Set(entries.map((e) => e.id));
+    const alert = entries.some((e) => !lastBoardIds.has(e.id));
+    lastBoardIds = ids;
+    void desktop.render(view.title, view.body, { alert });
   };
 
   /** Board id for a tracked CC-native dialog — one slot per session key, exactly
