@@ -5,7 +5,7 @@
 // sets. It still has to be on disk rather than in memory: a flag that resets
 // when the daemon restarts turns "told once" into "told every restart", which
 // is the exact spam this whole change removes.
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface DaemonState {
@@ -21,15 +21,19 @@ export interface DaemonState {
 
 const statePath = (home: string): string => join(home, 'state.json');
 
-/** Never throws. A missing or unparsable state file means "we know nothing",
- *  and the worst consequence of that is re-sending one explanation card —
- *  strictly better than a daemon that will not start over a corrupt cache. */
+/** Never throws. A missing or unparsable state file means "we know nothing".
+ *  For `notifyExplainedChats` that costs at most one re-sent explanation
+ *  card — but `toastId` shares this same file, so degrading to `{}` can ALSO
+ *  strand a live toast: the next `clear()` has no id to act on, and the
+ *  notification sits there until dismissed by hand. Still strictly better
+ *  than a daemon that will not start over a corrupt cache. */
 export function readState(home: string): DaemonState {
   const p = statePath(home);
   if (!existsSync(p)) return {};
 
   // Guard the read: file may be unreadable or vanish after existsSync (TOCTOU race).
-  // Degrading to {} costs at most one re-sent explanation message.
+  // Degrading to {} costs at most one re-sent explanation card OR one stranded
+  // toast — see the doc comment above.
   let raw: string;
   try {
     raw = readFileSync(p, 'utf-8');
@@ -37,8 +41,10 @@ export function readState(home: string): DaemonState {
     return {};
   }
 
-  // Guard the parse: file exists but contains invalid JSON (half-written or corrupt).
-  // Degrading to {} costs at most one re-sent explanation message.
+  // Guard the parse: file exists but contains invalid JSON (half-written or
+  // corrupt). `writeState` below writes atomically, so this should only ever
+  // catch a file corrupted by something outside this module. Degrading to {}
+  // costs at most one re-sent explanation card OR one stranded toast.
   try {
     return JSON.parse(raw) as DaemonState;
   } catch {
@@ -46,9 +52,34 @@ export function readState(home: string): DaemonState {
   }
 }
 
+/** Atomic write: a bare `writeFileSync` opens with O_TRUNC and then writes, so
+ *  a kill between those two steps leaves a 0-byte `state.json` — which
+ *  `readState` degrades exactly as it would a missing file, silently dropping
+ *  whatever `toastId` was on disk along with it (I3). Writing to a sibling
+ *  temp file in the SAME directory and `renameSync`-ing it over the target
+ *  avoids that: rename is atomic within one filesystem, so any reader always
+ *  sees either the complete old file or the complete new one, never a
+ *  partial one. The whole read-modify-write callers do around this (see
+ *  `markNotifyExplained` / `writeToastId`) must stay fully synchronous — no
+ *  `await` between their `readState()` and this call — or two callers could
+ *  interleave and one's write would clobber the other's field. This function
+ *  does not close every gap on its own, though: a ~4ms window remains between
+ *  `notify-send` rendering a toast and its id reaching `writeToastId` at all
+ *  (desktop-notify.ts persists only after the spawned process's first line
+ *  resolves) — a kill exactly there strands a toast with nothing on disk to
+ *  reach it. That window is irreducible: you cannot atomically persist an id
+ *  you do not have yet. */
 function writeState(home: string, next: DaemonState): void {
   mkdirSync(home, { recursive: true });
-  writeFileSync(statePath(home), JSON.stringify(next, null, 2));
+  const target = statePath(home);
+  const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync(tmp, JSON.stringify(next, null, 2));
+    renameSync(tmp, target);
+  } catch (e) {
+    try { unlinkSync(tmp); } catch { /* best-effort cleanup; the throw below is what matters */ }
+    throw e;
+  }
 }
 
 export function wasNotifyExplained(home: string, chatKey: string): boolean {
