@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createDesktopNotifier, type PingProc, type StreamSpawner } from '../desktop-notify';
+import { createDesktopNotifier, type NotifySendProc, type StreamSpawner } from '../desktop-notify';
 
 /** Fake notify-send process: id emitted immediately (as pinned live: ~4ms even
  *  with --action), later lines are clicked action names. */
@@ -12,7 +12,7 @@ function fakeProcs() {
       emit: (l: string) => { for (const cb of lineCbs) cb(l); },
     };
     procs.push(rec);
-    const proc: PingProc = {
+    const proc: NotifySendProc = {
       firstLine: Promise.resolve(String(41 + procs.length)), // 42, 43, …
       onLine: (cb) => lineCbs.push(cb),
       kill: () => { rec.killed = true; },
@@ -209,9 +209,22 @@ describe('vitest backstop', () => {
   it('returns a no-op notifier under vitest when no spawner is injected', async () => {
     // Guards the developer's real desktop: 35 bootstrap tests never inject the
     // seam, and used to reach real notify-send with fixture session names.
-    const n = createDesktopNotifier({ platform: 'linux', hasCmd: () => true });
+    //
+    // Asserting render()/clear() resolve to undefined is NOT enough to catch a
+    // regressed backstop (M2): if the VITEST guard ever stopped short-circuiting,
+    // this call would fall through to `platform: 'linux', hasCmd: () => true`
+    // and fire a genuine notify-send on the developer's desktop — while
+    // render()/clear() would STILL resolve to undefined either way (notify-send
+    // is fire-and-forget from the caller's perspective), so those two
+    // assertions alone can never fail even when the backstop is broken. A
+    // `hasCmd` spy can: the no-op path returns before any platform branching,
+    // so it is provably never consulted — same pattern as the sibling "silent
+    // no-op" test below (`expect(sp).not.toHaveBeenCalled()`).
+    const hasCmd = vi.fn(() => true);
+    const n = createDesktopNotifier({ platform: 'linux', hasCmd });
     await expect(n.render('t', 'b')).resolves.toBeUndefined();
     await expect(n.clear()).resolves.toBeUndefined();
+    expect(hasCmd).not.toHaveBeenCalled();
   });
 
   it('an injected spawner still exercises the REAL implementation under vitest', async () => {

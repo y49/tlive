@@ -68,12 +68,12 @@ const defaultSpawner: Spawner = (cmd, args) =>
 
 /** A long-lived notify-send holding an actionable toast: first stdout line is
  *  the notification id (immediate), later lines are invoked action names. */
-export interface PingProc {
+export interface NotifySendProc {
   firstLine: Promise<string | null>;
   onLine(cb: (line: string) => void): void;
   kill(): void;
 }
-export type StreamSpawner = (cmd: string, args: string[]) => PingProc;
+export type StreamSpawner = (cmd: string, args: string[]) => NotifySendProc;
 
 const defaultStreamSpawner: StreamSpawner = (cmd, args) => {
   const lineCbs: Array<(l: string) => void> = [];
@@ -156,7 +156,7 @@ export function createDesktopNotifier(opts?: {
   // makes the startup clear() below real: a fresh process otherwise has no
   // way to know a predecessor left a toast up, and would silently no-op.
   let lastId: string | null = idStore?.read() ?? null;
-  let liveProc: PingProc | null = null;
+  let liveProc: NotifySendProc | null = null;
   let generation = 0;
   let chain: Promise<void> = Promise.resolve();
   const enqueue = (task: () => Promise<void>): Promise<void> => {
@@ -240,7 +240,7 @@ function darwinNotifier(sp: Spawner): DesktopNotifier {
  *  render toasts. Spec-derived — pending real-hardware verification. */
 const WIN_APP_ID = String.raw`{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe`;
 
-export function win32ToastScript(title: string, body: string, tag = 'tlive'): string {
+export function win32ToastScript(title: string, body: string): string {
   const esc = (v: string): string =>
     v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
   return [
@@ -248,8 +248,8 @@ export function win32ToastScript(title: string, body: string, tag = 'tlive'): st
     `$xml = New-Object Windows.Data.Xml.Dom.XmlDocument`,
     `$xml.LoadXml('<toast><visual><binding template="ToastGeneric"><text>${esc(title)}</text><text>${esc(body)}</text></binding></visual></toast>')`,
     `$t = [Windows.UI.Notifications.ToastNotification]::new($xml)`,
-    `$t.Tag = '${tag}'`,
-    `$t.Group = '${tag}'`,
+    `$t.Tag = 'tlive'`,
+    `$t.Group = 'tlive'`,
     `[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('${WIN_APP_ID}').Show($t)`,
   ].join('; ');
 }
