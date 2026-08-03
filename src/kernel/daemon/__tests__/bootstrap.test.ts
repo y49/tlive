@@ -2514,10 +2514,14 @@ describe('a projection identical to the last one actually rendered is skipped (T
     expect(renders.length - before).toBe(1);
   });
 
-  it('an identical view still renders when something NEW arrived — text equality is not enough', async () => {
-    // Two sessions whose rendered line is identical: same label, same tool. One
-    // retires as the other arrives, so the text is unchanged but a new id is on
-    // the board. Suppressing this would swallow the alert the branch exists for.
+  it('an identical view returning after the board emptied still renders', async () => {
+    // Wiring only. This does NOT pin the `!alert` half of the skip condition:
+    // the board passes through an empty state here, and the `lastBoardIds`
+    // reset there forces alert:true by a different mechanism, so this test
+    // stays green with `!alert` removed. The clause is pinned by
+    // canSkipProjection's unit tests ('identical view, alert:true'), which is
+    // why that decision was extracted into a pure function. Do not read this
+    // test as proof that text equality alone is insufficient.
     const renders: Array<{ alert: boolean }> = [];
     h = await bootstrapDaemon({
       home: tmp, imAdapters: [],
