@@ -399,7 +399,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     expect(clears.length).toBeGreaterThan(0);
   });
 
-  it('desktop ping is immediate — it does NOT wait out the IM card grace delay (the local user is the whole point)', async () => {
+  it('the desktop toast is immediate — it does NOT wait out the IM card grace delay (the local user is the whole point)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },
       approvals: { approvalGraceSec: 30 }, // IM card held back 30s…
@@ -428,7 +428,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     expect(sent).toHaveLength(0);
   });
 
-  it('two configured chats with a slow adapter still get ONE desktop ping per request (regression: per-chat concurrent pushes each fired a toast)', async () => {
+  it('two configured chats with a slow adapter still get ONE desktop toast render per request (regression: per-chat concurrent pushes each fired a toast)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },
       approvals: { approvalGraceSec: 0 },
@@ -453,7 +453,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     );
     held(pending);
     await until(() => { expect(sent).toHaveLength(2); }); // one card per channel…
-    expect(notes).toHaveLength(1); // …but a single desktop ping
+    expect(notes).toHaveLength(1); // …but a single desktop toast render
     const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
     tg.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: card.buttons!.find((b) => b.id.startsWith('approve:'))!.id, ts: 0 });
     await pending;
@@ -995,7 +995,7 @@ describe('quoting a live approval card = deny with guidance (Task 7)', () => {
   });
 
   // Mirrors the hook.notify first-contact fix above, one call site over:
-  // onPending's desktop ping also renders sessionTag(key) — and used to do so
+  // onPending's board entry also renders sessionLabel(key) — and used to do so
   // BEFORE its own final `sessions.upsert(...)` registered the session, so a
   // session's very first tool-permission request (e.g. right after a daemon
   // restart) produced an unlabelled toast.
@@ -1228,7 +1228,7 @@ describe('sub-agent pass-through tells you what is blocked', () => {
   // `/mute` on, or the user simply not looking at their phone, a blocked
   // sub-agent used to produce NO signal at all. The desktop toast is
   // precisely the "at this machine, not watching the terminal" channel.
-  it('fires ONE desktop ping naming the tool when a sub-agent request passes through', async () => {
+  it('fires ONE desktop toast render naming the tool when a sub-agent request passes through', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
@@ -1251,7 +1251,7 @@ describe('sub-agent pass-through tells you what is blocked', () => {
   });
 
   // Same call-site-ordering bug as onPending above, the other flagged site:
-  // onPassthrough's desktop ping also renders sessionTag(key) before its own
+  // onPassthrough's board entry also renders sessionLabel(key) before its own
   // guarded upsert registered the session, so a sub-agent's first-ever
   // pass-through (e.g. right after a daemon restart) produced an unlabelled toast.
   it('a sub-agent pass-through for a never-before-seen session still carries the "<label> · " toast prefix', async () => {
@@ -1306,7 +1306,7 @@ describe('sub-agent pass-through tells you what is blocked', () => {
   // IM ⊥ desktop: `/mute` is an IM-only switch. The old early-return at the
   // top of onPassthrough killed the WHOLE announcement on mute, which broke
   // that rule for this notice specifically.
-  it('IM mute silences the card, but the desktop ping still fires (IM ⊥ desktop)', async () => {
+  it('IM mute silences the card, but the desktop toast still fires (IM ⊥ desktop)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
@@ -1704,7 +1704,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     return r.sessions.find((s) => s.id === id);
   }
 
-  it('no held request → desktop ping + read-only waiting-approval card; IM gets the one-time notify explanation, not dead mail (the chain a silent hang used to be)', async () => {
+  it('no held request → desktop toast + read-only waiting-approval card; IM gets the one-time notify explanation, not dead mail (the chain a silent hang used to be)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);

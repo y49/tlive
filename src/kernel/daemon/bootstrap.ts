@@ -687,7 +687,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     onPending: ({ key, cwd, requestId, title, body, toolName, ask }) => {
       // A permission request can be the FIRST thing the daemon ever hears
       // about this session (e.g. right after a daemon restart) — register it
-      // before the desktop ping below renders a `sessionTag(key)` label, same
+      // before the board entry below renders a `sessionLabel(key)` label, same
       // fix as hook.notify's and onPassthrough's. The guard skips a no-op write
       // for an already-known session (upsert's patch merge preserves its state
       // either way); the final upsert below still carries the full
@@ -794,7 +794,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     // requires no action, so a per-turn toast just floods the screen (live
     // feedback). Completion stays on IM only — a chat log stacks fine. The
     // desktop toast is reserved for things that genuinely need you to act:
-    // pending approvals (ping) and the idle "waiting for your input" nudge.
+    // pending approvals and the idle "waiting for your input" nudge.
     for (const t of configuredChats()) {
       // requestId 不进显示文本:回复路由走 replyToMessageId,不解析正文。
       const raw = req.context === TURN_FINISHED_SENTINEL ? '' : req.context;
@@ -1075,12 +1075,13 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           const s = sessions.get(key);
           if (req.permissionPrompt) {
             // A CC-native permission dialog is up (issue #49). A held request
-            // for this session already owns every surface (toast pinged at
-            // onPending, card sent/gracing, dashboard answerable) → this
-            // notification adds nothing, drop it. No held request — notify
-            // mode, or the router deferred on arrival — this is the ONLY
-            // signal anyone gets: run the local-waiting chain. Never carries
-            // a decision; never-auto-allow untouched.
+            // for this session already owns every surface (toast already
+            // rendered via onPending's board entry, card sent/gracing,
+            // dashboard answerable) → this notification adds nothing, drop it.
+            // No held request — notify mode, or the router deferred on
+            // arrival — this is the ONLY signal anyone gets: run the
+            // local-waiting chain. Never carries a decision; never-auto-allow
+            // untouched.
             //
             // heldOwnsIt is a PROXY and cannot be made exact: this notification
             // carries no tool_name and no agent_id (CC builds Notification input
