@@ -284,21 +284,23 @@ describe('vitest backstop', () => {
     // and fire a genuine notify-send on the developer's desktop — while
     // render()/clear() would STILL resolve to undefined either way (notify-send
     // is fire-and-forget from the caller's perspective), so those two
-    // assertions alone can never fail even when the backstop is broken.
-    //
-    // Task 10 superseded the old proxy for this ("hasCmd is never consulted" —
-    // no longer true: `desktop.channel`'s reason must reflect the REAL cause
-    // when there is one, so hasCmd IS now checked before the vitest backstop)
-    // with a direct one: the log line says `active: false, reason: 'vitest'`
-    // outright, so a regressed backstop shows up as `active: true` right here
-    // instead of escaping detection.
+    // assertions alone can never fail even when the backstop is broken. A
+    // `hasCmd` spy can: the no-op path returns before any platform branching,
+    // so it is provably never consulted — same pattern as the sibling "silent
+    // no-op" test below (`expect(sp).not.toHaveBeenCalled()`). The `desktop.channel`
+    // log line (Task 10) is a USEFUL extra signal — a regressed backstop would
+    // also show up there as `active: true` — but it is a self-reported string,
+    // not a structural guarantee, so it augments this assertion rather than
+    // replacing it.
+    const hasCmd = vi.fn(() => true);
     const lines: Array<{ fields: Record<string, unknown> }> = [];
     const n = createDesktopNotifier({
-      platform: 'linux', hasCmd: () => true,
+      platform: 'linux', hasCmd,
       log: (_msg, fields) => { lines.push({ fields }); },
     });
     await expect(n.render('t', 'b')).resolves.toBeUndefined();
     await expect(n.clear()).resolves.toBeUndefined();
+    expect(hasCmd).not.toHaveBeenCalled();
     expect(lines).toEqual([{ fields: { active: false, platform: 'linux', reason: 'vitest' } }]);
   });
 
@@ -321,7 +323,12 @@ describe('channel observability (Task 10) — the one line that answers "why do 
   it('reports once whether the channel is live, and why not when it is not', async () => {
     const lines: Array<{ msg: string; fields: Record<string, unknown> }> = [];
     const log = (msg: string, fields: Record<string, unknown>): void => { lines.push({ msg, fields }); };
-    createDesktopNotifier({ platform: 'linux', hasCmd: () => false, log });
+    // `spawner` is this file's documented "I am testing the real
+    // implementation" signal (see the vitest-backstop guard below) — without
+    // it, the vitest-no-spawner backstop fires FIRST under `pnpm test` and
+    // this call would report `reason: 'vitest'` instead of ever consulting
+    // `hasCmd`, proving nothing about the no-notify-send path.
+    createDesktopNotifier({ platform: 'linux', hasCmd: () => false, spawner: async () => '', log });
     expect(lines).toEqual([{ msg: 'desktop.channel', fields: { active: false, platform: 'linux', reason: 'no-notify-send' } }]);
   });
 
@@ -353,8 +360,22 @@ describe('channel observability (Task 10) — the one line that answers "why do 
   it('reports unsupported-platform for a platform with no backend at all', async () => {
     const lines: Array<{ fields: Record<string, unknown> }> = [];
     const log = (_msg: string, fields: Record<string, unknown>): void => { lines.push({ fields }); };
-    createDesktopNotifier({ platform: 'freebsd', hasCmd: () => true, log });
+    // Same reason a spawner is injected above: the vitest backstop fires
+    // before ANY platform check, regardless of platform, so without it this
+    // would report 'vitest' rather than exercising the platform branch at all.
+    createDesktopNotifier({ platform: 'freebsd', hasCmd: () => true, spawner: async () => '', log });
     expect(lines).toEqual([{ fields: { active: false, platform: 'freebsd', reason: 'unsupported-platform' } }]);
+  });
+
+  it('reports no-backend (not the linux-only no-notify-send) when darwin/win32 are missing their own binary', async () => {
+    const lines: Array<{ fields: Record<string, unknown> }> = [];
+    const log = (_msg: string, fields: Record<string, unknown>): void => { lines.push({ fields }); };
+    createDesktopNotifier({ platform: 'darwin', hasCmd: () => false, spawner: async () => '', log });
+    createDesktopNotifier({ platform: 'win32', hasCmd: () => false, spawner: async () => '', log });
+    expect(lines).toEqual([
+      { fields: { active: false, platform: 'darwin', reason: 'no-backend' } },
+      { fields: { active: false, platform: 'win32', reason: 'no-backend' } },
+    ]);
   });
 });
 

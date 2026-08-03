@@ -2408,20 +2408,62 @@ describe('desktop channel + projection logging is observable from the log alone 
   });
 
   // Deferred Minor from Task 9's review: a board entry re-added under the SAME
-  // id (a re-render of the same dialog) must not raise a banner. Guarded until
-  // now only indirectly, through WaitingBoard.add's Map-upsert test plus code
-  // reading — this drives it through refreshDesktop itself.
-  it('a same-id re-render with new text does not alert', async () => {
+  // id (a re-render of the same dialog) must not raise a banner — even when the
+  // rendered TEXT genuinely differs between the two renders. WaitingBoard.add's
+  // Map upsert replaces an entry's content but keeps its id, and `alert` must
+  // be computed from ids alone; a version of this test that used two
+  // byte-identical notifyIdle calls (same label, same constant `what`) could
+  // not tell that apart from a future regression that made `alert` sensitive
+  // to wording — so this one forces the text to change: the idle board's
+  // rendered title carries the session's CURRENT label, read live at render
+  // time (`sessionLabel` in bootstrap.ts), so changing the registered label
+  // between the two calls changes the title under the exact same `idle:s1` id.
+  it('a same-id re-render with a genuinely different label does not alert', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
-    const renders: Array<{ alert: boolean }> = [];
+    const renders: Array<{ title: string; alert: boolean }> = [];
     h = await bootstrapDaemon({
       home: tmp, imAdapters: [],
-      desktopNotifier: { render: async (_t, _b, o) => { renders.push({ alert: !!o?.alert }); }, clear: async () => {} },
+      desktopNotifier: { render: async (t, _b, o) => { renders.push({ title: t, alert: !!o?.alert }); }, clear: async () => {} },
     });
+    h.sessions.upsert({ key: 's1', cwd: '/w/a', label: 'first-label' });
     await notifyIdle(h, { cwd: '/w/a', sessionId: 's1' });
     await until(() => { expect(renders.length).toBe(1); });
-    await notifyIdle(h, { cwd: '/w/a', sessionId: 's1' }); // same idle:<key> id, re-registered
+    expect(renders[0]!.title).toBe('first-label · your input');
+    h.sessions.upsert({ key: 's1', cwd: '/w/a', label: 'second-label' }); // same idle:s1 id, different text next render
+    await notifyIdle(h, { cwd: '/w/a', sessionId: 's1' });
     await until(() => { expect(renders.length).toBe(2); });
-    expect(renders.map((r) => r.alert)).toEqual([true, false]);
+    expect(renders[1]!.title).toBe('second-label · your input'); // the text really did change …
+    expect(renders.map((r) => r.alert)).toEqual([true, false]);  // … yet it must not alert
+  });
+
+  // Finding 2 (fix round 1): refreshDesktop runs after every board removal,
+  // most of which are no-ops against an already-empty board (e.g.
+  // clearLocalPrompt's unconditional refresh, hit on every main-session
+  // `activity`/`prompt` event). Logging `desktop.clear` unconditionally there
+  // would emit one content-free line per such event — hundreds per session —
+  // burying the handful of `desktop.render` lines this task exists to
+  // surface. Only the REAL transition (something was on the board, now it
+  // is not) may log.
+  it('a refresh on an already-empty board logs no desktop.clear line', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    const lines: Array<{ msg: string; fields: Record<string, unknown> }> = [];
+    h = await bootstrapDaemon({
+      home: tmp, imAdapters: [],
+      desktopNotifier: { render: async () => {}, clear: async () => {} },
+      onLog: (msg, fields) => { lines.push({ msg, fields }); },
+    });
+    const sock = h.ipcSocketPath;
+    // One real transition: something waits, then the user types → the idle
+    // entry retires and the board empties → exactly one `desktop.clear`.
+    await notifyIdle(h, { cwd: '/w/a', sessionId: 's1' });
+    await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/w/a', sessionId: 's1', prompt: 'go on' } }, { socketPath: sock, timeoutMs: 2000 });
+    await until(() => { expect(lines.filter((l) => l.msg === 'desktop.clear')).toHaveLength(1); });
+    // A second, unrelated `prompt` event on the SAME (already-empty) board —
+    // this is exactly clearLocalPrompt's + the idle-removal's own
+    // unconditional refreshDesktop pair, both hitting an empty board — must
+    // add no further `desktop.clear` line.
+    await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/w/a', sessionId: 's1', prompt: 'again' } }, { socketPath: sock, timeoutMs: 2000 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lines.filter((l) => l.msg === 'desktop.clear')).toHaveLength(1);
   });
 });

@@ -539,9 +539,18 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     const entries = board.entries();
     const view = renderBoard(entries);
     if (!view) {
+      // Log only the real transition — the board just emptied and the toast
+      // came down. `refreshDesktop` runs after every removal, most of which
+      // are no-ops against an already-empty board (e.g. `clearLocalPrompt`'s
+      // unconditional refresh, called on EVERY main-session `activity`
+      // event): logging unconditionally here would emit hundreds of
+      // content-free `desktop.clear` lines per session and bury the handful
+      // of `desktop.render` lines this task exists to surface. `desktop.clear()`
+      // itself stays unconditional below — the notifier already self-guards
+      // on `!lastId`, so a redundant call is free.
+      if (lastBoardIds.size) logDesktop('desktop.clear');
       lastBoardIds = new Set();
       void desktop.clear();
-      logDesktop('desktop.clear');
       return;
     }
     const ids = new Set(entries.map((e) => e.id));

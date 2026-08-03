@@ -176,27 +176,26 @@ export function createDesktopNotifier(opts?: {
   // reach the code below — an unconditional no-op would disable this file's
   // own tests silently. Precedent: bootstrap's forceExit VITEST guard.
   //
-  // Checked AFTER platform/hasCmd below, deliberately: this guard is test-only
-  // scaffolding, and its own reason must never mask the REAL one (e.g.
-  // 'no-notify-send') that would apply in production regardless of vitest —
-  // the log line exists so a human can act on it, and "vitest" is not
-  // something a real user can act on.
-  const vitestBackstop = (): boolean => Boolean(process.env.VITEST) && !opts?.spawner;
+  // Checked BEFORE any platform branching, deliberately — this is what makes
+  // `hasCmd` PROVABLY never consulted under vitest without an injected
+  // spawner (see this file's own "vitest backstop" test), a structural
+  // property a self-reported log line cannot substitute for.
+  if (process.env.VITEST && !opts?.spawner) { channel(false, 'vitest'); return NOOP; }
   if (platform === 'darwin') {
-    if (!hasCmd('osascript')) { channel(false, 'no-notify-send'); return NOOP; }
-    if (vitestBackstop()) { channel(false, 'vitest'); return NOOP; }
+    // Not 'no-notify-send' — that binary is linux-only; naming it here would
+    // send a macOS user hunting for something that never existed on their
+    // platform.
+    if (!hasCmd('osascript')) { channel(false, 'no-backend'); return NOOP; }
     channel(true);
     return darwinNotifier(opts?.spawner ?? defaultSpawner);
   }
   if (platform === 'win32') {
-    if (!hasCmd('powershell')) { channel(false, 'no-notify-send'); return NOOP; }
-    if (vitestBackstop()) { channel(false, 'vitest'); return NOOP; }
+    if (!hasCmd('powershell')) { channel(false, 'no-backend'); return NOOP; }
     channel(true);
     return win32Notifier(opts?.spawner ?? defaultSpawner);
   }
   if (platform !== 'linux') { channel(false, 'unsupported-platform'); return NOOP; }
   if (!hasCmd('notify-send')) { channel(false, 'no-notify-send'); return NOOP; }
-  if (vitestBackstop()) { channel(false, 'vitest'); return NOOP; }
   channel(true);
   const sp = opts?.spawner ?? defaultSpawner;
   const ss = opts?.streamSpawner ?? defaultStreamSpawner;
