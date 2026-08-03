@@ -35,6 +35,39 @@ describe('WaitingBoard', () => {
     b.add(entry({ id: 'a', label: 'one', what: 'Edit' })); // replace in place
     expect(b.entries().map((e) => e.id)).toEqual(['a', 'b']);
   });
+
+  describe('removeWhere', () => {
+    it('retires every entry matching the predicate, and reports whether anything was removed', () => {
+      const b = new WaitingBoard();
+      b.add(entry({ id: 'a', key: '/w/s1', kind: 'subagent', what: 'Bash · sub-agent' }));
+      b.add(entry({ id: 'b', key: '/w/s1', kind: 'subagent', what: 'Read · sub-agent' }));
+      b.add(entry({ id: 'c', key: '/w/s2', kind: 'held', what: 'Bash' }));
+      expect(b.removeWhere((e) => e.kind === 'subagent' && e.key === '/w/s1')).toBe(true);
+      expect(b.entries().map((e) => e.id)).toEqual(['c']);
+    });
+
+    it('is a no-op, not a throw, when nothing matches — and reports false', () => {
+      const b = new WaitingBoard();
+      b.add(entry({ id: 'a' }));
+      expect(b.removeWhere((e) => e.kind === 'idle')).toBe(false);
+      expect(b.size()).toBe(1);
+    });
+
+    it('can narrow by a field beyond kind+key — e.g. the exact `what` a permission-denied event names', () => {
+      const b = new WaitingBoard();
+      b.add(entry({ id: 'a', key: '/w/s1', kind: 'subagent', what: 'Bash · sub-agent' }));
+      b.add(entry({ id: 'b', key: '/w/s1', kind: 'subagent', what: 'Read · sub-agent' }));
+      expect(b.removeWhere((e) => e.kind === 'subagent' && e.key === '/w/s1' && e.what === 'Bash · sub-agent')).toBe(true);
+      expect(b.entries().map((e) => e.id)).toEqual(['b']);
+    });
+
+    it('emptying the board via removeWhere is indistinguishable from emptying it via remove — isEmpty() still flips', () => {
+      const b = new WaitingBoard();
+      b.add(entry({ id: 'a' }));
+      expect(b.removeWhere(() => true)).toBe(true);
+      expect(b.isEmpty()).toBe(true);
+    });
+  });
 });
 
 describe('renderBoard', () => {

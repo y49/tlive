@@ -283,7 +283,17 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
    *  nothing else waits. The registry upsert is silent — the caller's own
    *  broadcast (applyMonitorEvent) carries the merged view in the same frame. */
   const clearLocalPrompt = (key: string, sessionId: string | undefined, cwd: string): void => {
-    if (!localPrompts.clear({ key, ...(sessionId ? { sessionId } : {}) })) return;
+    // Unconditional, matching onResolved below (which ignores localPrompts'
+    // own clear() return value the same way): gating the board/registry
+    // cleanup on THIS call's `localPrompts.clear()` result stranded the
+    // `local:<key>` board entry whenever the dialog was noted under one
+    // sessionId (e.g. a killed session s1) and the retirement arrived under a
+    // different one (s2 — a resume in the same cwd). Both the board entry and
+    // the registry's pending slot are keyed by `key`, not sessionId, so there
+    // is nothing sessionId-specific left to gate the cleanup on here — the
+    // sessionId is still passed to `localPrompts.clear()` itself, which uses
+    // it as its own (permissive) match.
+    localPrompts.clear({ key, ...(sessionId ? { sessionId } : {}) });
     if (sessions.get(key)?.pending?.local) sessions.upsert({ key, cwd, pending: null });
     board.remove(localBoardId(key));
     refreshDesktop();
@@ -526,6 +536,35 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         body: n.body,
       }).catch(() => undefined);
     }
+  };
+
+  /** Eager fallback for `subagent` board entries, for the retirement signals
+   *  that CANNOT name the exact (agentId, toolName) pair `retirePassthruNotice`
+   *  needs: a sub-agent pass-through creates no router pending (requestPermission
+   *  returns `{decision:'defer'}` immediately for it), so there is no cancel,
+   *  no timeout, and no `onResolved` for one — its PostToolUse is the ONLY exact
+   *  signal, and it never arrives at all if the dialog was denied, Esc'd, or the
+   *  sub-agent aborted (C1). Without this, that one entry pins `board.isEmpty()`
+   *  false forever, which disables `clear()` for every OTHER session too.
+   *
+   *  `toolName` narrows the match when the caller has one (permission-denied
+   *  does, but carries no agentId — CC's PermissionDenied hook never includes
+   *  it); omit it to retire every subagent entry for the key outright
+   *  (prompt / session-end: the session itself moved on or ended, so ANY
+   *  outstanding sub-agent notice for it is stale). Over-retiring only ever
+   *  drops a still-relevant reminder, never a decision — the same trade the
+   *  idle reminder's retirement (right below each call site) already makes.
+   *
+   *  Gated on removeWhere's own return value, unlike the idle-reminder
+   *  `board.remove(...); refreshDesktop();` pairs beside each call site: those
+   *  are the only board mutation in their branch, but this one runs SECOND,
+   *  right after that same idle removal — calling refreshDesktop()
+   *  unconditionally here would re-issue an identical (often already-empty →
+   *  clear()) render for no reason every time a session with no outstanding
+   *  sub-agent notice hits one of these three events. */
+  const retireSubagentBoardEntries = (key: string, toolName?: string): void => {
+    const removed = board.removeWhere((e) => e.kind === 'subagent' && e.key === key && (toolName === undefined || e.what === `${toolName} · sub-agent`));
+    if (removed) refreshDesktop();
   };
 
   // Reap wrapped sessions whose `tlive run` process died without unregistering (kill -9 / crash).
@@ -1194,6 +1233,14 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           } else if (ev.event === 'permission-denied') {
             permissionRouter.cancel({ key, toolName: ev.toolName, sessionId: ev.sessionId, matchAgent: null });
             clearLocalPrompt(key, ev.sessionId, ev.cwd);
+            // A denied dialog never produces a PostToolUse, so it never reaches
+            // retirePassthruNotice's exact (agentId, toolName) match (C1) — this
+            // is the ONLY other signal a sub-agent's dialog is gone. No agentId
+            // is available here at all (CC's PermissionDenied hook never
+            // carries one), so match on what this event actually has: the key
+            // and, since a denial always names the tool being denied, the
+            // toolName.
+            retireSubagentBoardEntries(key, ev.toolName);
           } else if (ev.event === 'prompt') {
             // 主会话新输入 → 主会话上一轮的对话框已没了,撤它的卡。matchAgent:null
             // 精确到主会话:一个 backgrounded 子 agent 的审批与父会话的输入框无关
@@ -1204,6 +1251,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // — retire the resident reminder before it outlives its cause.
             board.remove(idleBoardId(key));
             refreshDesktop();
+            // Same reasoning as permission-denied above, but wider: a fresh
+            // prompt means the user is back at the keyboard for THIS session,
+            // so any subagent notice still on the board for it is stale
+            // regardless of which tool it named (C1) — retire all of them.
+            retireSubagentBoardEntries(key);
             // 用户在键盘前开始了新一轮 → 取消上一 turn 还在 grace 里的续跑卡
             const g = continueGrace.get(key);
             if (g) { continueGrace.delete(key); g(); }
@@ -1216,6 +1268,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // that no longer exists.
             board.remove(idleBoardId(key));
             refreshDesktop();
+            // Same reason again: a session that no longer exists cannot have
+            // an outstanding sub-agent dialog either (C1) — retire every
+            // subagent notice still on the board for it.
+            retireSubagentBoardEntries(key);
           }
           events.broadcast(applyMonitorEvent(sessions, ev, key));
           reply({ kind: 'ack' });

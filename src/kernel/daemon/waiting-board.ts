@@ -46,6 +46,20 @@ export class WaitingBoard {
     return this.byId.delete(id);
   }
 
+  /** Retire every entry matching `pred`. For retirement signals that know only
+   *  an entry's visible fields (session key, kind, `what`) and cannot
+   *  construct its id — e.g. CC's PermissionDenied hook carries no agentId at
+   *  all, so a `subagent` entry's `passthruKey(key, agentId, toolName)` is
+   *  unbuildable from it. Returns whether anything was removed, same contract
+   *  as `remove`. */
+  removeWhere(pred: (e: WaitingEntry) => boolean): boolean {
+    let removed = false;
+    for (const [id, e] of this.byId) {
+      if (pred(e)) { this.byId.delete(id); removed = true; }
+    }
+    return removed;
+  }
+
   isEmpty(): boolean {
     return this.byId.size === 0;
   }

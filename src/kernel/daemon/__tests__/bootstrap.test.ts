@@ -1297,6 +1297,88 @@ describe('sub-agent pass-through tells you what is blocked', () => {
     expect(sent).toHaveLength(0); // …but the IM card never went out
   });
 
+  // C1: a sub-agent pass-through creates no router pending at all
+  // (requestPermission returns {decision:'defer'} immediately for it), so
+  // unlike a `held` entry there is no cancel/timeout/onResolved for it —
+  // retirePassthruNotice, reached only from a MATCHING PostToolUse
+  // (agentId+toolName), used to be the ONLY way off the board. Deny the
+  // dialog (or Esc it, or let the sub-agent abort) and no PostToolUse ever
+  // arrives, so the entry — and with it board.isEmpty(), so `clear()` for
+  // every OTHER session too — was stuck for the daemon's remaining lifetime.
+  // These three tests drive the eager fallbacks added for it.
+  describe('a pass-through notice retires even when the exact PostToolUse match never arrives (C1)', () => {
+    it('permission-denied retires it — a denied dialog never runs, so it never runs a matching PostToolUse', async () => {
+      writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+      const sent: OutgoingMessage[] = [];
+      const adapter = interactiveAdapter('telegram', sent);
+      const notes: Array<{ title: string; body: string }> = [];
+      const clears: number[] = [];
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
+      const sock = daemonSocketPath(tmp);
+      clears.length = 0; // discard the daemon's own startup clear
+
+      await request(
+        { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', agentId: 'a-77', toolName: 'Bash', input: { command: 'rm -rf /tmp/scratch' }, timeoutSec: 60 },
+        { socketPath: sock, timeoutMs: 5000 },
+      );
+      await until(() => { expect(notes).toHaveLength(1); });
+
+      // No agentId is available on this event at all (CC's PermissionDenied
+      // hook never carries one) — the match can only be key + toolName.
+      await request(
+        { kind: 'hook.event', event: { event: 'permission-denied', cwd: '/w', sessionId: 's1', toolName: 'Bash' } },
+        { socketPath: sock, timeoutMs: 2000 },
+      );
+      await until(() => { expect(clears.length).toBeGreaterThan(0); });
+    });
+
+    it('a fresh prompt at the terminal retires it — the session moved on, so any notice still on the board is stale', async () => {
+      writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+      const sent: OutgoingMessage[] = [];
+      const adapter = interactiveAdapter('telegram', sent);
+      const notes: Array<{ title: string; body: string }> = [];
+      const clears: number[] = [];
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
+      const sock = daemonSocketPath(tmp);
+      clears.length = 0;
+
+      await request(
+        { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', agentId: 'a-77', toolName: 'Bash', input: { command: 'rm -rf /tmp/scratch' }, timeoutSec: 60 },
+        { socketPath: sock, timeoutMs: 5000 },
+      );
+      await until(() => { expect(notes).toHaveLength(1); });
+
+      await request(
+        { kind: 'hook.event', event: { event: 'prompt', cwd: '/w', sessionId: 's1', prompt: 'go on' } },
+        { socketPath: sock, timeoutMs: 2000 },
+      );
+      await until(() => { expect(clears.length).toBeGreaterThan(0); });
+    });
+
+    it('the session ending retires it — a dead session cannot still be waiting on anything', async () => {
+      writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+      const sent: OutgoingMessage[] = [];
+      const adapter = interactiveAdapter('telegram', sent);
+      const notes: Array<{ title: string; body: string }> = [];
+      const clears: number[] = [];
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
+      const sock = daemonSocketPath(tmp);
+      clears.length = 0;
+
+      await request(
+        { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', agentId: 'a-77', toolName: 'Bash', input: { command: 'rm -rf /tmp/scratch' }, timeoutSec: 60 },
+        { socketPath: sock, timeoutMs: 5000 },
+      );
+      await until(() => { expect(notes).toHaveLength(1); });
+
+      await request(
+        { kind: 'hook.event', event: { event: 'session-end', cwd: '/w', sessionId: 's1' } },
+        { socketPath: sock, timeoutMs: 2000 },
+      );
+      await until(() => { expect(clears.length).toBeGreaterThan(0); });
+    });
+  });
+
   // Reuses the same read-only shape as the notify-mode local-prompt card
   // (`local: true`) — there is no held request behind it, so Allow/Deny would
   // be a button that cannot work. The registry holds ONE pending slot per
@@ -1409,9 +1491,13 @@ describe('sub-agent pass-through tells you what is blocked', () => {
   // identically everywhere — not three separate copies. A copy that forgets
   // passthruWaiting closes a still-outstanding sub-agent toast the INSTANT
   // something else the daemon tracks resolves, anywhere. This drives that
-  // through onResolved specifically: s1's sub-agent dialog is untouched
-  // (nothing retires it in this test) while a genuinely separate, genuinely
-  // held main-session approval on s2 gets answered via IM.
+  // through onResolved specifically: s2's resolution must NOT touch s1's
+  // still-outstanding sub-agent dialog. It then retires s1 via
+  // permission-denied rather than a matching PostToolUse — the dialog was
+  // DENIED, not run, so it never fires one, and retirePassthruNotice's exact
+  // (agentId, toolName) match never gets a chance to run at all (this used to
+  // strand the entry, and with it board.isEmpty(), for the daemon's remaining
+  // lifetime — C1).
   it("a held approval resolving on ANOTHER session must not close the toast while a sub-agent pass-through is still outstanding (onResolved)", async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
     const sent: OutgoingMessage[] = [];
@@ -1451,9 +1537,12 @@ describe('sub-agent pass-through tells you what is blocked', () => {
     // unanswered at the terminal, so the toast must NOT have closed.
     expect(clears).toEqual([]);
 
-    // Only once s1's notice actually retires does the toast close.
+    // Only once s1's notice actually retires does the toast close — here via
+    // permission-denied (denied at the terminal, not run), the eager
+    // key+toolName fallback added for C1, since a denial never runs the
+    // sub-agent's tool and so never reaches retirePassthruNotice.
     await request(
-      { kind: 'hook.event', event: { event: 'activity', cwd: '/w', sessionId: 's1', agentId: 'a-77', toolName: 'Bash', result: {} } },
+      { kind: 'hook.event', event: { event: 'permission-denied', cwd: '/w', sessionId: 's1', toolName: 'Bash' } },
       { socketPath: sock, timeoutMs: 2000 },
     );
     await until(() => { expect(clears.length).toBeGreaterThan(0); });
