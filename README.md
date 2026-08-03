@@ -85,7 +85,9 @@ continue" line makes the distinction moot for what you actually do.
   approval — every prompt stays 100% native (your local terminal dialog, or
   CC's own auto-deny when headless); when a prompt is waiting at the terminal
   you still get told (desktop toast, read-only dashboard card, graced IM
-  text — pointers back to the terminal, never a decision). **`full`** turns
+  text — pointers back to the terminal, never a decision). The desktop toast
+  has no on/off switch of its own — use your OS's Do Not Disturb to silence it
+  temporarily, or `tlive mode off` to stop tlive entirely. **`full`** turns
   on remote approval for the main session: tlive holds each tool call so you
   can answer it from IM / desktop / dashboard (everything the *Approvals*
   bullet below describes), in parallel with the terminal dialog — first
@@ -306,7 +308,7 @@ tlive hook <event>     hook shim (called by Claude Code, not by you;
 
 `setup`, `start`, `stop`, `status`, `logs`, `run`, `url`, `hook` are the
 frozen surface (locked by `tests/contract/`); `mode` and the runtime toggles
-`mute | trust | safe` (`on|off`) and `desktop` (`on|off`) are additive.
+`mute | trust | safe` (`on|off`) are additive.
 
 IM commands: `/mute on|off` (silence IM notifications), `/trust on|off` (pause
 approvals — auto-allow everything), `/safe on|off` (auto-allow routine ops),
@@ -352,10 +354,6 @@ message to type into that session.
     // grace period before an approval card is sent — answering at the
     // keyboard within this window means it's never sent at all
     "approvalGraceSec": 10,   // default 10s, 0 disables
-    // desktop notification (Linux notify-send) when a card goes out —
-    // background tool calls render no local dialog while the hook pends, so
-    // this is the at-the-computer pointer to the phone card / dashboard
-    "desktopNotify": true,    // default true; silent no-op without notify-send
     // how much auto-approves without a card. OMITTED (the default) = nothing:
     // every request CC would have asked about still gets asked. Setting this
     // CHANGES WHAT CC ASKS YOU — the hook only fires when a dialog was about to

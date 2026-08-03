@@ -232,10 +232,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // webUrl is assigned when the web server starts below; clicks only happen
   // after bootstrap completes, so the lazy read is safe. Web disabled → no
   // URL to open; the click is a silent no-op (toast still informs).
-  // Runtime gate (config seeds it; /desktop on|off flips it live). The
-  // notifier itself is created enabled so a config-off start can still be
-  // switched on without a restart.
-  let desktopOn = cfg.approvals?.desktopNotify ?? true;
   /** 姿态是 config-backed 的(shim 每个 hook 事件都重读),所以 daemon 绝不能
    *  缓存它:`tlive mode all` 或 IM 的 /mode 必须改变**下一次**审批的行为,不需要
    *  重启。此前 cfg 只在 bootstrap 读一次,子代理分支于是永远停在启动时的姿态。
@@ -481,14 +477,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const board = new WaitingBoard();
 
   /** Project the board onto the machine's one toast. Every registration and
-   *  every retirement ends with this call; nothing else touches `desktop`.
-   *  `desktopOn` lives HERE, not at each call site: it is a rendering
-   *  toggle, orthogonal to what is waiting (the board tracks that
-   *  regardless of the switch, so re-enabling mid-wait can still reflect
-   *  reality) — gating it per call site would reintroduce exactly the
-   *  per-site branching this refactor removes. */
+   *  every retirement ends with this call; apart from the two direct
+   *  `desktop.clear()` calls (startup and shutdown), nothing else touches
+   *  `desktop` — there is no runtime toggle left to gate it. */
   const refreshDesktop = (): void => {
-    if (!desktopOn) return;
     const view = renderBoard(board.entries());
     if (!view) void desktop.clear();
     else void desktop.render(view.title, view.body);
@@ -548,11 +540,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     sendToChat: (t, card) => sendToChat(t, card),
     isMuted: (key) => muted || (sessions.get(key)?.muted ?? false),
     hasWebClients: () => events.size() > 0,
-    // The desktop approval toast IS an answer path when it can open a dashboard
-    // (its "Open dashboard" button needs a web URL). So muting IM no longer
-    // forces a defer-to-terminal: with desktop on + web enabled, you answer via
-    // the toast → dashboard. (IM ⊥ desktop.)
-    hasLocalAnswerPath: () => desktopOn && webUrl != null,
+    // A dashboard URL IS the local answer path — the toast is only the pointer
+    // to it. Muting IM therefore no longer forces a defer-to-terminal. (This
+    // used to also require the desktop toggle, which conflated "were you told"
+    // with "can you answer".)
+    hasLocalAnswerPath: () => webUrl != null,
     policyDecide: (req) => {
       const d = policyDecide({ toolName: req.toolName, input: req.input, permissionMode: req.permissionMode }, policyState);
       if (d.decision === 'allow') console.log(`[policy] auto-allow ${req.toolName} (${d.reason})`); // 审计
@@ -595,9 +587,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // session (upsert's patch merge would preserve its state either way).
       if (!sessions.get(key)) sessions.upsert({ key, cwd });
       // Desktop toast: the "at this machine, not watching the terminal" signal.
-      // Gated ONLY by desktopOn (inside refreshDesktop) — never by IM mute (IM
-      // ⊥ desktop), so it fires with no IM configured at all, exactly like
-      // onPending's board entry below.
+      // Never gated by IM mute — it fires with no IM configured at all,
+      // exactly like onPending's board entry below.
       board.add({
         id: passthruKey(key, agentId, toolName), key, label: sessionLabel(key),
         kind: 'subagent', what: `${toolName} · sub-agent`,
@@ -904,26 +895,24 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const sockPath = daemonSocketPath(opts.home);
   /** One set of runtime toggles for every entrance — IM commands
    *  (/mute|/trust|/safe) and the CLI (`tlive mute on` … via daemon.set IPC)
-   *  flip the SAME state. `enabled` = "this switch is ON": for `mute`, on = muted.
-   *  `desktop` is CLI-only (`tlive desktop on|off`): the toast lives on the
-   *  daemon's machine and is INDEPENDENT of `mute` (IM ⊥ desktop). */
-  const runtimeSet = (key: 'mute' | 'trust' | 'safe' | 'desktop', enabled: boolean): void => {
-    if (key === 'mute') muted = enabled; // /mute on ⇒ muted (quiet)
-    else if (key === 'trust') policyState.trustUntilRevoked = enabled;
-    // `/safe off` reverts to whatever the config asked for, not to a hard-coded
-    // 'readonly' — that used to silently switch read-only auto-allow ON for a
-    // user who had never opted into any auto-approval.
-    else if (key === 'safe') {
-      const base = cfg.approvals?.autoApprove === 'readonly' ? 'readonly' : undefined;
-      policyState.autoApprove = enabled ? 'safe' : base;
+   *  flip the SAME state. `enabled` = "this switch is ON": for `mute`, on = muted. */
+  const RUNTIME_KEYS = ['mute', 'trust', 'safe'] as const;
+  type RuntimeKey = (typeof RUNTIME_KEYS)[number];
+  const isRuntimeKey = (k: string): k is RuntimeKey => (RUNTIME_KEYS as readonly string[]).includes(k);
+
+  const runtimeSet = (key: RuntimeKey, enabled: boolean): void => {
+    switch (key) {
+      case 'mute': muted = enabled; return; // /mute on ⇒ muted (quiet)
+      case 'trust': policyState.trustUntilRevoked = enabled; return;
+      // `/safe off` reverts to whatever the config asked for, not to a
+      // hard-coded 'readonly' — that used to silently switch read-only
+      // auto-allow ON for a user who had never opted into any auto-approval.
+      case 'safe': {
+        const base = cfg.approvals?.autoApprove === 'readonly' ? 'readonly' : undefined;
+        policyState.autoApprove = enabled ? 'safe' : base;
+        return;
+      }
     }
-    // Turning ON must reflect whatever the board already holds (entries kept
-    // accumulating while off — see refreshDesktop's doc comment) — otherwise
-    // two approvals that arrived while off stay silently un-toasted until some
-    // unrelated add/remove happens to trigger a repaint. Turning OFF is a direct
-    // `.clear()` (not `refreshDesktop()`, which early-returns once desktopOn is
-    // false and so could never do this).
-    else { desktopOn = enabled; if (enabled) refreshDesktop(); else void desktop.clear(); }
   };
 
   const ipc: IpcServer = await startIpcServer({
@@ -952,6 +941,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           setTimeout(() => { void shutdown(); }, 10).unref?.();
           return;
         case 'daemon.set':
+          // A retired key from an older CLI must fail loudly, not land on
+          // whichever branch happens to be last.
+          if (!isRuntimeKey(req.key)) { reply({ kind: 'error', message: `unknown toggle: ${req.key}` }); return; }
           runtimeSet(req.key, req.enabled);
           reply({ kind: 'ack' });
           return;

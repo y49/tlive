@@ -371,7 +371,7 @@ export class InboundHandler {
     switch (cmd.kind) {
       case 'mute':
         this.deps.setMuted(cmd.muted); // /mute on ⇒ muted (quiet); /mute off ⇒ notifications on
-        await this.reply(env, { kind: 'text', text: `IM notifications ${cmd.muted ? 'muted' : 'on'}${cmd.muted ? ' (desktop toasts unaffected — toggle at the machine with `tlive desktop`)' : ''}` });
+        await this.reply(env, { kind: 'text', text: `IM notifications ${cmd.muted ? 'muted' : 'on'}${cmd.muted ? ' (desktop toasts unaffected — they have no switch of their own)' : ''}` });
         return;
       case 'trust':
         this.deps.setTrust(cmd.enabled);
@@ -444,7 +444,7 @@ export class InboundHandler {
             '',
             '**Reply to a session** — quote-reply its message and your text is injected into that terminal (needs a `tlive run` wrapper). With a single active session, just send text.',
             '',
-            'IM and desktop are separate: `/mute` only silences IM. Desktop toasts have their own machine-local switch, `tlive desktop on|off` (not an IM command).',
+            'IM and desktop are separate: `/mute` only silences IM. Desktop toasts appear whenever something is blocking on you and clear once it is answered — there is no separate switch; use your OS\'s Do Not Disturb to silence them, or `tlive mode off` to stop tlive entirely.',
           ].join('\n'),
         });
         return;

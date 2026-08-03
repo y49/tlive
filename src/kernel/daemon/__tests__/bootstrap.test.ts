@@ -47,6 +47,16 @@ describe('daemon bootstrap', () => {
     const r = await request({ kind: 'daemon.status' }, { socketPath: daemonSocketPath(tmp), timeoutMs: 2000 });
     expect(r).toMatchObject({ kind: 'daemon.status', codex: 'off' });
   });
+
+  // The `desktop` runtime toggle was removed entirely (no separate on/off
+  // switch for the toast — see refreshDesktop's doc comment). A stale CLI
+  // still shipping `daemon.set key=desktop` must get a loud error, not
+  // silently land on whichever branch happens to be last in the dispatch.
+  it('daemon.set no longer accepts the retired desktop key', async () => {
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { render: async () => {}, clear: async () => {} } });
+    const r = await request({ kind: 'daemon.set', key: 'desktop', enabled: false } as never, { socketPath: h.ipcSocketPath, timeoutMs: 2000 });
+    expect(r.kind).toBe('error');
+  });
 });
 
 describe('dual-channel wiring helpers', () => {
@@ -384,83 +394,6 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     await pending;
     expect(clears.length).toBeGreaterThan(0);
     expect(sent).toHaveLength(0);
-  });
-
-  it('daemon.set desktop off (the `tlive desktop off` CLI wire) silences the toast and clears the live one', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
-      web: { enabled: false },
-      approvals: { approvalGraceSec: 0 },
-      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
-    }));
-    const sent: OutgoingMessage[] = [];
-    const adapter = interactiveAdapter('telegram', sent);
-    const notes: Array<{ title: string; body: string }> = [];
-    const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
-    const sock = daemonSocketPath(tmp);
-    clears.length = 0; // discard the daemon's own startup clear (unrelated to this scenario)
-    const off = await request({ kind: 'daemon.set', key: 'desktop', enabled: false }, { socketPath: sock, timeoutMs: 2000 });
-    expect(off.kind).toBe('ack');
-    expect(clears.length).toBeGreaterThan(0); // turning off clears any live toast
-    const pending = request(
-      { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
-      { socketPath: sock, timeoutMs: 10_000 },
-    );
-    held(pending);
-    await until(() => { expect(sent).toHaveLength(1); });
-    expect(notes).toHaveLength(0); // toast gated off; the IM card still went out
-    const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
-    adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: card.buttons!.find((b) => b.id.startsWith('approve:'))!.id, ts: 0 });
-    await pending;
-  });
-
-  // The board tracks what is waiting regardless of the desktopOn switch (see
-  // refreshDesktop's doc comment) — so re-enabling it must immediately reflect
-  // whatever accumulated while it was off, not wait for some unrelated
-  // add/remove to happen to trigger a repaint.
-  it('daemon.set desktop on re-renders the toast for whatever accumulated on the board while it was off', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
-      web: { enabled: false },
-      approvals: { approvalGraceSec: 0 },
-      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
-    }));
-    const sent: OutgoingMessage[] = [];
-    const adapter = interactiveAdapter('telegram', sent);
-    const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {} } });
-    const sock = daemonSocketPath(tmp);
-
-    await request({ kind: 'daemon.set', key: 'desktop', enabled: false }, { socketPath: sock, timeoutMs: 2000 });
-    notes.length = 0; // discard anything from before the switch was flipped off
-
-    // Two approvals arrive while the toast is off — the board accumulates
-    // them, but nothing is rendered (asserted by the "desktop off" test above).
-    const pendingA = request(
-      { kind: 'hook.permission.request', cwd: '/w/a', sessionId: 's1', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
-      { socketPath: sock, timeoutMs: 10_000 },
-    );
-    held(pendingA);
-    await until(() => { expect(sent.length).toBeGreaterThanOrEqual(1); });
-    const pendingB = request(
-      { kind: 'hook.permission.request', cwd: '/w/b', sessionId: 's2', toolName: 'Read', input: { file_path: '/w/b/x' }, timeoutSec: 60 },
-      { socketPath: sock, timeoutMs: 10_000 },
-    );
-    held(pendingB);
-    await until(() => { expect(sent.length).toBeGreaterThanOrEqual(2); });
-    expect(notes).toHaveLength(0); // still off — nothing rendered yet
-
-    const on = await request({ kind: 'daemon.set', key: 'desktop', enabled: true }, { socketPath: sock, timeoutMs: 2000 });
-    expect(on.kind).toBe('ack');
-    // Flipping back on must immediately reflect the board, not wait for the
-    // next unrelated add/remove.
-    await until(() => { expect(notes).toHaveLength(1); });
-    expect(notes[0].title).toBe('2 sessions need you');
-
-    for (const s of sent as Array<{ kind: 'card'; buttons?: Array<{ id: string; label: string }> }>) {
-      const approve = s.buttons?.find((b) => b.id.startsWith('approve:'));
-      if (approve) adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: `x-${approve.id}`, text: approve.id, ts: 0 });
-    }
-    await pendingA; await pendingB;
   });
 
   it('two configured chats with a slow adapter still get ONE desktop ping per request (regression: per-chat concurrent pushes each fired a toast)', async () => {
@@ -2082,6 +2015,27 @@ describe('WaitingBoard drives the ONE desktop toast (Task 3)', () => {
     await until(() => { expect(h.permissionRouter.pendingCount()).toBe(1); });
     h.permissionRouter.answer(firstPendingId(h), true);
     await until(() => { expect(clears).toHaveLength(1); });
+    await p;
+  });
+
+  // Regression guard for the old `desktopOn && webUrl != null`: whether a
+  // toast was drawn says nothing about whether the dashboard can answer. A
+  // dashboard URL alone is the local answer path — no desktop input belongs
+  // in the predicate at all.
+  it('a dashboard URL alone makes an approval locally answerable — no desktop input in the predicate', async () => {
+    // port 0 → ephemeral; inject via config to avoid port conflicts (same
+    // pattern as web-bootstrap.test.ts) — this test needs web ENABLED
+    // (unlike this describe's shared CFG, which disables it).
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 } }));
+    const adapter = fakeAdapter();
+    h = await bootstrapDaemon({
+      home: tmp, imAdapters: [adapter],
+      desktopNotifier: { render: async () => {}, clear: async () => {} },
+    });
+    expect(h.webUrl).toBeTruthy();
+    const p = h.permissionRouter.requestPermission({ key: '/w/a', cwd: '/w/a', toolName: 'Bash', input: { command: 'ls' } });
+    await until(() => { expect(h.permissionRouter.pendingCount()).toBe(1); }); // held, not deferred
+    h.permissionRouter.answer(firstPendingId(h), true);
     await p;
   });
 });

@@ -19,9 +19,10 @@ Guide the user through tlive setup. Execute in order, showing each result:
       reopen the chat).
    d. Desktop notifications: explain they fire on the computer only for things
       that need you to act — a pending approval, or the idle "waiting for your
-      input" nudge. A finished turn and tool failures stay on IM (a per-turn
-      toast would flood the screen). Toggle with `tlive desktop on|off` — it's
-      a machine-local control, so there is no IM command for it.
+      input" nudge — and disappear once answered. A finished turn and tool
+      failures stay on IM (a per-turn toast would flood the screen). There is
+      no separate on/off switch: use the OS's Do Not Disturb to silence them
+      temporarily, or `tlive mode off` to stop tlive entirely.
    e. Hand out the dashboard via `tlive url`; suggest opening it once.
    f. Offer optional next steps: add another channel (continue below), or
       stop here.

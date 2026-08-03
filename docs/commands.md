@@ -3,8 +3,8 @@
 > **v2 CLI surface.** The frozen core is exactly:
 > `setup`, `start`, `stop`, `status`, `logs`, `run`, `url`, `hook`.
 > Additive since: `mode` (posture: off / notify / full / all) and the runtime
-> toggles `mute`, `trust`, `safe`, `desktop` (`on|off`, same setters as the
-> in-chat IM commands).
+> toggles `mute`, `trust`, `safe` (`on|off`, same setters as the in-chat IM
+> commands).
 >
 > Removed in v2.0: `restart`, `doctor` (folded into `status`),
 > `daemon-logs` (renamed `logs`), `install-integrations` (folded into `setup`),
@@ -136,20 +136,26 @@ reach them:
 - **"Stop holding sub-agents"** — also on the held sub-agent card. Switches
   posture back to `full`.
 
-### `tlive mute|trust|safe on|off` · `tlive desktop on|off`
+### `tlive mute|trust|safe on|off`
 
 The same runtime switches as the in-chat IM commands, from the CLI:
 
 - `tlive mute on|off` — silence IM notifications (IM only; the desktop toast is
-  a separate surface, see below).
+  unaffected, see below).
 - `tlive trust on|off` — pause approvals (auto-allow everything). High-risk.
 - `tlive safe on|off` — also auto-allow routine ops (non-dangerous Bash,
   non-sensitive edits); the danger floor still asks.
-- `tlive desktop on|off` — machine-local desktop notifications. No IM command
-  for it (IM ⊥ desktop); unaffected by `mute`.
 
 These flip in-memory daemon state (cleared on restart), unlike `mode`, which
 persists to config.
+
+### Desktop notifications
+
+Desktop notifications appear whenever something is blocking on you and
+disappear when it is answered. There is no separate on/off switch: use your
+OS's Do Not Disturb to silence them temporarily, or `tlive mode off` to stop
+tlive entirely. Without `notify-send` (or the platform equivalent) they
+silently no-op.
 
 ---
 
