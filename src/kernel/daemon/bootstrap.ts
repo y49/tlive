@@ -31,7 +31,7 @@ import { excerptForCard } from './excerpt.js';
 import { TURN_FINISHED_SENTINEL, effectiveMode, type ShimMode } from '../hook/normalizer.js';
 import { writeMode } from '../config/mode.js';
 import { readToastId, writeToastId, wasNotifyExplained, markNotifyExplained } from '../config/state.js';
-import { WaitingBoard, renderBoard } from './waiting-board.js';
+import { WaitingBoard, renderBoard, canSkipProjection } from './waiting-board.js';
 
 export interface DaemonHandle {
   shutdown(): Promise<void>;
@@ -562,6 +562,14 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // on `!lastId`, so a redundant call is free.
       if (lastBoardIds.size) logDesktop('desktop.clear');
       lastBoardIds = new Set();
+      // Provably redundant today, kept anyway: `lastBoardIds` resetting to {}
+      // already forces the next non-empty render's `alert` to true (every id
+      // reads as "not in an empty set"), which alone stops canSkipProjection
+      // from ever matching right after this branch — so this line changes no
+      // CURRENT decision. It stays because "the board emptied" should be one
+      // forget-everything operation, not a fact some reader has to re-derive
+      // from how `alert` happens to be computed elsewhere — deleting this as
+      // dead code would be correct only until that computation changes.
       lastView = null;
       void desktop.clear();
       return;
@@ -571,9 +579,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     // Skip a projection that would change nothing: the text is byte-identical
     // to the one already on screen AND nothing NEW arrived. Both halves are
     // required — text equality alone would also suppress the case where a
-    // different id renders the same line (see `lastView`'s doc comment above),
-    // silently swallowing exactly the alert this board exists to raise.
-    if (!alert && lastView && lastView.title === view.title && lastView.body === view.body) return;
+    // different id renders the same line, silently swallowing exactly the
+    // alert this board exists to raise. Pure decision lives in
+    // canSkipProjection (waiting-board.ts) so both halves are unit-testable
+    // without a daemon.
+    if (canSkipProjection(lastView, view, alert)) return;
     lastBoardIds = ids;
     lastView = view;
     void desktop.render(view.title, view.body, { alert });

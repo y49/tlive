@@ -102,3 +102,16 @@ export function renderBoard(entries: WaitingEntry[]): { title: string; body: str
     : `${sessions.size} sessions need you`;
   return { title, body: entries.map((e) => `• ${line(e)}`).join('\n') };
 }
+
+/** Whether a projection can be skipped because it would change nothing the
+ *  user can see. Pure so both halves of the condition are directly testable —
+ *  the `alert` half guards a case that is not reachable through today's IPC
+ *  surface but would be the moment any caller batches an add and a remove into
+ *  one refresh, and an unreachable-but-correct guard still has to be pinned. */
+export function canSkipProjection(
+  lastView: { title: string; body: string } | null,
+  view: { title: string; body: string },
+  alert: boolean,
+): boolean {
+  return !alert && lastView !== null && lastView.title === view.title && lastView.body === view.body;
+}

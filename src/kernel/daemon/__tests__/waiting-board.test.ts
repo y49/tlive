@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { WaitingBoard, renderBoard, type WaitingEntry } from '../waiting-board.js';
+import { WaitingBoard, renderBoard, canSkipProjection, type WaitingEntry } from '../waiting-board.js';
 
 const entry = (over: Partial<WaitingEntry> = {}): WaitingEntry => ({
   id: 'r1', key: '/w/proj', label: 'proj', kind: 'held', what: 'Bash', ...over,
@@ -123,5 +123,30 @@ describe('renderBoard', () => {
   it('an unlabelled session (registry miss) still renders a usable line', () => {
     const out = renderBoard([entry({ label: '' }), entry({ id: 'b', key: '/w/x', label: 'x', what: 'Edit' })]);
     expect(out!.body).toBe('• Bash\n• x · Edit');
+  });
+});
+
+describe('canSkipProjection', () => {
+  const v1 = { title: 'proj · Bash', body: 'Approval needed — click to open and answer' };
+  const v2 = { title: 'other · Bash', body: 'Approval needed — click to open and answer' };
+
+  it('identical view, alert:false — skip: nothing changed and nothing new arrived', () => {
+    expect(canSkipProjection(v1, { ...v1 }, false)).toBe(true);
+  });
+
+  it('identical view, alert:true — do NOT skip: a new arrival must re-alert even when the text is unchanged', () => {
+    expect(canSkipProjection(v1, { ...v1 }, true)).toBe(false);
+  });
+
+  it('different title, alert:false — do NOT skip: the text on screen would be wrong', () => {
+    expect(canSkipProjection(v1, v2, false)).toBe(false);
+  });
+
+  it('different body, alert:false — do NOT skip: the text on screen would be wrong', () => {
+    expect(canSkipProjection(v1, { ...v1, body: 'Waiting at the terminal — answer it there.' }, false)).toBe(false);
+  });
+
+  it('lastView is null — do NOT skip: there is nothing on screen to compare against', () => {
+    expect(canSkipProjection(null, v1, false)).toBe(false);
   });
 });
