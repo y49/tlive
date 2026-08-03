@@ -175,7 +175,7 @@ subcommands.
 
 | Command | Description |
 |---|---|
-| `/mute on\|off` | Global mute toggle — `off` suppresses all outbound IM notifications. |
+| `/mute on\|off` | Global mute toggle — `on` suppresses all outbound IM notifications. |
 | `/trust on\|off` | Pause approvals (auto-allow everything) until turned off. High-risk; prefer the per-tool "Always allow" button. |
 | `/safe on\|off` | Auto-allow routine ops (non-dangerous Bash, non-sensitive edits); the danger floor still asks. |
 | `/mode off\|notify\|full\|all` | Set posture. A bare `/mode` replies with a card listing the ladder and marking the current rung, with tap-to-switch buttons. |

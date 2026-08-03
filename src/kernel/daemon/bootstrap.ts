@@ -1090,9 +1090,25 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               // the default rung waiting for their phone to buzz. Say why, offer
               // the rung that would make these answerable, then never again.
               // The flag is on disk, not in memory — see config/state.ts.
+              //
+              // /mute is a promise to suppress outbound IM, and this card's own
+              // rationale (silence might read as breakage) does not apply to
+              // someone who deliberately caused the silence — for them it would
+              // read as a mute bypass carrying a call-to-action. So this stays
+              // mute-gated same as every other IM push in this file, UNLIKE the
+              // desktop toast and dashboard card above (IM-only, same split as
+              // the sub-agent pass-through notice). Suppressed here must NOT
+              // burn the one lifetime card: `markNotifyExplained` only runs on
+              // the branch that actually sends, so unmuting later still
+              // delivers the explanation exactly once — suppression and
+              // completion are different states.
               for (const t of configuredChats()) {
                 const chatKey = `${t.channel}:${t.chatId}`;
                 if (wasNotifyExplained(opts.home, chatKey)) continue;
+                if (muted || sessions.get(key)?.muted) {
+                  logJson('permission.localPrompt.im', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), outcome: 'muted', channel: t.channel });
+                  continue;
+                }
                 markNotifyExplained(opts.home, chatKey);
                 logJson('permission.localPrompt.im', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), outcome: 'explained-once', channel: t.channel });
                 void sendToChat(t, {

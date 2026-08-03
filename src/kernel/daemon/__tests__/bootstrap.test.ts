@@ -1823,12 +1823,13 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     expect(s?.pending?.local).toBe(true); // still waiting — only a MAIN-session answer clears it
   });
 
-  // /mute silences ongoing IM notifications (docs: "mute IM notifications
-  // ONLY"), but the one-time explanation is not one of those — it is a single
-  // lifetime "here's why you'll never hear from IM about these" card with its
-  // own way out, sent unconditionally the first time. Desktop + dashboard are
-  // unaffected by `/mute` either way (IM ⊥ desktop).
-  it('muted IM still gets the one-time notify explanation exactly once; desktop + dashboard fire too (IM ⊥ desktop)', async () => {
+  // /mute is a promise to suppress outbound IM (docs: "mute IM notifications
+  // ONLY"), and the explanation card's own rationale — silence might read as
+  // breakage — does not apply to someone who deliberately caused the
+  // silence; for them the card would read as a mute bypass carrying a
+  // call-to-action. So it stays mute-gated same as every other IM push.
+  // Desktop + dashboard are unaffected by `/mute` either way (IM ⊥ desktop).
+  it('muted IM gets no explanation card; desktop + dashboard still fire (IM ⊥ desktop)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
@@ -1841,10 +1842,39 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
 
     expect(notes).toHaveLength(1);
     expect((await findSession(sock, 's1'))?.pending?.local).toBe(true);
+    await new Promise((r) => setTimeout(r, 80));
+    expect(sent).toHaveLength(0);
+  });
+
+  // The important half: suppression must NOT burn the one lifetime card.
+  // Muted and not-yet-explained are different states from "explained" — only
+  // a send that actually goes out may mark the chat as told. Prove both
+  // halves in one test: nothing arrives while muted, and unmuting then
+  // hitting the SAME suppressed-dialog path again still delivers the
+  // explanation exactly once (not zero — they never got it; not twice).
+  it('suppressing the card for a muted chat does not spend its one lifetime explanation — unmuting still delivers it exactly once', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async () => {}, clear: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+
+    await request({ kind: 'daemon.set', key: 'mute', enabled: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await new Promise((r) => setTimeout(r, 80));
+    expect(sent).toHaveLength(0); // muted → suppressed, not sent, not marked explained
+
+    await request({ kind: 'daemon.set', key: 'mute', enabled: false }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w2', sessionId: 's2', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
     await waitForSent(sent);
-    expect(sent).toHaveLength(1);
+    expect(sent).toHaveLength(1); // now unmuted — the explanation they never got still arrives, once
     const card = sent[0] as { buttons?: Array<{ id: string }> };
     expect(card.buttons?.map((b) => b.id)).toContain('mode:full');
+
+    // A third suppressed-dialog session, same chat, must not repeat it.
+    await request({ kind: 'hook.notify', cwd: '/w3', sessionId: 's3', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(sent).toHaveLength(1);
   });
 });
 
