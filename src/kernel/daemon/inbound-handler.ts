@@ -444,7 +444,7 @@ export class InboundHandler {
             '',
             '**Reply to a session** — quote-reply its message and your text is injected into that terminal (needs a `tlive run` wrapper). With a single active session, just send text.',
             '',
-            'IM and desktop are separate: `/mute` only silences IM. Desktop toasts appear whenever something is blocking on you and clear once it is answered — there is no separate switch; use your OS\'s Do Not Disturb to silence them, or `tlive mode off` to stop tlive entirely.',
+            'IM and desktop are separate: `/mute` only silences IM. Desktop toasts appear whenever something is blocking on you and clear once it is answered (macOS cannot clear/replace notifications, so there they pile up instead) — there is no separate switch; use your OS\'s Do Not Disturb to silence them, or `tlive mode off` to stop tlive entirely.',
           ].join('\n'),
         });
         return;

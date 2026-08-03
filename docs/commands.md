@@ -152,10 +152,13 @@ persists to config.
 ### Desktop notifications
 
 Desktop notifications appear whenever something is blocking on you and
-disappear when it is answered. There is no separate on/off switch: use your
-OS's Do Not Disturb to silence them temporarily, or `tlive mode off` to stop
-tlive entirely. Without `notify-send` (or the platform equivalent) they
-silently no-op.
+disappear when it is answered — on Linux and Windows, where the single toast
+is actively replaced/closed. macOS cannot do either (Notification Center has
+no scriptable close or replace), so there each change appends a fresh entry
+instead of recycling one. There is no separate on/off switch: use your OS's
+Do Not Disturb to silence them temporarily, or `tlive mode off` to stop tlive
+entirely. Without `notify-send` (or the platform equivalent) they silently
+no-op.
 
 ---
 

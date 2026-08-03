@@ -75,7 +75,9 @@ ladder). The daemon auto-starts with new sessions (disable via
   = go quiet; it silences IM notifications ONLY. The desktop toast is
   independent of `/mute` and has no on/off switch of its own: it appears
   whenever something is blocking on you (a pending approval, or the idle
-  "waiting for your input" nudge) and disappears once it is answered. Silence
+  "waiting for your input" nudge) and disappears once it is answered (macOS
+  is the exception — Notification Center has no scriptable close or replace,
+  so there it accumulates one entry per change instead of recycling). Silence
   it with your OS's Do Not Disturb, or `tlive mode off` to stop tlive entirely.
   A finished turn stays on IM (a per-turn toast would flood the screen).
 - Vendor-side `permissions.deny` always wins; tlive never overrides it.
