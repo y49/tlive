@@ -117,8 +117,11 @@ PermissionDenied(同 key+tool)只覆盖规则型拒绝——真机实测:用户�
 请求并主动放手了(子代理透传 / policy 放行 / 无答复面),而"放手"的定义就是
 "表现得像没装 tlive",裸推一条你答不了的"去终端答"是基线里不存在的消息;况且
 它无法归属(CC 的 Notification 输入既无 `agent_id` 也无 `tool_name`)。`notify`
-模式相反:tlive 从不门控,这条是"有框在等"的**唯一**信号,照发。桌面提醒和
-dashboard 只读卡属于 tlive 自己的界面(不是 CC 的输出),两种姿态下都保留。
+模式下 tlive 同样**不推 IM 文本**,但理由不同:那个框只有终端答得了,而手机
+够不着终端,所以那条消息在收件人那儿没有出口——投递规则是"只送到你能做点
+什么的面上"。该模式的信号走桌面提醒 + dashboard 只读卡(都是 tlive 自己的
+界面,不是 CC 的输出),IM 侧只在**每个 chat 第一次**发一张说明卡告诉你为什么
+安静、并给一个切到 `full` 的按钮(受 `/mute` 约束;被静音时不消耗那一次机会)。
 
 **`AskUserQuestion` (Claude Code only — Codex has no equivalent concept).**
 CC fires a `PermissionRequest` for its own question tool, same as any other
@@ -263,10 +266,10 @@ File: `src/kernel/contracts/cli-surface.ts`
 ```
 核心 8:      setup, start, stop, status, logs, run, url, hook
 加法命令:    mode (off|notify|full|all 姿态,持久化到 config)
-             mute, trust, safe, desktop (on|off 运行时开关,与 IM 命令同一 setter)
+             mute, trust, safe (on|off 运行时开关,与 IM 命令同一 setter)
 ```
 
-核心 8 是原始冻结面;`mode` 与 4 个运行时开关是后加的(仍由
+核心 8 是原始冻结面;`mode` 与 3 个运行时开关是后加的(仍由
 `tests/contract/cli-surface.test.ts` 锁定整份清单)。加 CLI 命令 = 先开
 issue 讨论 + 更新契约测试。
 
