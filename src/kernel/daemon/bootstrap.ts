@@ -509,6 +509,18 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
    *  id of a long-resolved entry could still read as "already seen" forever. */
   let lastBoardIds = new Set<string>();
 
+  /** The view actually handed to the notifier last time (title+body), or
+   *  `null` after a clear. Lets refreshDesktop tell "the entry set only
+   *  shrank/reworded and nothing new arrived" (see `alert` above) FROM
+   *  "the resulting text is the one already on screen" — retiring one of
+   *  several waiting things fires refreshDesktop twice in the same tick
+   *  (clearLocalPrompt's unconditional refresh, then the idle removal's), and
+   *  both compute the same view; only the first is a real change. Reset to
+   *  `null` in lockstep with `lastBoardIds` above — same class of bug: without
+   *  it, a board that empties and later returns to a previously-rendered state
+   *  would compare against a stale view instead of nothing. */
+  let lastView: { title: string; body: string } | null = null;
+
   /** Routes refreshDesktop's two projection lines through both the real log
    *  (`logJson` → daemon.log) and, if provided, the `onLog` test seam — so a
    *  test can observe them without spying on console.log. Deliberately
@@ -550,12 +562,20 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // on `!lastId`, so a redundant call is free.
       if (lastBoardIds.size) logDesktop('desktop.clear');
       lastBoardIds = new Set();
+      lastView = null;
       void desktop.clear();
       return;
     }
     const ids = new Set(entries.map((e) => e.id));
     const alert = entries.some((e) => !lastBoardIds.has(e.id));
+    // Skip a projection that would change nothing: the text is byte-identical
+    // to the one already on screen AND nothing NEW arrived. Both halves are
+    // required — text equality alone would also suppress the case where a
+    // different id renders the same line (see `lastView`'s doc comment above),
+    // silently swallowing exactly the alert this board exists to raise.
+    if (!alert && lastView && lastView.title === view.title && lastView.body === view.body) return;
     lastBoardIds = ids;
+    lastView = view;
     void desktop.render(view.title, view.body, { alert });
     // Entry ids/labels/tool names are deliberately excluded — the registry
     // and the permission logs already carry those, and a per-render dump of
