@@ -1850,6 +1850,38 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     expect(sent).toHaveLength(1); // said once, never again
   });
 
+  // I4: markNotifyExplained fires BEFORE the send resolves (mark-before-send,
+  // deliberate — see the comment above it in bootstrap.ts), so a delivery
+  // failure right there burns the one lifetime card without it ever reaching
+  // the user. That must not vanish into a bare `.catch(() => undefined)` —
+  // this is exactly the "IM never fires, it must be broken" state the card
+  // exists to prevent, so the failure has to be at least visible in the log.
+  it('a failed send of the one-time explain card is logged, not silently swallowed', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'notify' }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    adapter.send = async () => { throw new Error('boom: telegram 5xx'); };
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((line: unknown) => { logs.push(String(line)); });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async () => {}, clear: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+
+    await request({ kind: 'hook.notify', cwd: '/w/api', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await vi.waitFor(() => {
+      expect(logs.some((l) => l.includes('permission.localPrompt.im.undelivered'))).toBe(true);
+    }, { timeout: 2000, interval: 10 });
+    const entry = JSON.parse(logs.find((l) => l.includes('permission.localPrompt.im.undelivered'))!) as { error?: string };
+    expect(entry.error).toContain('boom');
+    logSpy.mockRestore();
+
+    // The flag is still burned even though delivery failed — mark-before-send
+    // means a retry (e.g. unmuting later) is a NEW state, not a resend of this
+    // same failed attempt (a second dialog for the same chat stays quiet).
+    await request({ kind: 'hook.notify', cwd: '/w/api2', sessionId: 's2', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(logs.filter((l) => l.includes('permission.localPrompt.im.undelivered'))).toHaveLength(1);
+  });
+
   it('the explanation survives a daemon restart — "once" means once, not once per boot', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'notify' }));
     const sent: OutgoingMessage[] = [];

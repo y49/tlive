@@ -1153,6 +1153,17 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
                   logJson('permission.localPrompt.im', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), outcome: 'muted', channel: t.channel });
                   continue;
                 }
+                // Marked spent BEFORE the send resolves, deliberately — not
+                // after (I4). Two suppressed dialogs arriving concurrently for
+                // the same chat would otherwise both pass the
+                // `wasNotifyExplained` check above and both send, producing
+                // duplicate one-time cards; mark-before-send is what keeps
+                // "at most once" true under a race. The cost is that a
+                // delivery failure right here (e.g. a Telegram 5xx) burns the
+                // one lifetime card without delivering it — that must not be
+                // silent, since the exact failure mode this card exists to
+                // prevent (IM configured, dialogs stay quiet, user concludes
+                // it is broken) is what a swallowed failure here produces.
                 markNotifyExplained(opts.home, chatKey);
                 logJson('permission.localPrompt.im', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), outcome: 'explained-once', channel: t.channel });
                 void sendToChat(t, {
@@ -1160,7 +1171,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
                   body: "tlive is in notify mode: it tells you a dialog is waiting, but only your terminal can answer it — so IM stays quiet about these.\n\nSwitch to full and tlive will hold main-session approvals for you, answerable right here.",
                   cwd: key,
                   buttons: [{ id: 'mode:full', label: 'Hold approvals for me' }],
-                }).catch(() => undefined);
+                }).catch((e: unknown) => {
+                  logJson('permission.localPrompt.im.undelivered', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), channel: t.channel, error: e instanceof Error ? e.message : String(e) });
+                });
               }
             }
             reply({ kind: 'ack' });
