@@ -30,7 +30,7 @@ import { startCompanion, type Companion } from '../codex/companion.js';
 import { excerptForCard } from './excerpt.js';
 import { TURN_FINISHED_SENTINEL, effectiveMode, type ShimMode } from '../hook/normalizer.js';
 import { writeMode } from '../config/mode.js';
-import { readToastId, writeToastId } from '../config/state.js';
+import { readToastId, writeToastId, wasNotifyExplained, markNotifyExplained } from '../config/state.js';
 import { WaitingBoard, renderBoard } from './waiting-board.js';
 
 export interface DaemonHandle {
@@ -271,11 +271,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
 
   // CC-native dialogs tlive is NOT holding, known only via
   // Notification(permission_prompt): notify mode, or a full-mode immediate
-  // defer (issue #49). Drives the same waiting surfaces as a held card
-  // (desktop toast / read-only dashboard card / graced IM text) minus any
-  // answer path — the answer happens at the terminal, and the local-answer
-  // triggers below (activity / permission-denied / prompt / session-end)
-  // retire the entry exactly like they release held cards.
+  // defer (issue #49). Drives the same waiting surfaces as a held card minus
+  // any answer path — the answer happens at the terminal — EXCEPT IM, which
+  // gets nothing per-dialog (a phone can't reach a terminal) beyond the
+  // one-time explain card below. The local-answer triggers further down
+  // (activity / permission-denied / prompt / session-end) retire the entry
+  // exactly like they release held cards.
   const localPrompts = new LocalPrompts();
   /** The tracked dialog is gone (answered locally / new prompt / session end):
    *  drop the read-only pending from the registry and close the toast when
@@ -1077,26 +1078,30 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               // Dashboard: read-only waiting-approval card (pending.local) —
               // visible from anywhere, answerable only at the terminal.
               events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'waiting-approval', pending: { requestId: `local:${key}`, title: 'Permission needed', body: req.message, local: true } }) });
-              // IM text rides the approval-card grace: answered at the
-              // keyboard within the window → never sent (zero spam at the
-              // keyboard, same contract as the held-card push). Only `notify`
-              // mode reaches here, and there this text is the ONLY signal that a
-              // dialog is waiting — see the posture note above.
-              const pushIm = (): void => {
-                // Each bail-out is logged with its own tag: "no IM text arrived"
-                // has four different causes and they are not interchangeable.
-                const note = (outcome: string, extra?: Record<string, unknown>): void =>
-                  logJson('permission.localPrompt.im', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), outcome, ...extra });
-                if (!localPrompts.has(key, req.sessionId)) return note('answered-in-grace');
-                if (permissionRouter.hasPendingFor({ key, sessionId: req.sessionId })) return note('raced-held-card');
-                if (muted || sessions.get(key)?.muted) return note('muted');
-                const targets = configuredChats();
-                note('sent', { chatTargets: targets.length });
-                for (const t of targets) void sendToChat(t, { text: `${req.message} — answer in the terminal`, cwd: key }).catch(() => undefined);
-              };
-              const graceSec = Math.max(cfg.approvals?.approvalGraceSec ?? 10, 0);
-              if (graceSec > 0) setTimeout(pushIm, graceSec * 1000).unref();
-              else pushIm();
+              // No IM text for this dialog, ever. It can only be answered at
+              // the terminal, and a phone cannot reach a terminal — the message
+              // was pure anxiety with no exit. Every channel this daemon
+              // pushes to must be one the reader can act on; the desktop toast
+              // above and the dashboard card below already cover this case for
+              // the person who can act, i.e. whoever is at the machine.
+              //
+              // One exception, once per chat: silence is indistinguishable from
+              // breakage for someone who just finished setup and is sitting on
+              // the default rung waiting for their phone to buzz. Say why, offer
+              // the rung that would make these answerable, then never again.
+              // The flag is on disk, not in memory — see config/state.ts.
+              for (const t of configuredChats()) {
+                const chatKey = `${t.channel}:${t.chatId}`;
+                if (wasNotifyExplained(opts.home, chatKey)) continue;
+                markNotifyExplained(opts.home, chatKey);
+                logJson('permission.localPrompt.im', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), outcome: 'explained-once', channel: t.channel });
+                void sendToChat(t, {
+                  title: 'Approvals stay at your terminal',
+                  body: "tlive is in notify mode: it tells you a dialog is waiting, but only your terminal can answer it — so IM stays quiet about these.\n\nSwitch to full and tlive will hold main-session approvals for you, answerable right here.",
+                  cwd: key,
+                  buttons: [{ id: 'mode:full', label: 'Hold approvals for me' }],
+                }).catch(() => undefined);
+              }
             }
             reply({ kind: 'ack' });
             return;

@@ -16,13 +16,17 @@ IM (Telegram/Feishu) and the web dashboard, where you can reply-to-continue.
 The **posture** (`tlive mode`, default `notify`) decides whether approvals are
 held for a remote answer, in escalation order: `off` makes every hook a no-op;
 `notify` only watches + notifies (the shim never holds an approval — prompts
-stay 100% native); `full` turns on remote approval for the main session
-(Allow/Deny from IM/desktop/dashboard), in parallel with the terminal dialog —
-first answer wins; `all` holds sub-agent approvals too, with **no terminal
-dialog** for a held one until the window ends, so use it only when nobody is
-at the keyboard (`tlive mode full` goes back). Also settable from IM: `/mode`
-(a bare `/mode` replies with the ladder). The daemon auto-starts with new
-sessions (disable via `daemon.autoStart: false`).
+stay 100% native) and reports **to the machine** (desktop toast + dashboard)
+— IM stays quiet about a dialog only the terminal can answer, except once
+ever per chat, when a card explains why and offers the switch to `full`;
+`full` is the posture that puts approvals **on your phone**: it turns on
+remote approval for the main session (Allow/Deny from IM/desktop/dashboard),
+in parallel with the terminal dialog — first answer wins; `all` holds
+sub-agent approvals too, with **no terminal dialog** for a held one until the
+window ends, so use it only when nobody is at the keyboard (`tlive mode full`
+goes back). Also settable from IM: `/mode` (a bare `/mode` replies with the
+ladder). The daemon auto-starts with new sessions (disable via
+`daemon.autoStart: false`).
 
 ## Commands
 - `tlive setup` — configure IM credentials + register the Claude/Codex plugins

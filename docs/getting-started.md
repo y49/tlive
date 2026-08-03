@@ -117,10 +117,11 @@ call:
    short-circuits the `PermissionRequest` hook to a pass-through, so nothing
    is held or sent for remote approval.
 2. When a permission prompt (or an `AskUserQuestion`) is waiting at the
-   terminal, tlive still tells you: a desktop toast, a read-only
-   *waiting-approval* card on the dashboard, and an IM text if you don't
-   answer within the grace window — all pointers back to the terminal, never
-   a decision.
+   terminal, tlive tells you **on the machine**: a desktop toast and a
+   read-only *waiting-approval* card on the dashboard — since only whoever is
+   sitting there can act on it. IM stays quiet about these (a phone can't
+   reach a terminal), except once ever per chat: the first time, a card
+   explains why and offers the one-tap switch to `full`.
 3. When the session stops or goes idle, the `Stop` hook sends an IM
    notification; reply with a continuation message to resume it.
 4. Tool/session failures are pushed as side-channel `⚠️` messages.

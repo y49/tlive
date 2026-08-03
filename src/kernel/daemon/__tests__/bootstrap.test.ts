@@ -1569,7 +1569,7 @@ describe('read-only auto-allow wiring', () => {
   });
 });
 
-describe('permission_prompt forwarding — the notify-mode / immediate-defer notification chain (issue #49)', () => {
+describe('permission_prompt forwarding — the notify-mode / immediate-defer notification chain, now with no more dead mail to IM (issue #49)', () => {
   const CFG = {
     web: { enabled: false },
     approvals: { approvalGraceSec: 0 },
@@ -1583,7 +1583,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     return r.sessions.find((s) => s.id === id);
   }
 
-  it('no held request → desktop ping + read-only waiting-approval card + IM text (the chain a silent hang used to be)', async () => {
+  it('no held request → desktop ping + read-only waiting-approval card; IM gets the one-time notify explanation, not dead mail (the chain a silent hang used to be)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
@@ -1604,10 +1604,14 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     expect(s?.status).toBe('waiting-approval');
     expect(s?.pending?.local).toBe(true);
     expect(s?.pending?.body).toBe(MSG);
-    // IM: plain text (grace 0 here), pointing back at the terminal.
+    // IM: no dead-mail text — this dialog can only be answered at the
+    // terminal. The first-ever prompt for this chat instead gets the
+    // one-time explanation card, with a one-tap switch to `full`.
     await waitForSent(sent);
-    expect(sent[0]).toMatchObject({ kind: 'text' });
-    expect((sent[0] as { text: string }).text).toContain('answer in the terminal');
+    expect(sent[0]).toMatchObject({ kind: 'card' });
+    const card = sent[0] as { title?: string; buttons?: Array<{ id: string }> };
+    expect(card.title).toContain('Approvals stay at your terminal');
+    expect(card.buttons?.map((b) => b.id)).toContain('mode:full');
   });
 
   // In `full` mode every request tlive sees ends up either held (an answerable
@@ -1682,24 +1686,73 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
 
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
 
-    // Now on 'notify' — the chain must run: it is the only signal a dialog is waiting.
+    // Now on 'notify' — the chain must run: it is the only signal a dialog is
+    // waiting. IM gets no dead-mail text; the first-ever prompt for this chat
+    // gets the one-time explanation card instead.
     expect(notes).toHaveLength(1);
     expect((await findSession(sock, 's1'))?.pending?.local).toBe(true);
     await waitForSent(sent);
-    expect((sent[0] as { text: string }).text).toContain('answer in the terminal');
+    expect(sent[0]).toMatchObject({ kind: 'card' });
+    const card = sent[0] as { buttons?: Array<{ id: string }> };
+    expect(card.buttons?.map((b) => b.id)).toContain('mode:full');
   });
 
-  it('notify mode still sends the IM text — there it is the only signal a dialog is waiting', async () => {
+  it('notify mode sends NO IM text for a terminal-only dialog — you cannot answer it from a phone', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'notify' }));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter] });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async () => {}, clear: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w/api', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(sent.filter((m) => (m as { text?: string }).text?.includes('answer in the terminal'))).toHaveLength(0);
+  });
 
+  it('the first suppressed dialog explains itself once per chat, with a way out', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'notify' }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async () => {}, clear: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+
+    await request({ kind: 'hook.notify', cwd: '/w/api', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
     await waitForSent(sent);
-    expect((sent[0] as { text: string }).text).toContain('answer in the terminal');
+    expect(sent).toHaveLength(1);
+    const card = sent[0] as { buttons?: Array<{ id: string }> };
+    expect(card.buttons?.map((b) => b.id)).toContain('mode:full');
+
+    // A second, unrelated session hits the same suppressed-dialog path —
+    // same chat, so the explanation must not repeat.
+    await request({ kind: 'hook.notify', cwd: '/w/api2', sessionId: 's2', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(sent).toHaveLength(1); // said once, never again
+  });
+
+  it('the explanation survives a daemon restart — "once" means once, not once per boot', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'notify' }));
+    const sent: OutgoingMessage[] = [];
+    const boot = async (): Promise<void> => {
+      const adapter = interactiveAdapter('telegram', sent);
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async () => {}, clear: async () => {} } });
+      await request({ kind: 'hook.notify', cwd: '/w/api', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: daemonSocketPath(tmp), timeoutMs: 2000 });
+      await new Promise((r) => setTimeout(r, 50));
+      await h.shutdown();
+    };
+    await boot();
+    await boot();
+    expect(sent).toHaveLength(1);
+  });
+
+  it('an idle session still reaches IM — replying there continues the run, so it is not dead mail', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'notify' }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async () => {}, clear: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+
+    await request({ kind: 'hook.notify', cwd: '/w/vf', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
+    await until(() => { expect(sent.some((m) => (m as { text?: string }).text?.includes('waiting for your input'))).toBe(true); });
   });
 
   it('a held request for the same session already owns every surface → the notification is dropped (full-mode dedupe)', async () => {
@@ -1729,7 +1782,12 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     await pending;
   });
 
-  it('a local answer (main-session PostToolUse) retires the chain: pending gone, toast closed, graced IM text never sent', async () => {
+  // The IM text this test's name used to protect is gone (dead mail). What
+  // survives: a local answer still retires the tracked dialog (pending gone,
+  // toast closed) — and the one-time explain card, which fires immediately
+  // rather than riding any grace, is unaffected by that retirement (it isn't
+  // per-dialog, so there's nothing for the local answer to cancel).
+  it('a local answer (main-session PostToolUse) retires the chain: pending gone, toast closed — the one-time explain card is unaffected (it fires immediately, not gated by grace)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, approvals: { approvalGraceSec: 30 } }));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
@@ -1739,6 +1797,8 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
 
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
     expect((await findSession(sock, 's1'))?.status).toBe('waiting-approval');
+    await waitForSent(sent); // the one-time explanation card, sent immediately
+    expect(sent).toHaveLength(1);
 
     await request({ kind: 'hook.event', event: { event: 'activity', cwd: '/w', sessionId: 's1', toolName: 'Bash', result: {} } }, { socketPath: sock, timeoutMs: 2000 });
 
@@ -1746,7 +1806,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     expect(s?.status).toBe('active');
     expect(s?.pending).toBeUndefined();
     expect(clears.length).toBeGreaterThan(0);
-    expect(sent).toHaveLength(0); // answered within grace → the IM text never fires
+    expect(sent).toHaveLength(1); // still just the one explanation — nothing new fires on retire
   });
 
   it('sub-agent activity does NOT retire the main-session dialog tracking (parallel agents keep running while you look at the dialog)', async () => {
@@ -1763,7 +1823,12 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     expect(s?.pending?.local).toBe(true); // still waiting — only a MAIN-session answer clears it
   });
 
-  it('muted IM stays quiet, but desktop + dashboard still fire (IM ⊥ desktop)', async () => {
+  // /mute silences ongoing IM notifications (docs: "mute IM notifications
+  // ONLY"), but the one-time explanation is not one of those — it is a single
+  // lifetime "here's why you'll never hear from IM about these" card with its
+  // own way out, sent unconditionally the first time. Desktop + dashboard are
+  // unaffected by `/mute` either way (IM ⊥ desktop).
+  it('muted IM still gets the one-time notify explanation exactly once; desktop + dashboard fire too (IM ⊥ desktop)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
@@ -1776,8 +1841,10 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
 
     expect(notes).toHaveLength(1);
     expect((await findSession(sock, 's1'))?.pending?.local).toBe(true);
-    await new Promise((r) => setTimeout(r, 80));
-    expect(sent).toHaveLength(0);
+    await waitForSent(sent);
+    expect(sent).toHaveLength(1);
+    const card = sent[0] as { buttons?: Array<{ id: string }> };
+    expect(card.buttons?.map((b) => b.id)).toContain('mode:full');
   });
 });
 

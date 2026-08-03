@@ -84,12 +84,15 @@ continue" line makes the distinction moot for what you actually do.
   (default) watches and notifies but the shim can never hold or block an
   approval — every prompt stays 100% native (your local terminal dialog, or
   CC's own auto-deny when headless); when a prompt is waiting at the terminal
-  you still get told (desktop toast, read-only dashboard card, graced IM
-  text — pointers back to the terminal, never a decision). The desktop toast
-  has no on/off switch of its own — use your OS's Do Not Disturb to silence it
-  temporarily, or `tlive mode off` to stop tlive entirely. **`full`** turns
-  on remote approval for the main session: tlive holds each tool call so you
-  can answer it from IM / desktop / dashboard (everything the *Approvals*
+  it reports **to the machine** — desktop toast + read-only dashboard card,
+  since only whoever is sitting there can act on it. IM stays quiet about
+  these (a phone can't reach a terminal), except once ever per chat: the
+  first time, a card explains why and offers the one-tap switch to `full`.
+  The desktop toast has no on/off switch of its own — use your OS's Do Not
+  Disturb to silence it temporarily, or `tlive mode off` to stop tlive
+  entirely. **`full`** turns on remote approval for the main session — the
+  posture that puts approvals **on your phone**: tlive holds each tool call
+  so you can answer it from IM / desktop / dashboard (everything the *Approvals*
   bullet below describes), in parallel with the terminal dialog — first
   answer wins. Sub-agent prompts still pass through to the terminal.
   **`all`** holds sub-agent approvals too — the trade is that **a held
