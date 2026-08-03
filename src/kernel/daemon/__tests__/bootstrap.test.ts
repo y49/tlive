@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { bootstrapDaemon, shouldFastNullContinue, clampPermissionTimeout, makeCodexResumeHandler, shouldDropNotify, resolveKey, type DaemonHandle } from '../bootstrap';
 import { request, daemonSocketPath } from '../../ipc/client';
+import { AlreadyRunningError } from '../../ipc/server.js';
 import type { IMAdapter, IMChannel, OutgoingMessage, IncomingEnvelope } from '../../contracts/im-adapter';
 import { SessionRegistry } from '../../web/session-registry';
 import { until } from '../../__tests__/wait.js';
@@ -56,6 +57,37 @@ describe('daemon bootstrap', () => {
     h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { render: async () => {}, clear: async () => {} } });
     const r = await request({ kind: 'daemon.set', key: 'desktop', enabled: false } as never, { socketPath: h.ipcSocketPath, timeoutMs: 2000 });
     expect(r.kind).toBe('error');
+  });
+
+  // I2: a second bootstrapDaemon() against the SAME home — the shape of
+  // daemon/main.ts's response to AlreadyRunningError — must fail to bind
+  // before it ever gets a chance to retract a toast. Before the fix, the
+  // startup clear() ran ~650 lines before the IPC bind, so the LOSING
+  // attempt would retract the SURVIVING daemon's toast on its way to exiting,
+  // right when something was still genuinely waiting.
+  it('a losing daemon whose IPC bind fails must never retract the surviving daemon\'s toast', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    const winnerClears: number[] = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { render: async () => {}, clear: async () => { winnerClears.push(1); } } });
+    expect(winnerClears).toHaveLength(1); // its own genuine startup retraction
+
+    const loserClears: number[] = [];
+    await expect(
+      bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { render: async () => {}, clear: async () => { loserClears.push(1); } } }),
+    ).rejects.toBeInstanceOf(AlreadyRunningError);
+    expect(loserClears).toHaveLength(0);
+  });
+
+  // No test asserted this before: deleting the shutdown `desktop.clear()`
+  // call broke nothing, despite being half of the resident toast's safety
+  // story (a daemon restart must not inherit a stale banner nothing owns).
+  it('closes the resident toast on shutdown', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    const clears: number[] = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { render: async () => {}, clear: async () => { clears.push(1); } } });
+    clears.length = 0; // discard the daemon's own startup clear
+    await h.shutdown();
+    expect(clears).toHaveLength(1);
   });
 });
 

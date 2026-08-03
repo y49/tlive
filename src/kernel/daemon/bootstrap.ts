@@ -262,12 +262,17 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     // that rendered it.
     idStore: { read: () => readToastId(opts.home), write: (id) => writeToastId(opts.home, id) },
   });
-  // Genuinely retracts a predecessor's toast now, not a no-op: `idStore.read()`
-  // above seeds `lastId` from the state file, so if a prior daemon rendered a
-  // toast and was killed before it could clear(), THIS call is what finally
-  // closes it — the gap the old 15s expiry used to self-heal before the toast
-  // became resident.
-  void desktop.clear();
+  // The startup retraction of a predecessor's toast (idStore.read() above
+  // seeds `lastId`) does NOT happen here — see the `void desktop.clear()`
+  // call after the IPC server binds, further down. It has to wait for that:
+  // `bootstrapDaemon` is called a second time by daemon/main.ts whenever
+  // `startIpcServer` throws AlreadyRunningError (a stalled first daemon that
+  // an autostart raced into existing alongside), and a clear() issued THIS
+  // early would fire regardless of which of the two attempts turns out to be
+  // the loser — retracting the SURVIVING daemon's toast right when something
+  // is still genuinely waiting, from a process that is about to fail to bind
+  // and exit. Only the attempt that actually ends up owning the socket may
+  // retract what a predecessor left behind.
 
   // CC-native dialogs tlive is NOT holding, known only via
   // Notification(permission_prompt): notify mode, or a full-mode immediate
@@ -1305,6 +1310,25 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       }
     },
   });
+
+  // Startup retraction of a PREDECESSOR's resident toast — placed HERE,
+  // immediately after the IPC bind above has actually SUCCEEDED, and not any
+  // earlier: `startIpcServer` throws AlreadyRunningError (a few lines up)
+  // when another live daemon already owns this socket, and daemon/main.ts
+  // responds to that by calling bootstrapDaemon a SECOND time. If this call
+  // sat before the bind — where it used to be — the LOSING attempt would
+  // still reach it before its own bind failed, retracting the SURVIVING
+  // daemon's toast on its way to exiting, at the exact moment something is
+  // still genuinely waiting (worse still, the survivor keeps rendering with
+  // the now-closed id via --replace-id). Only the attempt that ends up
+  // actually owning the socket may retract what a predecessor left behind.
+  //
+  // Genuinely retracts a predecessor's toast now, not a no-op: `idStore.read()`
+  // in the `createDesktopNotifier(...)` call above seeds `lastId` from the
+  // state file, so if a prior daemon rendered a toast and was killed before
+  // it could clear(), THIS call is what finally closes it — the gap the old
+  // 15s expiry used to self-heal before the toast became resident.
+  void desktop.clear();
 
   const { injectInput } = await import('./inject.js');
   const inbound = new (await import('./inbound-handler.js')).InboundHandler({
