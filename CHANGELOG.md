@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.1.0](https://github.com/y49/tlive/compare/v4.0.0...v4.1.0) (2026-08-04)
+
+
+### Features
+
+* **desktop:** drop the click promise, localize the toast ([#72](https://github.com/y49/tlive/issues/72)) ([788ed2d](https://github.com/y49/tlive/commit/788ed2d63d092e91f7a0f0b5b55840dea5e4f9cc))
+
+
+### Bug Fixes
+
+* **im:** put the seven Chinese reply strings back into English ([#73](https://github.com/y49/tlive/issues/73)) ([afd5168](https://github.com/y49/tlive/commit/afd51681d80f817c26bb8dd1057c8571e7335421))
+
 ## [4.0.0](https://github.com/y49/tlive/compare/v3.0.0...v4.0.0) (2026-08-04)
 
 
