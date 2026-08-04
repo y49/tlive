@@ -1,6 +1,5 @@
 // src/kernel/daemon/bootstrap.ts
 import { join, dirname } from 'node:path';
-import { spawn as spawnChild } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { startIpcServer, type IpcServer } from '../ipc/server.js';
@@ -31,7 +30,7 @@ import { excerptForCard } from './excerpt.js';
 import { TURN_FINISHED_SENTINEL, effectiveMode, type ShimMode } from '../hook/normalizer.js';
 import { writeMode } from '../config/mode.js';
 import { readToastId, writeToastId, wasNotifyExplained, markNotifyExplained } from '../config/state.js';
-import { WaitingBoard, renderBoard, canSkipProjection } from './waiting-board.js';
+import { WaitingBoard, renderBoard, canSkipProjection, WHAT, type Lang } from './waiting-board.js';
 
 export interface DaemonHandle {
   shutdown(): Promise<void>;
@@ -128,6 +127,20 @@ export function clampPermissionTimeout(timeoutSec: number | undefined): number {
 export const resolveKey = (sessionId: string, cwd: string, wrappedId?: string): string =>
   wrappedId ?? (sessionId || cwd);
 
+/** OS locale → toast language (see waiting-board.ts's `Lang` doc for why this
+ *  is the one place the project ships non-English strings). POSIX precedence:
+ *  `LC_ALL` overrides `LC_MESSAGES` overrides `LANG`. `zh` is used whenever
+ *  the winning value starts with `zh` (`zh_CN.UTF-8`, `zh-Hans`, bare `zh`,
+ *  …); everything else — unset, `C`, `POSIX`, or a locale nobody on this
+ *  project can proofread — falls back to `en` ON PURPOSE. Called exactly once,
+ *  at `bootstrapDaemon` startup, and held for the process's lifetime: a
+ *  system language change needs `tlive stop && tlive start`, not a live
+ *  re-read. */
+export function detectLang(env: NodeJS.ProcessEnv): Lang {
+  const value = env.LC_ALL || env.LC_MESSAGES || env.LANG || '';
+  return value.startsWith('zh') ? 'zh' : 'en';
+}
+
 /** stale 卡点击的告知文案。救不回来是物理事实(shim 已死),让用户以为点成功
  *  了才是产品在撒谎。覆盖:daemon 重启 / 已超时 / 会话已结束。 */
 export const STALE_CARD_NOTICE =
@@ -159,6 +172,9 @@ function logJson(msg: string, fields: Record<string, unknown> = {}): void {
 export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle> {
   mkdirSync(opts.home, { recursive: true });
   const cfg = loadConfig(opts.home);
+  // Read once, here, for the toast alone — see detectLang's doc for why this
+  // is a startup snapshot rather than a live read.
+  const lang = detectLang(process.env);
   const startedAt = Date.now();
 
   // Inbox housekeeping (uploaded attachments): sweep on startup AND hourly —
@@ -233,12 +249,14 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // Desktop notification: the at-the-computer pointer to the phone card /
   // dashboard, for background-launched tool calls that render no local dialog
   // while the hook pends. Never carries a decision (never-auto-allow intact).
-  // Click-to-answer: the toast carries an "Open dashboard" button — the
-  // notification is an entrance, not just a pointer (background terminal
-  // workflow: get pinged, click, approve, back to whatever you were doing).
-  // webUrl is assigned when the web server starts below; clicks only happen
-  // after bootstrap completes, so the lazy read is safe. Web disabled → no
-  // URL to open; the click is a silent no-op (toast still informs).
+  // No click action: it used to open the dashboard, but osascript has no
+  // bundle of its own, so macOS attributed the click to Script Editor —
+  // worse than nothing — and only the linux backend ever implemented it, so
+  // on macOS/Windows the toast was inviting a click that did not exist. The
+  // body also names no place, for the same reason `BODY.held` in
+  // waiting-board.ts does not: a `held` entry may be a main-session approval
+  // (answerable at the terminal) or an `all`-rung held sub-agent (answerable
+  // only remotely), and onPending carries no agentId to tell the two apart.
   /** 姿态是 config-backed 的(shim 每个 hook 事件都重读),所以 daemon 绝不能
    *  缓存它:`tlive mode all` 或 IM 的 /mode 必须改变**下一次**审批的行为,不需要
    *  重启。此前 cfg 只在 bootstrap 读一次,子代理分支于是永远停在启动时的姿态。
@@ -257,13 +275,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     try { return effectiveMode(loadConfig(opts.home).mode); } catch { return effectiveMode(cfg.mode); }
   };
   const desktop = opts.desktopNotifier ?? createDesktopNotifier({
-    action: {
-      label: 'Open dashboard',
-      run: () => {
-        if (!webUrl) return;
-        try { spawnChild('xdg-open', [webUrl], { detached: true, stdio: 'ignore' }).unref(); } catch { /* best-effort */ }
-      },
-    },
     // Backed by Task 6's state file, so the linux slot's notify-send id
     // survives a restart (or a `kill -9`) instead of dying with the process
     // that rendered it.
@@ -549,7 +560,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
    *  header comment on `BootstrapOpts.onLog` for why. */
   const refreshDesktop = (): void => {
     const entries = board.entries();
-    const view = renderBoard(entries);
+    const view = renderBoard(entries, lang);
     if (!view) {
       // Log only the real transition — the board just emptied and the toast
       // came down. `refreshDesktop` runs after every removal, most of which
@@ -1213,7 +1224,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               localPrompts.note(key, req.sessionId);
               // Board first, immediately — the waiting slot (add/remove
               // lifecycle), not an info banner: the dialog IS a waiting state.
-              board.add({ id: localBoardId(key), key, label: sessionLabel(key), kind: 'localPrompt', what: 'permission' });
+              board.add({ id: localBoardId(key), key, label: sessionLabel(key), kind: 'localPrompt', what: WHAT.permission[lang] });
               refreshDesktop();
               // Dashboard: read-only waiting-approval card (pending.local) —
               // visible from anywhere, answerable only at the terminal.
@@ -1299,7 +1310,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // failed tool is not blocking anyone, and it would be noise at the
           // keyboard. It still goes to IM, where it is diagnosable.
           if (req.level === 'info') {
-            board.add({ id: idleBoardId(key), key, label: sessionLabel(key), kind: 'idle', what: 'your input' });
+            board.add({ id: idleBoardId(key), key, label: sessionLabel(key), kind: 'idle', what: WHAT.yourInput[lang] });
             refreshDesktop();
           }
           events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.message }, key));
