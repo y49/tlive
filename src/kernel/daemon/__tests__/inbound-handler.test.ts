@@ -473,7 +473,7 @@ describe('reply-to routing & injection', () => {
       sessionInfo: () => ({ kind: 'hook' as const, label: 'proj' }),
     }));
     await h.handle(envelope({ text: 'hello', replyToMessageId: 'q1' }));
-    expect(msgs.some((m) => m.text?.includes('无法注入'))).toBe(true);
+    expect(msgs.some((m) => m.text?.includes('not wrapped with tlive run'))).toBe(true);
   });
 
   it('bare text with exactly one wrapped session injects directly', async () => {
@@ -501,7 +501,7 @@ describe('reply-to routing & injection', () => {
     }));
     await h.handle(envelope({ text: 'do it' }));
     expect(inject).not.toHaveBeenCalled();
-    expect(msgs.some((m) => m.text?.includes('引用'))).toBe(true);
+    expect(msgs.some((m) => m.text?.includes('reply to a message from the one you mean'))).toBe(true);
   });
 
   // The payload is requestId-only: Telegram caps callback_data at 64 bytes and
@@ -647,7 +647,7 @@ describe('quoting a live approval card = deny with guidance', () => {
       resolveReply: () => undefined,
     }));
     await h.handle(envelope({ text: 'use mv', replyToMessageId: 'dead-card' }));
-    expect(msgs.some((m) => m.text && /no longer active|引用/i.test(m.text))).toBe(true);
+    expect(msgs.some((m) => m.text && /no longer active|No session matches that message/i.test(m.text))).toBe(true);
   });
 
   it('a live-card hit that the router reports as stale (race) replies with the shared STALE_CARD_NOTICE, not a second wording', async () => {
