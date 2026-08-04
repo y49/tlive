@@ -106,7 +106,7 @@ export class InboundHandler {
       // "批了这一条"这半句可能是假的,分开告知。
       this.deps.setTrust(true);
       if (this.deps.permissionRouter.answer(requestId, true)) {
-        await this.reply(env, { kind: 'text', text: '已暂停审批:当前操作已放行,后续自动放行,发送 /trust off 恢复。' });
+        await this.reply(env, { kind: 'text', text: 'Approvals paused — this one is allowed, and everything after it is auto-allowed. Send /trust off to resume.' });
       } else {
         await this.reply(env, { kind: 'text', text: STALE_CARD_NOTICE });
       }
@@ -271,13 +271,13 @@ export class InboundHandler {
       return;
     }
     if (wrapped.length > 1) {
-      await this.reply(env, { kind: 'text', text: `有 ${wrapped.length} 个活跃会话,请引用(回复)对应会话的消息来指定目标。` });
+      await this.reply(env, { kind: 'text', text: `${wrapped.length} sessions are active — reply to a message from the one you mean.` });
       return;
     }
 
     await this.reply(env, {
       kind: 'text',
-      text: 'tlive: 无活动会话可接收文本。引用某条会话消息可将文本发入该终端(需 tlive run 包裹);命令见 /help。',
+      text: 'tlive: no active session can take text. Reply to a session\'s message to send text to that terminal — the session must be wrapped with tlive run. See /help for commands.',
     });
   }
 
@@ -306,12 +306,12 @@ export class InboundHandler {
     }
     const cwd = this.deps.resolveReply(env.channel, env.replyToMessageId!);
     if (!cwd) {
-      await this.reply(env, { kind: 'text', text: '找不到该消息对应的会话(daemon 可能重启过),请引用较新的消息。' });
+      await this.reply(env, { kind: 'text', text: 'No session matches that message — the daemon may have restarted. Reply to a more recent one.' });
       return;
     }
     const s = this.deps.sessionInfo(cwd);
     if (!s) {
-      await this.reply(env, { kind: 'text', text: '该会话已结束。' });
+      await this.reply(env, { kind: 'text', text: 'That session has ended.' });
       return;
     }
     // A pending Stop-continue is the official resume path — prefer it over injection.
@@ -321,7 +321,7 @@ export class InboundHandler {
       await this.injectTo(env, s.sockPath, s.label);
       return;
     }
-    await this.reply(env, { kind: 'text', text: `[${s.label}] 未用 tlive run 包裹,无法注入文本。审批请用按钮;续跑请在「续跑」提示后直接回复。` });
+    await this.reply(env, { kind: 'text', text: `[${s.label}] is not wrapped with tlive run, so text cannot be injected. Use the buttons for approvals, and reply under a "Turn finished" card to continue a run.` });
   }
 
   private async injectTo(env: IncomingEnvelope, sockPath: string, label: string): Promise<void> {
@@ -335,7 +335,7 @@ export class InboundHandler {
       const n = paths.length;
       await this.reply(env, { kind: 'text', text: `Sent to [${label}]${n ? ` (${n} attachment path${n === 1 ? '' : 's'})` : ''}` });
     } catch {
-      await this.reply(env, { kind: 'text', text: `[${label}] 注入失败:会话可能已退出。` });
+      await this.reply(env, { kind: 'text', text: `[${label}] injection failed — the session may have exited.` });
     }
   }
 
