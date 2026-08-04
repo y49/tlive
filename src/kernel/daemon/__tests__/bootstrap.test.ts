@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { bootstrapDaemon, shouldFastNullContinue, clampPermissionTimeout, makeCodexResumeHandler, shouldDropNotify, resolveKey, type DaemonHandle } from '../bootstrap';
+import { bootstrapDaemon, shouldFastNullContinue, clampPermissionTimeout, makeCodexResumeHandler, shouldDropNotify, resolveKey, detectLang, type DaemonHandle } from '../bootstrap';
 import { request, daemonSocketPath } from '../../ipc/client';
 import { AlreadyRunningError } from '../../ipc/server.js';
 import type { IMAdapter, IMChannel, OutgoingMessage, IncomingEnvelope } from '../../contracts/im-adapter';
@@ -33,8 +33,64 @@ async function waitForSent(sent: unknown[], n = 1): Promise<void> {
 let tmp: string;
 let h: DaemonHandle;
 
-beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'tlive-d-')); });
-afterEach(async () => { await h?.shutdown(); });
+// bootstrapDaemon calls detectLang(process.env) exactly once, at startup —
+// every toast-body assertion in this file below assumes the result is 'en'.
+// That assumption must not ride on whatever locale happens to be set in the
+// environment actually running this suite (this repo's own dev machine runs
+// zh_CN.UTF-8): saving and clearing LC_ALL/LC_MESSAGES/LANG around every test
+// makes 'en' the suite's deterministic default, the same way `tmp` isolates
+// each test from a shared HOME. The one test that exercises detectLang's zh
+// path end to end sets its own LC_ALL inside the test body.
+let origLocale: { LC_ALL?: string; LC_MESSAGES?: string; LANG?: string };
+
+beforeEach(() => {
+  // Captured BEFORE mkdtempSync: if mkdtempSync throws on the very first test,
+  // afterEach must still find a defined origLocale to restore from — otherwise
+  // it dereferences undefined and reports a TypeError that masks the real disk
+  // error instead of just running the (harmless, already-clear) restore.
+  origLocale = { LC_ALL: process.env.LC_ALL, LC_MESSAGES: process.env.LC_MESSAGES, LANG: process.env.LANG };
+  delete process.env.LC_ALL; delete process.env.LC_MESSAGES; delete process.env.LANG;
+  tmp = mkdtempSync(join(tmpdir(), 'tlive-d-'));
+});
+afterEach(async () => {
+  // shutdown() runs inside try/finally: if it rejects, the locale restore
+  // below must still happen — otherwise a leaked LC_ALL='zh_CN.UTF-8' (set by
+  // a zh-path test) survives into the next beforeEach's snapshot and pins
+  // Chinese for the rest of the file, turning one hook failure into a cascade
+  // of confusing English-assertion failures in unrelated later tests.
+  try {
+    await h?.shutdown();
+  } finally {
+    if (origLocale.LC_ALL === undefined) delete process.env.LC_ALL; else process.env.LC_ALL = origLocale.LC_ALL;
+    if (origLocale.LC_MESSAGES === undefined) delete process.env.LC_MESSAGES; else process.env.LC_MESSAGES = origLocale.LC_MESSAGES;
+    if (origLocale.LANG === undefined) delete process.env.LANG; else process.env.LANG = origLocale.LANG;
+  }
+});
+
+describe('detectLang (OS locale → toast language)', () => {
+  it('resolves zh for zh_CN.UTF-8, zh-Hans, and bare zh', () => {
+    expect(detectLang({ LANG: 'zh_CN.UTF-8' })).toBe('zh');
+    expect(detectLang({ LANG: 'zh-Hans' })).toBe('zh');
+    expect(detectLang({ LANG: 'zh' })).toBe('zh');
+  });
+
+  it('an unrecognised locale falls back to en on purpose', () => {
+    expect(detectLang({ LANG: 'fr_FR.UTF-8' })).toBe('en');
+    expect(detectLang({ LANG: 'ja_JP.UTF-8' })).toBe('en');
+  });
+
+  it('nothing set at all (a bare C/POSIX environment) also falls back to en', () => {
+    expect(detectLang({})).toBe('en');
+    expect(detectLang({ LANG: 'C' })).toBe('en');
+    expect(detectLang({ LANG: 'POSIX' })).toBe('en');
+  });
+
+  it('POSIX precedence: LC_ALL beats LC_MESSAGES beats LANG', () => {
+    expect(detectLang({ LC_ALL: 'zh_CN.UTF-8', LC_MESSAGES: 'en_US.UTF-8', LANG: 'en_US.UTF-8' })).toBe('zh');
+    expect(detectLang({ LC_MESSAGES: 'zh_CN.UTF-8', LANG: 'en_US.UTF-8' })).toBe('zh');
+    expect(detectLang({ LC_ALL: 'en_US.UTF-8', LC_MESSAGES: 'zh_CN.UTF-8', LANG: 'zh_CN.UTF-8' })).toBe('en');
+  });
+});
 
 describe('daemon bootstrap', () => {
   it('starts and answers daemon.status', async () => {
@@ -399,6 +455,29 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     expect(clears.length).toBeGreaterThan(0);
   });
 
+  // detectLang wired all the way through bootstrap: the outer beforeEach
+  // already clears LC_ALL/LC_MESSAGES/LANG, so this only needs to state its
+  // own intent explicitly — a bare C/POSIX environment, no locale at all.
+  it('renders the held body in English under a C/POSIX locale (detectLang wired through bootstrap)', async () => {
+    process.env.LC_ALL = 'C';
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } }, // an answer surface, or the router defers instead of holding
+    }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+    const pending = request(
+      { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
+      { socketPath: sock, timeoutMs: 10_000 },
+    );
+    held(pending);
+    await until(() => { expect(notes).toHaveLength(1); });
+    expect(notes[0].body).toBe('Approval needed');
+  });
+
   it('the desktop toast is immediate — it does NOT wait out the IM card grace delay (the local user is the whole point)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },
@@ -487,6 +566,26 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     expect(renders[0].body).toContain('your input');
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'error', message: 'Bash failed: boom' }, { socketPath: sock, timeoutMs: 2000 });
     expect(renders).toHaveLength(1); // error-level stays on IM/dashboard, never the at-the-keyboard toast
+  });
+
+  // The `what` fields for the two non-tool WaitingEntry kinds ('your input',
+  // 'permission') are localized at bootstrap.ts's registration sites, not
+  // inside renderBoard — the previous test alone cannot tell that apart from
+  // a hardcoded English literal, since 'en' is this suite's default. This
+  // one forces zh and checks the toast TITLE (which carries `what`) actually
+  // switches — proving the registration site reads `WHAT.yourInput[lang]`
+  // rather than a fixed string.
+  it('an idle toast\'s "what" is localized to zh under a zh locale, not hardcoded English', async () => {
+    process.env.LC_ALL = 'zh_CN.UTF-8';
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    const renders: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { render: async (title, body) => { renders.push({ title, body }); }, clear: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
+    expect(renders).toHaveLength(1);
+    expect(renders[0].title).toContain('你的输入');
+    expect(renders[0].title).not.toContain('your input');
+    expect(renders[0].body).toBe('等你输入');
   });
 
   it('an idle session joins the waiting toast and leaves it when the user types', async () => {
@@ -1247,7 +1346,7 @@ describe('sub-agent pass-through tells you what is blocked', () => {
     await until(() => { expect(notes).toHaveLength(1); });
     expect(notes[0].title).toContain('Bash');
     expect(notes[0].title).toContain('sub-agent');
-    expect(notes[0].body).toContain('Waiting at the terminal');
+    expect(notes[0].body).toBe('Answer at your terminal'); // names no place — see waiting-board.ts's BODY doc
   });
 
   // Same call-site-ordering bug as onPending above, the other flagged site:
@@ -1719,7 +1818,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     // WaitingBoard localPrompt body (see waiting-board.ts's BODY table).
     expect(notes).toHaveLength(1);
     expect(notes[0].title).toContain('permission');
-    expect(notes[0].body).toContain('answer it there');
+    expect(notes[0].body).toBe('Answer at your terminal'); // names no place — see waiting-board.ts's BODY doc
     // Dashboard: read-only pending — waiting-approval, marked local.
     const s = await findSession(sock, 's1');
     expect(s?.status).toBe('waiting-approval');
@@ -1733,6 +1832,25 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     const card = sent[0] as { title?: string; buttons?: Array<{ id: string }> };
     expect(card.title).toContain('Approvals stay at your terminal');
     expect(card.buttons?.map((b) => b.id)).toContain('mode:full');
+  });
+
+  // Same wiring gap as the idle toast's zh test above (Task 3/localPrompt is
+  // the OTHER registration site that reads WHAT.permission[lang], not just
+  // onNotify's idle one) — under English 'permission' is indistinguishable
+  // from a hardcoded literal, so this forces zh to prove the site actually
+  // reads the table rather than a fixed string.
+  it('a localPrompt toast\'s "what" is localized to zh under a zh locale, not hardcoded English', async () => {
+    process.env.LC_ALL = 'zh_CN.UTF-8';
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const adapter = interactiveAdapter('telegram', []);
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    expect(notes).toHaveLength(1);
+    expect(notes[0].title).toContain('权限');
+    expect(notes[0].title).not.toContain('permission');
+    expect(notes[0].body).toBe('回终端处理');
   });
 
   // In `full` mode every request tlive sees ends up either held (an answerable

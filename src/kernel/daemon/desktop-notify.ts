@@ -38,22 +38,23 @@
 //   posts a FRESH one with no --replace-id, forcing a banner. Answering one
 //   of several still waiting, or the set only shrinking/re-wording, renders
 //   with no `alert` — today's silent in-place update.
-// - CLICK TO ANSWER: an optional `action` renders a button on the toast
-//   (freedesktop actions via `notify-send --action`); clicking it runs the
-//   callback — bootstrap wires it to open the tlive dashboard, so the toast
-//   is an entrance, not just a pointer. Timing pinned live on this machine:
-//   with --action, --print-id emits the id IMMEDIATELY (~4ms), then the
-//   process waits and prints the action name on click / exits on expiry.
-// - Sends are serialized so a burst can't race past the id capture and fork
-//   into parallel slots. A replaced render's waiter is killed and its
-//   callbacks ignored, so a click can never fire twice through a superseded
-//   process.
+// - No click action. notify-send once rendered an "Open dashboard" button
+//   (freedesktop actions via --action), but only the linux backend ever
+//   implemented it, so on macOS/Windows the toast invited a click that did
+//   not exist — and on macOS, osascript has no bundle of its own, so the
+//   click landed on Script Editor instead of tlive, which is worse than
+//   nothing. Removed outright, on every platform, rather than papered over.
+//   With no --action, `notify-send --print-id` exits immediately once it has
+//   printed the id, so the plain `spawner` (below) is enough for both render
+//   and clear — there is no longer a long-lived waiter to keep alive or kill.
+// - Sends are still serialized (the `enqueue` chain), so a burst can't race
+//   past the id capture and fork into parallel slots.
 //
-// Platform coverage (the notification's core value is calling the user BACK
-// to the terminal — click-to-answer is a Linux bonus, not the bar):
-// - linux: notify-send — full model (single resident slot, close, action).
+// Platform coverage (the notification's whole job is calling the user BACK
+// to the terminal — never a decision surface, on any platform):
+// - linux: notify-send — full model (single resident slot, close).
 // - win32: PowerShell WinRT toast — single slot via Tag replace + active
-//   clear via ToastNotificationManager History. No click action (v1).
+//   clear via ToastNotificationManager History.
 // - darwin: osascript `display notification` — single toast; banners
 //   auto-dismiss, Notification Center accumulation is macOS-managed.
 // Missing binary anywhere → silent no-op — the card and dashboard remain
@@ -76,42 +77,6 @@ const defaultSpawner: Spawner = (cmd, args) =>
       c.on('close', () => resolve(out));
     } catch { resolve(null); }
   });
-
-/** A long-lived notify-send holding an actionable toast: first stdout line is
- *  the notification id (immediate), later lines are invoked action names. */
-export interface NotifySendProc {
-  firstLine: Promise<string | null>;
-  onLine(cb: (line: string) => void): void;
-  kill(): void;
-}
-export type StreamSpawner = (cmd: string, args: string[]) => NotifySendProc;
-
-const defaultStreamSpawner: StreamSpawner = (cmd, args) => {
-  const lineCbs: Array<(l: string) => void> = [];
-  let resolveFirst: (v: string | null) => void;
-  const firstLine = new Promise<string | null>((r) => { resolveFirst = r; });
-  let first = true;
-  try {
-    const c = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'ignore'] });
-    let buf = '';
-    c.stdout.on('data', (d: Buffer) => {
-      buf += d.toString();
-      let i;
-      while ((i = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, i); buf = buf.slice(i + 1);
-        if (first) { first = false; resolveFirst(line); }
-        else for (const cb of lineCbs) cb(line);
-      }
-    });
-    c.on('error', () => { if (first) { first = false; resolveFirst(null); } });
-    c.on('close', () => { if (first) { first = false; resolveFirst(null); } });
-    c.unref();
-    return { firstLine, onLine: (cb) => lineCbs.push(cb), kill: () => { try { c.kill(); } catch { /* already gone */ } } };
-  } catch {
-    resolveFirst!(null);
-    return { firstLine, onLine: () => undefined, kill: () => undefined };
-  }
-};
 
 /** Where the live toast's id survives a daemon restart. Absent → no
  *  persistence (tests, and platforms with no resident slot). */
@@ -149,9 +114,6 @@ export function createDesktopNotifier(opts?: {
   platform?: NodeJS.Platform;
   hasCmd?: (cmd: string) => boolean;
   spawner?: Spawner;
-  streamSpawner?: StreamSpawner;
-  /** Toast button; clicking runs `run` (bootstrap: open the dashboard). */
-  action?: { label: string; run: () => void };
   /** Persists the linux slot's notify-send id across a restart. Absent →
    *  in-memory only, same as before this seam existed. */
   idStore?: ToastIdStore;
@@ -203,24 +165,17 @@ export function createDesktopNotifier(opts?: {
   if (!hasCmd('notify-send')) { channel(false, 'no-notify-send'); return NOOP; }
   channel(true);
   const sp = opts?.spawner ?? defaultSpawner;
-  const ss = opts?.streamSpawner ?? defaultStreamSpawner;
-  const action = opts?.action;
   const idStore = opts?.idStore;
   // Seed from the previous process's id (if any) — this single line is what
   // makes the startup clear() below real: a fresh process otherwise has no
   // way to know a predecessor left a toast up, and would silently no-op.
   let lastId: string | null = idStore?.read() ?? null;
-  let liveProc: NotifySendProc | null = null;
-  let generation = 0;
+  // Still needed with no click action to wait for: a burst of renders/clears
+  // must not race past the id capture and fork into parallel slots.
   let chain: Promise<void> = Promise.resolve();
   const enqueue = (task: () => Promise<void>): Promise<void> => {
     chain = chain.then(task).catch(() => { /* best-effort, never throws */ });
     return chain;
-  };
-  const dropLiveProc = (): void => {
-    generation++; // callbacks from the superseded waiter are ignored from here
-    liveProc?.kill();
-    liveProc = null;
   };
   // The one gdbus argument list that closes a notification by id. Shared by
   // clear() and the alert path below — a second copy of this array is exactly
@@ -245,13 +200,11 @@ export function createDesktopNotifier(opts?: {
     // this must land as a FRESH notification so a persistent notification
     // server raises a banner instead of silently updating a panel entry.
     ...(!alert && lastId ? [`--replace-id=${lastId}`] : []),
-    ...(action ? [`--action=answer=${action.label}`] : []),
     title,
     body,
   ];
   const showSlot = (title: string, body: string, opts?: { alert?: boolean }): Promise<void> => enqueue(async () => {
     const alert = opts?.alert ?? false;
-    dropLiveProc();
     if (alert && lastId) {
       // Close first, then post. If the process dies between the two, nothing
       // is on screen and no id is persisted — safe. Posting first and closing
@@ -262,11 +215,11 @@ export function createDesktopNotifier(opts?: {
       await sp('gdbus', closeArgs(staleId));
       idStore?.write(null);
     }
-    const gen = generation;
-    const proc = ss('notify-send', slotArgs(title, body, alert));
-    liveProc = proc;
-    if (action) proc.onLine((line) => { if (generation === gen && line.trim() === 'answer') action.run(); });
-    const id = (await proc.firstLine)?.trim();
+    // No --action means notify-send exits as soon as it has printed the id
+    // (rather than staying alive to wait for a click), so the plain spawner
+    // that runs a command to completion and hands back its stdout is enough
+    // here — there is no longer a stream to hold open.
+    const id = (await sp('notify-send', slotArgs(title, body, alert)))?.trim();
     // Old notify-send without --print-id prints nothing → keep stacking
     // behavior rather than passing garbage to --replace-id.
     if (id && /^\d+$/.test(id)) { lastId = id; idStore?.write(id); }
@@ -274,7 +227,6 @@ export function createDesktopNotifier(opts?: {
   return {
     render: showSlot,
     clear: () => enqueue(async () => {
-      dropLiveProc();
       if (!lastId) return;
       const id = lastId;
       lastId = null;
