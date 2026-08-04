@@ -1,5 +1,16 @@
 # Changelog
 
+## [4.0.0](https://github.com/y49/tlive/compare/v3.0.0...v4.0.0) (2026-08-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* `tlive desktop on|off` and `approvals.desktopNotify` are removed. In notify mode the toast is the only push signal for a terminal-native dialog, so turning it off silenced a blocking prompt entirely. Use your OS's Do Not Disturb to silence temporarily, or `tlive mode off` to stop tlive entirely. A leftover config key is ignored, not an error.
+
+### Features
+
+* one delivery rule for notifications — blocking work only, on a surface you can act from ([#70](https://github.com/y49/tlive/issues/70)) ([79eb240](https://github.com/y49/tlive/commit/79eb24099459ca62894a658f0f1e0de04c5ba926))
+
 ## [3.0.0](https://github.com/y49/tlive/compare/v2.1.0...v3.0.0) (2026-07-30)
 
 
