@@ -3,9 +3,9 @@
 // IM command set: /mute, /trust, /safe, /help. Each earns its place by being
 // something you'd actually fire FROM the phone. `/mute on` = go quiet, `/mute
 // off` = notifications back on (polarity matches /trust /safe: "on" = that mode
-// engaged). It governs IM notifications ONLY — desktop toasts are independent,
-// with their own machine-local `tlive desktop on|off` (no IM command). /desktop
-// was dropped from IM for the same reason (you flip it AT the machine).
+// engaged). It governs IM notifications ONLY — the desktop toast fires
+// whenever something is blocking on you regardless, with no on/off switch of
+// its own (OS Do Not Disturb, or `tlive mode off`, cover that need instead).
 // (/use was removed earlier — no workspace binding.)
 
 import { MODES } from '../config/mode.js';

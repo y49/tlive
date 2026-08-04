@@ -30,6 +30,8 @@ import { startCompanion, type Companion } from '../codex/companion.js';
 import { excerptForCard } from './excerpt.js';
 import { TURN_FINISHED_SENTINEL, effectiveMode, type ShimMode } from '../hook/normalizer.js';
 import { writeMode } from '../config/mode.js';
+import { readToastId, writeToastId, wasNotifyExplained, markNotifyExplained } from '../config/state.js';
+import { WaitingBoard, renderBoard, canSkipProjection } from './waiting-board.js';
 
 export interface DaemonHandle {
   shutdown(): Promise<void>;
@@ -47,6 +49,13 @@ export interface BootstrapOpts {
   ensureAppServer?: typeof ensureCodexAppServer;
   /** Test seam for the desktop notifier; production uses createDesktopNotifier. */
   desktopNotifier?: import('./desktop-notify.js').DesktopNotifier;
+  /** Test seam for refreshDesktop's `desktop.render`/`desktop.clear` lines,
+   *  mirroring how `desktopNotifier` itself is injected. Production always
+   *  writes those lines through `logJson` (daemon.log) regardless of whether
+   *  this is set — it does not replace that, only lets a test observe the
+   *  same two lines without spying on console.log. It does not see any other
+   *  diagnostic line this file emits. */
+  onLog?: (msg: string, fields: Record<string, unknown>) => void;
 }
 
 /** A Stop hook should not sit waiting when nothing can answer: no IM chat
@@ -230,10 +239,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // webUrl is assigned when the web server starts below; clicks only happen
   // after bootstrap completes, so the lazy read is safe. Web disabled → no
   // URL to open; the click is a silent no-op (toast still informs).
-  // Runtime gate (config seeds it; /desktop on|off flips it live). The
-  // notifier itself is created enabled so a config-off start can still be
-  // switched on without a restart.
-  let desktopOn = cfg.approvals?.desktopNotify ?? true;
   /** 姿态是 config-backed 的(shim 每个 hook 事件都重读),所以 daemon 绝不能
    *  缓存它:`tlive mode all` 或 IM 的 /mode 必须改变**下一次**审批的行为,不需要
    *  重启。此前 cfg 只在 bootstrap 读一次,子代理分支于是永远停在启动时的姿态。
@@ -259,24 +264,54 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         try { spawnChild('xdg-open', [webUrl], { detached: true, stdio: 'ignore' }).unref(); } catch { /* best-effort */ }
       },
     },
+    // Backed by Task 6's state file, so the linux slot's notify-send id
+    // survives a restart (or a `kill -9`) instead of dying with the process
+    // that rendered it.
+    idStore: { read: () => readToastId(opts.home), write: (id) => writeToastId(opts.home, id) },
+    // One `desktop.channel` line, once, at factory time — the whole answer to
+    // "why do I never get toasts" without a probe fired at the user's screen.
+    log: logJson,
   });
+  // The startup retraction of a predecessor's toast (idStore.read() above
+  // seeds `lastId`) does NOT happen here — see the `void desktop.clear()`
+  // call after the IPC server binds, further down. It has to wait for that:
+  // `bootstrapDaemon` is called a second time by daemon/main.ts whenever
+  // `startIpcServer` throws AlreadyRunningError (a stalled first daemon that
+  // an autostart raced into existing alongside), and a clear() issued THIS
+  // early would fire regardless of which of the two attempts turns out to be
+  // the loser — retracting the SURVIVING daemon's toast right when something
+  // is still genuinely waiting, from a process that is about to fail to bind
+  // and exit. Only the attempt that actually ends up owning the socket may
+  // retract what a predecessor left behind.
 
   // CC-native dialogs tlive is NOT holding, known only via
   // Notification(permission_prompt): notify mode, or a full-mode immediate
-  // defer (issue #49). Drives the same waiting surfaces as a held card
-  // (desktop toast / read-only dashboard card / graced IM text) minus any
-  // answer path — the answer happens at the terminal, and the local-answer
-  // triggers below (activity / permission-denied / prompt / session-end)
-  // retire the entry exactly like they release held cards.
+  // defer (issue #49). Drives the same waiting surfaces as a held card minus
+  // any answer path — the answer happens at the terminal — EXCEPT IM, which
+  // gets nothing per-dialog (a phone can't reach a terminal) beyond the
+  // one-time explain card below. The local-answer triggers further down
+  // (activity / permission-denied / prompt / session-end) retire the entry
+  // exactly like they release held cards.
   const localPrompts = new LocalPrompts();
   /** The tracked dialog is gone (answered locally / new prompt / session end):
    *  drop the read-only pending from the registry and close the toast when
    *  nothing else waits. The registry upsert is silent — the caller's own
    *  broadcast (applyMonitorEvent) carries the merged view in the same frame. */
   const clearLocalPrompt = (key: string, sessionId: string | undefined, cwd: string): void => {
-    if (!localPrompts.clear({ key, ...(sessionId ? { sessionId } : {}) })) return;
+    // Unconditional, matching onResolved below (which ignores localPrompts'
+    // own clear() return value the same way): gating the board/registry
+    // cleanup on THIS call's `localPrompts.clear()` result stranded the
+    // `local:<key>` board entry whenever the dialog was noted under one
+    // sessionId (e.g. a killed session s1) and the retirement arrived under a
+    // different one (s2 — a resume in the same cwd). Both the board entry and
+    // the registry's pending slot are keyed by `key`, not sessionId, so there
+    // is nothing sessionId-specific left to gate the cleanup on here — the
+    // sessionId is still passed to `localPrompts.clear()` itself, which uses
+    // it as its own (permissive) match.
+    localPrompts.clear({ key, ...(sessionId ? { sessionId } : {}) });
     if (sessions.get(key)?.pending?.local) sessions.upsert({ key, cwd, pending: null });
-    if (nothingWaiting()) void desktop.clear();
+    board.remove(localBoardId(key));
+    refreshDesktop();
   };
 
   // Same lifetime as the ask flow's *pending* window, but never consumed by an
@@ -356,13 +391,18 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     }) });
   };
 
+  /** Bare session label ('' when the registry has never seen this key). The
+   *  board wants it unadorned; `sessionTag` adds the ' · ' separator. */
+  const sessionLabel = (cwd: string | undefined): string => {
+    if (!cwd) return '';
+    return sessions.get(cwd)?.label ?? '';
+  };
+
   /** `<label> · ` prefix. wrapped/hook-only 不再用图标区分 —— 续跑卡自带
    *  "Reply to continue" 引导,该区分对用户的实际操作没有影响。 */
   const sessionTag = (cwd: string | undefined): string => {
-    if (!cwd) return '';
-    const s = sessions.get(cwd);
-    if (!s) return '';
-    return `${s.label} · `;
+    const label = sessionLabel(cwd);
+    return label ? `${label} · ` : '';
   };
 
   const sendToChat = async (
@@ -454,31 +494,121 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   /** requestId for the dashboard's read-only pending card on a pass-through. */
   const passthruRequestId = (agentId: string, toolName: string): string => `passthru:${agentId}:${toolName}`;
 
-  /** Sub-agent dialogs handed back to the terminal and not yet observed running.
-   *  Separate from passthruNotices (which only has entries when an IM card was
-   *  actually sent) because the desktop toast must work with no IM at all — this
-   *  is what lets retirePassthruNotice close the toast even when there was never
-   *  a card to edit. */
-  const passthruWaiting = new Set<string>(); // passthruKey(key, agentId, toolName)
+  /** Everything currently waiting for the user, and the only input to the
+   *  desktop toast. This REPLACES both `passthruWaiting` and the old
+   *  three-term `nothingWaiting()` predicate: those were the same fact stored
+   *  twice, and the copy is what let one session's resolution close another
+   *  session's toast. A new waiting category is added by putting it here —
+   *  there is no separate predicate left to forget to update. */
+  const board = new WaitingBoard();
 
-  /** The single "is anything at all waiting for the user" predicate behind the
-   *  desktop toast's lifetime. THREE surfaces feed it today (a held approval /
-   *  a tracked CC-native local prompt / an outstanding sub-agent pass-through)
-   *  and every one of them MUST be represented here — this used to be three
-   *  separate copies of the same condition, and the copy at two of the three
-   *  call sites silently forgot passthruWaiting, so a main-session approval
-   *  resolving (or a local prompt clearing) anywhere closed a still-waiting
-   *  sub-agent's toast. The next surface that gets its own waiting-tracker
-   *  must be added HERE, not at whichever call site happens to need it. */
-  const nothingWaiting = (): boolean =>
-    permissionRouter.pendingCount() === 0 && localPrompts.count() === 0 && passthruWaiting.size === 0;
+  /** The board entry ids present at the LAST render — the only state needed
+   *  to tell "something NEW needs the user" from "the set only shrank or its
+   *  text changed". Reset to empty whenever the board empties (clear()), so
+   *  the next thing to arrive alerts again from a clean slate — otherwise the
+   *  id of a long-resolved entry could still read as "already seen" forever. */
+  let lastBoardIds = new Set<string>();
+
+  /** The view actually handed to the notifier last time (title+body), or
+   *  `null` after a clear. Lets refreshDesktop tell "the entry set only
+   *  shrank/reworded and nothing new arrived" (see `alert` above) FROM
+   *  "the resulting text is the one already on screen" — retiring one of
+   *  several waiting things fires refreshDesktop twice in the same tick
+   *  (clearLocalPrompt's unconditional refresh, then the idle removal's), and
+   *  both compute the same view; only the first is a real change. Reset to
+   *  `null` in lockstep with `lastBoardIds` above — same class of bug: without
+   *  it, a board that empties and later returns to a previously-rendered state
+   *  would compare against a stale view instead of nothing. */
+  let lastView: { title: string; body: string } | null = null;
+
+  /** Routes refreshDesktop's two projection lines through both the real log
+   *  (`logJson` → daemon.log) and, if provided, the `onLog` test seam — so a
+   *  test can observe them without spying on console.log. Deliberately
+   *  narrow: it does not touch any other diagnostic line in this file. */
+  const logDesktop = (msg: string, fields: Record<string, unknown> = {}): void => {
+    logJson(msg, fields);
+    opts.onLog?.(msg, fields);
+  };
+
+  /** Project the board onto the machine's one toast. Every registration and
+   *  every retirement ends with this call; apart from the two direct
+   *  `desktop.clear()` calls (startup and shutdown), nothing else touches
+   *  `desktop` — there is no runtime toggle left to gate it.
+   *
+   *  Alert vs silent update (measured live — a resident toast on a server
+   *  advertising the `persistence` capability turns --replace-id into a
+   *  silent panel edit, no banner): an id present now that was absent from
+   *  the last render is something new waiting for the user → `alert: true`,
+   *  which desktop.render() turns into close-then-post-fresh so the server
+   *  raises a banner. A board that only shrank, or whose entries only
+   *  reworded (no new id), renders with no alert — answering one of several
+   *  things waiting must not re-pop.
+   *
+   *  Also logs each projection (`desktop.render`/`desktop.clear`) — the only
+   *  two lines that make the desktop channel observable at all; see Task 10's
+   *  header comment on `BootstrapOpts.onLog` for why. */
+  const refreshDesktop = (): void => {
+    const entries = board.entries();
+    const view = renderBoard(entries);
+    if (!view) {
+      // Log only the real transition — the board just emptied and the toast
+      // came down. `refreshDesktop` runs after every removal, most of which
+      // are no-ops against an already-empty board (e.g. `clearLocalPrompt`'s
+      // unconditional refresh, called on EVERY main-session `activity`
+      // event): logging unconditionally here would emit hundreds of
+      // content-free `desktop.clear` lines per session and bury the handful
+      // of `desktop.render` lines this task exists to surface. `desktop.clear()`
+      // itself stays unconditional below — the notifier already self-guards
+      // on `!lastId`, so a redundant call is free.
+      if (lastBoardIds.size) logDesktop('desktop.clear');
+      lastBoardIds = new Set();
+      // Provably redundant today, kept anyway: `lastBoardIds` resetting to {}
+      // already forces the next non-empty render's `alert` to true (every id
+      // reads as "not in an empty set"), which alone stops canSkipProjection
+      // from ever matching right after this branch — so this line changes no
+      // CURRENT decision. It stays because "the board emptied" should be one
+      // forget-everything operation, not a fact some reader has to re-derive
+      // from how `alert` happens to be computed elsewhere — deleting this as
+      // dead code would be correct only until that computation changes.
+      lastView = null;
+      void desktop.clear();
+      return;
+    }
+    const ids = new Set(entries.map((e) => e.id));
+    const alert = entries.some((e) => !lastBoardIds.has(e.id));
+    // Skip a projection that would change nothing: the text is byte-identical
+    // to the one already on screen AND nothing NEW arrived. Both halves are
+    // required — text equality alone would also suppress the case where a
+    // different id renders the same line, silently swallowing exactly the
+    // alert this board exists to raise. Pure decision lives in
+    // canSkipProjection (waiting-board.ts) so both halves are unit-testable
+    // without a daemon.
+    if (canSkipProjection(lastView, view, alert)) return;
+    lastBoardIds = ids;
+    lastView = view;
+    void desktop.render(view.title, view.body, { alert });
+    // Entry ids/labels/tool names are deliberately excluded — the registry
+    // and the permission logs already carry those, and a per-render dump of
+    // them would bloat a log that is already several MB a session for no
+    // new information. `alert` is the one field that answers "did this raise
+    // a banner": a run of `alert:false` after an `alert:true` is a toast
+    // being silently updated in place instead of re-raised.
+    const kinds = [...new Set(entries.map((e) => e.kind))].sort();
+    logDesktop('desktop.render', { alert, count: entries.length, kinds });
+  };
+
+  /** Board id for a tracked CC-native dialog — one slot per session key, exactly
+   *  matching LocalPrompts' own single-slot approximation. */
+  const localBoardId = (key: string): string => `local:${key}`;
+
+  /** Board id for an idle "waiting for your input" reminder — one per session. */
+  const idleBoardId = (key: string): string => `idle:${key}`;
 
   /** The sub-agent's tool ran, so its dialog was answered at the keyboard. Mark
    *  the notice so it stops reading as "still waiting", clear its read-only
    *  dashboard card, and close the desktop toast once nothing else is waiting. */
   const retirePassthruNotice = (key: string, cwd: string, agentId: string, toolName: string): void => {
     const id = passthruKey(key, agentId, toolName);
-    passthruWaiting.delete(id);
     // Same guard as onResolved: only clear the registry's ONE pending slot if
     // THIS notice still owns it — a main-session held approval (or a
     // different pass-through that raced in) must survive untouched. Silent —
@@ -487,7 +617,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     if (sessions.get(key)?.pending?.requestId === passthruRequestId(agentId, toolName)) {
       sessions.upsert({ key, cwd, pending: null });
     }
-    if (nothingWaiting()) void desktop.clear();
+    board.remove(id);
+    refreshDesktop();
     const notices = passthruNotices.get(id);
     if (!notices) return;
     passthruNotices.delete(id);
@@ -507,6 +638,35 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     }
   };
 
+  /** Eager fallback for `subagent` board entries, for the retirement signals
+   *  that CANNOT name the exact (agentId, toolName) pair `retirePassthruNotice`
+   *  needs: a sub-agent pass-through creates no router pending (requestPermission
+   *  returns `{decision:'defer'}` immediately for it), so there is no cancel,
+   *  no timeout, and no `onResolved` for one — its PostToolUse is the ONLY exact
+   *  signal, and it never arrives at all if the dialog was denied, Esc'd, or the
+   *  sub-agent aborted (C1). Without this, that one entry pins `board.isEmpty()`
+   *  false forever, which disables `clear()` for every OTHER session too.
+   *
+   *  `toolName` narrows the match when the caller has one (permission-denied
+   *  does, but carries no agentId — CC's PermissionDenied hook never includes
+   *  it); omit it to retire every subagent entry for the key outright
+   *  (prompt / session-end: the session itself moved on or ended, so ANY
+   *  outstanding sub-agent notice for it is stale). Over-retiring only ever
+   *  drops a still-relevant reminder, never a decision — the same trade the
+   *  idle reminder's retirement (right below each call site) already makes.
+   *
+   *  Gated on removeWhere's own return value, unlike the idle-reminder
+   *  `board.remove(...); refreshDesktop();` pairs beside each call site: those
+   *  are the only board mutation in their branch, but this one runs SECOND,
+   *  right after that same idle removal — calling refreshDesktop()
+   *  unconditionally here would re-issue an identical (often already-empty →
+   *  clear()) render for no reason every time a session with no outstanding
+   *  sub-agent notice hits one of these three events. */
+  const retireSubagentBoardEntries = (key: string, toolName?: string): void => {
+    const removed = board.removeWhere((e) => e.kind === 'subagent' && e.key === key && (toolName === undefined || e.what === `${toolName} · sub-agent`));
+    if (removed) refreshDesktop();
+  };
+
   // Reap wrapped sessions whose `tlive run` process died without unregistering (kill -9 / crash).
   const sweeper = setInterval(() => {
     for (const f of sweepDeadSessions(sessions, pidAlive)) events.broadcast(f);
@@ -520,11 +680,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     sendToChat: (t, card) => sendToChat(t, card),
     isMuted: (key) => muted || (sessions.get(key)?.muted ?? false),
     hasWebClients: () => events.size() > 0,
-    // The desktop approval toast IS an answer path when it can open a dashboard
-    // (its "Open dashboard" button needs a web URL). So muting IM no longer
-    // forces a defer-to-terminal: with desktop on + web enabled, you answer via
-    // the toast → dashboard. (IM ⊥ desktop.)
-    hasLocalAnswerPath: () => desktopOn && webUrl != null,
+    // A dashboard URL IS the local answer path — the toast is only the pointer
+    // to it. Muting IM therefore no longer forces a defer-to-terminal. (This
+    // used to also require the desktop toggle, which conflated "were you told"
+    // with "can you answer".)
+    hasLocalAnswerPath: () => webUrl != null,
     policyDecide: (req) => {
       const d = policyDecide({ toolName: req.toolName, input: req.input, permissionMode: req.permissionMode }, policyState);
       if (d.decision === 'allow') console.log(`[policy] auto-allow ${req.toolName} (${d.reason})`); // 审计
@@ -560,17 +720,20 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     onPassthrough: ({ key, cwd, agentId, toolName, title, body }) => {
       logJson('permission.passthrough.notice', { key, agentId, toolName });
       void title; // the IM/dashboard titles below are the sub-agent-specific "<tool> · sub-agent", not the generic card title
-      passthruWaiting.add(passthruKey(key, agentId, toolName));
       // A sub-agent pass-through can be the FIRST thing the daemon ever hears
       // about this session (e.g. right after a daemon restart) — register it
-      // before the desktop ping below renders a `sessionTag(key)` label, same
+      // before the board entry below renders a `sessionLabel(key)` label, same
       // fix as hook.notify's. The guard skips a no-op write for an already-known
       // session (upsert's patch merge would preserve its state either way).
       if (!sessions.get(key)) sessions.upsert({ key, cwd });
       // Desktop toast: the "at this machine, not watching the terminal" signal.
-      // Gated ONLY by desktopOn — never by IM mute (IM ⊥ desktop), so it fires
-      // with no IM configured at all, exactly like onPending's ping below.
-      if (desktopOn) void desktop.ping(`${sessionTag(key)}${toolName} · sub-agent`, 'Waiting at the terminal — answer it there.');
+      // Never gated by IM mute — it fires with no IM configured at all,
+      // exactly like onPending's board entry below.
+      board.add({
+        id: passthruKey(key, agentId, toolName), key, label: sessionLabel(key),
+        kind: 'subagent', what: `${toolName} · sub-agent`,
+      });
+      refreshDesktop();
       // Dashboard: read-only pending (local: true) — there is no held request
       // behind this, so Allow/Deny would be a button that cannot work (same
       // rule as the notify-mode local-prompt card). ONE pending slot per
@@ -619,29 +782,22 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     onPending: ({ key, cwd, requestId, title, body, toolName, ask }) => {
       // A permission request can be the FIRST thing the daemon ever hears
       // about this session (e.g. right after a daemon restart) — register it
-      // before the desktop ping below renders a `sessionTag(key)` label, same
+      // before the board entry below renders a `sessionLabel(key)` label, same
       // fix as hook.notify's and onPassthrough's. The guard skips a no-op write
       // for an already-known session (upsert's patch merge preserves its state
       // either way); the final upsert below still carries the full
       // status/pending patch.
       if (!sessions.get(key)) sessions.upsert({ key, cwd });
-      // Desktop ping FIRST — this notification is for the person AT this
+      // Board entry FIRST — this notification is for the person AT this
       // machine, so it must be immediate (the IM card's grace delay exists to
       // spare the phone when you answer at the keyboard — delaying the local
       // pointer by the same 10s was backwards) and must not depend on any IM
       // channel being configured. onPending fires exactly once per request =
       // dedup by construction. Answering (any channel, incl. locally within
-      // grace) drops pendingCount to 0 → onResolved clears the toast.
-      {
-        // Body speaks to the person AT this machine (not "answer on your
-        // phone" — they're right here): the Linux toast carries an "Open
-        // dashboard" button, and the dashboard is the local answer surface.
-        const waiting = permissionRouter.pendingCount();
-        if (desktopOn) void desktop.ping(
-          `${sessionTag(key)}${title}`,
-          waiting > 1 ? `${waiting} approvals waiting — click to open and answer` : 'Approval needed — click to open and answer',
-        );
-      }
+      // grace) retires this entry → onResolved's refreshDesktop clears/shrinks
+      // the toast.
+      board.add({ id: requestId, key, label: sessionLabel(key), kind: 'held', what: toolName });
+      refreshDesktop();
       if (ask) {
         askFlow.begin(requestId, ask.batch, ask.input);
         askOwner.set(requestId, { key, cwd });
@@ -670,7 +826,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // can't pin the toast; a genuine separate local prompt for another
       // session key is untouched.
       localPrompts.clear({ key });
-      if (nothingWaiting()) void desktop.clear();
+      board.remove(requestId);
+      board.remove(localBoardId(key)); // the raced permission_prompt tracked the SAME dialog
+      refreshDesktop();
       askFlow.end(requestId); askOwner.delete(requestId); // no leak — covers defer/timeout/local-answer paths that skip asksubmit:/askskip: entirely
       const isAsk = askRequestIds.delete(requestId); // true only for an AskUserQuestion card (Minor 4)
       // Only touch the session view if THIS request still owns the pending slot —
@@ -731,7 +889,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     // requires no action, so a per-turn toast just floods the screen (live
     // feedback). Completion stays on IM only — a chat log stacks fine. The
     // desktop toast is reserved for things that genuinely need you to act:
-    // pending approvals (ping) and the idle "waiting for your input" nudge.
+    // pending approvals and the idle "waiting for your input" nudge.
     for (const t of configuredChats()) {
       // requestId 不进显示文本:回复路由走 replyToMessageId,不解析正文。
       const raw = req.context === TURN_FINISHED_SENTINEL ? '' : req.context;
@@ -877,20 +1035,24 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const sockPath = daemonSocketPath(opts.home);
   /** One set of runtime toggles for every entrance — IM commands
    *  (/mute|/trust|/safe) and the CLI (`tlive mute on` … via daemon.set IPC)
-   *  flip the SAME state. `enabled` = "this switch is ON": for `mute`, on = muted.
-   *  `desktop` is CLI-only (`tlive desktop on|off`): the toast lives on the
-   *  daemon's machine and is INDEPENDENT of `mute` (IM ⊥ desktop). */
-  const runtimeSet = (key: 'mute' | 'trust' | 'safe' | 'desktop', enabled: boolean): void => {
-    if (key === 'mute') muted = enabled; // /mute on ⇒ muted (quiet)
-    else if (key === 'trust') policyState.trustUntilRevoked = enabled;
-    // `/safe off` reverts to whatever the config asked for, not to a hard-coded
-    // 'readonly' — that used to silently switch read-only auto-allow ON for a
-    // user who had never opted into any auto-approval.
-    else if (key === 'safe') {
-      const base = cfg.approvals?.autoApprove === 'readonly' ? 'readonly' : undefined;
-      policyState.autoApprove = enabled ? 'safe' : base;
+   *  flip the SAME state. `enabled` = "this switch is ON": for `mute`, on = muted. */
+  const RUNTIME_KEYS = ['mute', 'trust', 'safe'] as const;
+  type RuntimeKey = (typeof RUNTIME_KEYS)[number];
+  const isRuntimeKey = (k: string): k is RuntimeKey => (RUNTIME_KEYS as readonly string[]).includes(k);
+
+  const runtimeSet = (key: RuntimeKey, enabled: boolean): void => {
+    switch (key) {
+      case 'mute': muted = enabled; return; // /mute on ⇒ muted (quiet)
+      case 'trust': policyState.trustUntilRevoked = enabled; return;
+      // `/safe off` reverts to whatever the config asked for, not to a
+      // hard-coded 'readonly' — that used to silently switch read-only
+      // auto-allow ON for a user who had never opted into any auto-approval.
+      case 'safe': {
+        const base = cfg.approvals?.autoApprove === 'readonly' ? 'readonly' : undefined;
+        policyState.autoApprove = enabled ? 'safe' : base;
+        return;
+      }
     }
-    else { desktopOn = enabled; if (!enabled) void desktop.clear(); }
   };
 
   const ipc: IpcServer = await startIpcServer({
@@ -919,6 +1081,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           setTimeout(() => { void shutdown(); }, 10).unref?.();
           return;
         case 'daemon.set':
+          // A retired key from an older CLI must fail loudly, not land on
+          // whichever branch happens to be last.
+          if (!isRuntimeKey(req.key)) { reply({ kind: 'error', message: `unknown toggle: ${req.key}` }); return; }
           runtimeSet(req.key, req.enabled);
           reply({ kind: 'ack' });
           return;
@@ -1005,12 +1170,13 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           const s = sessions.get(key);
           if (req.permissionPrompt) {
             // A CC-native permission dialog is up (issue #49). A held request
-            // for this session already owns every surface (toast pinged at
-            // onPending, card sent/gracing, dashboard answerable) → this
-            // notification adds nothing, drop it. No held request — notify
-            // mode, or the router deferred on arrival — this is the ONLY
-            // signal anyone gets: run the local-waiting chain. Never carries
-            // a decision; never-auto-allow untouched.
+            // for this session already owns every surface (toast already
+            // rendered via onPending's board entry, card sent/gracing,
+            // dashboard answerable) → this notification adds nothing, drop it.
+            // No held request — notify mode, or the router deferred on
+            // arrival — this is the ONLY signal anyone gets: run the
+            // local-waiting chain. Never carries a decision; never-auto-allow
+            // untouched.
             //
             // heldOwnsIt is a PROXY and cannot be made exact: this notification
             // carries no tool_name and no agent_id (CC builds Notification input
@@ -1045,32 +1211,66 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             logJson('permission.localPrompt', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), heldOwnsIt, action: heldOwnsIt ? 'suppressed' : redundant ? 'holding-mode-passthrough' : 'tracked' });
             if (!heldOwnsIt && !redundant) {
               localPrompts.note(key, req.sessionId);
-              // Desktop first, immediately — the waiting slot (ping/clear
+              // Board first, immediately — the waiting slot (add/remove
               // lifecycle), not an info banner: the dialog IS a waiting state.
-              if (desktopOn) void desktop.ping(`${sessionTag(key)}Permission needed`, `${req.message} — answer in the terminal`);
+              board.add({ id: localBoardId(key), key, label: sessionLabel(key), kind: 'localPrompt', what: 'permission' });
+              refreshDesktop();
               // Dashboard: read-only waiting-approval card (pending.local) —
               // visible from anywhere, answerable only at the terminal.
               events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'waiting-approval', pending: { requestId: `local:${key}`, title: 'Permission needed', body: req.message, local: true } }) });
-              // IM text rides the approval-card grace: answered at the
-              // keyboard within the window → never sent (zero spam at the
-              // keyboard, same contract as the held-card push). Only `notify`
-              // mode reaches here, and there this text is the ONLY signal that a
-              // dialog is waiting — see the posture note above.
-              const pushIm = (): void => {
-                // Each bail-out is logged with its own tag: "no IM text arrived"
-                // has four different causes and they are not interchangeable.
-                const note = (outcome: string, extra?: Record<string, unknown>): void =>
-                  logJson('permission.localPrompt.im', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), outcome, ...extra });
-                if (!localPrompts.has(key, req.sessionId)) return note('answered-in-grace');
-                if (permissionRouter.hasPendingFor({ key, sessionId: req.sessionId })) return note('raced-held-card');
-                if (muted || sessions.get(key)?.muted) return note('muted');
-                const targets = configuredChats();
-                note('sent', { chatTargets: targets.length });
-                for (const t of targets) void sendToChat(t, { text: `${req.message} — answer in the terminal`, cwd: key }).catch(() => undefined);
-              };
-              const graceSec = Math.max(cfg.approvals?.approvalGraceSec ?? 10, 0);
-              if (graceSec > 0) setTimeout(pushIm, graceSec * 1000).unref();
-              else pushIm();
+              // No IM text for this dialog, ever. It can only be answered at
+              // the terminal, and a phone cannot reach a terminal — the message
+              // was pure anxiety with no exit. Every channel this daemon
+              // pushes to must be one the reader can act on; the desktop toast
+              // above and the dashboard card below already cover this case for
+              // the person who can act, i.e. whoever is at the machine.
+              //
+              // One exception, once per chat: silence is indistinguishable from
+              // breakage for someone who just finished setup and is sitting on
+              // the default rung waiting for their phone to buzz. Say why, offer
+              // the rung that would make these answerable, then never again.
+              // The flag is on disk, not in memory — see config/state.ts.
+              //
+              // /mute is a promise to suppress outbound IM, and this card's own
+              // rationale (silence might read as breakage) does not apply to
+              // someone who deliberately caused the silence — for them it would
+              // read as a mute bypass carrying a call-to-action. So this stays
+              // mute-gated same as every other IM push in this file, UNLIKE the
+              // desktop toast and dashboard card above (IM-only, same split as
+              // the sub-agent pass-through notice). Suppressed here must NOT
+              // burn the one lifetime card: `markNotifyExplained` only runs on
+              // the branch that actually sends, so unmuting later still
+              // delivers the explanation exactly once — suppression and
+              // completion are different states.
+              for (const t of configuredChats()) {
+                const chatKey = `${t.channel}:${t.chatId}`;
+                if (wasNotifyExplained(opts.home, chatKey)) continue;
+                if (muted || sessions.get(key)?.muted) {
+                  logJson('permission.localPrompt.im', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), outcome: 'muted', channel: t.channel });
+                  continue;
+                }
+                // Marked spent BEFORE the send resolves, deliberately — not
+                // after (I4). Two suppressed dialogs arriving concurrently for
+                // the same chat would otherwise both pass the
+                // `wasNotifyExplained` check above and both send, producing
+                // duplicate one-time cards; mark-before-send is what keeps
+                // "at most once" true under a race. The cost is that a
+                // delivery failure right here (e.g. a Telegram 5xx) burns the
+                // one lifetime card without delivering it — that must not be
+                // silent, since the exact failure mode this card exists to
+                // prevent (IM configured, dialogs stay quiet, user concludes
+                // it is broken) is what a swallowed failure here produces.
+                markNotifyExplained(opts.home, chatKey);
+                logJson('permission.localPrompt.im', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), outcome: 'explained-once', channel: t.channel });
+                void sendToChat(t, {
+                  title: 'Approvals stay at your terminal',
+                  body: "tlive is in notify mode: it tells you a dialog is waiting, but only your terminal can answer it — so IM stays quiet about these.\n\nSwitch to full and tlive will hold main-session approvals for you, answerable right here.",
+                  cwd: key,
+                  buttons: [{ id: 'mode:full', label: 'Hold approvals for me' }],
+                }).catch((e: unknown) => {
+                  logJson('permission.localPrompt.im.undelivered', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), channel: t.channel, error: e instanceof Error ? e.message : String(e) });
+                });
+              }
             }
             reply({ kind: 'ack' });
             return;
@@ -1091,13 +1291,17 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               : req.level === 'error' ? `⚠️ ${req.message}` : req.message;
             await Promise.all(configuredChats().map((t) => sendToChat(t, { text, cwd: key })));
           }
-          // "等待你" FYI banner on the machine — INDEPENDENT of IM mute (IM ⊥
-          // desktop): it is gated only by its own `desktopOn` switch. Info-level
-          // only: the sole info-level notify CC produces (permission_prompt is
-          // dropped at the shim) is "Claude is waiting for your input", exactly
-          // the case a desktop poke helps. error-level (tool/stop failures) is
-          // deliberately NOT banner'd — it would be noise at the keyboard; IM only.
-          if (desktopOn && req.level === 'info') void desktop.info(`${sessionTag(key)}Waiting`, req.message);
+          // Idle IS a waiting state ("you must type something or nothing
+          // happens"), so it belongs in the waiting slot rather than the old
+          // fire-and-forget banner — that banner never replaced and never
+          // recycled, which is why two idle sessions used to sit stacked on the
+          // desktop forever. error level stays off the desktop on purpose: a
+          // failed tool is not blocking anyone, and it would be noise at the
+          // keyboard. It still goes to IM, where it is diagnosable.
+          if (req.level === 'info') {
+            board.add({ id: idleBoardId(key), key, label: sessionLabel(key), kind: 'idle', what: 'your input' });
+            refreshDesktop();
+          }
           events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.message }, key));
           reply({ kind: 'ack' });
           return;
@@ -1129,16 +1333,43 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // toolName narrowing — the notification never told us the tool
             // (message text only); a rare parallel-tool clear only retires the
             // reminder early, never a decision (issue #49).
-            if (!ev.agentId) clearLocalPrompt(key, ev.sessionId, ev.cwd);
+            if (!ev.agentId) {
+              clearLocalPrompt(key, ev.sessionId, ev.cwd);
+              // The toast is resident now, so an idle reminder that outlives its
+              // cause is a banner that never goes away — work resuming is proof
+              // the session is no longer waiting on the user. Over-retiring only
+              // ever drops a reminder, never a decision. Same agentId guard as
+              // clearLocalPrompt above: a backgrounded sub-agent's activity is
+              // not proof the parent session stopped waiting.
+              board.remove(idleBoardId(key));
+              refreshDesktop();
+            }
           } else if (ev.event === 'permission-denied') {
             permissionRouter.cancel({ key, toolName: ev.toolName, sessionId: ev.sessionId, matchAgent: null });
             clearLocalPrompt(key, ev.sessionId, ev.cwd);
+            // A denied dialog never produces a PostToolUse, so it never reaches
+            // retirePassthruNotice's exact (agentId, toolName) match (C1) — this
+            // is the ONLY other signal a sub-agent's dialog is gone. No agentId
+            // is available here at all (CC's PermissionDenied hook never
+            // carries one), so match on what this event actually has: the key
+            // and, since a denial always names the tool being denied, the
+            // toolName.
+            retireSubagentBoardEntries(key, ev.toolName);
           } else if (ev.event === 'prompt') {
             // 主会话新输入 → 主会话上一轮的对话框已没了,撤它的卡。matchAgent:null
             // 精确到主会话:一个 backgrounded 子 agent 的审批与父会话的输入框无关
             // (它仍真在等,且无本地答路 —— 清掉 = 保证被 deny),不得被父 prompt 清场。
             permissionRouter.cancel({ key, sessionId: ev.sessionId, matchAgent: null });
             clearLocalPrompt(key, ev.sessionId, ev.cwd);
+            // New input at the terminal is proof the session is no longer idle
+            // — retire the resident reminder before it outlives its cause.
+            board.remove(idleBoardId(key));
+            refreshDesktop();
+            // Same reasoning as permission-denied above, but wider: a fresh
+            // prompt means the user is back at the keyboard for THIS session,
+            // so any subagent notice still on the board for it is stale
+            // regardless of which tool it named (C1) — retire all of them.
+            retireSubagentBoardEntries(key);
             // 用户在键盘前开始了新一轮 → 取消上一 turn 还在 grace 里的续跑卡
             const g = continueGrace.get(key);
             if (g) { continueGrace.delete(key); g(); }
@@ -1147,6 +1378,14 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // toast lifecycle can close (the registry entry is removed by
             // applyMonitorEvent below anyway).
             clearLocalPrompt(key, ev.sessionId, ev.cwd);
+            // Same reason: the idle reminder must not strand for a session
+            // that no longer exists.
+            board.remove(idleBoardId(key));
+            refreshDesktop();
+            // Same reason again: a session that no longer exists cannot have
+            // an outstanding sub-agent dialog either (C1) — retire every
+            // subagent notice still on the board for it.
+            retireSubagentBoardEntries(key);
           }
           events.broadcast(applyMonitorEvent(sessions, ev, key));
           reply({ kind: 'ack' });
@@ -1180,6 +1419,25 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       }
     },
   });
+
+  // Startup retraction of a PREDECESSOR's resident toast — placed HERE,
+  // immediately after the IPC bind above has actually SUCCEEDED, and not any
+  // earlier: `startIpcServer` throws AlreadyRunningError (a few lines up)
+  // when another live daemon already owns this socket, and daemon/main.ts
+  // responds to that by calling bootstrapDaemon a SECOND time. If this call
+  // sat before the bind — where it used to be — the LOSING attempt would
+  // still reach it before its own bind failed, retracting the SURVIVING
+  // daemon's toast on its way to exiting, at the exact moment something is
+  // still genuinely waiting (worse still, the survivor keeps rendering with
+  // the now-closed id via --replace-id). Only the attempt that ends up
+  // actually owning the socket may retract what a predecessor left behind.
+  //
+  // Genuinely retracts a predecessor's toast now, not a no-op: `idStore.read()`
+  // in the `createDesktopNotifier(...)` call above seeds `lastId` from the
+  // state file, so if a prior daemon rendered a toast and was killed before
+  // it could clear(), THIS call is what finally closes it — the gap the old
+  // 15s expiry used to self-heal before the toast became resident.
+  void desktop.clear();
 
   const { injectInput } = await import('./inject.js');
   const inbound = new (await import('./inbound-handler.js')).InboundHandler({
@@ -1240,6 +1498,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       codexCompanion?.stop();
       custody?.stop();
       for (const a of opts.imAdapters ?? []) await a.stop();
+      // A resident toast outlives the process that drew it. Close it on the way
+      // out, or a daemon restart leaves a permanent "waiting" banner nothing owns.
+      await desktop.clear();
       if (web) await web.close();
       await ipc.close();
     } finally {

@@ -38,10 +38,6 @@ describe('parseImCommand (mute/help/trust/safe)', () => {
     expect(parseImCommand('/safe off')).toEqual({ kind: 'safe', enabled: false });
     expect(parseImCommand('/safe')).toEqual({ kind: 'toggle-prompt', which: 'safe' });
   });
-  it('/desktop is NOT an IM command — the toast is a machine-local control (CLI `tlive desktop` only)', () => {
-    expect(parseImCommand('/desktop on')).toEqual({ kind: 'unknown', name: 'desktop' });
-    expect(parseImCommand('/desktop off')).toEqual({ kind: 'unknown', name: 'desktop' });
-  });
 });
 
 describe('/mode — the posture ladder from the phone', () => {

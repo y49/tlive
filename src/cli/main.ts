@@ -25,7 +25,6 @@ Usage: tlive <subcommand> [args]   |   tlive --version
   mute on|off        mute / unmute IM notifications — on = quiet (same as IM /mute)
   trust on|off       pause approvals (auto-allow ALL) / resume (IM /trust)
   safe on|off        auto-allow routine ops, still ask for dangerous (IM /safe)
-  desktop on|off     desktop toasts on this computer — independent of /mute (no IM command)
 `;
 
 function printVersion(): void {
@@ -64,7 +63,7 @@ export async function runCli(argv: string[]): Promise<void> {
     case 'url': { const { runUrl } = await import('./subcommands/url.js'); return runUrl(rest); }
     case 'hook': { const { runHook } = await import('./subcommands/hook.js'); return runHook(rest); }
     case 'mode': { const { runMode } = await import('./subcommands/mode.js'); return runMode(rest); }
-    case 'mute': case 'trust': case 'safe': case 'desktop': {
+    case 'mute': case 'trust': case 'safe': {
       const { runToggle } = await import('./subcommands/toggle.js');
       return runToggle(name, rest);
     }

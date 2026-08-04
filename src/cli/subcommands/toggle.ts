@@ -1,21 +1,19 @@
 // src/cli/subcommands/toggle.ts
 //
 // At-the-terminal entrance to the daemon's runtime toggles — the same state
-// the IM commands (/mute /trust /safe) flip — plus `desktop`, which is
-// CLI-only (machine-local toast, no IM command). Direct IPC, no AI in
-// the loop (the CC plugin's slash commands are prompts by design; this is
-// the one-liner they can shell out to).
+// the IM commands (/mute /trust /safe) flip. Direct IPC, no AI in the loop
+// (the CC plugin's slash commands are prompts by design; this is the
+// one-liner they can shell out to).
 import { request } from '../../kernel/ipc/client.js';
 import { SAFE_TOGGLE_MESSAGE } from '../../kernel/permission/policy-engine.js';
 
-export type ToggleKey = 'mute' | 'trust' | 'safe' | 'desktop';
+export type ToggleKey = 'mute' | 'trust' | 'safe';
 
 export const CONFIRM: Record<ToggleKey, [on: string, off: string]> = {
   mute: ['IM notifications muted', 'IM notifications on'],
   trust: ['Approvals paused (everything auto-allowed)', 'Approvals resumed'],
   // Shared with the IM /safe command — see SAFE_TOGGLE_MESSAGE.
   safe: [SAFE_TOGGLE_MESSAGE.on, SAFE_TOGGLE_MESSAGE.off],
-  desktop: ['Desktop notifications on', 'Desktop notifications off (IM cards unaffected)'],
 };
 
 export async function runToggle(key: ToggleKey, argv: string[]): Promise<void> {

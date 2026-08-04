@@ -16,13 +16,17 @@ IM (Telegram/Feishu) and the web dashboard, where you can reply-to-continue.
 The **posture** (`tlive mode`, default `notify`) decides whether approvals are
 held for a remote answer, in escalation order: `off` makes every hook a no-op;
 `notify` only watches + notifies (the shim never holds an approval — prompts
-stay 100% native); `full` turns on remote approval for the main session
-(Allow/Deny from IM/desktop/dashboard), in parallel with the terminal dialog —
-first answer wins; `all` holds sub-agent approvals too, with **no terminal
-dialog** for a held one until the window ends, so use it only when nobody is
-at the keyboard (`tlive mode full` goes back). Also settable from IM: `/mode`
-(a bare `/mode` replies with the ladder). The daemon auto-starts with new
-sessions (disable via `daemon.autoStart: false`).
+stay 100% native) and reports **to the machine** (desktop toast + dashboard)
+— IM stays quiet about a dialog only the terminal can answer, except once
+ever per chat, when a card explains why and offers the switch to `full`;
+`full` is the posture that puts approvals **on your phone**: it turns on
+remote approval for the main session (Allow/Deny from IM/desktop/dashboard),
+in parallel with the terminal dialog — first answer wins; `all` holds
+sub-agent approvals too, with **no terminal dialog** for a held one until the
+window ends, so use it only when nobody is at the keyboard (`tlive mode full`
+goes back). Also settable from IM: `/mode` (a bare `/mode` replies with the
+ladder). The daemon auto-starts with new sessions (disable via
+`daemon.autoStart: false`).
 
 ## Commands
 - `tlive setup` — configure IM credentials + register the Claude/Codex plugins
@@ -68,11 +72,14 @@ sessions (disable via `daemon.autoStart: false`).
 - Runtime switches flip the same state from either entrance: IM commands
   (/mute /trust /safe on|off, /mode for the posture ladder) and the CLI
   (`tlive mute|trust|safe on|off`, `tlive mode off|notify|full|all`). `/mute on`
-  = go quiet; it silences IM notifications ONLY. The desktop toast is a separate,
-  independent surface (IM ⊥ desktop): CLI-only `tlive desktop on|off`, no IM
-  command, unaffected by `/mute`. It fires only for things that need you to act:
-  a pending approval, or the idle "waiting for your input" nudge. A finished turn
-  stays on IM (a per-turn toast would flood the screen).
+  = go quiet; it silences IM notifications ONLY. The desktop toast is
+  independent of `/mute` and has no on/off switch of its own: it appears
+  whenever something is blocking on you (a pending approval, or the idle
+  "waiting for your input" nudge) and disappears once it is answered (macOS
+  is the exception — Notification Center has no scriptable close or replace,
+  so there it accumulates one entry per change instead of recycling). Silence
+  it with your OS's Do Not Disturb, or `tlive mode off` to stop tlive entirely.
+  A finished turn stays on IM (a per-turn toast would flood the screen).
 - Vendor-side `permissions.deny` always wins; tlive never overrides it.
 
 ## First-time onboarding

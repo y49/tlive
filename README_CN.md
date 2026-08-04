@@ -73,9 +73,13 @@ IM 消息带 `label · ` 前缀(会话目录名),但不再用图标区分包装/
   no-op(kill switch——不 gating、不通知、不监看、不懒启动 daemon)。
   **`notify`**(默认)只监看 + 通知,但 shim 物理上无法 hold 或阻塞任何
   审批——每个提示都保持 100% 原生(你本地终端的对话框,或无头时 CC 自己的
-  auto-deny);提示在终端等你时仍会提醒(桌面通知、dashboard 只读卡、grace
-  后的 IM 文本——只是指回终端的路标,绝不代答)。**`full`** 为主会话开启
-  远程审批:tlive hold 住每个工具调用,让你在 IM / 桌面 / dashboard 上作答
+  auto-deny);提示在终端等你时,通知只送到**这台机器**——桌面通知 + dashboard
+  只读卡,因为只有坐在机器前的人才能处理它。IM 对这类只有终端能答的对话保持
+  安静(手机够不到终端),每个聊天只有第一次例外:届时会收到一张卡解释原因,
+  并带一键切到 `full` 的按钮。桌面通知没有自己的开关——
+  想临时静音用系统自带的"勿扰模式",想彻底停用 tlive 就 `tlive mode off`。
+  **`full`** 为主会话开启远程审批——这是把审批**送上手机**的姿态:
+  tlive hold 住每个工具调用,让你在 IM / 桌面 / dashboard 上作答
   (即下方*审批*那条描述的一切),与本地终端对话框并行竞速——先答先得;
   子代理的提示仍照常透传给终端。**`all`** 连子代理审批也一并 hold 住——
   代价是**被 hold 的子代理在窗口结束前没有终端框**,因为 Claude Code 会先
@@ -252,7 +256,7 @@ tlive hook <event>     hook shim(Claude Code 调用,不是给你用的;
 
 `setup`、`start`、`stop`、`status`、`logs`、`run`、`url`、`hook` 是冻结面
 (由 `tests/contract/` 锁定);`mode` 与运行时开关 `mute | trust | safe`
-(`on|off`)、`desktop`(`on|off`)是加法命令。
+(`on|off`)是加法命令。
 
 IM 命令:`/mute on|off`(静音 IM 通知)、`/trust on|off`(暂停审批——全部
 自动放行)、`/safe on|off`(自动放行日常操作)、`/mode off|notify|full|all`
@@ -292,9 +296,6 @@ IM 命令:`/mute on|off`(静音 IM 通知)、`/trust on|off`(暂停审批——�
     "windowSec": 86200,       // 默认约 24 小时(同时是上限;最小 60)
     // 审批卡发出前的静默期——键盘前这段时间内答掉就永不发卡
     "approvalGraceSec": 10,   // 默认 10 秒,0 = 关闭
-    // 审批卡发出时在 daemon 本机弹桌面通知(Linux notify-send)——后台命令
-    // hook 挂起期间 CC 不弹本地框,这是"人在电脑前"指向手机卡/dashboard 的入口
-    "desktopNotify": true,    // 默认 true;无 notify-send 时静默降级
     // 多少操作不发卡直接自动放行。不写(默认)= 一个都不放:CC 原本会问你的,
     // 依然会问你。一旦设置就会**改变 CC 问你什么** —— 这个 hook 只在框即将
     // 弹出时才触发,所以在这里自动放行 = 抹掉一个你本该看到的确认框。

@@ -3,8 +3,8 @@
 > **v2 CLI surface.** The frozen core is exactly:
 > `setup`, `start`, `stop`, `status`, `logs`, `run`, `url`, `hook`.
 > Additive since: `mode` (posture: off / notify / full / all) and the runtime
-> toggles `mute`, `trust`, `safe`, `desktop` (`on|off`, same setters as the
-> in-chat IM commands).
+> toggles `mute`, `trust`, `safe` (`on|off`, same setters as the in-chat IM
+> commands).
 >
 > Removed in v2.0: `restart`, `doctor` (folded into `status`),
 > `daemon-logs` (renamed `logs`), `install-integrations` (folded into `setup`),
@@ -111,8 +111,8 @@ effect on the **next hook** — no daemon restart, no new session.
 | Mode | What it does |
 |---|---|
 | `off` | Every hook is a no-op — no gating, notifications, monitoring, or daemon autostart (kill switch). |
-| `notify` (default) | Watch + notify only. The shim short-circuits every `PermissionRequest` to a pass-through `{}` — tlive **can never hold or block an approval**; every prompt stays 100% native. You still get told when a prompt is waiting at the terminal (desktop toast, read-only dashboard card, graced IM text — pointers only, never a decision). Monitoring, turn-finished / waiting notifications, and reply-to-continue all still work. |
-| `full` | Remote approval ON for the main session — tlive holds each tool call so you can Allow/Deny it from IM / desktop / dashboard, in parallel with the terminal dialog (first answer wins). Sub-agent prompts still pass through to the terminal untouched. |
+| `notify` (default) | Watch + notify only. The shim short-circuits every `PermissionRequest` to a pass-through `{}` — tlive **can never hold or block an approval**; every prompt stays 100% native. A prompt waiting at the terminal reports **to the machine** — desktop toast + read-only dashboard card — since only whoever is sitting there can act on it. IM stays quiet about these (a phone can't reach a terminal), except once ever per chat: the first time, a card explains why and offers the one-tap switch to `full`. Monitoring, turn-finished / waiting notifications, and reply-to-continue all still reach IM — those ARE answerable from a phone. |
+| `full` | Remote approval ON for the main session — this is the posture that puts approvals **on your phone**: tlive holds each tool call so you can Allow/Deny it from IM / desktop / dashboard, in parallel with the terminal dialog (first answer wins). Sub-agent prompts still pass through to the terminal untouched. |
 | `all` | Sub-agent approvals are held too. **A held sub-agent has NO terminal dialog until the window ends** — Claude Code awaits the hook before deciding whether to build one — so this is the "nobody is at the keyboard" posture; `tlive mode full` goes back. |
 
 Remote approval is opt-in by design: a freshly-installed tool must never be
@@ -136,20 +136,51 @@ reach them:
 - **"Stop holding sub-agents"** — also on the held sub-agent card. Switches
   posture back to `full`.
 
-### `tlive mute|trust|safe on|off` · `tlive desktop on|off`
+### `tlive mute|trust|safe on|off`
 
 The same runtime switches as the in-chat IM commands, from the CLI:
 
 - `tlive mute on|off` — silence IM notifications (IM only; the desktop toast is
-  a separate surface, see below).
+  unaffected, see below).
 - `tlive trust on|off` — pause approvals (auto-allow everything). High-risk.
 - `tlive safe on|off` — also auto-allow routine ops (non-dangerous Bash,
   non-sensitive edits); the danger floor still asks.
-- `tlive desktop on|off` — machine-local desktop notifications. No IM command
-  for it (IM ⊥ desktop); unaffected by `mute`.
 
 These flip in-memory daemon state (cleared on restart), unlike `mode`, which
 persists to config.
+
+### Desktop notifications
+
+Desktop notifications appear whenever something is blocking on you and
+disappear when it is answered — on Linux and Windows, where the single toast
+is actively replaced/closed. macOS cannot do either (Notification Center has
+no scriptable close or replace), so there each change appends a fresh entry
+instead of recycling one.
+
+The toast carries no expiry, but "no expiry" is not the same as "stays on
+screen". Most shells show the banner for a few seconds and then tuck the
+notification into the notification centre, where it stays — and keeps counting
+toward the app badge — until the work is answered. That is where you find it
+after stepping away; it is the same behaviour your terminal's own
+notifications get. A banner is raised again whenever something NEW starts
+waiting, so a second session needing you re-alerts rather than silently
+updating the existing entry.
+
+There is no separate on/off switch: use your OS's Do Not Disturb to silence
+them temporarily, or `tlive mode off` to stop tlive entirely. Without
+`notify-send` (or the platform equivalent) they silently no-op.
+
+**Only blocking work reaches the desktop.** A finished turn and a failed tool
+go to IM and never pop a toast — a per-turn "done" notification would bury the
+handful that actually need you.
+
+If you see a desktop notification saying a turn finished, check who sent it: it
+is almost certainly your IM client, not tlive. Running Telegram or Feishu on
+the same machine turns every message tlive sends to IM — continue cards, idle
+nudges, failure reports — into a second desktop notification, which is exactly
+the flood the rule above avoids. tlive cannot tell where your IM client runs,
+so the fix belongs in that client: mute the tlive chat there and your phone
+still gets everything while the desktop stays quiet.
 
 ---
 
@@ -169,7 +200,7 @@ subcommands.
 
 | Command | Description |
 |---|---|
-| `/mute on\|off` | Global mute toggle — `off` suppresses all outbound IM notifications. |
+| `/mute on\|off` | Global mute toggle — `on` suppresses all outbound IM notifications. |
 | `/trust on\|off` | Pause approvals (auto-allow everything) until turned off. High-risk; prefer the per-tool "Always allow" button. |
 | `/safe on\|off` | Auto-allow routine ops (non-dangerous Bash, non-sensitive edits); the danger floor still asks. |
 | `/mode off\|notify\|full\|all` | Set posture. A bare `/mode` replies with a card listing the ladder and marking the current rung, with tap-to-switch buttons. |

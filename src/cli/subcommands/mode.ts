@@ -1,7 +1,7 @@
 // src/cli/subcommands/mode.ts
 //
 // `tlive mode off|notify|full|all` — sets tlive's posture. Unlike the runtime
-// toggles (/mute /trust /safe /desktop, which flip daemon state via IPC), `mode`
+// toggles (/mute /trust /safe, which flip daemon state via IPC), `mode`
 // is read by the hook SHIM straight from config.json on every event, so it must
 // persist there. It takes effect immediately: the shim re-reads config on the
 // next hook, no daemon restart and no new session needed. The IM `/mode` command

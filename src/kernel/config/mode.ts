@@ -15,7 +15,7 @@ export const MODES: readonly ShimMode[] = ['off', 'notify', 'full', 'all'];
 
 export const MODE_DESC: Record<ShimMode, string> = {
   off: 'off — hooks are no-ops: no approval gating, no notifications, no monitoring.',
-  notify: 'notify — watch + notify only; approvals stay 100% native (turn remote approval on with `tlive mode full`).',
+  notify: 'notify — reports to the machine (desktop toast + dashboard); approvals stay 100% native and IM stays quiet about dialogs only your terminal can answer (turn remote approval on with `tlive mode full`, which puts approvals on your phone).',
   full: 'full — main-session approvals are held for a remote answer, in parallel with the terminal dialog (first answer wins). Sub-agent prompts pass through to the terminal.',
   all: 'all — sub-agent approvals are held too. A held sub-agent has NO terminal dialog until the window ends, so use this when nobody is at the keyboard (`tlive mode full` to go back).',
 };

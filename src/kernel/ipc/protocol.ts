@@ -19,9 +19,7 @@ export type IpcRequest =
   // Runtime toggle. `enabled` = "this switch is ON" (for `mute`, on = muted).
   // mute/trust/safe are shared with the IM /mute|/trust|/safe commands; the CLI
   // (`tlive mute on` …) is the at-the-terminal entrance to the same setters.
-  // `desktop` is CLI-only (`tlive desktop on|off`) — a machine-local control
-  // with no IM command, independent of `mute` (additive, 2026-07-21).
-  | { kind: 'daemon.set'; key: 'mute' | 'trust' | 'safe' | 'desktop'; enabled: boolean }
+  | { kind: 'daemon.set'; key: 'mute' | 'trust' | 'safe'; enabled: boolean }
   // wrappedId: TLIVE_SESSION inherited by the hook process when the agent runs
   // inside `tlive run` — routes hook traffic to that EXACT session card (so
   // several wrapped sessions can share one cwd).

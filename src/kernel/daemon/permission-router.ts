@@ -182,8 +182,9 @@ export class PermissionRouter {
 
     // Answer-surface gate: fall back to the local terminal (defer) only when
     // NOBODY can answer remotely. Muting IM (/mute) no longer defers on its own
-    // — it just silences the IM card (see push() below); the desktop toast and
-    // any live dashboard client remain independent answer paths (IM ⊥ desktop).
+    // — it just silences the IM card (see push() below); any live dashboard
+    // client remains an independent answer path (the desktop toast is only a
+    // pointer to it, never an answer surface itself).
     const targets = this.deps.configuredChats();
     const imUsable = targets.length > 0 && !this.deps.isMuted(opts.key);
     const webUsable = this.deps.hasWebClients();
