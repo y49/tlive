@@ -170,6 +170,18 @@ There is no separate on/off switch: use your OS's Do Not Disturb to silence
 them temporarily, or `tlive mode off` to stop tlive entirely. Without
 `notify-send` (or the platform equivalent) they silently no-op.
 
+**Only blocking work reaches the desktop.** A finished turn and a failed tool
+go to IM and never pop a toast — a per-turn "done" notification would bury the
+handful that actually need you.
+
+If you see a desktop notification saying a turn finished, check who sent it: it
+is almost certainly your IM client, not tlive. Running Telegram or Feishu on
+the same machine turns every message tlive sends to IM — continue cards, idle
+nudges, failure reports — into a second desktop notification, which is exactly
+the flood the rule above avoids. tlive cannot tell where your IM client runs,
+so the fix belongs in that client: mute the tlive chat there and your phone
+still gets everything while the desktop stays quiet.
+
 ---
 
 ## Global flags
