@@ -155,10 +155,20 @@ Desktop notifications appear whenever something is blocking on you and
 disappear when it is answered — on Linux and Windows, where the single toast
 is actively replaced/closed. macOS cannot do either (Notification Center has
 no scriptable close or replace), so there each change appends a fresh entry
-instead of recycling one. There is no separate on/off switch: use your OS's
-Do Not Disturb to silence them temporarily, or `tlive mode off` to stop tlive
-entirely. Without `notify-send` (or the platform equivalent) they silently
-no-op.
+instead of recycling one.
+
+The toast carries no expiry, but "no expiry" is not the same as "stays on
+screen". Most shells show the banner for a few seconds and then tuck the
+notification into the notification centre, where it stays — and keeps counting
+toward the app badge — until the work is answered. That is where you find it
+after stepping away; it is the same behaviour your terminal's own
+notifications get. A banner is raised again whenever something NEW starts
+waiting, so a second session needing you re-alerts rather than silently
+updating the existing entry.
+
+There is no separate on/off switch: use your OS's Do Not Disturb to silence
+them temporarily, or `tlive mode off` to stop tlive entirely. Without
+`notify-send` (or the platform equivalent) they silently no-op.
 
 ---
 
