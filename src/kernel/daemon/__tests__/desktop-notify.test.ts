@@ -133,6 +133,62 @@ describe('resident waiting toast', () => {
   });
 });
 
+describe('concurrent renders are serialized (enqueue)', () => {
+  // Before the click action was removed, `dropLiveProc`/`generation` and the
+  // `enqueue` chain shared the job of keeping a burst of renders from racing
+  // into parallel slots. Both of those are gone now — correctly, per Part C —
+  // which leaves `enqueue` as the ONLY defence left. If a later cleanup pass
+  // simplifies `enqueue` away (a direct call, matching how every OTHER test in
+  // this file already awaits each render one at a time and so can't tell the
+  // difference), two `render()` calls fired back-to-back without awaiting the
+  // first would both read `lastId === null`, both omit `--replace-id`, and the
+  // machine would grow two permanently resident toasts — the exact stacking
+  // bug this file exists to prevent.
+  it('a second render fired before the first resolves still waits for the first to capture its id', async () => {
+    const notifyCalls: string[][] = [];
+    let resolveFirstId!: (id: string) => void;
+    // Controlled by the test, not the spawner: the first notify-send call
+    // hangs here until we explicitly resolve it, so we can observe what the
+    // second call does WHILE the first is still in flight.
+    const firstIdPromise = new Promise<string>((resolve) => { resolveFirstId = resolve; });
+    let call = 0;
+    const spawner: Spawner = async (cmd, args) => {
+      if (cmd === 'notify-send') {
+        call++;
+        notifyCalls.push(args);
+        return call === 1 ? firstIdPromise : '99';
+      }
+      return '';
+    };
+    const n = createDesktopNotifier({ platform: 'linux', hasCmd: () => true, spawner });
+
+    const p1 = n.render('a', 'b', { alert: false });
+    const p2 = n.render('c', 'd', { alert: false }); // fired WITHOUT awaiting p1
+
+    // Flush the microtask queue via a macrotask boundary (deterministic per
+    // spec — a timer callback never runs until every currently-queued
+    // microtask has drained, regardless of how many .then/.catch hops
+    // `enqueue` adds). That is enough for the first render's synchronous
+    // prefix — including its notify-send call — to have run. The second
+    // render must NOT have reached notify-send yet: it is queued behind the
+    // first and cannot proceed until the first's promise settles, which it
+    // never will on its own (only `resolveFirstId` below unblocks it).
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(notifyCalls).toHaveLength(1);
+
+    resolveFirstId('42');
+    await p1;
+    await p2;
+
+    expect(notifyCalls).toHaveLength(2);
+    expect(notifyCalls[0]!.some((a) => a.startsWith('--replace-id='))).toBe(false);
+    // The second render's args are only built once it actually runs, which
+    // `enqueue` delays until the first has captured its id — so it carries
+    // --replace-id=42, not a stacked, un-replaced second toast.
+    expect(notifyCalls[1]).toContain('--replace-id=42');
+  });
+});
+
 describe('toast id survives a daemon restart', () => {
   const makeStore = (seed: string | null = null) => {
     let v = seed;

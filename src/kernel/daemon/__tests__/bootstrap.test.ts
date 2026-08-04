@@ -44,15 +44,27 @@ let h: DaemonHandle;
 let origLocale: { LC_ALL?: string; LC_MESSAGES?: string; LANG?: string };
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), 'tlive-d-'));
+  // Captured BEFORE mkdtempSync: if mkdtempSync throws on the very first test,
+  // afterEach must still find a defined origLocale to restore from — otherwise
+  // it dereferences undefined and reports a TypeError that masks the real disk
+  // error instead of just running the (harmless, already-clear) restore.
   origLocale = { LC_ALL: process.env.LC_ALL, LC_MESSAGES: process.env.LC_MESSAGES, LANG: process.env.LANG };
   delete process.env.LC_ALL; delete process.env.LC_MESSAGES; delete process.env.LANG;
+  tmp = mkdtempSync(join(tmpdir(), 'tlive-d-'));
 });
 afterEach(async () => {
-  await h?.shutdown();
-  if (origLocale.LC_ALL === undefined) delete process.env.LC_ALL; else process.env.LC_ALL = origLocale.LC_ALL;
-  if (origLocale.LC_MESSAGES === undefined) delete process.env.LC_MESSAGES; else process.env.LC_MESSAGES = origLocale.LC_MESSAGES;
-  if (origLocale.LANG === undefined) delete process.env.LANG; else process.env.LANG = origLocale.LANG;
+  // shutdown() runs inside try/finally: if it rejects, the locale restore
+  // below must still happen — otherwise a leaked LC_ALL='zh_CN.UTF-8' (set by
+  // a zh-path test) survives into the next beforeEach's snapshot and pins
+  // Chinese for the rest of the file, turning one hook failure into a cascade
+  // of confusing English-assertion failures in unrelated later tests.
+  try {
+    await h?.shutdown();
+  } finally {
+    if (origLocale.LC_ALL === undefined) delete process.env.LC_ALL; else process.env.LC_ALL = origLocale.LC_ALL;
+    if (origLocale.LC_MESSAGES === undefined) delete process.env.LC_MESSAGES; else process.env.LC_MESSAGES = origLocale.LC_MESSAGES;
+    if (origLocale.LANG === undefined) delete process.env.LANG; else process.env.LANG = origLocale.LANG;
+  }
 });
 
 describe('detectLang (OS locale → toast language)', () => {
