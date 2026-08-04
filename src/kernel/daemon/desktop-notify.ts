@@ -123,13 +123,18 @@ export interface ToastIdStore {
 export interface DesktopNotifier {
   /** Show (or replace) THE waiting toast. Resident: it stays until clear().
    *  Single slot — a machine shows one toast listing everything that waits.
+   *  `alert` is required, not defaulted: the caller must say which behaviour
+   *  it wants rather than lean on a fallback the next call site might not
+   *  know about — on darwin, "not alerting" means posting NOTHING, the most
+   *  concealed of the three backends' failure modes, so an accidentally
+   *  omitted flag there is silent on the very platform CI cannot see.
    *  `alert: true` means something NEW needs the user: close the previous
    *  toast, then post a FRESH one with no replace-id, so a notification
    *  server that treats a resident toast as a permanent panel entry (the
    *  `persistence` capability — quickshell, GNOME, most modern shells) still
-   *  raises a banner. Omitted/false is today's silent in-place update — the
+   *  raises a banner. `alert: false` is today's silent in-place update — the
    *  set only shrank or its text changed, nothing new is waiting. */
-  render(title: string, body: string, opts?: { alert?: boolean }): Promise<void>;
+  render(title: string, body: string, opts: { alert: boolean }): Promise<void>;
   /** Close the waiting toast — nothing is waiting anymore. */
   clear(): Promise<void>;
 }
@@ -293,18 +298,17 @@ export function createDesktopNotifier(opts?: {
  *  scriptable replace/close for a Notification Center entry (`clear()` stays
  *  a no-op below — that is the platform, not us). Because of that, the only
  *  thing this channel can honestly say is "something NEW needs you": a
- *  silent update is unrepresentable here, so `alert: false` (including the
- *  omitted default) skips the render entirely rather than post a fresh
- *  banner for something that isn't new. The stale entry left on screen is a
- *  timestamped record of what was waiting at that moment, not a claim about
- *  now. */
+ *  silent update is unrepresentable here, so `alert: false` skips the render
+ *  entirely rather than post a fresh banner for something that isn't new.
+ *  The stale entry left on screen is a timestamped record of what was
+ *  waiting at that moment, not a claim about now. */
 function darwinNotifier(sp: Spawner): DesktopNotifier {
   const esc = (v: string): string => v.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const show = (title: string, body: string): Promise<string | null> =>
     sp('osascript', ['-e', `display notification "${esc(body)}" with title "${esc(title)}"`]);
   return {
     render: async (title, body, opts) => {
-      if (!opts?.alert) return;
+      if (!opts.alert) return;
       await show(title, body);
     },
     clear: async () => { /* not scriptable on macOS */ },
