@@ -384,7 +384,7 @@ describe('darwin backend (osascript, no slot)', () => {
     const calls: Array<[string, string[]]> = [];
     const sp = async (cmd: string, args: string[]) => { calls.push([cmd, args]); return ''; };
     const n = createDesktopNotifier({ platform: 'darwin', hasCmd: () => true, spawner: sp });
-    await n.render('tlive · Bash', 'say "hi"');
+    await n.render('tlive · Bash', 'say "hi"', { alert: true });
     expect(calls).toHaveLength(1);
     expect(calls[0][0]).toBe('osascript');
     expect(calls[0][1][1]).toBe('display notification "say \\"hi\\"" with title "tlive · Bash"');
@@ -412,5 +412,60 @@ describe('win32 backend (PowerShell WinRT toast)', () => {
     const sp = vi.fn(async () => '');
     await createDesktopNotifier({ platform: 'win32', hasCmd: () => false, spawner: sp }).render('t', 'b');
     expect(sp).not.toHaveBeenCalled();
+  });
+});
+
+describe('alert on darwin', () => {
+  const mac = (calls: string[][]) => createDesktopNotifier({
+    platform: 'darwin', hasCmd: () => true,
+    spawner: async (_cmd, args) => { calls.push(args); return ''; },
+  });
+
+  it('a new waiting thing posts a banner', async () => {
+    const calls: string[][] = [];
+    await mac(calls).render('t', 'b', { alert: true });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('a silent update posts NOTHING — macOS cannot update in place, and a fresh banner would be wrong', async () => {
+    const calls: string[][] = [];
+    const n = mac(calls);
+    await n.render('t', 'b', { alert: true });
+    await n.render('t2', 'b2', { alert: false });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('an omitted alert flag is treated as silent', async () => {
+    const calls: string[][] = [];
+    await mac(calls).render('t', 'b');
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe('alert on win32', () => {
+  const win = (scripts: string[]) => createDesktopNotifier({
+    platform: 'win32', hasCmd: () => true,
+    spawner: async (_cmd, args) => { scripts.push(args.at(-1) ?? ''); return ''; },
+  });
+
+  it('a new waiting thing removes the old toast first, so the banner is guaranteed', async () => {
+    const scripts: string[] = [];
+    await win(scripts).render('t', 'b', { alert: true });
+    expect(scripts[0]).toContain('History.Remove');
+    expect(scripts[0]!.indexOf('History.Remove')).toBeLessThan(scripts[0]!.indexOf('.Show('));
+    expect(scripts[0]).not.toContain('SuppressPopup');
+  });
+
+  it('a silent update suppresses the popup instead of re-raising it', async () => {
+    const scripts: string[] = [];
+    await win(scripts).render('t', 'b', { alert: false });
+    expect(scripts[0]).toContain('SuppressPopup = $true');
+    expect(scripts[0]).not.toContain('History.Remove');
+  });
+
+  it('clear() still removes the toast from the Action Center', async () => {
+    const scripts: string[] = [];
+    await win(scripts).clear();
+    expect(scripts[0]).toContain('History.Remove');
   });
 });

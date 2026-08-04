@@ -289,16 +289,24 @@ export function createDesktopNotifier(opts?: {
   };
 }
 
-/** macOS: built-in osascript. No slot — banners auto-dismiss; there is no
- *  scriptable replace/close for Notification Center entries, so `opts.alert`
- *  is accepted (for the shared interface) and ignored: every render here is
- *  already a fresh banner. */
+/** macOS: built-in osascript. No slot — banners auto-dismiss, and there is no
+ *  scriptable replace/close for a Notification Center entry (`clear()` stays
+ *  a no-op below — that is the platform, not us). Because of that, the only
+ *  thing this channel can honestly say is "something NEW needs you": a
+ *  silent update is unrepresentable here, so `alert: false` (including the
+ *  omitted default) skips the render entirely rather than post a fresh
+ *  banner for something that isn't new. The stale entry left on screen is a
+ *  timestamped record of what was waiting at that moment, not a claim about
+ *  now. */
 function darwinNotifier(sp: Spawner): DesktopNotifier {
   const esc = (v: string): string => v.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const show = (title: string, body: string): Promise<string | null> =>
     sp('osascript', ['-e', `display notification "${esc(body)}" with title "${esc(title)}"`]);
   return {
-    render: async (title, body, _opts) => { await show(title, body); },
+    render: async (title, body, opts) => {
+      if (!opts?.alert) return;
+      await show(title, body);
+    },
     clear: async () => { /* not scriptable on macOS */ },
   };
 }
@@ -309,16 +317,30 @@ function darwinNotifier(sp: Spawner): DesktopNotifier {
  *  render toasts. Spec-derived — pending real-hardware verification. */
 const WIN_APP_ID = String.raw`{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe`;
 
-export function win32ToastScript(title: string, body: string): string {
+/** `alert: true` states its intent up front rather than trusting Tag/Group
+ *  replacement to behave a particular way: History.Remove first, then Show,
+ *  so a banner is guaranteed regardless of how replacement happens to behave.
+ *  `alert: false` (including the omitted default) sets SuppressPopup before
+ *  Show, which replaces the Action Center entry (Tag+Group) without raising
+ *  a banner — the silent in-place update this backend was missing. */
+export function win32ToastScript(title: string, body: string, opts?: { alert?: boolean }): string {
+  const alert = opts?.alert ?? false;
   const esc = (v: string): string =>
     v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
   return [
     `[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null`,
+    // A new arrival: close the old Action Center entry BEFORE showing the new
+    // one, so the banner is guaranteed rather than left to Tag/Group replace
+    // semantics (which may suppress the popup on their own).
+    ...(alert ? [`[Windows.UI.Notifications.ToastNotificationManager]::History.Remove('tlive', 'tlive', '${WIN_APP_ID}')`] : []),
     `$xml = New-Object Windows.Data.Xml.Dom.XmlDocument`,
     `$xml.LoadXml('<toast><visual><binding template="ToastGeneric"><text>${esc(title)}</text><text>${esc(body)}</text></binding></visual></toast>')`,
     `$t = [Windows.UI.Notifications.ToastNotification]::new($xml)`,
     `$t.Tag = 'tlive'`,
     `$t.Group = 'tlive'`,
+    // A silent update: suppress the popup explicitly rather than relying on
+    // Tag/Group replacement to not re-raise it.
+    ...(!alert ? [`$t.SuppressPopup = $true`] : []),
     `[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('${WIN_APP_ID}').Show($t)`,
   ].join('; ');
 }
@@ -330,14 +352,16 @@ export function win32ClearScript(): string {
   ].join('; ');
 }
 
-// `opts.alert` is accepted (for the shared interface) and ignored here: this
-// backend is spec-derived and unverified on real hardware, and this task's
-// fix must not be the first blind change to it.
+// `opts.alert` is threaded straight through to win32ToastScript (see there for
+// the History.Remove/SuppressPopup split) — this backend is still
+// spec-derived and unverified on real hardware, but the two behaviours it
+// must pick between are stated explicitly rather than left to how Tag/Group
+// replacement happens to behave.
 function win32Notifier(sp: Spawner): DesktopNotifier {
   const run = (script: string): Promise<string | null> =>
     sp('powershell', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script]);
   return {
-    render: async (title, body, _opts) => { await run(win32ToastScript(title, body)); },
+    render: async (title, body, opts) => { await run(win32ToastScript(title, body, opts)); },
     clear: async () => { await run(win32ClearScript()); },
   };
 }
