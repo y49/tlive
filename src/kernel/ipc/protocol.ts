@@ -31,7 +31,11 @@ export type IpcRequest =
   | { kind: 'hook.permission.request'; cwd: string; sessionId: string; toolName: string; input: unknown; permissionMode?: string; wrappedId?: string; timeoutSec?: number; agentId?: string }
   | { kind: 'hook.permission.answer'; requestId: string; approved: boolean; message?: string }
   | { kind: 'hook.continue.request'; cwd: string; sessionId: string; context: string; lastMessage?: string; wrappedId?: string }
-  | { kind: 'hook.event'; event: MonitorEvent; wrappedId?: string }
+  // agentPid: the agent process that ran this hook (CLAUDE_PID). Recorded on
+  // the session so the liveness sweep can reap it when that process dies
+  // without firing SessionEnd — kill -9, a crash, or a hard-closed terminal
+  // run no hooks at all, and SessionEnd was a hook session's only way out.
+  | { kind: 'hook.event'; event: MonitorEvent; wrappedId?: string; agentPid?: number }
   // droppable: normalizer 判定"无实际错误内容"(如 Bash 非零退出但 stderr
   // 为空)的 attention 事件透传标记。daemon 侧只据此跳过 IM 发送(见
   // bootstrap.ts 的 hook.notify handler);dashboard 广播不受影响,照常收到
@@ -41,7 +45,11 @@ export type IpcRequest =
   // daemon 据 pending 判重:full 模式已有 held 卡 → 丢(卡管全部答复面);
   // 没卡(notify 模式 / 立即 defer)→ 本地对话框在等 = 走等待通知链
   // (desktop ping + dashboard 只读 waiting-approval + grace 后 IM 文本)。
-  | { kind: 'hook.notify'; cwd: string; sessionId: string; level: 'info' | 'warn' | 'error'; message: string; wrappedId?: string; droppable?: boolean; permissionPrompt?: boolean }
+  // agentPid: same purpose as on hook.event. Carried here too because a daemon
+  // that restarts mid-session never sees that session's SessionStart, and a
+  // notification may be the first hook it does see — an idle session recreated
+  // without a pid could never be reaped.
+  | { kind: 'hook.notify'; cwd: string; sessionId: string; level: 'info' | 'warn' | 'error'; message: string; wrappedId?: string; droppable?: boolean; permissionPrompt?: boolean; agentPid?: number }
   | { kind: 'session.register'; session: SessionMeta }
   | { kind: 'session.unregister'; id: string }
   // Terminal-derived activity for a wrapped session (running vs idle) — updates

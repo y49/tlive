@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { bootstrapDaemon, shouldFastNullContinue, clampPermissionTimeout, makeCodexResumeHandler, shouldDropNotify, resolveKey, detectLang, type DaemonHandle } from '../bootstrap';
@@ -2668,5 +2669,72 @@ describe('a projection identical to the last one actually rendered is skipped (T
     await until(() => { expect(clears.length).toBeGreaterThan(0); });
     await notifyLocalPrompt(h, { cwd: '/w/a', sessionId: 'a' }); // identical view returns
     expect(renders.length).toBeGreaterThan(first);
+  });
+});
+
+// A hook session's only retirement path was SessionEnd — and kill -9, a crash,
+// or a hard-closed terminal run no hooks at all. Both halves of what it leaves
+// behind matter: the registry entry (a phantom on the dashboard that IM replies
+// still route to) and its waiting entry (a resident toast still claiming that a
+// session which no longer exists is waiting for you).
+describe('a session killed without SessionEnd stops haunting the dashboard and the toast', () => {
+  /** A pid that has certainly exited — spawnSync returns only after the child is
+   *  reaped, so the liveness probe sees a dead process. */
+  const deadPid = (): number => {
+    const { pid } = spawnSync(process.execPath, ['-e', '']);
+    if (!pid) throw new Error('could not produce a dead pid');
+    return pid;
+  };
+
+  it('reaps the session and retires the waiting entry it left behind', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    const clears: number[] = [];
+    h = await bootstrapDaemon({
+      home: tmp, imAdapters: [],
+      desktopNotifier: { render: async () => {}, clear: async () => { clears.push(1); } },
+      sweepMs: 20,
+    });
+    const sock = daemonSocketPath(tmp);
+    const pid = deadPid();
+
+    // The session announces itself, then goes idle → resident "waiting" toast.
+    await request(
+      { kind: 'hook.event', event: { event: 'session-start', cwd: '/ghost', sessionId: 's1' }, agentPid: pid },
+      { socketPath: sock, timeoutMs: 2000 },
+    );
+    await request(
+      { kind: 'hook.notify', cwd: '/ghost', sessionId: 's1', level: 'info', message: 'waiting for your input', agentPid: pid },
+      { socketPath: sock, timeoutMs: 2000 },
+    );
+    const listed = await request({ kind: 'session.list' }, { socketPath: sock, timeoutMs: 2000 });
+    expect(listed.kind === 'session.list' && listed.sessions.length).toBe(1);
+    clears.length = 0; // discard everything before the kill
+
+    // Nothing else will ever be heard from this session.
+    await until(() => { expect(clears.length).toBeGreaterThan(0); });
+    const after = await request({ kind: 'session.list' }, { socketPath: sock, timeoutMs: 2000 });
+    expect(after.kind === 'session.list' && after.sessions).toEqual([]);
+  });
+
+  it('records the pid from a notification too, for a daemon restarted mid-session', async () => {
+    // A daemon that restarts never sees the running session's SessionStart. If
+    // the first hook it does see is a notification, that has to carry the pid
+    // as well, or an idle session that is then closed strands forever.
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    h = await bootstrapDaemon({
+      home: tmp, imAdapters: [],
+      desktopNotifier: { render: async () => {}, clear: async () => {} },
+      sweepMs: 20,
+    });
+    const sock = daemonSocketPath(tmp);
+
+    await request(
+      { kind: 'hook.notify', cwd: '/ghost2', sessionId: 's2', level: 'info', message: 'waiting for your input', agentPid: deadPid() },
+      { socketPath: sock, timeoutMs: 2000 },
+    );
+    await until(async () => {
+      const r = await request({ kind: 'session.list' }, { socketPath: sock, timeoutMs: 2000 });
+      expect(r.kind === 'session.list' && r.sessions).toEqual([]);
+    });
   });
 });
