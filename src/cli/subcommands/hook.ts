@@ -40,6 +40,21 @@ export function maybeAutoStartDaemon(
   }
 }
 
+/** The agent process that spawned this hook, from the environment it exports.
+ *  Claude Code exports CLAUDE_PID to every hook and Bash command (verified on
+ *  2.1.226); Codex hooks are retired, so there is one variable to read today
+ *  and this is the seam where a second vendor's would join.
+ *
+ *  Reported to the daemon on every monitoring event so a session that dies
+ *  without firing SessionEnd (kill -9, crash, terminal closed hard) can still
+ *  be reaped by the liveness sweep. Anything unparseable — or a 0, which
+ *  process.kill would aim at the whole process group — yields undefined, and
+ *  the session simply stays unsweepable, exactly as it is today. */
+export function agentPidFromEnv(env: NodeJS.ProcessEnv): number | undefined {
+  const pid = Number(env.CLAUDE_PID);
+  return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+}
+
 async function readStdin(): Promise<unknown> {
   const chunks: Buffer[] = [];
   for await (const c of process.stdin) chunks.push(c as Buffer);
@@ -138,6 +153,9 @@ export async function runHook(argv: string[]): Promise<void> {
     // Inherited from a `tlive run` pty (like $TMUX): routes this hook's traffic
     // to that exact session card, so several wrapped sessions can share one cwd.
     const wrappedId = process.env.TLIVE_SESSION;
+    // The agent process that spawned this hook — its liveness is the only
+    // retirement path a hook session has that doesn't depend on a hook firing.
+    const agentPid = agentPidFromEnv(process.env);
 
     if (event === 'permission-request') {
       // CC hook 与本地对话并行(先答先得),窗口拉满 24h,本地答掉由 daemon 的
@@ -182,7 +200,7 @@ export async function runHook(argv: string[]): Promise<void> {
       // pending 判重 —— full 模式已有卡就丢,没卡(notify 模式 / 立即 defer)
       // 就走本地等待通知链。曾经在这里无条件吞掉,notify 模式下权限框零通知。
       await request(
-        { kind: 'hook.notify', cwd: att.cwd, sessionId: att.sessionId, level, message: att.message, ...(wrappedId ? { wrappedId } : {}), ...(att.droppable ? { droppable: true } : {}), ...(att.permissionPrompt ? { permissionPrompt: true } : {}) },
+        { kind: 'hook.notify', cwd: att.cwd, sessionId: att.sessionId, level, message: att.message, ...(wrappedId ? { wrappedId } : {}), ...(agentPid ? { agentPid } : {}), ...(att.droppable ? { droppable: true } : {}), ...(att.permissionPrompt ? { permissionPrompt: true } : {}) },
         { timeoutMs: OBSERVE_IPC_TIMEOUT_MS },
       ).catch(() => undefined);
       process.stdout.write('{}');
@@ -222,7 +240,7 @@ export async function runHook(argv: string[]): Promise<void> {
 
     // post-tool-use / user-prompt-submit / session-start / session-end → monitoring
     await request(
-      { kind: 'hook.event', event: n as MonitorEvent, ...(wrappedId ? { wrappedId } : {}) },
+      { kind: 'hook.event', event: n as MonitorEvent, ...(wrappedId ? { wrappedId } : {}), ...(agentPid ? { agentPid } : {}) },
       { timeoutMs: OBSERVE_IPC_TIMEOUT_MS },
     ).catch(() => {
       if (event === 'session-start') {

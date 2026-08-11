@@ -44,6 +44,33 @@ describe('applyMonitorEvent', () => {
     }
   });
 
+  it('session-start records the agent pid, so a killed session can be reaped', () => {
+    const r = new SessionRegistry();
+    const f = applyMonitorEvent(r, { event: 'session-start', cwd: '/r', sessionId: 's' }, '/r', 4242);
+    if (f.type === 'session-upsert') expect(f.session.pid).toBe(4242);
+    expect(r.get('/r')?.pid).toBe(4242);
+  });
+
+  it('records the agent pid on any event, not just session-start', () => {
+    // A daemon restarted mid-session never sees that session's SessionStart:
+    // the entry is re-created by whatever hook fires next, and it must still
+    // carry the pid or it can never be swept.
+    const r = new SessionRegistry();
+    applyMonitorEvent(r, { event: 'activity', cwd: '/r', sessionId: 's', toolName: 'Bash', result: {} }, '/r', 4242);
+    expect(r.get('/r')?.pid).toBe(4242);
+  });
+
+  it('never stamps the agent pid over a wrapped session (the sweep watches `tlive run`)', () => {
+    // Hooks fired inside a `tlive run` pty carry TLIVE_SESSION, so they land on
+    // the wrapped session's key. Its pid must stay the `tlive run` process —
+    // the one whose death means the pty is gone. Overwriting it with the
+    // agent's pid would reap a live terminal the moment the agent exited.
+    const r = new SessionRegistry();
+    r.register({ id: 'u1', label: 'a', cmd: 'x', cwd: '/w', pid: 111, sockPath: '/a.sock' });
+    applyMonitorEvent(r, { event: 'activity', cwd: '/w', sessionId: 's', toolName: 'Bash', result: {} }, 'u1', 4242);
+    expect(r.get('u1')?.pid).toBe(111);
+  });
+
   it('session-end → remove frame + purges registry (hook-kind)', () => {
     const r = new SessionRegistry();
     r.upsert({ cwd: '/r', status: 'active' });
@@ -94,6 +121,20 @@ describe('sweepDeadSessions', () => {
     expect(r.get('u1')).toBeUndefined();
     expect(r.get('u2')).toBeDefined();
     expect(r.get('/hook')).toBeDefined();
+  });
+
+  it('removes hook sessions whose agent process died without firing SessionEnd', () => {
+    // kill -9 / crash / terminal closed hard: no hook runs, so the only
+    // retirement path a hook session had (SessionEnd) never fires and the
+    // entry strands forever — a phantom on the dashboard that IM replies
+    // still route to.
+    const r = new SessionRegistry();
+    r.upsert({ cwd: '/gone', kind: 'hook', status: 'active', pid: 333 });
+    r.upsert({ cwd: '/alive', kind: 'hook', status: 'active', pid: 444 });
+    const frames = sweepDeadSessions(r, (pid) => pid === 444);
+    expect(frames).toEqual([{ type: 'session-remove', id: '/gone' }]);
+    expect(r.get('/gone')).toBeUndefined();
+    expect(r.get('/alive')).toBeDefined();
   });
 });
 

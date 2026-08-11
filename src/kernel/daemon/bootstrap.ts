@@ -55,6 +55,9 @@ export interface BootstrapOpts {
    *  same two lines without spying on console.log. It does not see any other
    *  diagnostic line this file emits. */
   onLog?: (msg: string, fields: Record<string, unknown>) => void;
+  /** Liveness-sweep interval. Defaults to 30s; a test that needs to observe a
+   *  reap drops it to a few ms rather than waiting out the production period. */
+  sweepMs?: number;
 }
 
 /** A Stop hook should not sit waiting when nothing can answer: no IM chat
@@ -678,10 +681,32 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     if (removed) refreshDesktop();
   };
 
-  // Reap wrapped sessions whose `tlive run` process died without unregistering (kill -9 / crash).
+  /** Everything a session leaves on the waiting board once it is gone. Shared by
+   *  the two ways a session can end — SessionEnd, and the liveness sweep below
+   *  for the deaths that fire no hook at all — so the two can never drift into
+   *  retiring different subsets. */
+  const retireGoneSession = (key: string, cwd: string, sessionId?: string): void => {
+    clearLocalPrompt(key, sessionId, cwd);
+    // The idle reminder must not strand for a session that no longer exists.
+    board.remove(idleBoardId(key));
+    refreshDesktop();
+    // Nor can a session that no longer exists have an outstanding sub-agent
+    // dialog (C1) — retire every subagent notice still on the board for it.
+    retireSubagentBoardEntries(key);
+  };
+
+  // Reap sessions whose owning process died without unregistering: `tlive run`
+  // killed with -9, or an agent whose terminal was closed hard. Neither runs a
+  // hook on the way out, so this sweep is the only retirement path either has —
+  // the registry entry would otherwise stay a phantom on the dashboard that IM
+  // replies still route to, and its board entry a toast that never retracts.
   const sweeper = setInterval(() => {
-    for (const f of sweepDeadSessions(sessions, pidAlive)) events.broadcast(f);
-  }, 30_000);
+    const before = new Map(sessions.list().map((s) => [s.id, s.cwd]));
+    for (const f of sweepDeadSessions(sessions, pidAlive)) {
+      events.broadcast(f);
+      if (f.type === 'session-remove') retireGoneSession(f.id, before.get(f.id) ?? '');
+    }
+  }, opts.sweepMs ?? 30_000);
   sweeper.unref();
 
   const OUTCOME: Record<string, string> = { allow: 'Allowed', deny: 'Denied', defer: 'Timed out', local: 'Answered in terminal', gone: 'Session ended', handback: 'Handed back to the terminal' };
@@ -1313,7 +1338,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             board.add({ id: idleBoardId(key), key, label: sessionLabel(key), kind: 'idle', what: WHAT.yourInput[lang] });
             refreshDesktop();
           }
-          events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.message }, key));
+          events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.message }, key, req.agentPid));
           reply({ kind: 'ack' });
           return;
         }
@@ -1388,17 +1413,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // Session gone → its dialog is gone; retire the tracker so the
             // toast lifecycle can close (the registry entry is removed by
             // applyMonitorEvent below anyway).
-            clearLocalPrompt(key, ev.sessionId, ev.cwd);
-            // Same reason: the idle reminder must not strand for a session
-            // that no longer exists.
-            board.remove(idleBoardId(key));
-            refreshDesktop();
-            // Same reason again: a session that no longer exists cannot have
-            // an outstanding sub-agent dialog either (C1) — retire every
-            // subagent notice still on the board for it.
-            retireSubagentBoardEntries(key);
+            retireGoneSession(key, ev.cwd, ev.sessionId);
           }
-          events.broadcast(applyMonitorEvent(sessions, ev, key));
+          events.broadcast(applyMonitorEvent(sessions, ev, key, req.agentPid));
           reply({ kind: 'ack' });
           return;
         }
