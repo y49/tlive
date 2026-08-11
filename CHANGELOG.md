@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.1](https://github.com/y49/tlive/compare/v4.1.0...v4.1.1) (2026-08-11)
+
+
+### Bug Fixes
+
+* **sessions:** reap agent sessions killed without SessionEnd ([#75](https://github.com/y49/tlive/issues/75)) ([5ddf0ab](https://github.com/y49/tlive/commit/5ddf0abdd610534b0fa68d9adc0cd9aee72d8e8e))
+
 ## [4.1.0](https://github.com/y49/tlive/compare/v4.0.0...v4.1.0) (2026-08-04)
 
 

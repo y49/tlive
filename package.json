@@ -1,6 +1,6 @@
 {
   "name": "tlive",
-  "version": "4.1.0",
+  "version": "4.1.1",
   "description": "Vendor-neutral, self-hosted remote-approval + live-monitoring layer for Claude Code / Codex (Telegram, Feishu, web terminal + dashboard)",
   "type": "module",
   "bin": {
