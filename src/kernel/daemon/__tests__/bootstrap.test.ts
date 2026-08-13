@@ -564,7 +564,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const sock = daemonSocketPath(tmp);
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
     expect(renders).toHaveLength(1);
-    expect(renders[0].body).toContain('your input');
+    expect(renders[0].title).toContain('your input'); // `what` rides the title; the body is the call to action
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'error', message: 'Bash failed: boom' }, { socketPath: sock, timeoutMs: 2000 });
     expect(renders).toHaveLength(1); // error-level stays on IM/dashboard, never the at-the-keyboard toast
   });
@@ -584,9 +584,9 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const sock = daemonSocketPath(tmp);
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
     expect(renders).toHaveLength(1);
-    expect(renders[0].title).toContain('你的输入');
+    expect(renders[0].title).toContain('等你输入');
     expect(renders[0].title).not.toContain('your input');
-    expect(renders[0].body).toBe('等你输入');
+    expect(renders[0].body).toBe('回终端继续');
   });
 
   it('an idle session joins the waiting toast and leaves it when the user types', async () => {
@@ -1849,7 +1849,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     const sock = daemonSocketPath(tmp);
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
     expect(notes).toHaveLength(1);
-    expect(notes[0].title).toContain('权限');
+    expect(notes[0].title).toContain('等你批准');
     expect(notes[0].title).not.toContain('permission');
     expect(notes[0].body).toBe('回终端处理');
   });

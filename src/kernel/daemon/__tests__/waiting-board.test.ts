@@ -28,7 +28,7 @@ describe('WaitingBoard', () => {
     expect(b.entries()[0]!.what).toBe('Read');
   });
 
-  it('keeps registration order so the toast does not reshuffle between renders', () => {
+  it('keeps registration order (renderBoard reverses it) so a replaced entry does not jump the queue', () => {
     const b = new WaitingBoard();
     b.add(entry({ id: 'a', label: 'one' }));
     b.add(entry({ id: 'b', label: 'two' }));
@@ -103,8 +103,8 @@ describe('renderBoard', () => {
   });
 
   it('zh: a lone terminal-only dialog (subagent/localPrompt)', () => {
-    expect(renderBoard([entry({ kind: 'localPrompt', what: '权限' })], 'zh')).toEqual({
-      title: 'proj · 权限',
+    expect(renderBoard([entry({ kind: 'localPrompt', what: '等你批准' })], 'zh')).toEqual({
+      title: 'proj · 等你批准',
       body: '回终端处理',
     });
     expect(renderBoard([entry({ kind: 'subagent', what: 'Read · sub-agent' })], 'zh')).toEqual({
@@ -116,21 +116,24 @@ describe('renderBoard', () => {
   it('en: a lone idle session says what it is waiting for', () => {
     expect(renderBoard([entry({ kind: 'idle', what: 'your input' })], 'en')).toEqual({
       title: 'proj · your input',
-      body: 'Waiting for your input',
+      body: 'Your turn at the terminal',
     });
   });
 
-  it('zh: a lone idle session', () => {
-    expect(renderBoard([entry({ kind: 'idle', what: '你的输入' })], 'zh')).toEqual({
-      title: 'proj · 你的输入',
-      body: '等你输入',
+  // The single-entry title already carries `what`, so the body must not repeat
+  // it — a toast reading "proj · 等你输入 / 等你输入" says one thing twice and
+  // wastes the one line that could say what to DO about it.
+  it('zh: a lone idle session — body is the call to action, not a second copy of the title', () => {
+    expect(renderBoard([entry({ kind: 'idle', what: '等你输入' })], 'zh')).toEqual({
+      title: 'proj · 等你输入',
+      body: '回终端继续',
     });
   });
 
   // Aggregate titles, both shapes (many sessions / one session with several),
   // both languages --------------------------------------------------------
 
-  it('en: several sessions aggregate into ONE toast, one bullet each — "N sessions need you"', () => {
+  it('en: several sessions aggregate into ONE toast, one bullet each (newest first) — "N sessions need you"', () => {
     const out = renderBoard([
       entry({ id: 'a', key: '/w/api', label: 'redreels-api', what: 'Bash' }),
       entry({ id: 'b', key: '/w/vf', label: 'vision-factory', kind: 'idle', what: 'your input' }),
@@ -138,20 +141,42 @@ describe('renderBoard', () => {
     ], 'en');
     expect(out).toEqual({
       title: '3 sessions need you',
-      body: '• redreels-api · Bash\n• vision-factory · your input\n• tlive · permission',
+      body: '• tlive · permission\n• vision-factory · your input\n• redreels-api · Bash',
     });
   });
 
-  it('zh: several sessions aggregate title — "N 个会话在等你"', () => {
+  it('zh: several sessions aggregate title — "N 个会话等你处理"', () => {
     const out = renderBoard([
       entry({ id: 'a', key: '/w/api', label: 'redreels-api', what: 'Bash' }),
-      entry({ id: 'b', key: '/w/vf', label: 'vision-factory', kind: 'idle', what: '你的输入' }),
-      entry({ id: 'c', key: '/w/tl', label: 'tlive', kind: 'localPrompt', what: '权限' }),
+      entry({ id: 'b', key: '/w/vf', label: 'vision-factory', kind: 'idle', what: '等你输入' }),
+      entry({ id: 'c', key: '/w/tl', label: 'tlive', kind: 'localPrompt', what: '等你批准' }),
     ], 'zh');
     expect(out).toEqual({
-      title: '3 个会话在等你',
-      body: '• redreels-api · Bash\n• vision-factory · 你的输入\n• tlive · 权限',
+      title: '3 个会话等你处理',
+      body: '• tlive · 等你批准\n• vision-factory · 等你输入\n• redreels-api · Bash',
     });
+  });
+
+  // THE regression this ordering exists for (found on real hardware
+  // 2026-08-13). The notification server clips the body — 2 lines on
+  // quickshell, and that clip is the server's business, not something the
+  // daemon can negotiate (see desktop-notify.ts's platform notes). The newest
+  // entry is the ONLY reason a banner was raised, so rendering arrival-order
+  // (oldest first) put it on exactly the line that gets cut: a toast raised by
+  // drama-admin showed two vision-factory rows, which reads as the permission
+  // having been attributed to the wrong project. Newest-first makes the rows
+  // that survive the clip the ones the user has NOT been told about yet.
+  it('renders newest-first, so the rows a clipped body drops are the ones already seen', () => {
+    const out = renderBoard([
+      // Arrival order: two long-standing vision-factory waits, then the new one.
+      entry({ id: 'idle:vf', key: '/w/vf', label: 'vision-factory', kind: 'idle', what: '等你输入' }),
+      entry({ id: 'local:vf', key: '/w/vf', label: 'vision-factory', kind: 'localPrompt', what: '等你批准' }),
+      entry({ id: 'local:da', key: '/w/da', label: 'drama-admin', kind: 'localPrompt', what: '等你批准' }),
+    ], 'zh');
+    expect(out!.body.split('\n')[0]).toBe('• drama-admin · 等你批准');
+    // And the title still counts the WHOLE board, clipped rows included — the
+    // count is the one thing a truncated body cannot tell you.
+    expect(out!.title).toBe('2 个会话等你处理');
   });
 
   it('en: counts SESSIONS, not entries — two dialogs in one session is not "2 sessions"', () => {
@@ -162,23 +187,23 @@ describe('renderBoard', () => {
     expect(out!.title).toBe('proj · 2 waiting');
   });
 
-  it('zh: one-session aggregate title — "<label> · N 个在等"', () => {
+  it('zh: one-session aggregate title — "<label> · N 件事等你"', () => {
     const out = renderBoard([
       entry({ id: 'a', key: '/w/proj', label: 'proj', what: 'Bash' }),
       entry({ id: 'b', key: '/w/proj', label: 'proj', what: 'Edit' }),
     ], 'zh');
-    expect(out!.title).toBe('proj · 2 个在等');
+    expect(out!.title).toBe('proj · 2 件事等你');
   });
 
   it('an unlabelled session (registry miss) still renders a usable line', () => {
     const out = renderBoard([entry({ label: '' }), entry({ id: 'b', key: '/w/x', label: 'x', what: 'Edit' })], 'en');
-    expect(out!.body).toBe('• Bash\n• x · Edit');
+    expect(out!.body).toBe('• x · Edit\n• Bash');
   });
 
   it('an unlabelled SOLE session falls back to a placeholder in the aggregate title (en/zh, not a session name so it IS translated)', () => {
     const entries = [entry({ label: '' }), entry({ id: 'b', label: '', what: 'Edit' })];
     expect(renderBoard(entries, 'en')!.title).toBe('This session · 2 waiting');
-    expect(renderBoard(entries, 'zh')!.title).toBe('本会话 · 2 个在等');
+    expect(renderBoard(entries, 'zh')!.title).toBe('本会话 · 2 件事等你');
   });
 });
 

@@ -32,9 +32,15 @@ export interface WaitingEntry {
 }
 
 export class WaitingBoard {
-  // Map preserves insertion order, and re-setting an existing key keeps that
-  // key's original position — so a replaced entry does not jump to the end and
-  // reshuffle the toast under the user's eyes.
+  // Map preserves insertion order, so `entries()` is ARRIVAL order — oldest
+  // first. `renderBoard` reverses it for display (see the clipping note there);
+  // keeping arrival order here rather than pre-reversed keeps this class the
+  // plain record of what arrived when, and leaves presentation in one place.
+  // Re-setting an existing key keeps that key's original position — a replaced
+  // entry (same dialog, new wording) must not jump the queue and reshuffle the
+  // toast under the user's eyes; a genuinely NEW id is a fresh insert and does
+  // land at the end, which is what makes "newest is last here, first on screen"
+  // reliable.
   private byId = new Map<string, WaitingEntry>();
 
   add(entry: WaitingEntry): void {
@@ -101,17 +107,28 @@ const BODY: Record<WaitKind, Record<Lang, string>> = {
   held: { en: 'Approval needed', zh: '等你批准' },
   subagent: { en: 'Answer at your terminal', zh: '回终端处理' },
   localPrompt: { en: 'Answer at your terminal', zh: '回终端处理' },
-  idle: { en: 'Waiting for your input', zh: '等你输入' },
+  // NOT a restatement of `what` ('your input' / '等你输入'), which the
+  // single-entry title already carries — a toast reading
+  // "proj · 等你输入 / 等你输入" spends its only free line saying the same
+  // thing twice. This line says what to do about it instead.
+  idle: { en: 'Your turn at the terminal', zh: '回终端继续' },
 };
 
 /** The two non-tool `what` values a `WaitingEntry` can carry (a real tool
  *  name is the third, and — like session labels — is a proper noun that is
  *  NEVER translated). These are produced at bootstrap.ts's registration
  *  sites, not inside `renderBoard`, but drawn from this same table so the
- *  strings live in exactly one place. */
+ *  strings live in exactly one place.
+ *
+ *  Chinese reads as a verb phrase where English reads as a noun ('等你批准'
+ *  vs 'permission'): a row is `<label> · <what>`, and in Chinese a bare noun
+ *  there ('vision-factory · 权限') is a label with no statement in it, while
+ *  the verb phrase says what is being waited on. Matching English word-for-word
+ *  would make one of the two languages stiff; each table entry is written to
+ *  read naturally on its own. */
 export const WHAT: Record<'permission' | 'yourInput', Record<Lang, string>> = {
-  permission: { en: 'permission', zh: '权限' },
-  yourInput: { en: 'your input', zh: '你的输入' },
+  permission: { en: 'permission', zh: '等你批准' },
+  yourInput: { en: 'your input', zh: '等你输入' },
 };
 
 /** Aggregate title templates. "3 sessions need you" would be a lie for three
@@ -119,11 +136,13 @@ export const WHAT: Record<'permission' | 'yourInput', Record<Lang, string>> = {
  *  worded (and pluralised in English's case, trivially) differently. */
 const AGGREGATE_MANY: Record<Lang, (n: number) => string> = {
   en: (n) => `${n} sessions need you`,
-  zh: (n) => `${n} 个会话在等你`,
+  zh: (n) => `${n} 个会话等你处理`,
 };
 const AGGREGATE_ONE: Record<Lang, (label: string, n: number) => string> = {
   en: (label, n) => `${label} · ${n} waiting`,
-  zh: (label, n) => `${label} · ${n} 个在等`,
+  // '2 个在等' left the noun out — two of WHAT? Chinese needs the measure word
+  // to carry it ('件事'), where English gets away with a bare participle.
+  zh: (label, n) => `${label} · ${n} 件事等你`,
 };
 /** Placeholder for the one-session aggregate title when `label` is '' (a
  *  registry miss) — not a session name, so unlike a real label it IS
@@ -135,18 +154,34 @@ const line = (e: WaitingEntry): string => (e.label ? `${e.label} · ${e.what}` :
 /** The toast for this board state, or null when nothing waits (caller clears).
  *  Aggregate — never one toast per entry: a machine-wide stack of toasts is the
  *  thing this design removes. Pure: `lang` is passed in rather than detected
- *  here, so both languages are directly unit-testable without a daemon. */
+ *  here, so both languages are directly unit-testable without a daemon.
+ *
+ *  NEWEST FIRST, and that is load-bearing rather than cosmetic. The body is
+ *  hard-clipped by the notification server (2 lines on quickshell, measured;
+ *  the server decides, we cannot ask for more — see desktop-notify.ts), and a
+ *  banner is raised for exactly one reason: something NEW is waiting. Rendered
+ *  in arrival order the new arrival was the LAST row, i.e. the first one cut,
+ *  so a banner raised by one project displayed only another project's older
+ *  rows and read as if the new dialog had been attributed to the wrong session.
+ *  Reversing makes the clip drop the entries the user has already been told
+ *  about. This is also why there is no "+N more" line: the count belongs in the
+ *  title, where nothing can clip it, and an extra body row would evict a real
+ *  one. */
 export function renderBoard(entries: WaitingEntry[], lang: Lang): { title: string; body: string } | null {
   if (entries.length === 0) return null;
-  if (entries.length === 1) {
-    const e = entries[0]!;
+  const newestFirst = [...entries].reverse();
+  if (newestFirst.length === 1) {
+    const e = newestFirst[0]!;
     return { title: line(e), body: BODY[e.kind][lang] };
   }
-  const sessions = new Set(entries.map((e) => e.key));
+  // Counted over the WHOLE board, never over the rows that survive the clip:
+  // the total is the one fact a truncated body cannot convey, so it must stay
+  // honest even when most of the rows are invisible.
+  const sessions = new Set(newestFirst.map((e) => e.key));
   const title = sessions.size === 1
-    ? AGGREGATE_ONE[lang](entries[0]!.label || THIS_SESSION[lang], entries.length)
+    ? AGGREGATE_ONE[lang](newestFirst[0]!.label || THIS_SESSION[lang], newestFirst.length)
     : AGGREGATE_MANY[lang](sessions.size);
-  return { title, body: entries.map((e) => `• ${line(e)}`).join('\n') };
+  return { title, body: newestFirst.map((e) => `• ${line(e)}`).join('\n') };
 }
 
 /** Whether a projection can be skipped because it would change nothing the
