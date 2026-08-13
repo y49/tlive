@@ -86,6 +86,11 @@ export interface ToastIdStore {
 }
 
 export interface DesktopNotifier {
+  /** Fire one notification about one waiting thing. Fire-and-forget: no id is
+   *  kept, nothing is replaced, nothing is ever retracted. The notification
+   *  behaves like every other application's — it banners, then ages into the
+   *  notification centre, where the user clears it or ignores it. */
+  notify(title: string, body: string): Promise<void>;
   /** Show (or replace) THE waiting toast. Resident: it stays until clear().
    *  Single slot — a machine shows one toast listing everything that waits.
    *  `alert` is required, not defaulted: the caller must say which behaviour
@@ -105,6 +110,7 @@ export interface DesktopNotifier {
 }
 
 const NOOP: DesktopNotifier = {
+  notify: async () => {},
   render: async (_title, _body, _opts) => {},
   clear: async () => {},
 };
@@ -225,6 +231,13 @@ export function createDesktopNotifier(opts?: {
     if (id && /^\d+$/.test(id)) { lastId = id; idStore?.write(id); }
   });
   return {
+    notify: async (title, body) => {
+      // No --expire-time: the server's own policy applies, so the banner shows
+      // briefly and the entry persists in the panel. No `transient` hint
+      // either — that hint means "do not persist", the opposite of what is
+      // wanted here. No --print-id: nothing will ever come back for this.
+      await sp('notify-send', ['--app-name=tlive', title, body]);
+    },
     render: showSlot,
     clear: () => enqueue(async () => {
       if (!lastId) return;
@@ -259,6 +272,7 @@ function darwinNotifier(sp: Spawner): DesktopNotifier {
   const show = (title: string, body: string): Promise<string | null> =>
     sp('osascript', ['-e', `display notification "${esc(body)}" with title "${esc(title)}"`]);
   return {
+    notify: async (title, body) => { await show(title, body); },
     render: async (title, body, opts) => {
       if (!opts.alert) return;
       await show(title, body);
@@ -301,6 +315,21 @@ export function win32ToastScript(title: string, body: string, opts?: { alert?: b
   ].join('; ');
 }
 
+/** One toast per waiting thing. No Tag, Group, History.Remove or
+ *  SuppressPopup: those existed to keep a single slot current, and there is no
+ *  slot any more. */
+export function win32NotifyScript(title: string, body: string): string {
+  const esc = (v: string): string =>
+    v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+  return [
+    `[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null`,
+    `$xml = New-Object Windows.Data.Xml.Dom.XmlDocument`,
+    `$xml.LoadXml('<toast><visual><binding template="ToastGeneric"><text>${esc(title)}</text><text>${esc(body)}</text></binding></visual></toast>')`,
+    `$t = [Windows.UI.Notifications.ToastNotification]::new($xml)`,
+    `[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('${WIN_APP_ID}').Show($t)`,
+  ].join('; ');
+}
+
 export function win32ClearScript(): string {
   return [
     `[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null`,
@@ -317,6 +346,7 @@ function win32Notifier(sp: Spawner): DesktopNotifier {
   const run = (script: string): Promise<string | null> =>
     sp('powershell', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script]);
   return {
+    notify: async (title, body) => { await run(win32NotifyScript(title, body)); },
     render: async (title, body, opts) => { await run(win32ToastScript(title, body, opts)); },
     clear: async () => { await run(win32ClearScript()); },
   };

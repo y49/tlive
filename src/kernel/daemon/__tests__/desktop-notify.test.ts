@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createDesktopNotifier, type Spawner } from '../desktop-notify.js';
 
 /** Fake linux backend: `notify-send` resolves immediately with the next id
@@ -504,5 +504,63 @@ describe('alert on win32', () => {
     const scripts: string[] = [];
     await win(scripts).clear();
     expect(scripts[0]).toContain('History.Remove');
+  });
+});
+
+describe('notify — one notification per waiting thing', () => {
+  const calls: Array<{ cmd: string; args: string[] }> = [];
+  const spawner = async (cmd: string, args: string[]): Promise<string | null> => {
+    calls.push({ cmd, args });
+    return '';
+  };
+  beforeEach(() => { calls.length = 0; });
+
+  it('linux: one notify-send per call, with no slot flags at all', async () => {
+    const n = createDesktopNotifier({ platform: 'linux', hasCmd: () => true, spawner });
+    await n.notify('drama-admin · 等你批准', 'Bash · pnpm build');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.cmd).toBe('notify-send');
+    expect(calls[0]!.args).toEqual(['--app-name=tlive', 'drama-admin · 等你批准', 'Bash · pnpm build']);
+  });
+
+  it('linux: no --print-id, --replace-id, --expire-time or transient hint — there is no slot to keep', async () => {
+    const n = createDesktopNotifier({ platform: 'linux', hasCmd: () => true, spawner });
+    await n.notify('a', 'b');
+    await n.notify('c', 'd');
+    const flat = calls.flatMap((c) => c.args).join(' ');
+    expect(flat).not.toContain('--print-id');
+    expect(flat).not.toContain('--replace-id');
+    expect(flat).not.toContain('--expire-time');
+    expect(flat).not.toContain('transient');
+    expect(calls.every((c) => c.cmd === 'notify-send')).toBe(true);
+    expect(calls).toHaveLength(2); // never a gdbus close between them
+  });
+
+  it('darwin: posts every time — the old model silently posted NOTHING for a non-alert', async () => {
+    const n = createDesktopNotifier({ platform: 'darwin', hasCmd: () => true, spawner });
+    await n.notify('t', 'b');
+    await n.notify('t2', 'b2');
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.cmd).toBe('osascript');
+    expect(calls[0]!.args.join(' ')).toContain('display notification "b" with title "t"');
+  });
+
+  it('win32: shows a toast with no Tag, Group, History or SuppressPopup — nothing to replace', async () => {
+    const n = createDesktopNotifier({ platform: 'win32', hasCmd: () => true, spawner });
+    await n.notify('t', 'b');
+    expect(calls).toHaveLength(1);
+    const script = calls[0]!.args.join(' ');
+    expect(script).toContain('Show');
+    expect(script).not.toContain('History.Remove');
+    expect(script).not.toContain('SuppressPopup');
+    expect(script).not.toContain('$t.Tag');
+  });
+
+  it('a missing backend is a silent no-op, on every platform', async () => {
+    for (const platform of ['linux', 'darwin', 'win32'] as const) {
+      const n = createDesktopNotifier({ platform, hasCmd: () => false, spawner });
+      await n.notify('t', 'b');
+    }
+    expect(calls).toHaveLength(0);
   });
 });
