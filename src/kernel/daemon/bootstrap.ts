@@ -25,7 +25,7 @@ import { EventHub } from '../web/event-hub.js';
 import { applyMonitorEvent, sweepDeadSessions, pidAlive } from '../web/session-events.js';
 import { ensureCodexAppServer, codexAppServerSockPath } from '../codex/spawn.js';
 import { connectCodexRpc } from '../codex/rpc.js';
-import { startCompanion, type Companion } from '../codex/companion.js';
+import { startCompanion, failureText, type Companion, type TurnOutcome } from '../codex/companion.js';
 import { excerptForCard } from './excerpt.js';
 import { TURN_FINISHED_SENTINEL, effectiveMode, type ShimMode } from '../hook/normalizer.js';
 import { writeMode } from '../config/mode.js';
@@ -107,21 +107,43 @@ export function makeCodexResumeHandler(deps: {
    *  vendor-specific, and Codex already reaches the desktop for approvals via
    *  the same PermissionRouter; only this path was missing. */
   notifyTurn: (p: { key: string; lastMessage?: string }) => void;
-}): (p: { threadId: string; key: string; lastMessage?: string }) => void {
+  /** A turn that died has to say so somewhere you can act on it — the same
+   *  treatment a failed Claude Code tool call gets. Non-blocking, so per the
+   *  delivery rule it travels to IM and the dashboard and NOT to the desktop. */
+  reportFailure: (p: { key: string; message: string }) => void;
+}): (p: { threadId: string; key: string; lastMessage?: string; outcome: TurnOutcome; errorMessage?: string }) => void {
   return (p) => {
     void (async () => {
-      const { threadId, key, lastMessage } = p;
-      // A turn that produced no assistant message has nothing for anyone to come
-      // back to, so it is not announced — not on the desktop and not as an IM
-      // continue card. `turn/completed` fires for an ABORTED turn as well, and
-      // an abort is exactly the case with no message: nine interrupted sessions
-      // in fourteen minutes produced nine empty cards and nine empty
-      // notifications before this guard existed. The dashboard still learns the
+      const { threadId, key, lastMessage, outcome, errorMessage } = p;
+      // Ends the turn's story here for anything that is not a clean completion.
+      // Both of these used to fall through to the announcement path and claim
+      // "Turn finished — reply to continue", which was false twice over: the
+      // turn did not finish, and replying resumes a thread that is about to
+      // fail the same way.
+      if (outcome === 'failed') {
+        // No grace wait: unlike "your turn", which goes stale the moment you
+        // continue it yourself, a failure that happened stays true. This is also
+        // what the Claude Code tool-failure path does — report on arrival.
+        deps.reportFailure({ key, message: failureText(errorMessage) });
+        deps.events.broadcast({ type: 'session-upsert', session: deps.sessions.upsert({ key, cwd: key, status: 'idle' }) });
+        return;
+      }
+      if (outcome === 'interrupted') {
+        // You pressed Esc. You were at the keyboard, you already know, and
+        // nothing is waiting on you. The dashboard still records it went idle.
+        deps.events.broadcast({ type: 'session-upsert', session: deps.sessions.upsert({ key, cwd: key, status: 'idle' }) });
+        return;
+      }
+      // A turn that completed cleanly but produced no assistant message has
+      // nothing for anyone to come back to, so it is not announced — not on the
+      // desktop and not as an IM continue card. The dashboard still learns the
       // session went idle below, which is true and useful.
       //
-      // The condition is content, not abortedness, on purpose: the RPC gives no
-      // abort flag, and "there is nothing to show you" is the thing that
-      // actually decides whether announcing helps.
+      // This used to be the ONLY guard, standing in for the aborted case too,
+      // because the RPC was believed to carry no abort flag. It does: `turn`
+      // carries `status` plus, for `failed`, `error` — resolved into `outcome`
+      // upstream in the companion, and handled above. Emptiness is back to
+      // meaning only what it says.
       if (!lastMessage) {
         deps.events.broadcast({ type: 'session-upsert', session: deps.sessions.upsert({ key, cwd: key, status: 'idle' }) });
         return;
@@ -881,6 +903,17 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     resume: (threadId, input) => codexResume(threadId, input),
     gracePassed,
     notifyTurn: ({ key, lastMessage }) => deliver({ key, label: sessionLabel(key), kind: 'idle', detail: lastMessage ?? '' }),
+    reportFailure: ({ key, message }) => {
+      logJson('codex.turn.failed', { key, message });
+      // Same gates and the same ⚠️ error level a failed Claude Code tool call
+      // gets in the `hook.notify` handler — a mute means quiet for both vendors.
+      // `shouldDropNotify` is not consulted: it only suppresses info-level
+      // chatter once a turn end has been announced, and this IS the
+      // announcement.
+      if (muted || sessions.get(key)?.muted) return;
+      const text = `⚠️ ${message}`;
+      void Promise.all(configuredChats().map((t) => sendToChat(t, { text, cwd: key }))).catch(() => undefined);
+    },
   });
   if (custody) {
     codexState = 'running';

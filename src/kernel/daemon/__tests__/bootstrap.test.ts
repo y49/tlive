@@ -171,31 +171,78 @@ describe('makeCodexResumeHandler', () => {
     return { broadcast, size: () => size, broadcasts };
   }
 
-  it('an interrupted Codex turn announces nothing — it produced no assistant message, so there is nothing to come back to', async () => {
-    // Real incident: nine Codex sessions in fourteen minutes, each a turn the
-    // user started and interrupted. `turn/completed` fires for an aborted turn
-    // too and carries no assistant message, so tlive announced nine finished
-    // turns with empty bodies — nine IM cards and nine desktop notifications
-    // with nothing in them. The rollout files show it plainly: user typed "1",
-    // then turn_aborted with reason interrupted.
-    let requested = false;
+  function rig(over: Partial<Parameters<typeof makeCodexResumeHandler>[0]> = {}) {
     const notified: unknown[] = [];
+    const reports: Array<{ key: string; message: string }> = [];
     const events = fakeEvents(1);
     const sessions = new SessionRegistry();
+    let requested = false;
     const handler = makeCodexResumeHandler({
       broker: { request: async () => { requested = true; return null; } },
       sessions,
       events,
-      chats: () => [],
+      chats: () => [{}],
       resume: async () => undefined,
       gracePassed: async () => true,
       notifyTurn: () => notified.push(1),
+      reportFailure: (p) => reports.push(p),
+      ...over,
     });
-    handler({ threadId: 't1', key: 'codex:t1' }); // no lastMessage: nothing was produced
+    return { handler, notified, reports, events, sessions, wasRequested: () => requested };
+  }
+
+  it('a completed Codex turn with no assistant message announces nothing — there is nothing to come back to', async () => {
+    const { handler, notified, reports, events, wasRequested } = rig();
+    handler({ threadId: 't1', key: 'codex:t1', outcome: 'completed' }); // nothing was produced
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     expect(notified).toHaveLength(0); // no desktop notification…
-    expect(requested).toBe(false);    // …and no IM continue card either
+    expect(wasRequested()).toBe(false); // …and no IM continue card either
+    expect(reports).toHaveLength(0);    // …and nothing failed, so nothing to report
     // The dashboard still learns the session is idle: that part is honest.
+    expect(events.broadcasts.some((b: any) => b.session?.status === 'idle')).toBe(true);
+  });
+
+  it('a failed turn is reported instead of announced as finished', async () => {
+    // Real incident: nine Codex threads in fourteen minutes, every turn killed
+    // by a 401 against a third-party relay. tlive announced nine FINISHED turns
+    // with empty bodies. Then the empty-body guard turned that into nine
+    // silences, which is better and still wrong: the one thing the user needed
+    // was the reason.
+    const { handler, notified, reports, events, wasRequested } = rig();
+    handler({ threadId: 't1', key: 'codex:t1', outcome: 'failed', errorMessage: 'unexpected status 401 Unauthorized' });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(reports).toEqual([{ key: 'codex:t1', message: 'Codex turn failed: unexpected status 401 Unauthorized' }]);
+    // A failure is not blocking, so it does not reach the desktop, and it must
+    // not offer a reply that resumes a thread about to fail the same way.
+    expect(notified).toHaveLength(0);
+    expect(wasRequested()).toBe(false);
+    expect(events.broadcasts.some((b: any) => b.session?.status === 'idle')).toBe(true);
+  });
+
+  it('a failed turn is reported even when a new turn started inside the grace', async () => {
+    // "Your turn" goes stale the moment you continue it yourself; a failure that
+    // happened stays true. Same as the Claude Code tool-failure path, which
+    // reports on arrival and waits for nothing.
+    const { handler, reports } = rig({ gracePassed: async () => false });
+    handler({ threadId: 't1', key: 'codex:t1', outcome: 'failed', errorMessage: 'boom' });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(reports).toHaveLength(1);
+  });
+
+  it('a failed turn with no error detail still says something', async () => {
+    const { handler, reports } = rig();
+    handler({ threadId: 't1', key: 'codex:t1', outcome: 'failed' });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(reports[0]!.message).toBe('Codex turn failed (no error detail)');
+  });
+
+  it('an interrupted turn says nothing at all — you pressed Esc, you already know', async () => {
+    const { handler, notified, reports, events, wasRequested } = rig();
+    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'half an answer', outcome: 'interrupted' });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(reports).toHaveLength(0);
+    expect(notified).toHaveLength(0);
+    expect(wasRequested()).toBe(false);
     expect(events.broadcasts.some((b: any) => b.session?.status === 'idle')).toBe(true);
   });
 
@@ -213,8 +260,9 @@ describe('makeCodexResumeHandler', () => {
       resume: async () => undefined,
       gracePassed: async () => true,
       notifyTurn: (p) => notified.push(p),
+      reportFailure: () => {},
     });
-    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'patch applied' });
+    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'patch applied', outcome: 'completed' });
     await until(() => { expect(notified).toHaveLength(1); });
     expect(notified[0]).toEqual({ key: 'codex:t1', lastMessage: 'patch applied' });
   });
@@ -229,8 +277,9 @@ describe('makeCodexResumeHandler', () => {
       resume: async () => undefined,
       gracePassed: async () => true,
       notifyTurn: (p) => notified.push(p),
+      reportFailure: () => {},
     });
-    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'done' });
+    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'done', outcome: 'completed' });
     await until(() => { expect(notified).toHaveLength(1); });
   });
 
@@ -244,8 +293,9 @@ describe('makeCodexResumeHandler', () => {
       resume: async () => undefined,
       gracePassed: async () => false, // turn/started arrived inside the grace
       notifyTurn: () => notified.push(1),
+      reportFailure: () => {},
     });
-    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'done' });
+    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'done', outcome: 'completed' });
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     expect(notified).toHaveLength(0);
   });
@@ -262,9 +312,10 @@ describe('makeCodexResumeHandler', () => {
       chats: () => [],
       resume: async (t, i) => { resumeCall = [t, i]; await resume(t, i); },
       gracePassed: async () => true,
-      notifyTurn: () => {}
+      notifyTurn: () => {},
+      reportFailure: () => {},
     });
-    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'done' });
+    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'done', outcome: 'completed' });
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     expect(resumeCall).toEqual(['t1', 'go on']);
     expect(events.broadcasts.some((b: any) => b.session?.status === 'active')).toBe(true);
@@ -283,8 +334,9 @@ describe('makeCodexResumeHandler', () => {
       resume: async () => { resumed = true; },
       gracePassed: async () => true,
       notifyTurn: () => {},
+      reportFailure: () => {},
     });
-    handler({ threadId: 't1', key: 'codex:t1' });
+    handler({ threadId: 't1', key: 'codex:t1', outcome: 'completed' });
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     expect(requested).toBe(false);
     expect(resumed).toBe(false);
@@ -302,9 +354,10 @@ describe('makeCodexResumeHandler', () => {
       chats: () => [],
       resume: async () => { resumed = true; },
       gracePassed: async () => true,
-      notifyTurn: () => {}
+      notifyTurn: () => {},
+      reportFailure: () => {},
     });
-    handler({ threadId: 't1', key: 'codex:t1' });
+    handler({ threadId: 't1', key: 'codex:t1', outcome: 'completed' });
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     expect(resumed).toBe(false);
     expect(events.broadcasts.filter((b: any) => b.session?.status === 'idle').length).toBeGreaterThan(0);
