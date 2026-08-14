@@ -152,17 +152,15 @@ describe('resolveKey — one key per session, not per directory', () => {
 });
 
 describe('shouldDropNotify', () => {
-  it('drops an info-level idle notify when a continue card is already pending for the session', () => {
-    expect(shouldDropNotify('req-1', 'info')).toBe(true);
+  it('drops an info-level idle notify once this turn\'s end has already been announced', () => {
+    expect(shouldDropNotify(true, 'info')).toBe(true);
   });
-  it('never drops an error-level failure notify, even with a continue card pending — a stale continueId (up to continueWindowSec, default 30min) must not silently eat a tool/stop failure alert', () => {
-    expect(shouldDropNotify('req-1', 'error')).toBe(false);
+  it('never drops an error-level failure notify, announced or not — a tool or stop failure must never be silently eaten', () => {
+    expect(shouldDropNotify(true, 'error')).toBe(false);
+    expect(shouldDropNotify(false, 'error')).toBe(false);
   });
-  it('keeps the notify when no continue card is outstanding, for both levels', () => {
-    expect(shouldDropNotify(null, 'info')).toBe(false);
-    expect(shouldDropNotify(undefined, 'info')).toBe(false);
-    expect(shouldDropNotify(null, 'error')).toBe(false);
-    expect(shouldDropNotify(undefined, 'error')).toBe(false);
+  it('keeps an info-level notify when this turn\'s end was never announced — the Stop hook may never have reached the daemon, e.g. it was down, and then this notification is the only signal', () => {
+    expect(shouldDropNotify(false, 'info')).toBe(false);
   });
 });
 
@@ -1745,6 +1743,42 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     expect(sent).toHaveLength(1);
   });
 
+  it('Claude Code\'s idle notification does NOT reach IM once the Stop hook announced this turn — the continue card already said it', async () => {
+    // The old dedup asked "is a continue card live", reading a field that is
+    // only written after the grace and never written at all when the grace
+    // cancels the card — so the notification slipped through the very window
+    // the rule exists to cover. It now asks "was this turn's end announced",
+    // which the Stop hook's arrival settles before any grace runs.
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'notify', approvals: { continueGraceSec: 30, continueWindowSec: 60 } }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+    void request(
+      { kind: 'hook.continue.request', cwd: '/w/vf', sessionId: 's1', context: 'ctx', lastMessage: 'done' },
+      { socketPath: sock, timeoutMs: 40_000 },
+    ).catch(() => undefined);
+    // Still inside the grace: no card has been sent yet, and the old rule would
+    // have let this through.
+    await request({ kind: 'hook.notify', cwd: '/w/vf', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
+    expect(sent.filter((m) => (m as { text?: string }).text?.includes('waiting for your input'))).toHaveLength(0);
+  });
+
+  it('a new prompt re-arms the dedup — the next turn\'s idle notification is a different turn\'s news', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'notify', approvals: { continueGraceSec: 30, continueWindowSec: 60 } }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+    void request(
+      { kind: 'hook.continue.request', cwd: '/w/vf', sessionId: 's1', context: 'ctx', lastMessage: 'done' },
+      { socketPath: sock, timeoutMs: 40_000 },
+    ).catch(() => undefined);
+    await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/w/vf', sessionId: 's1' } }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w/vf', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
+    await until(() => { expect(sent.some((m) => (m as { text?: string }).text?.includes('waiting for your input'))).toBe(true); });
+  });
+
   it('an idle session still reaches IM — replying there continues the run, so it is not dead mail', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'notify' }));
     const sent: OutgoingMessage[] = [];
@@ -2013,6 +2047,25 @@ describe('desktop notifications are one-per-event', () => {
     expect(notes[0]!.body).toBe('Claude needs your permission to use Bash');
   });
 
+
+  it('a read-only dialog card is timestamped, so the dashboard can say WHEN it was reported instead of asserting it is still true', async () => {
+    // tlive cannot know whether a Claude Code dialog is still up: the
+    // notification that reports one carries no agent id, so a dialog raised by
+    // a background agent is recorded against the main session and answered by a
+    // tool call the clearing path deliberately ignores. Rather than guess — and
+    // clearing on sub-agent activity would wipe a main dialog that really is
+    // waiting, measured at 27 minutes on real hardware — the claim carries the
+    // moment it was made and the dashboard renders its age.
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+    const before = Date.now();
+    await request({ kind: 'hook.notify', cwd: '/w/repo', sessionId: 's1', level: 'info', message: 'Claude needs your permission to use Bash', permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    const seenAt = h.sessions.get('s1')?.pending?.seenAt;
+    expect(typeof seenAt).toBe('number');
+    expect(seenAt!).toBeGreaterThanOrEqual(before);
+    expect(seenAt!).toBeLessThanOrEqual(Date.now());
+  });
 
   it('answering fires NOTHING — retirement events have no desktop surface any more', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));

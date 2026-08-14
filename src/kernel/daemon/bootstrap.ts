@@ -65,15 +65,25 @@ export function shouldFastNullContinue(chatCount: number, webClientCount: number
   return chatCount === 0 && webClientCount === 0;
 }
 
-/** 该会话已挂着一张续跑卡(continueId 非空)时,idle notification(level=info)
- *  是重复 —— CC 在 turn 结束 60s 后会 fire 一条 "waiting for your input",而
- *  Turn finished 卡早就在等你了。只对 info 级去重;error 级(工具失败 /
- *  Stop 失败告警,见 hook.ts 的 level 判定)永不去重 —— continueId 只在
- *  broker resolve 时清空(最长 continueWindowSec,默认 30min),且
- *  'prompt' 事件(键盘前续跑)不清它,残留期间任何失败告警都不能被静默吞掉。
- *  用状态 + level 判断,不匹配 vendor 文案。 */
-export function shouldDropNotify(continueId: string | null | undefined, level: 'info' | 'warn' | 'error'): boolean {
-  return level === 'info' && Boolean(continueId);
+/** Claude Code fires a "waiting for your input" notification about 60 seconds
+ *  after a turn ends. That is news tlive already delivered: the Stop hook told
+ *  it the same thing, and the continue card went out. So an info-level notify
+ *  is dropped once this turn's end has been announced.
+ *
+ *  `turnEndAnnounced` is deliberately NOT "a continue card is live". That was
+ *  the old test, read off the registry's `continueId`, and it was blind for
+ *  exactly the window it had to cover: `continueId` is written when the broker
+ *  request starts — AFTER the grace — and never written at all when the grace
+ *  cancels the card. Claude Code's notification lands in that gap, so the
+ *  duplicate went out anyway. The Stop hook's ARRIVAL settles the question
+ *  before any grace runs, and a new prompt is what makes it stale again.
+ *
+ *  Error level is never dropped: a tool or stop failure is separate news, and
+ *  an announcement that outlives its turn must not silently eat it.
+ *
+ *  Judged on state plus level, never by matching vendor wording. */
+export function shouldDropNotify(turnEndAnnounced: boolean, level: 'info' | 'warn' | 'error'): boolean {
+  return level === 'info' && turnEndAnnounced;
 }
 
 /** Codex `turn/completed` → offer the reply to whoever's watching (IM/web) via
@@ -548,6 +558,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
    *  different subsets. */
   const retireGoneSession = (key: string, cwd: string, sessionId?: string): void => {
     clearLocalPrompt(key, sessionId, cwd);
+    // A session that is gone announces nothing. Hygiene rather than behaviour —
+    // its registry entry goes too — but a per-session Set that only ever grows
+    // is the kind of thing that is obvious now and a puzzle in six months.
+    turnEndAnnounced.delete(key);
   };
 
   // Reap sessions whose owning process died without unregistering: `tlive run`
@@ -627,7 +641,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // session key: never evict an already-held main-session approval.
       if (!sessions.get(key)?.pending) {
         events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd, status: 'waiting-approval', pending: {
-          requestId: passthruRequestId(agentId, toolName), title: `${toolName} · sub-agent`, body, local: true,
+          requestId: passthruRequestId(agentId, toolName), title: `${toolName} · sub-agent`, body, local: true, seenAt: Date.now(),
         } }) });
       }
       // IM card stays mute-gated (/mute is IM-only) — the desktop toast and
@@ -698,7 +712,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // "Denied via tlive" answer to its own question — the reason ask cards
       // used to be hidden from the web entirely).
       events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd, status: 'waiting-approval', pending: {
-        requestId, title, body, toolName,
+        requestId, title, body, toolName, seenAt: Date.now(),
         ...(ask ? { ask: askView(ask.batch, 0) } : {}),
       } }) });
     },
@@ -760,6 +774,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // key → cancel-grace:一个会话在续跑 grace 窗口内时,收到该会话的新 prompt
   // 就调用它取消发卡(用户在键盘前继续了)。
   const continueGrace = new Map<string, () => void>();
+  // Sessions whose current turn-end has already been announced — the Stop hook
+  // arrived and the continue card went out or is in its grace. Set on the Stop
+  // hook's ARRIVAL and cleared by the next prompt, so it covers the whole
+  // period Claude Code's own idle notification can land in; see
+  // shouldDropNotify for why "is a card live" could not.
+  const turnEndAnnounced = new Set<string>();
 
   continueBroker.onRequest((req) => {
     latestContinueId = req.requestId;
@@ -1012,6 +1032,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // no label at all, which is the one thing it cannot afford to omit.
           // Same guard, same reason, as the hook.notify handler's.
           if (!sessions.get(key)) sessions.upsert({ key, cwd: req.cwd });
+          // Announced from HERE, not from wherever the card ends up going out:
+          // this is the earliest moment tlive knows the turn ended, and the
+          // whole point is to cover the grace as well.
+          turnEndAnnounced.add(key);
           // Grace 门控:turn 刚结束,先等 graceSec —— 你要是在键盘前很快开始新
           // 一轮(UserPromptSubmit),就取消,不发续跑卡(消除刷屏);静默才推卡。
           // (async Stop hook 让 turn 立即结束,本 grace 不占用你的终端。)
@@ -1126,7 +1150,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               deliver({ key, label: sessionLabel(key), kind: 'localPrompt', detail: req.message });
               // Dashboard: read-only waiting-approval card (pending.local) —
               // visible from anywhere, answerable only at the terminal.
-              events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'waiting-approval', pending: { requestId: `local:${key}`, title: 'Permission needed', body: req.message, local: true } }) });
+              events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'waiting-approval', pending: { requestId: `local:${key}`, title: 'Permission needed', body: req.message, local: true, seenAt: Date.now() } }) });
               // No IM text for this dialog, ever. It can only be answered at
               // the terminal, and a phone cannot reach a terminal — the message
               // was pure anxiety with no exit. Every channel this daemon
@@ -1190,7 +1214,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // 活动的唯一途径(PostToolUse/PostToolUseFailure 互斥,失败时没有
           // activity 事件替补)。Fix 3b:上一版把这个短路放在 shim 层,连
           // dashboard 一起吞了——落点错了,改回这里。
-          if (!muted && !s?.muted && !shouldDropNotify(s?.continueId, req.level) && !req.droppable) {
+          if (!muted && !s?.muted && !shouldDropNotify(turnEndAnnounced.has(key), req.level) && !req.droppable) {
             // cwd carries the resolved KEY so the label tag + reply-routing map are consistent.
             // 装饰性 emoji 一律不发;error 级别用 ⚠️(有信息量)。
             // normalizer 不再自带任何前缀(单一职责:只归一化文本)——
@@ -1246,6 +1270,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // 精确到主会话:一个 backgrounded 子 agent 的审批与父会话的输入框无关
             // (它仍真在等,且无本地答路 —— 清掉 = 保证被 deny),不得被父 prompt 清场。
             permissionRouter.cancel({ key, sessionId: ev.sessionId, matchAgent: null });
+            // New input = a new turn, so the previous turn's announcement no
+            // longer covers anything Claude Code says from here on.
+            turnEndAnnounced.delete(key);
             clearLocalPrompt(key, ev.sessionId, ev.cwd);
             // 用户在键盘前开始了新一轮 → 取消上一 turn 还在 grace 里的续跑卡
             const g = continueGrace.get(key);

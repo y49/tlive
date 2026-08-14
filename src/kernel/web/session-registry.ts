@@ -22,6 +22,15 @@ export type SessionKind = 'wrapped' | 'hook';
 
 export interface PendingApproval {
   requestId: string;
+  /** When this claim was made, ms epoch. Required on purpose: a card that says
+   *  "waiting at the terminal" is asserting a present state tlive cannot verify
+   *  — the notification reporting a dialog carries no agent id, so one raised by
+   *  a background agent is recorded here against the main session and answered
+   *  by a tool call the clearing path must ignore. Timestamping the claim is
+   *  what lets the dashboard show its age instead of insisting it is still true,
+   *  and making the field required means a new construction site cannot forget
+   *  to date its own claim. */
+  seenAt: number;
   title: string;
   body: string;
   toolName?: string; // for "always allow <tool>" actions
