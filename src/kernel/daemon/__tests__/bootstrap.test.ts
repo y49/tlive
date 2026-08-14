@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { bootstrapDaemon, shouldFastNullContinue, clampPermissionTimeout, makeCodexResumeHandler, shouldDropNotify, resolveKey, detectLang, type DaemonHandle } from '../bootstrap';
 import { request, daemonSocketPath } from '../../ipc/client';
+import { AlreadyRunningError } from '../../ipc/server.js';
 import type { IMAdapter, IMChannel, OutgoingMessage, IncomingEnvelope } from '../../contracts/im-adapter';
 import { SessionRegistry } from '../../web/session-registry';
 import { until } from '../../__tests__/wait.js';
@@ -106,15 +107,19 @@ describe('daemon bootstrap', () => {
   });
 
   // The `desktop` runtime toggle was removed entirely (no separate on/off
-  // switch for the desktop channel). A stale CLI
-  // still shipping `daemon.set key=desktop` must get a loud error, not
-  // silently land on whichever branch happens to be last in the dispatch.
+  // switch for the desktop channel). A stale CLI still shipping `daemon.set
+  // key=desktop` must get a loud error, not silently land on whichever branch
+  // happens to be last in the dispatch.
   it('daemon.set no longer accepts the retired desktop key', async () => {
     h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async () => {} } });
     const r = await request({ kind: 'daemon.set', key: 'desktop', enabled: false } as never, { socketPath: h.ipcSocketPath, timeoutMs: 2000 });
     expect(r.kind).toBe('error');
   });
 
+  it('a second daemon against the same home fails to bind', async () => {
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [] });
+    await expect(bootstrapDaemon({ home: tmp, imAdapters: [] })).rejects.toBeInstanceOf(AlreadyRunningError);
+  });
 });
 
 describe('dual-channel wiring helpers', () => {

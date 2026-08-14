@@ -5,7 +5,7 @@ describe('createDesktopNotifier', () => {
   const linux = { platform: 'linux' as const, hasCmd: () => true };
 
   it('is a silent no-op when disabled / on unsupported platforms / without notify-send', async () => {
-    const sp = vi.fn(async () => '');
+    const sp = vi.fn(async () => {});
     await createDesktopNotifier({ ...linux, enabled: false, spawner: sp }).notify('t', 'b');
     await createDesktopNotifier({ platform: 'freebsd', hasCmd: () => true, spawner: sp }).notify('t', 'b');
     await createDesktopNotifier({ platform: 'linux', hasCmd: () => false, spawner: sp }).notify('t', 'b');
@@ -47,7 +47,7 @@ describe('vitest backstop', () => {
     const calls: string[][] = [];
     const n = createDesktopNotifier({
       platform: 'linux', hasCmd: () => true,
-      spawner: async (cmd, args) => { if (cmd === 'notify-send') calls.push(args); return '1'; },
+      spawner: async (cmd, args) => { if (cmd === 'notify-send') calls.push(args); },
     });
     await n.notify('t', 'b');
     expect(calls).toHaveLength(1);
@@ -117,7 +117,6 @@ describe('notify — one notification per waiting thing', () => {
   const calls: Array<{ cmd: string; args: string[] }> = [];
   const spawner: Spawner = async (cmd, args) => {
     calls.push({ cmd, args });
-    return '';
   };
   beforeEach(() => { calls.length = 0; });
 

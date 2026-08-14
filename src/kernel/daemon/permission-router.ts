@@ -32,9 +32,9 @@ export interface PermissionRouterDeps {
   /** True when at least one dashboard client is connected on /ws/events —
    *  a card can be answered from the web even with zero IM chats. */
   hasWebClients: () => boolean;
-  /** True when the daemon's own machine can surface + answer a card without IM —
-   *  i.e. the desktop toast is on AND can open a dashboard. Lets a muted-IM
-   *  approval still be answered locally instead of deferring to the terminal. */
+  /** True when a dashboard exists to answer a card from, without IM. Lets a
+   *  muted-IM approval still be answered locally instead of deferring to the
+   *  terminal. */
   hasLocalAnswerPath: () => boolean;
   /** Vendor-neutral policy: allow (auto) vs ask (send card). Never auto-denies. */
   policyDecide: (req: { toolName: string; input: unknown; permissionMode?: string }) => { decision: 'allow' | 'ask'; reason?: string };

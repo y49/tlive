@@ -29,18 +29,18 @@
 import { spawn } from 'node:child_process';
 import { commandOnPath } from '../integrations/hooks-cleanup.js';
 
-/** Runs the command and resolves its stdout (null on any failure). */
-export type Spawner = (cmd: string, args: string[]) => Promise<string | null>;
+/** Runs the command. Fire-and-forget: nothing is read back from it, on any
+ *  platform — there is no output left to capture now that no notification is
+ *  ever replaced or retracted by id. */
+export type Spawner = (cmd: string, args: string[]) => Promise<void>;
 
 const defaultSpawner: Spawner = (cmd, args) =>
   new Promise((resolve) => {
     try {
-      const c = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'ignore'] });
-      let out = '';
-      c.stdout.on('data', (d: Buffer) => { out += d.toString(); });
-      c.on('error', () => resolve(null));
-      c.on('close', () => resolve(out));
-    } catch { resolve(null); }
+      const c = spawn(cmd, args, { stdio: 'ignore' });
+      c.on('error', () => resolve());
+      c.on('close', () => resolve());
+    } catch { resolve(); }
   });
 
 export interface DesktopNotifier {
@@ -138,7 +138,7 @@ const WIN_APP_ID = String.raw`{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowe
 /** One toast per waiting thing. No Tag, Group, History.Remove or
  *  SuppressPopup: those existed to keep a single slot current, and there is no
  *  slot any more. */
-export function win32NotifyScript(title: string, body: string): string {
+function win32NotifyScript(title: string, body: string): string {
   const esc = (v: string): string =>
     v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
   return [
@@ -151,7 +151,7 @@ export function win32NotifyScript(title: string, body: string): string {
 }
 
 function win32Notifier(sp: Spawner): DesktopNotifier {
-  const run = (script: string): Promise<string | null> =>
+  const run = (script: string): Promise<void> =>
     sp('powershell', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script]);
   return {
     notify: async (title, body) => { await run(win32NotifyScript(title, body)); },

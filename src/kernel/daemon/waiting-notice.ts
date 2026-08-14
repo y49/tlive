@@ -2,15 +2,14 @@
 // is waiting for the user.
 //
 // This replaces the old aggregate projection (one toast listing everything
-// waiting), and the reason is worth keeping: a notification is an EVENT, not
-// a status display. An
-// aggregate toast has to claim "N sessions are waiting", which is true for a
-// few seconds and then sits in the notification centre's history lying about
-// it — which is exactly how a toast raised by one project came to read as
-// another project's approval. A notice that says "drama-admin needs approval
-// for pnpm build" is true at the moment it fires and stays true forever, in
-// the panel and in the history, which is what makes needing no lifecycle a
-// consequence rather than a shortcut.
+// waiting), and the reason is worth keeping: a notification is an EVENT, not a
+// status display. An aggregate toast has to claim "N sessions are waiting",
+// which is true for a few seconds and then sits in the notification centre's
+// history lying about it — which is exactly how a toast raised by one project
+// came to read as another project's approval. A notice that says "drama-admin
+// needs approval for pnpm build" is true at the moment it fires and stays true
+// forever, in the panel and in the history, which is what makes needing no
+// lifecycle a consequence rather than a shortcut.
 //
 // Masking and the length cap live HERE, not at the call sites: three
 // different sources feed `detail` — a summarized tool call, Claude Code's own
