@@ -135,6 +135,13 @@ export function summarizeToolCall(toolName: string, input: unknown): string {
         try { return new URL(u).host; } catch { return u; }
       }
       case 'Task': return one(str(input, 'description') ?? '');
+      case 'AskUserQuestion': {
+        // The header exists to be a short label — it is what the question is
+        // ABOUT, which is exactly the one line wanted here. Without one, the
+        // question text itself; the renderer caps the length either way.
+        const q = (input as { questions?: Array<{ question?: string; header?: string }> } | null)?.questions?.[0];
+        return one(q?.header ?? q?.question ?? '');
+      }
       default: return '';
     }
   })();

@@ -134,6 +134,18 @@ describe('summarizeToolCall', () => {
       .toBe('Task · Audit the retry paths');
   });
 
+  it('AskUserQuestion names the question, not itself — a body reading "AskUserQuestion" tells you nothing you did not already know', () => {
+    const input = { questions: [{ question: 'Which auth method should the worker use?', header: 'Auth method', options: [{ label: 'OIDC' }], multiSelect: false }] };
+    expect(summarizeToolCall('AskUserQuestion', input)).toBe('AskUserQuestion · Auth method');
+  });
+
+  it('AskUserQuestion falls back to the question text when there is no header, and to its own name when there are no questions', () => {
+    expect(summarizeToolCall('AskUserQuestion', { questions: [{ question: 'Ship it?', options: [], multiSelect: false }] }))
+      .toBe('AskUserQuestion · Ship it?');
+    expect(summarizeToolCall('AskUserQuestion', { questions: [] })).toBe('AskUserQuestion');
+    expect(summarizeToolCall('AskUserQuestion', {})).toBe('AskUserQuestion');
+  });
+
   it('an unknown tool, or a known one with nothing to name, degrades to the tool name alone', () => {
     expect(summarizeToolCall('mcp__weird__thing', { a: 1 })).toBe('mcp__weird__thing');
     expect(summarizeToolCall('Bash', {})).toBe('Bash');
