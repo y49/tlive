@@ -173,11 +173,21 @@ There is no separate on/off switch: use your OS's Do Not Disturb to silence
 them temporarily, or `tlive mode off` to stop tlive entirely. Without
 `notify-send` (or the platform equivalent) they silently no-op.
 
-**Only blocking work reaches the desktop.** A finished turn and a failed tool
-go to IM and never pop a notification — a per-turn "done" notification would
-bury the handful that actually need you.
+**Only work that needs you reaches the desktop.** Four things do: an approval
+tlive is holding, a sub-agent's approval waiting at your terminal, a Claude
+Code dialog tlive is not holding, and a finished turn — the last one because
+"nothing happens until you type" is something you need to come back for. A
+failed tool does not: it blocks nobody, and it goes to IM where it is
+diagnosable.
 
-If you see a desktop notification saying a turn finished, check who sent it: it
+A finished turn is delivered from the Stop hook, the same event the IM continue
+card rides, after the same `continueGraceSec` grace — so continuing at the
+keyboard within that grace notifies nobody, and Claude Code's own 60-second
+"waiting for your input" notification is left to say what it likes without
+tlive repeating it.
+
+If you see a SECOND desktop notification saying a turn finished, check who sent
+it: it
 is almost certainly your IM client, not tlive. Running Telegram or Feishu on
 the same machine turns every message tlive sends to IM — continue cards, idle
 nudges, failure reports — into a second desktop notification, which is exactly

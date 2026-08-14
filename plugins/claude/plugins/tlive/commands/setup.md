@@ -22,8 +22,9 @@ Guide the user through tlive setup. Execute in order, showing each result:
       and tlive never touches it again afterward; it just ages into the
       notification centre like any other app's, so that's a log, not a live
       status board (open the dashboard for what's waiting right now). A
-      finished turn and tool failures stay on IM (a per-turn toast would
-      flood the screen). There is no separate on/off switch: use the OS's Do
+      finished turn notifies the desktop too, after the same grace as the IM
+      card; tool failures stay on IM, since they block nobody. There is no
+      separate on/off switch: use the OS's Do
       Not Disturb to silence them temporarily, or `tlive mode off` to stop
       tlive entirely.
    e. Hand out the dashboard via `tlive url`; suggest opening it once.

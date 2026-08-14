@@ -79,8 +79,9 @@ ladder). The daemon auto-starts with new sessions (disable via
   touches it again — it ages into the notification centre like any other
   app's, a log rather than live status (the dashboard is the live view).
   Silence it with your OS's Do Not Disturb, or `tlive mode off` to stop tlive
-  entirely. A finished turn stays on IM (a per-turn toast would flood the
-  screen).
+  entirely. A finished turn notifies the desktop too, from the Stop hook and
+  after the same grace as the IM card; a failed tool does not, it blocks
+  nobody.
 - Vendor-side `permissions.deny` always wins; tlive never overrides it.
 
 ## First-time onboarding

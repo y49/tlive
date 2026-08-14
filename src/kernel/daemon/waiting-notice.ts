@@ -1,5 +1,5 @@
-// The copy and the renderer for ONE desktop notification about ONE thing that
-// is waiting for the user.
+// One thing that needs the user: the event shape, the reason copy, and the
+// renderer that turns it into a desktop notification.
 //
 // This replaces the old aggregate projection (one toast listing everything
 // waiting), and the reason is worth keeping: a notification is an EVENT, not a
@@ -28,7 +28,17 @@ export type WaitKind = 'held' | 'subagent' | 'localPrompt' | 'idle';
  *  than shipping English. */
 export type Lang = 'en' | 'zh';
 
-export interface WaitingNotice {
+/** One thing that now needs the user. Channel-agnostic on purpose: the desktop
+ *  is its only consumer today, and the next consumer that cannot answer either
+ *  — a webhook, a phone push — is a second reader of this same object rather
+ *  than a fifth call site to remember. Surfaces that CAN be answered from (an
+ *  IM card, the dashboard) hang off the request instead: they need settlement,
+ *  a grace and a mute, and none of that belongs on an event that is delivered
+ *  once and never touched again. */
+export interface WaitingEvent {
+  /** Registry session key — identity for a consumer that has no idea what a
+   *  label is (a webhook keys by session, not by display name). */
+  key: string;
   /** Session label, already resolved by the caller. '' on a registry miss —
    *  the title then degrades to the bare reason rather than a stray ' · '. */
   label: string;
@@ -61,9 +71,26 @@ const REASON: Record<WaitKind, Record<Lang, string>> = {
   idle: { en: 'waiting for your input', zh: '等你输入' },
 };
 
-export function renderWaiting(n: WaitingNotice, lang: Lang): { title: string; body: string } {
+/** Markdown markers, stripped so a body is plain text. The last assistant
+ *  message is markdown, and a notification body is one plain line on a lock
+ *  screen: emphasis markers survive as literal noise and eat a 90-character
+ *  budget. Deliberately NOT `excerptForCard` — that renders markdown FOR
+ *  Telegram, keeping bold, inline code and paragraph newlines on purpose, and
+ *  its omission markers ate the budget when it was asked for 90 characters. */
+const stripMarkdown = (s: string): string => s
+  .replace(/```[\s\S]*?```/g, ' ')      // fenced code: whole block, not its markers
+  .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, '')
+  .replace(/^[ \t]{0,3}>[ \t]?/gm, '')
+  .replace(/\*\*([^*]+)\*\*/g, '$1')
+  .replace(/(^|\s)[*_]([^*_\n]+)[*_]/g, '$1$2')
+  .replace(/`([^`\n]+)`/g, '$1');
+
+export function renderWaiting(n: WaitingEvent, lang: Lang): { title: string; body: string } {
   const reason = REASON[n.kind][lang];
-  const flat = maskSecrets(n.detail.replace(/\s+/g, ' ').trim());
+  // Order matters and each step earns its place: strip markers, flatten to one
+  // line, mask secrets, then cap. Masking BEFORE the cap is what stops a secret
+  // from surviving by sitting past the cut.
+  const flat = maskSecrets(stripMarkdown(n.detail).replace(/\s+/g, ' ').trim());
   const body = flat.length > DETAIL_BUDGET ? `${flat.slice(0, DETAIL_BUDGET - 1)}…` : flat;
   return { title: n.label ? `${n.label} · ${reason}` : reason, body };
 }

@@ -527,38 +527,75 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     expect((sent[0] as { title?: string }).title).toContain('Turn finished');
   });
 
-  it('info-level notify ("Claude is waiting for your input") fires a desktop notification; error-level (failures) does NOT', async () => {
+  it('an info-level notify no longer reaches the desktop, and error-level never did', async () => {
+    // Claude Code's own 60-second "waiting for your input" notification used to
+    // be this channel's trigger; "your turn" rides the Stop hook now. Error
+    // level was always excluded: a failed tool blocks nobody, and it goes to IM
+    // where it is diagnosable.
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
     const renders: Array<{ title: string; body: string }> = [];
     h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
-    expect(renders).toHaveLength(1);
-    expect(renders[0].title).toContain('waiting for your input'); // the reason rides the title
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'error', message: 'Bash failed: boom' }, { socketPath: sock, timeoutMs: 2000 });
-    expect(renders).toHaveLength(1); // error-level stays on IM/dashboard, never the at-the-keyboard channel
+    expect(renders).toHaveLength(0);
   });
 
-  // The reason is localized inside renderWaiting, and the previous test alone
-  // cannot tell that apart from a hardcoded English literal, since 'en' is this
-  // suite's default. This one forces zh and checks the TITLE (which carries the
-  // reason) actually switches — proving `lang` is threaded from detectLang all
-  // the way to the idle emit site rather than a fixed string being used.
-  it('an idle notification\'s reason is localized to zh under a zh locale, not hardcoded English', async () => {
-    process.env.LC_ALL = 'zh_CN.UTF-8';
+  // "Your turn" rides the Stop hook, the same event the IM continue card rides,
+  // and NOT Claude Code's own 60-second "waiting for your input" notification.
+  // Two reasons, both structural: the Stop hook's payload carries the real last
+  // assistant message, whereas the notification path had to dig it out of a
+  // registry field that the same hook overwrites with its own boilerplate; and
+  // the timing then belongs to tlive's own configurable grace instead of a
+  // Claude Code constant that varies with the user's settings.
+  it('a finished turn notifies the desktop with what Claude actually said', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { continueGraceSec: 0, continueWindowSec: 30 } }));
+    const renders: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+    // The Stop hook blocks in the daemon until the continue window resolves, so
+    // it cannot be awaited here.
+    void request(
+      { kind: 'hook.continue.request', cwd: '/w/repo', sessionId: 's1', context: 'ctx', lastMessage: 'Fixed the retry path; 932 tests pass' },
+      { socketPath: sock, timeoutMs: 40_000 },
+    ).catch(() => undefined);
+    await until(() => { expect(renders).toHaveLength(1); });
+    expect(renders[0].title).toBe('repo · waiting for your input');
+    expect(renders[0].body).toBe('Fixed the retry path; 932 tests pass');
+  });
+
+  it('Claude Code\'s own 60-second idle notification no longer produces a desktop notification — one event, one notification', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
     const renders: Array<{ title: string; body: string }> = [];
     h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
-    expect(renders).toHaveLength(1);
+    expect(renders).toHaveLength(0);
+  });
+
+  // The reason is localized inside renderWaiting, and the test above cannot tell
+  // that apart from a hardcoded English literal, since 'en' is this suite's
+  // default. This one forces zh and checks the TITLE actually switches — proving
+  // `lang` is threaded from detectLang to the emit site rather than fixed.
+  it('a finished turn\'s reason is localized to zh under a zh locale, not hardcoded English', async () => {
+    process.env.LC_ALL = 'zh_CN.UTF-8';
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { continueGraceSec: 0, continueWindowSec: 30 } }));
+    const renders: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+    void request(
+      { kind: 'hook.continue.request', cwd: '/w', sessionId: 's1', context: 'ctx', lastMessage: 'done' },
+      { socketPath: sock, timeoutMs: 40_000 },
+    ).catch(() => undefined);
+    await until(() => { expect(renders).toHaveLength(1); });
     expect(renders[0].title).toContain('等你输入');
     expect(renders[0].title).not.toContain('your input');
   });
 
-  it('the desktop channel is INDEPENDENT of IM mute (IM ⊥ desktop): /mute on silences IM but the idle notification still fires', async () => {
+  it('the desktop channel is INDEPENDENT of IM mute (IM ⊥ desktop): /mute on silences IM but a finished turn still notifies the desktop', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },
+      approvals: { continueGraceSec: 0, continueWindowSec: 30 },
       adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
     }));
     const sent: OutgoingMessage[] = [];
@@ -567,8 +604,11 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async (t, b) => { renders.push({ title: t, body: b }); } } });
     const sock = daemonSocketPath(tmp);
     await request({ kind: 'daemon.set', key: 'mute', enabled: true }, { socketPath: sock, timeoutMs: 2000 }); // /mute on
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
-    expect(renders).toHaveLength(1); // desktop fires despite the IM mute…
+    void request(
+      { kind: 'hook.continue.request', cwd: '/w', sessionId: 's1', context: 'ctx', lastMessage: 'done' },
+      { socketPath: sock, timeoutMs: 40_000 },
+    ).catch(() => undefined);
+    await until(() => { expect(renders).toHaveLength(1); }); // desktop fires despite the IM mute…
     expect(sent).toHaveLength(0);  // …IM stays silent
   });
 
@@ -1973,21 +2013,6 @@ describe('desktop notifications are one-per-event', () => {
     expect(notes[0]!.body).toBe('Claude needs your permission to use Bash');
   });
 
-  it('an idle notification never quotes its own boilerplate back at you', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
-    const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
-    const sock = daemonSocketPath(tmp);
-    const idle = { kind: 'hook.notify' as const, cwd: '/w/repo', sessionId: 's1', level: 'info' as const, message: 'Claude is waiting for your input' };
-    // The FIRST one records its own message as the session's lastMessage, so a
-    // naive second read would quote "Claude is waiting for your input" as if
-    // Claude had said it.
-    await request(idle, { socketPath: sock, timeoutMs: 2000 });
-    await request(idle, { socketPath: sock, timeoutMs: 2000 });
-    expect(notes).toHaveLength(2);
-    expect(notes.every((n) => n.title === 'repo · waiting for your input')).toBe(true);
-    expect(notes.every((n) => n.body === '')).toBe(true);
-  });
 
   it('answering fires NOTHING — retirement events have no desktop surface any more', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
@@ -2082,24 +2107,27 @@ describe('the desktop channel is observable from the log alone (Task 10)', () =>
    *  hook layer does — a plain `hook.notify` IPC call (level: 'info', no
    *  permissionPrompt) — matching every other `hook.notify` call in this file,
    *  just named at this call site for readability. */
-  async function notifyIdle(handle: DaemonHandle, opts: { cwd: string; sessionId: string }): Promise<void> {
-    await request(
-      { kind: 'hook.notify', cwd: opts.cwd, sessionId: opts.sessionId, level: 'info', message: 'Claude is waiting for your input' },
-      { socketPath: handle.ipcSocketPath, timeoutMs: 2000 },
-    );
+  function notifyIdle(handle: DaemonHandle, opts: { cwd: string; sessionId: string }): void {
+    // The Stop hook, which is what "your turn" rides. It blocks in the daemon
+    // until the continue window resolves, so it cannot be awaited — the caller
+    // waits on the effect instead.
+    void request(
+      { kind: 'hook.continue.request', cwd: opts.cwd, sessionId: opts.sessionId, context: 'ctx', lastMessage: 'done' },
+      { socketPath: handle.ipcSocketPath, timeoutMs: 40_000 },
+    ).catch(() => undefined);
   }
 
   it('logs one line per notification, naming which kind of wait it was', async () => {
     // Identity fields only: `kind` plus the session key. The rendered title and
     // body never go to the log — they carry tool input, which can carry secrets.
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { continueGraceSec: 0, continueWindowSec: 30 } }));
     const lines: Array<{ msg: string; fields: Record<string, unknown> }> = [];
     h = await bootstrapDaemon({
       home: tmp, imAdapters: [],
       desktopNotifier: { notify: async () => {} },
       onLog: (msg, fields) => { lines.push({ msg, fields }); },
     });
-    await notifyIdle(h, { cwd: '/w/a', sessionId: 's1' });
+    notifyIdle(h, { cwd: '/w/a', sessionId: 's1' });
     await until(() => { expect(lines.some((l) => l.msg === 'desktop.notify')).toBe(true); });
     const fired = lines.filter((l) => l.msg === 'desktop.notify');
     expect(fired).toHaveLength(1);

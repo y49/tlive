@@ -30,7 +30,7 @@ import { excerptForCard } from './excerpt.js';
 import { TURN_FINISHED_SENTINEL, effectiveMode, type ShimMode } from '../hook/normalizer.js';
 import { writeMode } from '../config/mode.js';
 import { wasNotifyExplained, markNotifyExplained } from '../config/state.js';
-import { renderWaiting, type WaitingNotice, type Lang } from './waiting-notice.js';
+import { renderWaiting, type WaitingEvent, type Lang } from './waiting-notice.js';
 
 export interface DaemonHandle {
   shutdown(): Promise<void>;
@@ -157,21 +157,6 @@ export function buildContinueCardBody(lastMessage: string): string {
   // Quote-reply is the continue path (the on-card input box was removed) — the
   // hint spells it out because quote-reply is not obvious, esp. on Feishu.
   return `\n${quote}*Reply to this message to continue.*`;
-}
-
-/** What an idle notification should quote: the sentence the Stop hook recorded
- *  for this session, and never this notification's own boilerplate.
- *
- *  Both guards are load-bearing. `applyMonitorEvent` at the end of the
- *  `hook.notify` handler writes THIS hook's message into the session's
- *  `lastMessage`, so by the time a second idle notification arrives for the
- *  same session, the only thing on record may be "Claude is waiting for your
- *  input" — quoting that back would read as if Claude had said it. Exported
- *  for the same reason `buildContinueCardBody` is: the decision is worth
- *  testing without a daemon. */
-export function idleDetail(lastMessage: string | undefined, hookMessage: string): string {
-  if (!lastMessage || lastMessage === hookMessage) return '';
-  return excerptForCard(lastMessage, 90);
 }
 
 /** One structured line per diagnostic event, on the daemon's stdout (captured to
@@ -503,15 +488,25 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   /** requestId for the dashboard's read-only pending card on a pass-through. */
   const passthruRequestId = (agentId: string, toolName: string): string => `passthru:${agentId}:${toolName}`;
 
-  /** Fire one desktop notification about one thing that is now waiting.
-   *  There is no counterpart: nothing retracts, replaces or re-renders it.
+  /** Deliver one WaitingEvent — one thing that now needs the user — to the
+   *  desktop. There is no counterpart: nothing retracts, replaces or
+   *  re-renders it.
+   *
    *  `desktop.notify` is the ONLY function in this file that touches the
    *  desktop channel, so "what reaches the desktop" is answered by this
-   *  function's call sites and nothing else. */
-  const notifyDesktop = (key: string, n: WaitingNotice): void => {
-    const { title, body } = renderWaiting(n, lang);
-    logJson('desktop.notify', { kind: n.kind, key });
-    opts.onLog?.('desktop.notify', { kind: n.kind, key });
+   *  function's call sites and nothing else.
+   *
+   *  It takes the whole event rather than event-plus-key because the event is
+   *  meant to be self-contained: the desktop is one consumer of it today, and
+   *  a second consumer that cannot answer either — a webhook, a phone push —
+   *  attaches here without the call sites changing shape. What such a consumer
+   *  would additionally need (the raw tool input, a timestamp) is deliberately
+   *  NOT pre-added: an unread field carrying an unmasked command is a leak
+   *  waiting for its first consumer, and masking is the renderer's job. */
+  const deliver = (e: WaitingEvent): void => {
+    const { title, body } = renderWaiting(e, lang);
+    logJson('desktop.notify', { kind: e.kind, key: e.key });
+    opts.onLog?.('desktop.notify', { kind: e.kind, key: e.key });
     void desktop.notify(title, body);
   };
 
@@ -625,7 +620,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // Desktop: the "at this machine, not watching the terminal" signal.
       // Never gated by IM mute — it fires with no IM configured at all,
       // exactly like onPending's notification below.
-      notifyDesktop(key, { label: sessionLabel(key), kind: 'subagent', detail: summarizeToolCall(toolName, input) });
+      deliver({ key, label: sessionLabel(key), kind: 'subagent', detail: summarizeToolCall(toolName, input) });
       // Dashboard: read-only pending (local: true) — there is no held request
       // behind this, so Allow/Deny would be a button that cannot work (same
       // rule as the notify-mode local-prompt card). ONE pending slot per
@@ -687,7 +682,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // configured. onPending fires exactly once per request = dedup by
       // construction, and answering it later retracts nothing: the notification
       // was true when it fired.
-      notifyDesktop(key, { label: sessionLabel(key), kind: 'held', detail: summarizeToolCall(toolName, input) });
+      deliver({ key, label: sessionLabel(key), kind: 'held', detail: summarizeToolCall(toolName, input) });
       if (ask) {
         askFlow.begin(requestId, ask.batch, ask.input);
         askOwner.set(requestId, { key, cwd });
@@ -1010,26 +1005,51 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // pending (and has no local answer path), so a parent Stop must NOT
           // sweep sub-agent cards; those clear via their own PostToolUse / deny.
           permissionRouter.cancel({ key, matchAgent: null });
-          if (shouldFastNullContinue(configuredChats().length, events.size())) {
-            // Nobody can answer (no IM chat, no dashboard client) — don't make
-            // the Stop hook sit its full window for nothing.
-            events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'idle', ...(req.lastMessage ? { lastMessage: req.lastMessage } : {}) }) });
-            reply({ kind: 'hook.continue.result', reply: null });
-            return;
-          }
+          // A Stop hook can be the FIRST thing the daemon ever hears about this
+          // session — a daemon restart under a running session is the common
+          // case — and the notification below renders `sessionLabel(key)`.
+          // Without this the first notification for that session goes out with
+          // no label at all, which is the one thing it cannot afford to omit.
+          // Same guard, same reason, as the hook.notify handler's.
+          if (!sessions.get(key)) sessions.upsert({ key, cwd: req.cwd });
           // Grace 门控:turn 刚结束,先等 graceSec —— 你要是在键盘前很快开始新
           // 一轮(UserPromptSubmit),就取消,不发续跑卡(消除刷屏);静默才推卡。
           // (async Stop hook 让 turn 立即结束,本 grace 不占用你的终端。)
-          const graceSec = cfg.approvals?.continueGraceSec ?? 15;
-          const suppressed = await new Promise<boolean>((res) => {
-            continueGrace.set(key, () => res(true));
-            setTimeout(() => { if (continueGrace.delete(key)) res(false); }, graceSec * 1000).unref();
-          });
-          if (suppressed) {
+          const gracePassed = async (): Promise<boolean> => {
+            const graceSec = cfg.approvals?.continueGraceSec ?? 15;
+            const suppressed = await new Promise<boolean>((res) => {
+              continueGrace.set(key, () => res(true));
+              setTimeout(() => { if (continueGrace.delete(key)) res(false); }, graceSec * 1000).unref();
+            });
+            return !suppressed;
+          };
+          /** "Your turn" on the desktop — the same event the IM card rides, so
+           *  both surfaces learn it from one place with the same grace applied.
+           *  Never waits for the continue broker: that await runs for the whole
+           *  window (30 min by default), and a notification delayed by it would
+           *  arrive after the thing it announces is over. */
+          const notifyTurn = (): void => {
+            deliver({ key, label: sessionLabel(key), kind: 'idle', detail: req.lastMessage ?? '' });
+          };
+          if (shouldFastNullContinue(configuredChats().length, events.size())) {
+            // Nobody can ANSWER (no IM chat, no dashboard client) — don't make
+            // the Stop hook sit its full window for nothing. The desktop is not
+            // an answer surface though: it points, and a user with no IM and no
+            // dashboard open is exactly the user for whom this is the only
+            // signal. So reply first, keeping this path's "returns immediately"
+            // property intact, and let the grace run on afterwards — nothing is
+            // waiting on it.
+            events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'idle', ...(req.lastMessage ? { lastMessage: req.lastMessage } : {}) }) });
+            reply({ kind: 'hook.continue.result', reply: null });
+            void gracePassed().then((ok) => { if (ok) notifyTurn(); });
+            return;
+          }
+          if (!(await gracePassed())) {
             events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'active' }) });
             reply({ kind: 'hook.continue.result', reply: null });
             return;
           }
+          notifyTurn();
           events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'waiting-input', ...(req.lastMessage ? { lastMessage: req.lastMessage } : {}) }) });
           // IM 摘录用真正的最后一句;没有才落回通用 context 文案。async Stop hook
           // 在后台等,窗口可以很长(默认 30min),覆盖"离开很久才看手机"。
@@ -1103,7 +1123,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               // sentence is the only information that exists to name what is
               // waiting; it stays in English even under a Chinese locale for
               // exactly that reason.
-              notifyDesktop(key, { label: sessionLabel(key), kind: 'localPrompt', detail: req.message });
+              deliver({ key, label: sessionLabel(key), kind: 'localPrompt', detail: req.message });
               // Dashboard: read-only waiting-approval card (pending.local) —
               // visible from anywhere, answerable only at the terminal.
               events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'waiting-approval', pending: { requestId: `local:${key}`, title: 'Permission needed', body: req.message, local: true } }) });
@@ -1180,19 +1200,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               : req.level === 'error' ? `⚠️ ${req.message}` : req.message;
             await Promise.all(configuredChats().map((t) => sendToChat(t, { text, cwd: key })));
           }
-          // Idle IS a waiting state ("you must type something or nothing
-          // happens"), so it gets its own notification. error level stays off
-          // the desktop on purpose: a failed tool is not blocking anyone, and it
-          // would be noise at the keyboard. It still goes to IM, where it is
-          // diagnosable.
-          //
-          // `s` is the registry view read at the TOP of this handler — BEFORE
-          // the applyMonitorEvent broadcast below writes this hook's own message
-          // into `lastMessage`. Re-reading it here would quote this
-          // notification's own boilerplate back at the user (see idleDetail).
-          if (req.level === 'info') {
-            notifyDesktop(key, { label: sessionLabel(key), kind: 'idle', detail: idleDetail(s?.lastMessage, req.message) });
-          }
+          // Claude Code's own 60-second "waiting for your input" notification
+          // reaches NO desktop notification: "your turn" is delivered from the
+          // Stop hook instead, which is the same event the IM continue card
+          // rides. Notifying here as well would say one thing twice, 45 seconds
+          // apart, for one finished turn. This handler still feeds IM and the
+          // dashboard below — only the desktop moved.
           events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.message }, key, req.agentPid));
           reply({ kind: 'ack' });
           return;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildContinueCardBody, idleDetail } from '../bootstrap.js';
+import { buildContinueCardBody } from '../bootstrap.js';
 
 describe('buildContinueCardBody', () => {
   it('wraps the excerpt in an expandable quote and ends with the quote-reply hint', () => {
@@ -22,25 +22,3 @@ describe('buildContinueCardBody', () => {
   });
 });
 
-describe('idleDetail', () => {
-  it('quotes the sentence the Stop hook recorded', () => {
-    expect(idleDetail('Fixed the retry path; 932 tests pass', 'Claude is waiting for your input'))
-      .toBe('Fixed the retry path; 932 tests pass');
-  });
-
-  it('says nothing when the only thing on record is this hook\'s own boilerplate', () => {
-    // The idle notification's own message becomes the session's lastMessage
-    // moments later, so without this guard the NEXT idle notification for the
-    // same session would quote "Claude is waiting for your input" as if Claude
-    // had said it.
-    expect(idleDetail('Claude is waiting for your input', 'Claude is waiting for your input')).toBe('');
-  });
-
-  it('says nothing when the session has no recorded message at all', () => {
-    expect(idleDetail(undefined, 'Claude is waiting for your input')).toBe('');
-  });
-
-  it('runs the excerpt pipeline, so raw markdown never leaks into a toast', () => {
-    expect(idleDetail('## Done\n\nAll green.', 'x')).not.toContain('##');
-  });
-});

@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { renderWaiting, DETAIL_BUDGET, type WaitingNotice } from '../waiting-notice.js';
+import { renderWaiting, DETAIL_BUDGET, type WaitingEvent } from '../waiting-notice.js';
 
-const notice = (over: Partial<WaitingNotice> = {}): WaitingNotice => ({
-  label: 'drama-admin', kind: 'held', detail: 'Bash · pnpm build', ...over,
+const notice = (over: Partial<WaitingEvent> = {}): WaitingEvent => ({
+  key: 's1', label: 'drama-admin', kind: 'held', detail: 'Bash · pnpm build', ...over,
 });
 
 describe('renderWaiting', () => {
@@ -51,6 +51,18 @@ describe('renderWaiting', () => {
     expect(body).toHaveLength(DETAIL_BUDGET);
     expect(body.endsWith('…')).toBe(true);
     expect(renderWaiting(notice({ detail: 'a \n b' }), 'en').body).toBe('a b');
+  });
+
+  // Real-machine finding: an idle body carried `cache-control: no-store` with
+  // its backticks intact, because the last assistant message is markdown and
+  // nothing on this path stripped it. The body is one plain line on a lock
+  // screen — markers are noise that eats a 90-character budget.
+  it('strips markdown markers — a body is plain text, not markdown', () => {
+    expect(renderWaiting(notice({ detail: 'set `cache-control: no-store` and **retry**' }), 'en').body)
+      .toBe('set cache-control: no-store and retry');
+    expect(renderWaiting(notice({ detail: '## Done\n\n- fixed *the* thing' }), 'en').body)
+      .toBe('Done - fixed the thing');
+    expect(renderWaiting(notice({ detail: '> quoted line' }), 'en').body).toBe('quoted line');
   });
 
   it('an empty detail renders a title-only notification rather than repeating the title', () => {
