@@ -2,6 +2,22 @@ import { describe, it, expect } from 'vitest';
 import { SessionRegistry } from '../session-registry';
 import { applyMonitorEvent, sweepDeadSessions } from '../session-events';
 
+describe('attention with no content of its own', () => {
+  it('leaves an existing lastMessage alone — an empty message means the notification had no content worth showing', () => {
+    const sessions = new SessionRegistry();
+    sessions.upsert({ key: 's1', cwd: '/w/repo', lastMessage: 'Fixed the retry path; 932 tests pass' });
+    applyMonitorEvent(sessions, { event: 'attention', cwd: '/w/repo', sessionId: 's1', message: '' }, 's1');
+    expect(sessions.get('s1')?.lastMessage).toBe('Fixed the retry path; 932 tests pass');
+  });
+
+  it('still records a failure notification, which is the dashboard\'s only view of a failed tool call', () => {
+    const sessions = new SessionRegistry();
+    sessions.upsert({ key: 's1', cwd: '/w/repo', lastMessage: 'earlier' });
+    applyMonitorEvent(sessions, { event: 'attention', cwd: '/w/repo', sessionId: 's1', message: 'Bash failed: permission denied' }, 's1');
+    expect(sessions.get('s1')?.lastMessage).toBe('Bash failed: permission denied');
+  });
+});
+
 describe('applyMonitorEvent', () => {
   it('activity → active upsert frame', () => {
     const r = new SessionRegistry();

@@ -1266,7 +1266,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // rides. Notifying here as well would say one thing twice, 45 seconds
           // apart, for one finished turn. This handler still feeds IM and the
           // dashboard below — only the desktop moved.
-          events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.message }, key, req.agentPid));
+          // An info-level notify is Claude Code's own boilerplate about a state the
+          // status pill already carries, so it travels with NO content: it must not
+          // overwrite the sentence the assistant actually said, which the Stop hook
+          // recorded. A failure keeps its text — that is the dashboard's only view
+          // of a failed tool call.
+          events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.level === 'info' ? '' : req.message }, key, req.agentPid));
           reply({ kind: 'ack' });
           return;
         }
