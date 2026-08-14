@@ -1,5 +1,16 @@
 # Changelog
 
+## [5.0.0](https://github.com/y49/tlive/compare/v4.1.1...v5.0.0) (2026-08-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* the desktop toast is no longer a single slot that updates and disappears when work is answered. Answered notifications stay in the notification centre until the OS ages them out or you clear them.
+
+### Features
+
+* one desktop notification per waiting thing ([#77](https://github.com/y49/tlive/issues/77)) ([ebdb456](https://github.com/y49/tlive/commit/ebdb45613cde43c9457dbfe46bbc4bcc84dbbea8))
+
 ## [4.1.1](https://github.com/y49/tlive/compare/v4.1.0...v4.1.1) (2026-08-11)
 
 
