@@ -64,7 +64,9 @@ describe('PermissionRouter pending lifecycle callbacks', () => {
     }));
     const p = r.requestPermission({ key: '/p/foo', cwd: '/p/foo', toolName: 'Bash', input: {} });
     await new Promise((res) => setTimeout(res, 0));
-    expect(pend).toEqual([{ key: '/p/foo', cwd: '/p/foo', requestId: id, title: 'T', body: 'B', toolName: 'Bash' }]);
+    // `input` rides along so a consumer can summarize the call itself (the
+    // desktop notification does) instead of parsing the rendered card apart.
+    expect(pend).toEqual([{ key: '/p/foo', cwd: '/p/foo', requestId: id, title: 'T', body: 'B', toolName: 'Bash', input: {} }]);
     r.answer(id, true);
     await p;
     expect(done).toEqual([{ key: '/p/foo', cwd: '/p/foo', requestId: id, decision: 'allow' }]);
@@ -102,7 +104,7 @@ describe('PermissionRouter pending lifecycle callbacks', () => {
     // values — a session id is never a directory path in practice.
     const p = r.requestPermission({ key: 'sess-xyz', cwd: '/real/project/dir', toolName: 'Bash', input: {} });
     await new Promise((res) => setTimeout(res, 0));
-    expect(pend).toEqual([{ key: 'sess-xyz', cwd: '/real/project/dir', requestId: id, title: 'T', body: 'B', toolName: 'Bash' }]);
+    expect(pend).toEqual([{ key: 'sess-xyz', cwd: '/real/project/dir', requestId: id, title: 'T', body: 'B', toolName: 'Bash', input: {} }]);
     r.answer(id, true);
     await p;
     expect(done).toEqual([{ key: 'sess-xyz', cwd: '/real/project/dir', requestId: id, decision: 'allow' }]);
