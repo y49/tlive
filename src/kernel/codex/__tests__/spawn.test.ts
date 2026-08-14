@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
-import { ensureCodexAppServer, codexAppServerSockPath } from '../spawn.js';
+import { ensureCodexAppServer, codexAppServerSockPath, appServerSpawnOptions } from '../spawn.js';
 
-const fakeChild = () => Object.assign(new EventEmitter(), { pid: 42, kill: vi.fn() });
+const fakeChild = () => Object.assign(new EventEmitter(), { pid: 42, kill: vi.fn(), unref: vi.fn() });
 
 describe('ensureCodexAppServer', () => {
   it('adopts an already-listening socket without spawning', async () => {
@@ -25,11 +25,29 @@ describe('ensureCodexAppServer', () => {
       await vi.advanceTimersByTimeAsync(1100);
       expect(spawnFn).toHaveBeenCalledTimes(2);
       c!.stop();
-      expect(children[1].kill).toHaveBeenCalled();
       children[1].emit('exit', 0); // stop() 后退出不得重拉
       await vi.advanceTimersByTimeAsync(60_000);
       expect(spawnFn).toHaveBeenCalledTimes(2);
     } finally { vi.useRealTimers(); }
+  });
+  it('stop() leaves the app-server running — killing it orphans live Codex TUIs', async () => {
+    const children: any[] = [];
+    const spawnFn = vi.fn(() => { const ch = fakeChild(); children.push(ch); return ch; });
+    const c = await ensureCodexAppServer({ logPath: '/tmp/x.log', probe: async () => false, spawnFn: spawnFn as any, platform: 'linux', hasCodex: () => true });
+    c!.stop();
+    expect(children[0].kill).not.toHaveBeenCalled();
+  });
+  it('unrefs the child so the daemon neither waits for it nor drags it down', async () => {
+    const children: any[] = [];
+    const spawnFn = vi.fn(() => { const ch = fakeChild(); children.push(ch); return ch; });
+    const c = await ensureCodexAppServer({ logPath: '/tmp/x.log', probe: async () => false, spawnFn: spawnFn as any, platform: 'linux', hasCodex: () => true });
+    expect(children[0].unref).toHaveBeenCalled();
+    c!.stop();
+  });
+  it('spawn options detach the app-server from the daemon process group', () => {
+    // Mirrors what Codex itself does for its own managed backend
+    // (app-server-daemon/src/backend/pid.rs: Stdio::null + pre_exec setsid).
+    expect(appServerSpawnOptions(7)).toMatchObject({ detached: true, stdio: ['ignore', 7, 7] });
   });
   it('gives up after 6 straight fast exits and reports degraded', async () => {
     vi.useFakeTimers();
