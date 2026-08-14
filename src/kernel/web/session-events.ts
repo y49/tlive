@@ -50,10 +50,23 @@ export function applyMonitorEvent(sessions: SessionRegistry, evt: MonitorEvent, 
   switch (evt.event) {
     case 'activity':
       return { type: 'session-upsert', session: sessions.upsert({ key, cwd: evt.cwd, status: 'active', ...pid }) };
-    case 'attention':
-      // lastMessage is reused for both Stop's last_assistant_message and Notification text —
-      // a deliberate lightweight tradeoff; a distinct notificationText field is a later refinement.
-      return { type: 'session-upsert', session: sessions.upsert({ key, cwd: evt.cwd, status: 'waiting-input', lastMessage: evt.lastMessage ?? evt.message, ...pid }) };
+    case 'attention': {
+      // `lastMessage` carries whatever this session last SAID: the assistant's
+      // real sentence from Stop, or a failure notification, which is the
+      // dashboard's only view of a failed tool call — PostToolUse and
+      // PostToolUseFailure are mutually exclusive, so a failure produces no
+      // activity event to carry it.
+      //
+      // An EMPTY message means the notification had no content of its own, and
+      // must not overwrite what the session actually said. Claude Code's
+      // 60-second "waiting for your input" is exactly that: boilerplate about a
+      // state the status already carries, and letting it through made the
+      // dashboard quote it as if the assistant had said it, while the desktop —
+      // fed by the Stop hook — showed the real sentence. Two surfaces, one
+      // event, two different stories.
+      const said = evt.lastMessage ?? evt.message;
+      return { type: 'session-upsert', session: sessions.upsert({ key, cwd: evt.cwd, status: 'waiting-input', ...(said ? { lastMessage: said } : {}), ...pid }) };
+    }
     case 'prompt':
       return { type: 'session-upsert', session: sessions.upsert({ key, cwd: evt.cwd, status: 'active', lastPrompt: evt.prompt, ...pid }) };
     case 'subagent': {

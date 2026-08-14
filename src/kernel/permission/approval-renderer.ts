@@ -107,3 +107,43 @@ export function renderApprovalCard(req: RenderRequest): { title: string; body: s
     }
   }
 }
+
+/** One line naming what a tool call actually is, for a desktop notification.
+ *  Deliberately NOT renderApprovalCard: that builds markdown with diff fences
+ *  for an IM card, while a desktop body is clipped to about two lines by the
+ *  notification server. So this carries the SHAPE of the call — tool plus one
+ *  target — never its payload.
+ *
+ *  No masking and no truncation here on purpose: renderWaiting applies both to
+ *  every notice body it renders, whatever the source, so a future detail
+ *  source cannot forget them. */
+export function summarizeToolCall(toolName: string, input: unknown): string {
+  const one = (s: string): string => s.replace(/\s+/g, ' ').trim();
+  const base = (p: string): string => one(p).split(/[\\/]/).pop() ?? '';
+  const target = ((): string => {
+    switch (toolName) {
+      case 'Bash': return one(str(input, 'command') ?? '');
+      case 'Edit': case 'Write': case 'Read': return base(str(input, 'file_path') ?? '');
+      case 'NotebookEdit': return base(str(input, 'notebook_path') ?? '');
+      case 'Glob': case 'Grep': return one(str(input, 'pattern') ?? '');
+      case 'apply_patch': {
+        const m = /^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/m.exec(str(input, 'command') ?? '');
+        return m ? base(m[1]!) : '';
+      }
+      case 'WebFetch': {
+        const u = one(str(input, 'url') ?? '');
+        try { return new URL(u).host; } catch { return u; }
+      }
+      case 'Task': return one(str(input, 'description') ?? '');
+      case 'AskUserQuestion': {
+        // The header exists to be a short label — it is what the question is
+        // ABOUT, which is exactly the one line wanted here. Without one, the
+        // question text itself; the renderer caps the length either way.
+        const q = (input as { questions?: Array<{ question?: string; header?: string }> } | null)?.questions?.[0];
+        return one(q?.header ?? q?.question ?? '');
+      }
+      default: return '';
+    }
+  })();
+  return target ? `${toolName} · ${target}` : toolName;
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderApprovalCard, maskSecrets } from '../approval-renderer';
+import { renderApprovalCard, maskSecrets, summarizeToolCall } from '../approval-renderer';
 
 describe('maskSecrets', () => {
   it('masks URL query token/key/password params', () => {
@@ -97,5 +97,64 @@ describe('approval-card fence spoofing defense', () => {
   it('neutralizes backticks in an inline file_path span', () => {
     const { body } = renderApprovalCard({ toolName: 'Write', input: { file_path: 'a`b`c', content: 'x' } });
     expect(body).not.toContain('a`b`c');
+  });
+});
+
+describe('summarizeToolCall', () => {
+  it('Bash: the command, collapsed onto one line', () => {
+    expect(summarizeToolCall('Bash', { command: 'pnpm build' })).toBe('Bash · pnpm build');
+    expect(summarizeToolCall('Bash', { command: 'a \n  b\tc' })).toBe('Bash · a b c');
+  });
+
+  it('file tools: the basename, not the whole path — the body is two lines wide', () => {
+    expect(summarizeToolCall('Edit', { file_path: '/home/y/proj/src/kernel/daemon/bootstrap.ts' }))
+      .toBe('Edit · bootstrap.ts');
+    expect(summarizeToolCall('Write', { file_path: '/tmp/out.json' })).toBe('Write · out.json');
+    expect(summarizeToolCall('Read', { file_path: '/tmp/out.json' })).toBe('Read · out.json');
+    expect(summarizeToolCall('NotebookEdit', { notebook_path: '/n/a.ipynb' })).toBe('NotebookEdit · a.ipynb');
+  });
+
+  it('search tools: the pattern', () => {
+    expect(summarizeToolCall('Grep', { pattern: 'TODO' })).toBe('Grep · TODO');
+    expect(summarizeToolCall('Glob', { pattern: '**/*.ts' })).toBe('Glob · **/*.ts');
+  });
+
+  it('apply_patch: the first file the patch touches', () => {
+    const command = '*** Begin Patch\n*** Update File: src/kernel/daemon/bootstrap.ts\n@@\n-a\n+b\n*** End Patch';
+    expect(summarizeToolCall('apply_patch', { command })).toBe('apply_patch · bootstrap.ts');
+  });
+
+  it('WebFetch: the host only', () => {
+    expect(summarizeToolCall('WebFetch', { url: 'https://example.com/a/b?token=abc' }))
+      .toBe('WebFetch · example.com');
+  });
+
+  it('Task: the agent description', () => {
+    expect(summarizeToolCall('Task', { description: 'Audit the retry paths' }))
+      .toBe('Task · Audit the retry paths');
+  });
+
+  it('AskUserQuestion names the question, not itself — a body reading "AskUserQuestion" tells you nothing you did not already know', () => {
+    const input = { questions: [{ question: 'Which auth method should the worker use?', header: 'Auth method', options: [{ label: 'OIDC' }], multiSelect: false }] };
+    expect(summarizeToolCall('AskUserQuestion', input)).toBe('AskUserQuestion · Auth method');
+  });
+
+  it('AskUserQuestion falls back to the question text when there is no header, and to its own name when there are no questions', () => {
+    expect(summarizeToolCall('AskUserQuestion', { questions: [{ question: 'Ship it?', options: [], multiSelect: false }] }))
+      .toBe('AskUserQuestion · Ship it?');
+    expect(summarizeToolCall('AskUserQuestion', { questions: [] })).toBe('AskUserQuestion');
+    expect(summarizeToolCall('AskUserQuestion', {})).toBe('AskUserQuestion');
+  });
+
+  it('an unknown tool, or a known one with nothing to name, degrades to the tool name alone', () => {
+    expect(summarizeToolCall('mcp__weird__thing', { a: 1 })).toBe('mcp__weird__thing');
+    expect(summarizeToolCall('Bash', {})).toBe('Bash');
+    expect(summarizeToolCall('Edit', null)).toBe('Edit');
+  });
+
+  it('does NOT mask or truncate — renderWaiting owns both, so every body gets them', () => {
+    const long = 'x'.repeat(200);
+    expect(summarizeToolCall('Bash', { command: `TOKEN=abc123 ${long}` }))
+      .toBe(`Bash · TOKEN=abc123 ${long}`);
   });
 });

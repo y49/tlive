@@ -151,30 +151,43 @@ persists to config.
 
 ### Desktop notifications
 
-Desktop notifications appear whenever something is blocking on you and
-disappear when it is answered — on Linux and Windows, where the single toast
-is actively replaced/closed. macOS cannot do either (Notification Center has
-no scriptable close or replace), so there each change appends a fresh entry
-instead of recycling one.
+One notification per thing that is waiting for you. Each says which project is
+calling and what the call actually is — `drama-admin · approval needed` /
+`Bash · pnpm build` — and then it is left alone: tlive never replaces,
+updates or retracts it. It banners, ages into your notification centre like
+every other application's, and stays there until the OS drops it or you clear
+it.
 
-The toast carries no expiry, but "no expiry" is not the same as "stays on
-screen". Most shells show the banner for a few seconds and then tuck the
-notification into the notification centre, where it stays — and keeps counting
-toward the app badge — until the work is answered. That is where you find it
-after stepping away; it is the same behaviour your terminal's own
-notifications get. A banner is raised again whenever something NEW starts
-waiting, so a second session needing you re-alerts rather than silently
-updating the existing entry.
+That means the notification centre is a log of what your agents asked for, not
+a live status display. For "what is waiting right now", open the dashboard —
+that is what a pull view is for.
+
+Bodies are capped and secret-masked, because a notification is visible on a
+lock screen and during a screen sharing session.
+
+`full` mode notifications are more informative than `notify` mode ones: only a
+held approval lets tlive see the command, so in `notify` mode the body is
+whatever sentence Claude Code's own notification carried.
 
 There is no separate on/off switch: use your OS's Do Not Disturb to silence
 them temporarily, or `tlive mode off` to stop tlive entirely. Without
 `notify-send` (or the platform equivalent) they silently no-op.
 
-**Only blocking work reaches the desktop.** A finished turn and a failed tool
-go to IM and never pop a toast — a per-turn "done" notification would bury the
-handful that actually need you.
+**Only work that needs you reaches the desktop.** Four things do: an approval
+tlive is holding, a sub-agent's approval waiting at your terminal, a Claude
+Code dialog tlive is not holding, and a finished turn — the last one because
+"nothing happens until you type" is something you need to come back for. A
+failed tool does not: it blocks nobody, and it goes to IM where it is
+diagnosable.
 
-If you see a desktop notification saying a turn finished, check who sent it: it
+A finished turn is delivered from the Stop hook, the same event the IM continue
+card rides, after the same `continueGraceSec` grace — so continuing at the
+keyboard within that grace notifies nobody, and Claude Code's own 60-second
+"waiting for your input" notification is left to say what it likes without
+tlive repeating it.
+
+If you see a SECOND desktop notification saying a turn finished, check who sent
+it: it
 is almost certainly your IM client, not tlive. Running Telegram or Feishu on
 the same machine turns every message tlive sends to IM — continue cards, idle
 nudges, failure reports — into a second desktop notification, which is exactly

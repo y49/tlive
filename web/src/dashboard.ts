@@ -11,7 +11,7 @@ const token = new URLSearchParams(location.search).get('token') ?? '';
 
 type Status = 'active' | 'waiting-approval' | 'waiting-input' | 'idle';
 interface AskInfo { question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect: boolean }
-interface Pending { requestId: string; title: string; body: string; toolName?: string; local?: boolean; ask?: AskInfo }
+interface Pending { requestId: string; title: string; body: string; toolName?: string; local?: boolean; ask?: AskInfo; seenAt: number }
 interface SessionView {
   id: string; label: string; cwd: string;
   kind: 'wrapped' | 'hook'; status: Status;
@@ -19,6 +19,17 @@ interface SessionView {
   activeSubagents?: number;
   pending?: Pending; continueId?: string; muted: boolean; sockPath?: string; pid?: number;
 }
+/** How long a claim tlive cannot verify keeps the present tense. Past this the
+ *  card reports it as an observation with an age rather than a live state. */
+const STALE_MS = 5 * 60_000;
+const rel = (ms: number): string => {
+  const m = Math.floor(ms / 60_000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
+};
+
 type Frame =
   | { type: 'session-upsert'; session: SessionView }
   | { type: 'session-remove'; id: string };
@@ -280,8 +291,21 @@ function card(s: SessionView): HTMLElement {
     // pending.local = a CC-native dialog waiting at the terminal (notify mode /
     // full-mode defer) — nothing to answer from here, say so instead of
     // rendering dead Allow/Deny buttons (issue #49).
+    // A `local` pending is a Claude Code dialog tlive does NOT hold: it cannot
+    // see whether that dialog is still up, because the notification reporting
+    // one carries no agent id, so one raised by a background agent is recorded
+    // against the main session and answered by a tool call the clearing path
+    // must ignore. So this says WHEN it was reported and how long ago, and stops
+    // claiming the present tense once that age passes STALE_MS. A held pending
+    // needs none of that: tlive owns the request and retires it itself.
+    const age = Date.now() - s.pending.seenAt;
+    const stale = !!s.pending.local && age > STALE_MS;
+    const when = `${new Date(s.pending.seenAt).toLocaleTimeString()} · ${rel(age)}`;
     m.innerHTML = `<span class="k">${esc(s.pending.title)}</span>\n${renderApprovalBody(s.pending.body)}`
-      + (s.pending.local ? `\n<span class="k">waiting at the terminal — not answerable from here</span>` : '');
+      + (s.pending.local
+        ? `\n<span class="k">${stale ? 'reported waiting at the terminal' : 'waiting at the terminal — not answerable from here'} · ${esc(when)}</span>`
+        : '');
+    if (stale) m.style.opacity = '0.55';
     foot.appendChild(m);
   } else if (!(s.kind === 'wrapped' && s.sockPath) && (s.lastMessage || s.lastPrompt)) {
     const m = document.createElement('div'); m.className = 'msg';

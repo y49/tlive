@@ -7,10 +7,10 @@
 // (issue #49). These are "someone is waiting at the terminal" facts, not
 // held wire requests — hence a separate tracker instead of PermissionRouter
 // entries (a router entry resolves a shim reply; there is no shim waiting
-// here). bootstrap.ts uses this to drive the desktop toast lifecycle, the
-// dashboard's read-only waiting-approval card, and the grace-delayed IM text,
-// and clears entries from the same local-answer triggers that release held
-// cards (PostToolUse / PermissionDenied / UserPromptSubmit / SessionEnd).
+// here). bootstrap.ts uses this to drive the dashboard's read-only
+// waiting-approval card and the grace-delayed IM text, and clears entries from
+// the same local-answer triggers that release held cards (PostToolUse /
+// PermissionDenied / UserPromptSubmit / SessionEnd).
 
 /** 关联字段匹配:双方都带且非空才比较;任一侧缺失 = 通配(保守方向 —— 宁可
  *  多清一个条目:清除只是收回通知,不动任何决策)。与 permission-router 的
@@ -41,8 +41,10 @@ export class LocalPrompts {
     return e !== undefined && fieldMatches(e.sessionId, sessionId);
   }
 
-  /** Remove the entry if it matches. Returns whether one was removed — the
-   *  caller uses that to know a dashboard/toast update is due. */
+  /** Remove the entry if it matches. Returns whether one was removed, for
+   *  the caller's information only — bootstrap.ts's clearLocalPrompt
+   *  deliberately does not gate its registry cleanup on this value (see the
+   *  comment there for why). */
   clear(opts: { key: string; sessionId?: string }): boolean {
     const e = this.byKey.get(opts.key);
     if (!e || !fieldMatches(e.sessionId, opts.sessionId)) return false;

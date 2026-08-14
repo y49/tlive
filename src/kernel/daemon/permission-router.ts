@@ -32,9 +32,9 @@ export interface PermissionRouterDeps {
   /** True when at least one dashboard client is connected on /ws/events —
    *  a card can be answered from the web even with zero IM chats. */
   hasWebClients: () => boolean;
-  /** True when the daemon's own machine can surface + answer a card without IM —
-   *  i.e. the desktop toast is on AND can open a dashboard. Lets a muted-IM
-   *  approval still be answered locally instead of deferring to the terminal. */
+  /** True when a dashboard exists to answer a card from, without IM. Lets a
+   *  muted-IM approval still be answered locally instead of deferring to the
+   *  terminal. */
   hasLocalAnswerPath: () => boolean;
   /** Vendor-neutral policy: allow (auto) vs ask (send card). Never auto-denies. */
   policyDecide: (req: { toolName: string; input: unknown; permissionMode?: string }) => { decision: 'allow' | 'ask'; reason?: string };
@@ -52,7 +52,7 @@ export interface PermissionRouterDeps {
    *  directory, threaded through only for the registry's display field
    *  (label = basename(cwd)). Conflating them here is exactly the bug this
    *  split fixes (see resolveKey in bootstrap.ts). */
-  onPending?: (p: { key: string; cwd: string; requestId: string; title: string; body: string; toolName: string; ask?: AskContext }) => void;
+  onPending?: (p: { key: string; cwd: string; requestId: string; title: string; body: string; toolName: string; input: unknown; ask?: AskContext }) => void;
   /** Fired when a request is handed straight back to the vendor instead of being
    *  held — today only the sub-agent pass-through. The point is that tlive is
    *  holding the whole request at that instant (tool, input, agentId) while the
@@ -65,8 +65,11 @@ export interface PermissionRouterDeps {
    *  by the time it exists this hook invocation is over. Consumers must not offer
    *  an Allow/Deny affordance for it. `agentId` + `toolName` are carried because
    *  together they are the one pair that also comes back on the sub-agent's
-   *  PostToolUse, which is how the notice gets retired. */
-  onPassthrough?: (p: { key: string; cwd: string; agentId: string; toolName: string; title: string; body: string }) => void;
+   *  PostToolUse, which is how the notice gets retired.
+   *
+   *  `input` is the raw tool input, carried so a consumer can summarize the
+   *  call itself rather than parse the rendered card back apart. */
+  onPassthrough?: (p: { key: string; cwd: string; agentId: string; toolName: string; title: string; body: string; input: unknown }) => void;
   /** Fired when the request resolves (answered / timed out / deferred after a card). Same key/cwd split as onPending.
    *  message:带理由的拒绝所携带的文本(引用回复而来)—— 供回写区分
    *  `Denied` 与 `Denied with guidance`。
@@ -175,7 +178,7 @@ export class PermissionRouter {
       // details. See onPassthrough for why this is the only chance to.
       if (this.deps.onPassthrough) {
         const { title, body } = this.deps.renderCard({ toolName: opts.toolName, input: opts.input });
-        this.deps.onPassthrough({ key: opts.key, cwd: opts.cwd, agentId: opts.agentId, toolName: opts.toolName, title, body });
+        this.deps.onPassthrough({ key: opts.key, cwd: opts.cwd, agentId: opts.agentId, toolName: opts.toolName, title, body, input: opts.input });
       }
       return { decision: 'defer' };
     }
@@ -230,7 +233,7 @@ export class PermissionRouter {
       });
       // web 立即 —— dashboard 是 pull 视图,不该等 grace。
       this.deps.onPending?.({
-        key: opts.key, cwd: opts.cwd, requestId, title, body, toolName: opts.toolName,
+        key: opts.key, cwd: opts.cwd, requestId, title, body, toolName: opts.toolName, input: opts.input,
         ...(ask ? { ask } : {}),
       });
       // IM 卡走 grace:开火时 pending 还在才发。cancel()/answer() 都先 delete

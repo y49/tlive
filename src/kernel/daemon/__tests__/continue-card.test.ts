@@ -21,3 +21,4 @@ describe('buildContinueCardBody', () => {
     expect(body).toContain('>! `ls`');
   });
 });
+

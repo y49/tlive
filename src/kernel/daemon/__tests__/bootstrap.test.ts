@@ -35,7 +35,7 @@ let tmp: string;
 let h: DaemonHandle;
 
 // bootstrapDaemon calls detectLang(process.env) exactly once, at startup —
-// every toast-body assertion in this file below assumes the result is 'en'.
+// every notification-copy assertion in this file below assumes the result is 'en'.
 // That assumption must not ride on whatever locale happens to be set in the
 // environment actually running this suite (this repo's own dev machine runs
 // zh_CN.UTF-8): saving and clearing LC_ALL/LC_MESSAGES/LANG around every test
@@ -68,7 +68,7 @@ afterEach(async () => {
   }
 });
 
-describe('detectLang (OS locale → toast language)', () => {
+describe('detectLang (OS locale → notification language)', () => {
   it('resolves zh for zh_CN.UTF-8, zh-Hans, and bare zh', () => {
     expect(detectLang({ LANG: 'zh_CN.UTF-8' })).toBe('zh');
     expect(detectLang({ LANG: 'zh-Hans' })).toBe('zh');
@@ -107,44 +107,18 @@ describe('daemon bootstrap', () => {
   });
 
   // The `desktop` runtime toggle was removed entirely (no separate on/off
-  // switch for the toast — see refreshDesktop's doc comment). A stale CLI
-  // still shipping `daemon.set key=desktop` must get a loud error, not
-  // silently land on whichever branch happens to be last in the dispatch.
+  // switch for the desktop channel). A stale CLI still shipping `daemon.set
+  // key=desktop` must get a loud error, not silently land on whichever branch
+  // happens to be last in the dispatch.
   it('daemon.set no longer accepts the retired desktop key', async () => {
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { render: async () => {}, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async () => {} } });
     const r = await request({ kind: 'daemon.set', key: 'desktop', enabled: false } as never, { socketPath: h.ipcSocketPath, timeoutMs: 2000 });
     expect(r.kind).toBe('error');
   });
 
-  // I2: a second bootstrapDaemon() against the SAME home — the shape of
-  // daemon/main.ts's response to AlreadyRunningError — must fail to bind
-  // before it ever gets a chance to retract a toast. Before the fix, the
-  // startup clear() ran ~650 lines before the IPC bind, so the LOSING
-  // attempt would retract the SURVIVING daemon's toast on its way to exiting,
-  // right when something was still genuinely waiting.
-  it('a losing daemon whose IPC bind fails must never retract the surviving daemon\'s toast', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
-    const winnerClears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { render: async () => {}, clear: async () => { winnerClears.push(1); } } });
-    expect(winnerClears).toHaveLength(1); // its own genuine startup retraction
-
-    const loserClears: number[] = [];
-    await expect(
-      bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { render: async () => {}, clear: async () => { loserClears.push(1); } } }),
-    ).rejects.toBeInstanceOf(AlreadyRunningError);
-    expect(loserClears).toHaveLength(0);
-  });
-
-  // No test asserted this before: deleting the shutdown `desktop.clear()`
-  // call broke nothing, despite being half of the resident toast's safety
-  // story (a daemon restart must not inherit a stale banner nothing owns).
-  it('closes the resident toast on shutdown', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
-    const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { render: async () => {}, clear: async () => { clears.push(1); } } });
-    clears.length = 0; // discard the daemon's own startup clear
-    await h.shutdown();
-    expect(clears).toHaveLength(1);
+  it('a second daemon against the same home fails to bind', async () => {
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [] });
+    await expect(bootstrapDaemon({ home: tmp, imAdapters: [] })).rejects.toBeInstanceOf(AlreadyRunningError);
   });
 });
 
@@ -178,17 +152,15 @@ describe('resolveKey — one key per session, not per directory', () => {
 });
 
 describe('shouldDropNotify', () => {
-  it('drops an info-level idle notify when a continue card is already pending for the session', () => {
-    expect(shouldDropNotify('req-1', 'info')).toBe(true);
+  it('drops an info-level idle notify once this turn\'s end has already been announced', () => {
+    expect(shouldDropNotify(true, 'info')).toBe(true);
   });
-  it('never drops an error-level failure notify, even with a continue card pending — a stale continueId (up to continueWindowSec, default 30min) must not silently eat a tool/stop failure alert', () => {
-    expect(shouldDropNotify('req-1', 'error')).toBe(false);
+  it('never drops an error-level failure notify, announced or not — a tool or stop failure must never be silently eaten', () => {
+    expect(shouldDropNotify(true, 'error')).toBe(false);
+    expect(shouldDropNotify(false, 'error')).toBe(false);
   });
-  it('keeps the notify when no continue card is outstanding, for both levels', () => {
-    expect(shouldDropNotify(null, 'info')).toBe(false);
-    expect(shouldDropNotify(undefined, 'info')).toBe(false);
-    expect(shouldDropNotify(null, 'error')).toBe(false);
-    expect(shouldDropNotify(undefined, 'error')).toBe(false);
+  it('keeps an info-level notify when this turn\'s end was never announced — the Stop hook may never have reached the daemon, e.g. it was down, and then this notification is the only signal', () => {
+    expect(shouldDropNotify(false, 'info')).toBe(false);
   });
 });
 
@@ -198,6 +170,85 @@ describe('makeCodexResumeHandler', () => {
     const broadcasts: unknown[] = [];
     return { broadcast, size: () => size, broadcasts };
   }
+
+  it('an interrupted Codex turn announces nothing — it produced no assistant message, so there is nothing to come back to', async () => {
+    // Real incident: nine Codex sessions in fourteen minutes, each a turn the
+    // user started and interrupted. `turn/completed` fires for an aborted turn
+    // too and carries no assistant message, so tlive announced nine finished
+    // turns with empty bodies — nine IM cards and nine desktop notifications
+    // with nothing in them. The rollout files show it plainly: user typed "1",
+    // then turn_aborted with reason interrupted.
+    let requested = false;
+    const notified: unknown[] = [];
+    const events = fakeEvents(1);
+    const sessions = new SessionRegistry();
+    const handler = makeCodexResumeHandler({
+      broker: { request: async () => { requested = true; return null; } },
+      sessions,
+      events,
+      chats: () => [],
+      resume: async () => undefined,
+      gracePassed: async () => true,
+      notifyTurn: () => notified.push(1),
+    });
+    handler({ threadId: 't1', key: 'codex:t1' }); // no lastMessage: nothing was produced
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(notified).toHaveLength(0); // no desktop notification…
+    expect(requested).toBe(false);    // …and no IM continue card either
+    // The dashboard still learns the session is idle: that part is honest.
+    expect(events.broadcasts.some((b: any) => b.session?.status === 'idle')).toBe(true);
+  });
+
+  it('a finished Codex turn notifies the desktop, exactly like a finished Claude Code turn', async () => {
+    // Codex reaches the desktop for approvals already — the companion goes
+    // through the same PermissionRouter — but its turn/completed path never did,
+    // so the same machine notified you for one vendor and stayed silent for the
+    // other. Nothing about "your turn" is vendor-specific.
+    const notified: Array<{ key: string; lastMessage?: string }> = [];
+    const handler = makeCodexResumeHandler({
+      broker: { request: async () => null },
+      sessions: new SessionRegistry(),
+      events: fakeEvents(1),
+      chats: () => [],
+      resume: async () => undefined,
+      gracePassed: async () => true,
+      notifyTurn: (p) => notified.push(p),
+    });
+    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'patch applied' });
+    await until(() => { expect(notified).toHaveLength(1); });
+    expect(notified[0]).toEqual({ key: 'codex:t1', lastMessage: 'patch applied' });
+  });
+
+  it('notifies even when nothing can answer — the desktop is not an answer surface', async () => {
+    const notified: Array<{ key: string; lastMessage?: string }> = [];
+    const handler = makeCodexResumeHandler({
+      broker: { request: async () => { throw new Error('broker must not be reached'); } },
+      sessions: new SessionRegistry(),
+      events: fakeEvents(0), // no dashboard client…
+      chats: () => [],       // …and no IM chat: the fast-null path
+      resume: async () => undefined,
+      gracePassed: async () => true,
+      notifyTurn: (p) => notified.push(p),
+    });
+    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'done' });
+    await until(() => { expect(notified).toHaveLength(1); });
+  });
+
+  it('continuing inside the grace notifies nobody — same filter Claude Code gets', async () => {
+    const notified: unknown[] = [];
+    const handler = makeCodexResumeHandler({
+      broker: { request: async () => null },
+      sessions: new SessionRegistry(),
+      events: fakeEvents(1),
+      chats: () => [],
+      resume: async () => undefined,
+      gracePassed: async () => false, // turn/started arrived inside the grace
+      notifyTurn: () => notified.push(1),
+    });
+    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'done' });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(notified).toHaveLength(0);
+  });
 
   it('reply path: resume called and active broadcast', async () => {
     const sessions = new SessionRegistry();
@@ -210,6 +261,8 @@ describe('makeCodexResumeHandler', () => {
       events,
       chats: () => [],
       resume: async (t, i) => { resumeCall = [t, i]; await resume(t, i); },
+      gracePassed: async () => true,
+      notifyTurn: () => {}
     });
     handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'done' });
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
@@ -228,6 +281,8 @@ describe('makeCodexResumeHandler', () => {
       events,
       chats: () => [],
       resume: async () => { resumed = true; },
+      gracePassed: async () => true,
+      notifyTurn: () => {},
     });
     handler({ threadId: 't1', key: 'codex:t1' });
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
@@ -246,6 +301,8 @@ describe('makeCodexResumeHandler', () => {
       events,
       chats: () => [],
       resume: async () => { resumed = true; },
+      gracePassed: async () => true,
+      notifyTurn: () => {}
     });
     handler({ threadId: 't1', key: 'codex:t1' });
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
@@ -438,8 +495,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
     const pending = request(
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'touch /x' }, timeoutSec: 60 },
@@ -447,19 +503,18 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     );
     held(pending);
     await until(() => { expect(notes).toHaveLength(1); }); // exactly once — not once per configured channel
-    expect(notes[0].title).toContain('Bash');
+    expect(notes[0].title).toBe('w · approval needed');
+    expect(notes[0].body).toBe('Bash · touch /x'); // the call itself, so you know what you are being called about
     const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
     adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: card.buttons!.find((b) => b.id.startsWith('approve:'))!.id, ts: 0 });
     await pending;
-    // Warp-style lifecycle: the answer resolved the LAST pending approval →
-    // the desktop notification is actively cleared, never left as a zombie.
-    expect(clears.length).toBeGreaterThan(0);
+    expect(notes).toHaveLength(1); // answering fires nothing further, and retracts nothing
   });
 
   // detectLang wired all the way through bootstrap: the outer beforeEach
   // already clears LC_ALL/LC_MESSAGES/LANG, so this only needs to state its
   // own intent explicitly — a bare C/POSIX environment, no locale at all.
-  it('renders the held body in English under a C/POSIX locale (detectLang wired through bootstrap)', async () => {
+  it('renders the held reason in English under a C/POSIX locale (detectLang wired through bootstrap)', async () => {
     process.env.LC_ALL = 'C';
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },
@@ -468,7 +523,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
     const pending = request(
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
@@ -476,10 +531,11 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     );
     held(pending);
     await until(() => { expect(notes).toHaveLength(1); });
-    expect(notes[0].body).toBe('Approval needed');
+    expect(notes[0].title).toBe('w · approval needed');
+    expect(notes[0].body).toBe('Bash · ls'); // the project name and the tool are never translated
   });
 
-  it('the desktop toast is immediate — it does NOT wait out the IM card grace delay (the local user is the whole point)', async () => {
+  it('the desktop notification is immediate — it does NOT wait out the IM card grace delay (the local user is the whole point)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },
       approvals: { approvalGraceSec: 30 }, // IM card held back 30s…
@@ -488,8 +544,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
     const pending = request(
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
@@ -498,17 +553,16 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     held(pending);
     await until(() => { expect(notes).toHaveLength(1); });
     expect(sent).toHaveLength(0); // …but the desktop already knows
-    // Local answer within grace (PostToolUse cancel) → card never sent, toast cleared.
+    // Local answer within grace (PostToolUse cancel) → the card is never sent.
     await request(
       { kind: 'hook.event', event: { event: 'activity', cwd: '/w', sessionId: 's1', toolName: 'Bash', result: {} } },
       { socketPath: sock, timeoutMs: 2000 },
     );
     await pending;
-    expect(clears.length).toBeGreaterThan(0);
     expect(sent).toHaveLength(0);
   });
 
-  it('two configured chats with a slow adapter still get ONE desktop toast render per request (regression: per-chat concurrent pushes each fired a toast)', async () => {
+  it('two configured chats with a slow adapter still get ONE desktop notification per request (regression: per-chat concurrent pushes each fired one)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },
       approvals: { approvalGraceSec: 0 },
@@ -524,8 +578,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       a.send = async (out) => { await new Promise((r) => setTimeout(r, 20)); return base(out); };
     }
     const notes: Array<{ title: string; body: string }> = [];
-    const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [tg, fs], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [tg, fs], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
     const pending = request(
       { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', toolName: 'Bash', input: { command: 'touch /x' }, timeoutSec: 60 },
@@ -533,13 +586,13 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     );
     held(pending);
     await until(() => { expect(sent).toHaveLength(2); }); // one card per channel…
-    expect(notes).toHaveLength(1); // …but a single desktop toast render
+    expect(notes).toHaveLength(1); // …but a single desktop notification
     const card = sent[0] as { kind: 'card'; buttons?: Array<{ id: string; label: string }> };
     tg.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: card.buttons!.find((b) => b.id.startsWith('approve:'))!.id, ts: 0 });
     await pending;
   });
 
-  it('a finished turn does NOT pop a desktop toast (per-turn completion would flood) — it stays on IM only', async () => {
+  it('a finished turn does NOT pop a desktop notification (per-turn completion would flood) — it stays on IM only', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },
       adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
@@ -547,7 +600,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const renders: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { renders.push({ title, body }); }, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
     // Drive the real, shared continueBroker directly (same instance the CC Stop
     // and Codex turn/completed paths both funnel through). Floating request with
     // a tiny window; we only assert the notification surfaces, not the reply.
@@ -557,90 +610,123 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     expect((sent[0] as { title?: string }).title).toContain('Turn finished');
   });
 
-  it('info-level notify ("Claude is waiting for your input") joins the waiting toast; error-level (failures) does NOT', async () => {
+  it('an info-level notify no longer reaches the desktop, and error-level never did', async () => {
+    // Claude Code's own 60-second "waiting for your input" notification used to
+    // be this channel's trigger; "your turn" rides the Stop hook now. Error
+    // level was always excluded: a failed tool blocks nobody, and it goes to IM
+    // where it is diagnosable.
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
     const renders: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { render: async (title, body) => { renders.push({ title, body }); }, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
-    expect(renders).toHaveLength(1);
-    expect(renders[0].body).toContain('your input');
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'error', message: 'Bash failed: boom' }, { socketPath: sock, timeoutMs: 2000 });
-    expect(renders).toHaveLength(1); // error-level stays on IM/dashboard, never the at-the-keyboard toast
+    expect(renders).toHaveLength(0);
   });
 
-  // The `what` fields for the two non-tool WaitingEntry kinds ('your input',
-  // 'permission') are localized at bootstrap.ts's registration sites, not
-  // inside renderBoard — the previous test alone cannot tell that apart from
-  // a hardcoded English literal, since 'en' is this suite's default. This
-  // one forces zh and checks the toast TITLE (which carries `what`) actually
-  // switches — proving the registration site reads `WHAT.yourInput[lang]`
-  // rather than a fixed string.
-  it('an idle toast\'s "what" is localized to zh under a zh locale, not hardcoded English', async () => {
+  // "Your turn" rides the Stop hook, the same event the IM continue card rides,
+  // and NOT Claude Code's own 60-second "waiting for your input" notification.
+  // Two reasons, both structural: the Stop hook's payload carries the real last
+  // assistant message, whereas the notification path had to dig it out of a
+  // registry field that the same hook overwrites with its own boilerplate; and
+  // the timing then belongs to tlive's own configurable grace instead of a
+  // Claude Code constant that varies with the user's settings.
+  it('a session that ends inside the grace announces nothing — there is nobody left to call back', async () => {
+    // A ONE-SECOND grace, and the wait runs past it: an absence assertion needs
+    // the window it is denying to have actually elapsed.
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { continueGraceSec: 1, continueWindowSec: 60 } }));
+    const renders: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+    void request(
+      { kind: 'hook.continue.request', cwd: '/w/repo', sessionId: 's1', context: 'ctx', lastMessage: 'done' },
+      { socketPath: sock, timeoutMs: 40_000 },
+    ).catch(() => undefined);
+    await request({ kind: 'hook.event', event: { event: 'session-end', cwd: '/w/repo', sessionId: 's1' } }, { socketPath: sock, timeoutMs: 2000 });
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(renders).toHaveLength(0);
+  });
+
+  it('a tool call inside the grace does NOT cancel the announcement — it is the finished turn trailing, not you coming back', async () => {
+    // The cancel rule is deliberately narrow: only a prompt or a session end.
+    // Keying it on any activity would be one event-ordering change away from
+    // silently killing every announcement, since a turn's own trailing events
+    // can land inside its grace — Codex sends the turn/completed attention
+    // event before the grace even starts.
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { continueGraceSec: 1, continueWindowSec: 60 } }));
+    const renders: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+    void request(
+      { kind: 'hook.continue.request', cwd: '/w/repo', sessionId: 's1', context: 'ctx', lastMessage: 'done' },
+      { socketPath: sock, timeoutMs: 40_000 },
+    ).catch(() => undefined);
+    // Inside the grace, and it must not count as you coming back.
+    await request({ kind: 'hook.event', event: { event: 'activity', cwd: '/w/repo', sessionId: 's1', toolName: 'Bash' } }, { socketPath: sock, timeoutMs: 2000 });
+    await until(() => { expect(renders).toHaveLength(1); });
+  });
+
+  it('a finished turn notifies the desktop with what Claude actually said', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { continueGraceSec: 0, continueWindowSec: 30 } }));
+    const renders: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+    // The Stop hook blocks in the daemon until the continue window resolves, so
+    // it cannot be awaited here.
+    void request(
+      { kind: 'hook.continue.request', cwd: '/w/repo', sessionId: 's1', context: 'ctx', lastMessage: 'Fixed the retry path; 932 tests pass' },
+      { socketPath: sock, timeoutMs: 40_000 },
+    ).catch(() => undefined);
+    await until(() => { expect(renders).toHaveLength(1); });
+    expect(renders[0].title).toBe('repo · waiting for your input');
+    expect(renders[0].body).toBe('Fixed the retry path; 932 tests pass');
+  });
+
+  it('Claude Code\'s own 60-second idle notification no longer produces a desktop notification — one event, one notification', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    const renders: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
+    expect(renders).toHaveLength(0);
+  });
+
+  // The reason is localized inside renderWaiting, and the test above cannot tell
+  // that apart from a hardcoded English literal, since 'en' is this suite's
+  // default. This one forces zh and checks the TITLE actually switches — proving
+  // `lang` is threaded from detectLang to the emit site rather than fixed.
+  it('a finished turn\'s reason is localized to zh under a zh locale, not hardcoded English', async () => {
     process.env.LC_ALL = 'zh_CN.UTF-8';
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { continueGraceSec: 0, continueWindowSec: 30 } }));
     const renders: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { render: async (title, body) => { renders.push({ title, body }); }, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
-    expect(renders).toHaveLength(1);
-    expect(renders[0].title).toContain('你的输入');
+    void request(
+      { kind: 'hook.continue.request', cwd: '/w', sessionId: 's1', context: 'ctx', lastMessage: 'done' },
+      { socketPath: sock, timeoutMs: 40_000 },
+    ).catch(() => undefined);
+    await until(() => { expect(renders).toHaveLength(1); });
+    expect(renders[0].title).toContain('等你输入');
     expect(renders[0].title).not.toContain('your input');
-    expect(renders[0].body).toBe('等你输入');
   });
 
-  it('an idle session joins the waiting toast and leaves it when the user types', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
-    const renders: Array<{ title: string; body: string }> = [];
-    const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { render: async (title, body) => { renders.push({ title, body }); }, clear: async () => { clears.push(1); } } });
-    const sock = daemonSocketPath(tmp);
-    clears.length = 0; // discard the daemon's own startup clear (unrelated to this scenario)
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
-    expect(renders.at(-1)!.title).toContain('your input');
-    await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/w', sessionId: 's1', prompt: 'go on' } }, { socketPath: sock, timeoutMs: 2000 });
-    expect(clears).toHaveLength(1); // the toast that outlived its cause is now closed
-  });
-
-  it('an idle reminder also retires when the session ends, so the resident toast cannot strand', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
-    const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { render: async () => {}, clear: async () => { clears.push(1); } } });
-    const sock = daemonSocketPath(tmp);
-    clears.length = 0; // discard the daemon's own startup clear (unrelated to this scenario)
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
-    await request({ kind: 'hook.event', event: { event: 'session-end', cwd: '/w', sessionId: 's1' } }, { socketPath: sock, timeoutMs: 2000 });
-    expect(clears).toHaveLength(1);
-  });
-
-  it('an idle reminder is also retired by the session resuming activity at the terminal — but NOT by a background sub-agent\'s', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
-    const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { render: async () => {}, clear: async () => { clears.push(1); } } });
-    const sock = daemonSocketPath(tmp);
-    clears.length = 0; // discard the daemon's own startup clear (unrelated to this scenario)
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
-    // A backgrounded sub-agent's activity is not proof the parent stopped waiting.
-    await request({ kind: 'hook.event', event: { event: 'activity', cwd: '/w', sessionId: 's1', agentId: 'a-1', toolName: 'Bash', result: {} } }, { socketPath: sock, timeoutMs: 2000 });
-    expect(clears).toHaveLength(0);
-    // The main session's own activity is.
-    await request({ kind: 'hook.event', event: { event: 'activity', cwd: '/w', sessionId: 's1', toolName: 'Bash', result: {} } }, { socketPath: sock, timeoutMs: 2000 });
-    expect(clears).toHaveLength(1);
-  });
-
-  it('desktop waiting toast is INDEPENDENT of IM mute (IM ⊥ desktop): /mute on silences IM but the idle toast still fires', async () => {
+  it('the desktop channel is INDEPENDENT of IM mute (IM ⊥ desktop): /mute on silences IM but a finished turn still notifies the desktop', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },
+      approvals: { continueGraceSec: 0, continueWindowSec: 30 },
       adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
     }));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const renders: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (t, b) => { renders.push({ title: t, body: b }); }, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async (t, b) => { renders.push({ title: t, body: b }); } } });
     const sock = daemonSocketPath(tmp);
     await request({ kind: 'daemon.set', key: 'mute', enabled: true }, { socketPath: sock, timeoutMs: 2000 }); // /mute on
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
-    expect(renders).toHaveLength(1); // desktop fires despite the IM mute…
+    void request(
+      { kind: 'hook.continue.request', cwd: '/w', sessionId: 's1', context: 'ctx', lastMessage: 'done' },
+      { socketPath: sock, timeoutMs: 40_000 },
+    ).catch(() => undefined);
+    await until(() => { expect(renders).toHaveLength(1); }); // desktop fires despite the IM mute…
     expect(sent).toHaveLength(0);  // …IM stays silent
   });
 
@@ -1095,11 +1181,11 @@ describe('quoting a live approval card = deny with guidance (Task 7)', () => {
   });
 
   // Mirrors the hook.notify first-contact fix above, one call site over:
-  // onPending's board entry also renders sessionLabel(key) — and used to do so
+  // onPending's notification also renders sessionLabel(key) — and used to do so
   // BEFORE its own final `sessions.upsert(...)` registered the session, so a
   // session's very first tool-permission request (e.g. right after a daemon
-  // restart) produced an unlabelled toast.
-  it('the first-ever permission request for a never-before-seen session still carries the "<label> · " toast prefix (onPending)', async () => {
+  // restart) went out unlabelled.
+  it('the first-ever permission request for a never-before-seen session still carries the "<label> · " prefix (onPending)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },
       approvals: { approvalGraceSec: 0 },
@@ -1108,7 +1194,7 @@ describe('quoting a live approval card = deny with guidance (Task 7)', () => {
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
     // Mirrors a daemon restart: the registry is empty before this request.
     expect(h.sessions.get('s-fresh')).toBeUndefined();
@@ -1143,7 +1229,7 @@ describe('Codex resume handler → continue card (regression: sentinel mismatch)
     };
   }
 
-  it('renders an empty continue-card body (no duplicated title) when Codex has no lastMessage', async () => {
+  it('the Codex path reaches the shared broker and the IM card, carrying the assistant\'s message', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },
       adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
@@ -1160,17 +1246,24 @@ describe('Codex resume handler → continue card (regression: sentinel mismatch)
       events: h.events,
       chats: () => [{}], // non-empty → bypasses the fast-null path
       resume: async () => undefined,
+      gracePassed: async () => true,
+      notifyTurn: () => {}
     });
 
-    onCodexResumePrompt({ threadId: 't1', key: 'codex:t1' }); // no lastMessage
+    // This used to pass no lastMessage, and asserted that an EMPTY card went out.
+    // That behaviour is now suppressed: an interrupted turn produces no assistant
+    // message, and announcing it sent nine empty cards in fourteen minutes on
+    // real hardware. The empty-body RENDERING is still covered, at the level it
+    // belongs to — see continue-card.test.ts's `buildContinueCardBody('')` case.
+    // What this test is for is the wiring: Codex reaches the shared broker, whose
+    // onRequest handler builds the IM card.
+    onCodexResumePrompt({ threadId: 't1', key: 'codex:t1', lastMessage: 'patch applied' });
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
 
     expect(sent).toHaveLength(1);
     const card = sent[0] as { kind: 'card'; title?: string; body?: string };
-    // Title carries the usual `<label> · ` session tag (unrelated to this bug);
-    // what matters here is that the body is NOT a quoted repeat of the title.
     expect(card.title?.endsWith('Turn finished')).toBe(true);
-    expect(card.body).toBe('\n*Reply to this message to continue.*');
+    expect(card.body).toContain('patch applied');
   });
 });
 
@@ -1326,14 +1419,14 @@ describe('sub-agent pass-through tells you what is blocked', () => {
 
   // The IM notice (above) is only half the gap: with no IM configured, or
   // `/mute` on, or the user simply not looking at their phone, a blocked
-  // sub-agent used to produce NO signal at all. The desktop toast is
-  // precisely the "at this machine, not watching the terminal" channel.
-  it('fires ONE desktop toast render naming the tool when a sub-agent request passes through', async () => {
+  // sub-agent used to produce NO signal at all. The desktop channel is
+  // precisely the "at this machine, not watching the terminal" one.
+  it('fires ONE desktop notification naming the tool when a sub-agent request passes through', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
 
     await request(
@@ -1345,21 +1438,23 @@ describe('sub-agent pass-through tells you what is blocked', () => {
     );
 
     await until(() => { expect(notes).toHaveLength(1); });
-    expect(notes[0].title).toContain('Bash');
-    expect(notes[0].title).toContain('sub-agent');
-    expect(notes[0].body).toBe('Answer at your terminal'); // names no place — see waiting-board.ts's BODY doc
+    // The reason says it is a sub-agent's; the body says which call is blocked.
+    // Neither names a place to answer: renderWaiting cannot tell a terminal-only
+    // dialog from a remotely answerable one (see waiting-notice.ts's REASON doc).
+    expect(notes[0].title).toBe('w · sub-agent needs approval');
+    expect(notes[0].body).toBe('Bash · rm -rf /tmp/scratch');
   });
 
   // Same call-site-ordering bug as onPending above, the other flagged site:
-  // onPassthrough's board entry also renders sessionLabel(key) before its own
+  // onPassthrough's notification also renders sessionLabel(key) before its own
   // guarded upsert registered the session, so a sub-agent's first-ever
-  // pass-through (e.g. right after a daemon restart) produced an unlabelled toast.
-  it('a sub-agent pass-through for a never-before-seen session still carries the "<label> · " toast prefix', async () => {
+  // pass-through (e.g. right after a daemon restart) went out unlabelled.
+  it('a sub-agent pass-through for a never-before-seen session still carries the "<label> · " prefix', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
     expect(h.sessions.get('s1')).toBeUndefined();
 
@@ -1406,12 +1501,12 @@ describe('sub-agent pass-through tells you what is blocked', () => {
   // IM ⊥ desktop: `/mute` is an IM-only switch. The old early-return at the
   // top of onPassthrough killed the WHOLE announcement on mute, which broke
   // that rule for this notice specifically.
-  it('IM mute silences the card, but the desktop toast still fires (IM ⊥ desktop)', async () => {
+  it('IM mute silences the card, but the desktop notification still fires (IM ⊥ desktop)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'daemon.set', key: 'mute', enabled: true }, { socketPath: sock, timeoutMs: 2000 }); // /mute on
@@ -1427,88 +1522,6 @@ describe('sub-agent pass-through tells you what is blocked', () => {
     await until(() => { expect(notes).toHaveLength(1); }); // desktop unaffected by IM mute…
     await new Promise((r) => setTimeout(r, 80));
     expect(sent).toHaveLength(0); // …but the IM card never went out
-  });
-
-  // C1: a sub-agent pass-through creates no router pending at all
-  // (requestPermission returns {decision:'defer'} immediately for it), so
-  // unlike a `held` entry there is no cancel/timeout/onResolved for it —
-  // retirePassthruNotice, reached only from a MATCHING PostToolUse
-  // (agentId+toolName), used to be the ONLY way off the board. Deny the
-  // dialog (or Esc it, or let the sub-agent abort) and no PostToolUse ever
-  // arrives, so the entry — and with it board.isEmpty(), so `clear()` for
-  // every OTHER session too — was stuck for the daemon's remaining lifetime.
-  // These three tests drive the eager fallbacks added for it.
-  describe('a pass-through notice retires even when the exact PostToolUse match never arrives (C1)', () => {
-    it('permission-denied retires it — a denied dialog never runs, so it never runs a matching PostToolUse', async () => {
-      writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
-      const sent: OutgoingMessage[] = [];
-      const adapter = interactiveAdapter('telegram', sent);
-      const notes: Array<{ title: string; body: string }> = [];
-      const clears: number[] = [];
-      h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
-      const sock = daemonSocketPath(tmp);
-      clears.length = 0; // discard the daemon's own startup clear
-
-      await request(
-        { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', agentId: 'a-77', toolName: 'Bash', input: { command: 'rm -rf /tmp/scratch' }, timeoutSec: 60 },
-        { socketPath: sock, timeoutMs: 5000 },
-      );
-      await until(() => { expect(notes).toHaveLength(1); });
-
-      // No agentId is available on this event at all (CC's PermissionDenied
-      // hook never carries one) — the match can only be key + toolName.
-      await request(
-        { kind: 'hook.event', event: { event: 'permission-denied', cwd: '/w', sessionId: 's1', toolName: 'Bash' } },
-        { socketPath: sock, timeoutMs: 2000 },
-      );
-      await until(() => { expect(clears.length).toBeGreaterThan(0); });
-    });
-
-    it('a fresh prompt at the terminal retires it — the session moved on, so any notice still on the board is stale', async () => {
-      writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
-      const sent: OutgoingMessage[] = [];
-      const adapter = interactiveAdapter('telegram', sent);
-      const notes: Array<{ title: string; body: string }> = [];
-      const clears: number[] = [];
-      h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
-      const sock = daemonSocketPath(tmp);
-      clears.length = 0;
-
-      await request(
-        { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', agentId: 'a-77', toolName: 'Bash', input: { command: 'rm -rf /tmp/scratch' }, timeoutSec: 60 },
-        { socketPath: sock, timeoutMs: 5000 },
-      );
-      await until(() => { expect(notes).toHaveLength(1); });
-
-      await request(
-        { kind: 'hook.event', event: { event: 'prompt', cwd: '/w', sessionId: 's1', prompt: 'go on' } },
-        { socketPath: sock, timeoutMs: 2000 },
-      );
-      await until(() => { expect(clears.length).toBeGreaterThan(0); });
-    });
-
-    it('the session ending retires it — a dead session cannot still be waiting on anything', async () => {
-      writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
-      const sent: OutgoingMessage[] = [];
-      const adapter = interactiveAdapter('telegram', sent);
-      const notes: Array<{ title: string; body: string }> = [];
-      const clears: number[] = [];
-      h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
-      const sock = daemonSocketPath(tmp);
-      clears.length = 0;
-
-      await request(
-        { kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', agentId: 'a-77', toolName: 'Bash', input: { command: 'rm -rf /tmp/scratch' }, timeoutSec: 60 },
-        { socketPath: sock, timeoutMs: 5000 },
-      );
-      await until(() => { expect(notes).toHaveLength(1); });
-
-      await request(
-        { kind: 'hook.event', event: { event: 'session-end', cwd: '/w', sessionId: 's1' } },
-        { socketPath: sock, timeoutMs: 2000 },
-      );
-      await until(() => { expect(clears.length).toBeGreaterThan(0); });
-    });
   });
 
   // Reuses the same read-only shape as the notify-mode local-prompt card
@@ -1561,20 +1574,18 @@ describe('sub-agent pass-through tells you what is blocked', () => {
   });
 
   // Retirement (measured live: the sub-agent's PostToolUse carrying the same
-  // (agentId, toolName) pair) must close BOTH the dashboard card and the
-  // desktop toast when nothing else is waiting — and must not close the toast
-  // early when a held approval elsewhere is still pending, since the toast is
-  // one shared machine-wide slot.
-  it('a matching PostToolUse clears the dashboard card and closes the toast — but not while a held approval is still pending', async () => {
+  // (agentId, toolName) pair) must clear the read-only dashboard card — that
+  // card is now the ONLY surface that says what is waiting right now, so a
+  // notice that never retires is a card still claiming a dialog nobody is
+  // looking at.
+  it('a matching PostToolUse clears the read-only dashboard card', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
 
-    // Nothing else pending: retirement closes both surfaces.
     await request(
       {
         kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', agentId: 'a-77',
@@ -1583,151 +1594,13 @@ describe('sub-agent pass-through tells you what is blocked', () => {
       { socketPath: sock, timeoutMs: 5000 },
     );
     await until(() => { expect(notes).toHaveLength(1); });
+    expect((await findSession(sock, 's1'))?.pending?.local).toBe(true);
+
     await request(
       { kind: 'hook.event', event: { event: 'activity', cwd: '/w', sessionId: 's1', agentId: 'a-77', toolName: 'Bash', result: {} } },
       { socketPath: sock, timeoutMs: 2000 },
     );
-    await until(() => { expect(clears.length).toBeGreaterThan(0); });
-    expect((await findSession(sock, 's1'))?.pending).toBeUndefined();
-
-    // A held main-session approval on a DIFFERENT session is still
-    // outstanding when THIS session's sub-agent notice retires.
-    const heldMain = held(request(
-      { kind: 'hook.permission.request', cwd: '/w2', sessionId: 's2', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
-      { socketPath: sock, timeoutMs: 10_000 },
-    ));
-    await until(() => { expect(notes.length).toBeGreaterThanOrEqual(2); });
-    clears.length = 0;
-
-    await request(
-      {
-        kind: 'hook.permission.request', cwd: '/w3', sessionId: 's3', agentId: 'a-99',
-        toolName: 'Read', input: { file_path: '/etc/hosts' }, timeoutSec: 60,
-      },
-      { socketPath: sock, timeoutMs: 5000 },
-    );
-    await until(() => { expect(notes.length).toBeGreaterThanOrEqual(3); });
-    expect((await findSession(sock, 's3'))?.pending?.local).toBe(true);
-
-    await request(
-      { kind: 'hook.event', event: { event: 'activity', cwd: '/w3', sessionId: 's3', agentId: 'a-99', toolName: 'Read', result: {} } },
-      { socketPath: sock, timeoutMs: 2000 },
-    );
-    await new Promise((r) => setTimeout(r, 100));
-    expect(clears).toEqual([]); // s2's held approval still pending → toast stays open
-    expect((await findSession(sock, 's3'))?.pending).toBeUndefined(); // s3's own card still retires
-    void heldMain; // resolved by the daemon's own shutdown() → settleAllPending
-  });
-
-  // Regression: the desktop-clear condition must be ONE predicate evaluated
-  // identically everywhere — not three separate copies. A copy that forgets
-  // passthruWaiting closes a still-outstanding sub-agent toast the INSTANT
-  // something else the daemon tracks resolves, anywhere. This drives that
-  // through onResolved specifically: s2's resolution must NOT touch s1's
-  // still-outstanding sub-agent dialog. It then retires s1 via
-  // permission-denied rather than a matching PostToolUse — the dialog was
-  // DENIED, not run, so it never fires one, and retirePassthruNotice's exact
-  // (agentId, toolName) match never gets a chance to run at all (this used to
-  // strand the entry, and with it board.isEmpty(), for the daemon's remaining
-  // lifetime — C1).
-  it("a held approval resolving on ANOTHER session must not close the toast while a sub-agent pass-through is still outstanding (onResolved)", async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
-    const sent: OutgoingMessage[] = [];
-    const adapter = interactiveAdapter('telegram', sent);
-    const notes: Array<{ title: string; body: string }> = [];
-    const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
-    const sock = daemonSocketPath(tmp);
-    clears.length = 0; // discard the daemon's own startup clear (stray-toast retraction, unrelated to this scenario)
-
-    // s1: sub-agent pass-through — still outstanding for the rest of this test.
-    await request(
-      {
-        kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', agentId: 'a-77',
-        toolName: 'Bash', input: { command: 'rm -rf /tmp/scratch' }, timeoutSec: 60,
-      },
-      { socketPath: sock, timeoutMs: 5000 },
-    );
-    await until(() => { expect(notes).toHaveLength(1); });
-
-    // s2: a genuine held MAIN-session approval, answered via IM → onResolved fires.
-    const pending = request(
-      { kind: 'hook.permission.request', cwd: '/w2', sessionId: 's2', toolName: 'Bash', input: { command: 'ls' }, timeoutSec: 60 },
-      { socketPath: sock, timeoutMs: 10_000 },
-    );
-    held(pending);
-    // sent[] also carries s1's pass-through IM notice (its own "mode:all"
-    // button) — find the actual approvable card, not just sent[0].
-    await vi.waitFor(() => {
-      expect((sent as Array<{ buttons?: Array<{ id: string }> }>).some((m) => m.buttons?.some((b) => b.id.startsWith('approve:')))).toBe(true);
-    }, { timeout: 3000, interval: 10 });
-    const card = (sent as Array<{ buttons?: Array<{ id: string; label: string }> }>).find((m) => m.buttons?.some((b) => b.id.startsWith('approve:')))!;
-    adapter.fire({ channel: 'telegram', chatId: 'c1', userId: 'u1', messageId: 'x1', text: card.buttons!.find((b) => b.id.startsWith('approve:'))!.id, ts: 0 });
-    await pending;
-
-    // s2's own approval just resolved — s1's sub-agent dialog is still
-    // unanswered at the terminal, so the toast must NOT have closed.
-    expect(clears).toEqual([]);
-
-    // Only once s1's notice actually retires does the toast close — here via
-    // permission-denied (denied at the terminal, not run), the eager
-    // key+toolName fallback added for C1, since a denial never runs the
-    // sub-agent's tool and so never reaches retirePassthruNotice.
-    await request(
-      { kind: 'hook.event', event: { event: 'permission-denied', cwd: '/w', sessionId: 's1', toolName: 'Bash' } },
-      { socketPath: sock, timeoutMs: 2000 },
-    );
-    await until(() => { expect(clears.length).toBeGreaterThan(0); });
-  });
-
-  // Mirrors the test above for the OTHER pre-existing copy of the condition:
-  // clearLocalPrompt (the notify-mode / full-mode-defer CC-native dialog
-  // tracker) must not close the toast either, while a sub-agent pass-through
-  // elsewhere is still outstanding. mode: 'notify' is required to get a
-  // tracked local prompt at all — 'full' treats permission_prompt as
-  // redundant and never calls localPrompts.note in the first place.
-  it('clearing a local prompt on ANOTHER session must not close the toast while a sub-agent pass-through is still outstanding (clearLocalPrompt)', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'notify' }));
-    const sent: OutgoingMessage[] = [];
-    const adapter = interactiveAdapter('telegram', sent);
-    const notes: Array<{ title: string; body: string }> = [];
-    const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => { clears.push(1); } } });
-    const sock = daemonSocketPath(tmp);
-    clears.length = 0; // discard the daemon's own startup clear (stray-toast retraction, unrelated to this scenario)
-
-    // s1: sub-agent pass-through — still outstanding for the rest of this test.
-    await request(
-      {
-        kind: 'hook.permission.request', cwd: '/w', sessionId: 's1', agentId: 'a-77',
-        toolName: 'Bash', input: { command: 'rm -rf /tmp/scratch' }, timeoutSec: 60,
-      },
-      { socketPath: sock, timeoutMs: 5000 },
-    );
-    await until(() => { expect(notes).toHaveLength(1); });
-
-    // s2: a notify-mode CC-native dialog (no held request), tracked…
-    await request(
-      { kind: 'hook.notify', cwd: '/w2', sessionId: 's2', level: 'info', message: 'Claude needs your permission to use Bash', permissionPrompt: true },
-      { socketPath: sock, timeoutMs: 2000 },
-    );
-    await until(() => { expect(notes.length).toBeGreaterThanOrEqual(2); });
-
-    // …then answered at the keyboard → clearLocalPrompt fires.
-    await request(
-      { kind: 'hook.event', event: { event: 'activity', cwd: '/w2', sessionId: 's2', toolName: 'Bash', result: {} } },
-      { socketPath: sock, timeoutMs: 2000 },
-    );
-    await new Promise((r) => setTimeout(r, 100));
-    // s1's sub-agent dialog is still unanswered — the toast must NOT have closed.
-    expect(clears).toEqual([]);
-
-    // Only once s1's notice actually retires does the toast close.
-    await request(
-      { kind: 'hook.event', event: { event: 'activity', cwd: '/w', sessionId: 's1', agentId: 'a-77', toolName: 'Bash', result: {} } },
-      { socketPath: sock, timeoutMs: 2000 },
-    );
-    await until(() => { expect(clears.length).toBeGreaterThan(0); });
+    await until(async () => { expect((await findSession(sock, 's1'))?.pending).toBeUndefined(); });
   });
 });
 
@@ -1804,22 +1677,22 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     return r.sessions.find((s) => s.id === id);
   }
 
-  it('no held request → desktop toast + read-only waiting-approval card; IM gets the one-time notify explanation, not dead mail (the chain a silent hang used to be)', async () => {
+  it('no held request → desktop notification + read-only waiting-approval card; IM gets the one-time notify explanation, not dead mail (the chain a silent hang used to be)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
 
-    // Desktop: the waiting slot (board-driven render), speaking to the person
-    // at the machine. Single-entry wording is "<label> · <what>" / the
-    // WaitingBoard localPrompt body (see waiting-board.ts's BODY table).
+    // Desktop: one notification, speaking to the person at the machine. CC's
+    // Notification carries no tool name and no agent id, so its own sentence is
+    // the only thing there is to say what is waiting.
     expect(notes).toHaveLength(1);
-    expect(notes[0].title).toContain('permission');
-    expect(notes[0].body).toBe('Answer at your terminal'); // names no place — see waiting-board.ts's BODY doc
+    expect(notes[0].title).toBe('w · approval needed');
+    expect(notes[0].body).toBe(MSG);
     // Dashboard: read-only pending — waiting-approval, marked local.
     const s = await findSession(sock, 's1');
     expect(s?.status).toBe('waiting-approval');
@@ -1833,25 +1706,6 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     const card = sent[0] as { title?: string; buttons?: Array<{ id: string }> };
     expect(card.title).toContain('Approvals stay at your terminal');
     expect(card.buttons?.map((b) => b.id)).toContain('mode:full');
-  });
-
-  // Same wiring gap as the idle toast's zh test above (Task 3/localPrompt is
-  // the OTHER registration site that reads WHAT.permission[lang], not just
-  // onNotify's idle one) — under English 'permission' is indistinguishable
-  // from a hardcoded literal, so this forces zh to prove the site actually
-  // reads the table rather than a fixed string.
-  it('a localPrompt toast\'s "what" is localized to zh under a zh locale, not hardcoded English', async () => {
-    process.env.LC_ALL = 'zh_CN.UTF-8';
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
-    const adapter = interactiveAdapter('telegram', []);
-    const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {} } });
-    const sock = daemonSocketPath(tmp);
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
-    expect(notes).toHaveLength(1);
-    expect(notes[0].title).toContain('权限');
-    expect(notes[0].title).not.toContain('permission');
-    expect(notes[0].body).toBe('回终端处理');
   });
 
   // In `full` mode every request tlive sees ends up either held (an answerable
@@ -1869,12 +1723,12 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
   // Measured live: a workflow session sat at `status: active` with a "Permission
   // needed" card still on it, because every event in that session was a
   // sub-agent's. Don't create it, and there is nothing to retire.
-  it('full mode: a permission_prompt with nothing held creates no card, toast or IM text', async () => {
+  it('full mode: a permission_prompt with nothing held creates no card, notification or IM text', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'full' }));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
@@ -1891,12 +1745,12 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
   // `mode === 'full'` alone, so 'all' fell through as `redundant = false` and
   // built the chain anyway in a posture where it must not run (see the
   // comment above `redundant` in bootstrap.ts).
-  it('all mode: a permission_prompt with nothing held ALSO creates no card, toast or IM text', async () => {
+  it('all mode: a permission_prompt with nothing held ALSO creates no card, notification or IM text', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'all' }));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
@@ -1919,7 +1773,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
 
     writeMode(tmp, 'notify');
@@ -1941,7 +1795,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'notify' }));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async () => {}, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'hook.notify', cwd: '/w/api', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
@@ -1953,7 +1807,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'notify' }));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async () => {}, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'hook.notify', cwd: '/w/api', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
@@ -1982,7 +1836,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     adapter.send = async () => { throw new Error('boom: telegram 5xx'); };
     const logs: string[] = [];
     const logSpy = vi.spyOn(console, 'log').mockImplementation((line: unknown) => { logs.push(String(line)); });
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async () => {}, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'hook.notify', cwd: '/w/api', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
@@ -2006,7 +1860,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     const sent: OutgoingMessage[] = [];
     const boot = async (): Promise<void> => {
       const adapter = interactiveAdapter('telegram', sent);
-      h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async () => {}, clear: async () => {} } });
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
       await request({ kind: 'hook.notify', cwd: '/w/api', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: daemonSocketPath(tmp), timeoutMs: 2000 });
       await new Promise((r) => setTimeout(r, 50));
       await h.shutdown();
@@ -2016,11 +1870,47 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     expect(sent).toHaveLength(1);
   });
 
+  it('Claude Code\'s idle notification does NOT reach IM once the Stop hook announced this turn — the continue card already said it', async () => {
+    // The old dedup asked "is a continue card live", reading a field that is
+    // only written after the grace and never written at all when the grace
+    // cancels the card — so the notification slipped through the very window
+    // the rule exists to cover. It now asks "was this turn's end announced",
+    // which the Stop hook's arrival settles before any grace runs.
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'notify', approvals: { continueGraceSec: 30, continueWindowSec: 60 } }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+    void request(
+      { kind: 'hook.continue.request', cwd: '/w/vf', sessionId: 's1', context: 'ctx', lastMessage: 'done' },
+      { socketPath: sock, timeoutMs: 40_000 },
+    ).catch(() => undefined);
+    // Still inside the grace: no card has been sent yet, and the old rule would
+    // have let this through.
+    await request({ kind: 'hook.notify', cwd: '/w/vf', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
+    expect(sent.filter((m) => (m as { text?: string }).text?.includes('waiting for your input'))).toHaveLength(0);
+  });
+
+  it('a new prompt re-arms the dedup — the next turn\'s idle notification is a different turn\'s news', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'notify', approvals: { continueGraceSec: 30, continueWindowSec: 60 } }));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+    void request(
+      { kind: 'hook.continue.request', cwd: '/w/vf', sessionId: 's1', context: 'ctx', lastMessage: 'done' },
+      { socketPath: sock, timeoutMs: 40_000 },
+    ).catch(() => undefined);
+    await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/w/vf', sessionId: 's1' } }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w/vf', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
+    await until(() => { expect(sent.some((m) => (m as { text?: string }).text?.includes('waiting for your input'))).toBe(true); });
+  });
+
   it('an idle session still reaches IM — replying there continues the run, so it is not dead mail', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'notify' }));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async () => {}, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'hook.notify', cwd: '/w/vf', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
@@ -2032,7 +1922,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
 
     const pending = request(
@@ -2045,7 +1935,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
 
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
 
-    expect(notes).toHaveLength(1); // no second toast
+    expect(notes).toHaveLength(1); // no second notification
     expect(sent).toHaveLength(1); // no extra IM text — the card owns IM
     const s = await findSession(sock, 's1');
     expect(s?.pending?.local).toBeUndefined(); // still the answerable card
@@ -2055,16 +1945,15 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
   });
 
   // The IM text this test's name used to protect is gone (dead mail). What
-  // survives: a local answer still retires the tracked dialog (pending gone,
-  // toast closed) — and the one-time explain card, which fires immediately
-  // rather than riding any grace, is unaffected by that retirement (it isn't
-  // per-dialog, so there's nothing for the local answer to cancel).
-  it('a local answer (main-session PostToolUse) retires the chain: pending gone, toast closed — the one-time explain card is unaffected (it fires immediately, not gated by grace)', async () => {
+  // survives: a local answer still retires the tracked dialog (the registry's
+  // read-only pending goes away) — and the one-time explain card, which fires
+  // immediately rather than riding any grace, is unaffected by that retirement
+  // (it isn't per-dialog, so there's nothing for the local answer to cancel).
+  it('a local answer (main-session PostToolUse) retires the chain: pending gone — the one-time explain card is unaffected (it fires immediately, not gated by grace)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, approvals: { approvalGraceSec: 30 } }));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
-    const clears: number[] = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async () => {}, clear: async () => { clears.push(1); } } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
@@ -2077,7 +1966,6 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     const s = await findSession(sock, 's1');
     expect(s?.status).toBe('active');
     expect(s?.pending).toBeUndefined();
-    expect(clears.length).toBeGreaterThan(0);
     expect(sent).toHaveLength(1); // still just the one explanation — nothing new fires on retire
   });
 
@@ -2085,7 +1973,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async () => {}, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
@@ -2106,7 +1994,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     const notes: Array<{ title: string; body: string }> = [];
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async (title, body) => { notes.push({ title, body }); }, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'daemon.set', key: 'mute', enabled: true }, { socketPath: sock, timeoutMs: 2000 });
@@ -2128,7 +2016,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { render: async () => {}, clear: async () => {} } });
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'daemon.set', key: 'mute', enabled: true }, { socketPath: sock, timeoutMs: 2000 });
@@ -2269,18 +2157,86 @@ describe('sub-agent card affordances', () => {
   });
 });
 
-// Task 3: the board (src/kernel/daemon/waiting-board.ts) is now the ONLY
-// input to the desktop toast — `passthruWaiting` and the old three-term
-// `nothingWaiting()` predicate are gone. These tests drive the router
-// directly (no IPC round-trip needed for the toast's own logic) and assert
-// on `render`, not `ping` — `refreshDesktop` never calls `ping`.
-describe('WaitingBoard drives the ONE desktop toast (Task 3)', () => {
-  const CFG = {
-    web: { enabled: false },
-    approvals: { approvalGraceSec: 0 },
-    adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
-  };
+// The desktop channel is a stream of events: each of the four places that
+// knows something started waiting fires ONE notification naming the project and
+// the call, and nothing ever retracts, replaces or re-renders it. "What is
+// waiting right now" belongs to the dashboard, which is a pull view built for
+// it.
+describe('desktop notifications are one-per-event', () => {
+  it('a CC-native dialog fires exactly one notification naming the project', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+    await request({ kind: 'hook.notify', cwd: '/w/repo', sessionId: 's1', level: 'info', message: 'Claude needs your permission to use Bash', permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    expect(notes).toHaveLength(1);
+    expect(notes[0]!.title).toBe('repo · approval needed');
+    expect(notes[0]!.body).toBe('Claude needs your permission to use Bash');
+  });
 
+
+  it('a read-only dialog card is timestamped, so the dashboard can say WHEN it was reported instead of asserting it is still true', async () => {
+    // tlive cannot know whether a Claude Code dialog is still up: the
+    // notification that reports one carries no agent id, so a dialog raised by
+    // a background agent is recorded against the main session and answered by a
+    // tool call the clearing path deliberately ignores. Rather than guess — and
+    // clearing on sub-agent activity would wipe a main dialog that really is
+    // waiting, measured at 27 minutes on real hardware — the claim carries the
+    // moment it was made and the dashboard renders its age.
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+    const before = Date.now();
+    await request({ kind: 'hook.notify', cwd: '/w/repo', sessionId: 's1', level: 'info', message: 'Claude needs your permission to use Bash', permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    const seenAt = h.sessions.get('s1')?.pending?.seenAt;
+    expect(typeof seenAt).toBe('number');
+    expect(seenAt!).toBeGreaterThanOrEqual(before);
+    expect(seenAt!).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('answering fires NOTHING — retirement events have no desktop surface any more', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+    await request({ kind: 'hook.notify', cwd: '/w/repo', sessionId: 's1', level: 'info', message: 'Claude needs your permission to use Bash', permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    expect(notes).toHaveLength(1);
+    for (const ev of [
+      { event: 'activity' as const, cwd: '/w/repo', sessionId: 's1', toolName: 'Bash' },
+      { event: 'prompt' as const, cwd: '/w/repo', sessionId: 's1' },
+      { event: 'permission-denied' as const, cwd: '/w/repo', sessionId: 's1', toolName: 'Bash' },
+      { event: 'session-end' as const, cwd: '/w/repo', sessionId: 's1' },
+    ]) {
+      await request({ kind: 'hook.event', event: ev }, { socketPath: sock, timeoutMs: 2000 });
+    }
+    expect(notes).toHaveLength(1); // still one: nothing retracts, nothing re-renders
+  });
+
+  it('error-level notify still never reaches the desktop — a failed tool is not blocking anyone', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+    await request({ kind: 'hook.notify', cwd: '/w/repo', sessionId: 's1', level: 'error', message: 'Bash failed: boom' }, { socketPath: sock, timeoutMs: 2000 });
+    expect(notes).toHaveLength(0);
+  });
+
+  it('zh locale: the reason is localized, the project name and tool are not', async () => {
+    process.env.LC_ALL = 'zh_CN.UTF-8';
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+    await request({ kind: 'hook.notify', cwd: '/w/repo', sessionId: 's1', level: 'info', message: 'Claude needs your permission to use Bash', permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    expect(notes[0]!.title).toBe('repo · 等你批准');
+  });
+});
+
+// Regression guard for the old `desktopOn && webUrl != null`: whether a desktop
+// notification was fired says nothing about whether the dashboard can answer. A
+// dashboard URL alone is the local answer path — no desktop input belongs in the
+// predicate at all.
+describe('the local answer path is a dashboard URL alone', () => {
   function fakeAdapter(): IMAdapter {
     return {
       channel: 'telegram',
@@ -2303,103 +2259,14 @@ describe('WaitingBoard drives the ONE desktop toast (Task 3)', () => {
     return found.pending.requestId;
   }
 
-  /** Drive a sub-agent pass-through the same way `hook.permission.request`
-   *  with an `agentId` does under the default (non-`all`) posture — straight
-   *  to `PermissionRouter.requestPermission`, matching this describe's other
-   *  direct-router calls. Resolves once the pass-through's synchronous
-   *  onPassthrough side effects (board entry, IM notice) have run. */
-  async function sendPassthrough(h: DaemonHandle, opts: { key: string; cwd: string; agentId: string; toolName: string }): Promise<void> {
-    await h.permissionRouter.requestPermission({
-      key: opts.key, cwd: opts.cwd, toolName: opts.toolName, input: {}, agentId: opts.agentId, timeoutSec: 60,
-    });
-  }
-
-  it('two sessions waiting render ONE aggregated toast, and answering one re-renders the rest', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
-    const renders: Array<{ title: string; body: string }> = [];
-    const clears: number[] = [];
-    const adapter = fakeAdapter();
-    h = await bootstrapDaemon({
-      home: tmp, imAdapters: [adapter],
-      desktopNotifier: {
-        render: async (title, body) => { renders.push({ title, body }); },
-        clear: async () => { clears.push(1); },
-      },
-    });
-    clears.length = 0; // discard the daemon's own startup clear (unrelated to this scenario)
-    const a = h.permissionRouter.requestPermission({ key: '/w/a', cwd: '/w/a', toolName: 'Bash', input: { command: 'ls' } });
-    const b = h.permissionRouter.requestPermission({ key: '/w/b', cwd: '/w/b', toolName: 'Read', input: { file_path: '/w/b/x' } });
-    await until(() => { expect(renders.at(-1)!.title).toBe('2 sessions need you'); });
-    expect(renders.at(-1)!.body.split('\n')).toHaveLength(2);
-
-    h.permissionRouter.answer(firstPendingId(h), true);
-    await until(() => { expect(renders.at(-1)!.title).not.toBe('2 sessions need you'); });
-    expect(renders.at(-1)!.body.split('\n')).toHaveLength(1);
-    expect(clears).toHaveLength(0); // still one waiting — do NOT clear
-
-    // Clean up the still-outstanding request so the test doesn't hang waiting
-    // for `b` — its default timeout (580s) far outlives this test.
-    h.permissionRouter.answer(firstPendingId(h), true);
-    await a; await b;
-  });
-
-  // This is the regression test the whole task exists to protect: two of the
-  // three old call sites forgot `passthruWaiting`, so a main-session approval
-  // resolving ANYWHERE closed a still-waiting sub-agent's toast. With the
-  // predicate derived from the board, there is no separate copy left to forget.
-  it('answering one session does not close a still-waiting sub-agent toast (the predicate is the board)', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
-    const clears: number[] = [];
-    const renders: Array<{ title: string }> = [];
-    const adapter = fakeAdapter();
-    h = await bootstrapDaemon({
-      home: tmp, imAdapters: [adapter],
-      desktopNotifier: {
-        render: async (title) => { renders.push({ title }); },
-        clear: async () => { clears.push(1); },
-      },
-    });
-    clears.length = 0; // discard the daemon's own startup clear (unrelated to this scenario)
-    // A sub-agent pass-through is outstanding …
-    await sendPassthrough(h, { key: '/w/a', cwd: '/w/a', agentId: 'ag1', toolName: 'Read' });
-    // … while an unrelated main-session approval arrives and is answered.
-    const p = h.permissionRouter.requestPermission({ key: '/w/b', cwd: '/w/b', toolName: 'Bash', input: { command: 'ls' } });
-    await until(() => { expect(renders.length).toBeGreaterThan(1); });
-    h.permissionRouter.answer(firstPendingId(h), true);
-    await until(() => { expect(renders.at(-1)!.title).toContain('sub-agent'); });
-    expect(clears).toHaveLength(0);
-    await p;
-  });
-
-  it('clears the toast once — and only once — nothing at all is waiting', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
-    const clears: number[] = [];
-    const adapter = fakeAdapter();
-    h = await bootstrapDaemon({
-      home: tmp, imAdapters: [adapter],
-      desktopNotifier: { render: async () => {}, clear: async () => { clears.push(1); } },
-    });
-    clears.length = 0; // discard the daemon's own startup clear (unrelated to this scenario)
-    const p = h.permissionRouter.requestPermission({ key: '/w/a', cwd: '/w/a', toolName: 'Bash', input: { command: 'ls' } });
-    await until(() => { expect(h.permissionRouter.pendingCount()).toBe(1); });
-    h.permissionRouter.answer(firstPendingId(h), true);
-    await until(() => { expect(clears).toHaveLength(1); });
-    await p;
-  });
-
-  // Regression guard for the old `desktopOn && webUrl != null`: whether a
-  // toast was drawn says nothing about whether the dashboard can answer. A
-  // dashboard URL alone is the local answer path — no desktop input belongs
-  // in the predicate at all.
   it('a dashboard URL alone makes an approval locally answerable — no desktop input in the predicate', async () => {
     // port 0 → ephemeral; inject via config to avoid port conflicts (same
-    // pattern as web-bootstrap.test.ts) — this test needs web ENABLED
-    // (unlike this describe's shared CFG, which disables it).
+    // pattern as web-bootstrap.test.ts) — this test needs web ENABLED.
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 } }));
     const adapter = fakeAdapter();
     h = await bootstrapDaemon({
       home: tmp, imAdapters: [adapter],
-      desktopNotifier: { render: async () => {}, clear: async () => {} },
+      desktopNotifier: { notify: async () => {} },
     });
     expect(h.webUrl).toBeTruthy();
     const p = h.permissionRouter.requestPermission({ key: '/w/a', cwd: '/w/a', toolName: 'Bash', input: { command: 'ls' } });
@@ -2407,277 +2274,51 @@ describe('WaitingBoard drives the ONE desktop toast (Task 3)', () => {
     h.permissionRouter.answer(firstPendingId(h), true);
     await p;
   });
-
-  // Task 9: the toast is resident, so on a server advertising the
-  // `persistence` capability, --replace-id updates it in place and silently
-  // — no banner. The decision lives in `refreshDesktop`, so prove it end to
-  // end: a NEW waiting thing must alert; answering one of several must not.
-  it('a second session needing you re-alerts; answering one of them does not', async () => {
-    // port 0 → ephemeral: this test needs a real answer surface (web enabled)
-    // so the router HOLDS the request instead of resolving it immediately as
-    // unanswerable, but the fixed default port collides with a real tlive
-    // daemon that may already be running on this machine (same fix as "a
-    // dashboard URL alone…" above).
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { port: 0 } }));
-    const renders: Array<{ title: string; alert: boolean }> = [];
-    h = await bootstrapDaemon({
-      home: tmp, imAdapters: [],
-      desktopNotifier: {
-        render: async (title, _b, o) => { renders.push({ title, alert: !!o?.alert }); },
-        clear: async () => {},
-      },
-    });
-    const a = h.permissionRouter.requestPermission({ key: '/w/a', cwd: '/w/a', toolName: 'Bash', input: { command: 'ls' } });
-    await until(() => { expect(renders).toHaveLength(1); });
-    expect(renders[0]!.alert).toBe(true);                       // first thing waiting → alert
-    const b = h.permissionRouter.requestPermission({ key: '/w/b', cwd: '/w/b', toolName: 'Read', input: { file_path: '/w/b/x' } });
-    await until(() => { expect(renders).toHaveLength(2); });
-    expect(renders[1]!.alert).toBe(true);                       // a NEW one → alert
-    h.permissionRouter.answer(firstPendingId(h), true);
-    await until(() => { expect(renders).toHaveLength(3); });
-    expect(renders[2]!.alert).toBe(false);                      // one answered → silent
-    // Clean up the still-outstanding request so the test doesn't hang waiting
-    // for the other of `a`/`b` — its default timeout (580s) far outlives this
-    // test (same pattern as "two sessions waiting render ONE aggregated
-    // toast" above).
-    h.permissionRouter.answer(firstPendingId(h), true);
-    await a; await b;
-  });
-
-  // Coverage gap flagged in review round 1: the test above only ever adds
-  // entries with fresh (router-generated UUID) requestIds, which never
-  // repeat across requests — so it cannot fail even if `refreshDesktop`'s
-  // empty-board reset (`lastBoardIds = new Set()`) were deleted; a brand-new
-  // UUID is never "in" the remembered set regardless of whether that set was
-  // ever cleared. Verified: temporarily commenting out the reset line still
-  // left that test green.
-  //
-  // The idle reminder's board id (`idle:<key>`, deterministic per session —
-  // see `idleBoardId` in bootstrap.ts) is what actually reuses an id across
-  // separate waiting episodes, so it is the real repro: retire it fully
-  // (board empties → clear()), then have the SAME session go idle again.
-  // Without the reset, that returning id would still read as "already seen"
-  // and stay silent — the exact silent-forever bug this task exists to fix,
-  // returning through the empty-board door instead of the --replace-id door.
-  it('an idle reminder that returns after the board fully emptied alerts again, even though it reuses the same board id', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
-    const renders: Array<{ title: string; alert: boolean }> = [];
-    const clears: number[] = [];
-    h = await bootstrapDaemon({
-      home: tmp, imAdapters: [],
-      desktopNotifier: {
-        render: async (title, _b, o) => { renders.push({ title, alert: !!o?.alert }); },
-        clear: async () => { clears.push(1); },
-      },
-    });
-    const sock = daemonSocketPath(tmp);
-    clears.length = 0; // discard the daemon's own startup clear (unrelated to this scenario)
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
-    await until(() => { expect(renders.length).toBeGreaterThan(0); });
-    expect(renders[0]!.alert).toBe(true);                       // first arrival → alert
-    // The user types → the idle reminder retires, and (nothing else waiting) the board empties.
-    // (clearLocalPrompt's own unconditional refreshDesktop — a no-op local-prompt
-    // removal that fires regardless — can interleave one harmless extra silent
-    // render here before the idle entry itself is removed; asserting on the
-    // COUNT rather than a fixed index keeps this test robust to that.)
-    await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/w', sessionId: 's1', prompt: 'go on' } }, { socketPath: sock, timeoutMs: 2000 });
-    await until(() => { expect(clears).toHaveLength(1); });     // board fully emptied → remembered set reset
-    const rendersBeforeReturn = renders.length;
-    // The SAME session goes idle again — same board id (`idle:/w`) as before,
-    // but this is a genuinely new waiting episode after a full empty.
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
-    await until(() => { expect(renders.length).toBeGreaterThan(rendersBeforeReturn); });
-    expect(renders.at(-1)!.alert).toBe(true);                   // must alert again, not read as "already seen"
-  });
 });
 
-// Task 10: the desktop toast was the one surface that left no trace at all —
+// Task 10: the desktop channel was the one surface that left no trace at all —
 // a 4.3 MB daemon.log from a real session contained zero lines matching
 // `desktop|toast|notify-send`. These tests lock the two lines that make it
 // observable: `desktop.channel` (factory time, covered directly in
-// desktop-notify.test.ts) and refreshDesktop's own `desktop.render`/
-// `desktop.clear` per projection, asserted here through `onLog`.
-describe('desktop channel + projection logging is observable from the log alone (Task 10)', () => {
-  /** Drive the idle "waiting for your input" board entry the same way the CC
+// desktop-notify.test.ts) and `notifyDesktop`'s own `desktop.notify` per event,
+// asserted here through `onLog`.
+describe('the desktop channel is observable from the log alone (Task 10)', () => {
+  /** Drive the idle "waiting for your input" notification the same way the CC
    *  hook layer does — a plain `hook.notify` IPC call (level: 'info', no
    *  permissionPrompt) — matching every other `hook.notify` call in this file,
    *  just named at this call site for readability. */
-  async function notifyIdle(handle: DaemonHandle, opts: { cwd: string; sessionId: string }): Promise<void> {
-    await request(
-      { kind: 'hook.notify', cwd: opts.cwd, sessionId: opts.sessionId, level: 'info', message: 'Claude is waiting for your input' },
-      { socketPath: handle.ipcSocketPath, timeoutMs: 2000 },
-    );
+  function notifyIdle(handle: DaemonHandle, opts: { cwd: string; sessionId: string }): void {
+    // The Stop hook, which is what "your turn" rides. It blocks in the daemon
+    // until the continue window resolves, so it cannot be awaited — the caller
+    // waits on the effect instead.
+    void request(
+      { kind: 'hook.continue.request', cwd: opts.cwd, sessionId: opts.sessionId, context: 'ctx', lastMessage: 'done' },
+      { socketPath: handle.ipcSocketPath, timeoutMs: 40_000 },
+    ).catch(() => undefined);
   }
 
-  it('logs every projection with the alert flag — the field that explains a silent channel', async () => {
-    // A run of alert:false after one alert:true is the signature of a toast being
-    // updated in place instead of re-raised, which is invisible without this line.
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+  it('logs one line per notification, naming which kind of wait it was', async () => {
+    // Identity fields only: `kind` plus the session key. The rendered title and
+    // body never go to the log — they carry tool input, which can carry secrets.
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { continueGraceSec: 0, continueWindowSec: 30 } }));
     const lines: Array<{ msg: string; fields: Record<string, unknown> }> = [];
     h = await bootstrapDaemon({
       home: tmp, imAdapters: [],
-      desktopNotifier: { render: async () => {}, clear: async () => {} },
+      desktopNotifier: { notify: async () => {} },
       onLog: (msg, fields) => { lines.push({ msg, fields }); },
     });
-    await notifyIdle(h, { cwd: '/w/a', sessionId: 's1' });
-    await until(() => { expect(lines.some((l) => l.msg === 'desktop.render')).toBe(true); });
-    const rendered = lines.filter((l) => l.msg === 'desktop.render');
-    expect(rendered).toHaveLength(1);
-    expect(rendered[0]!.fields).toEqual({ alert: true, count: 1, kinds: ['idle'] });
-  });
-
-  // Deferred Minor from Task 9's review: a board entry re-added under the SAME
-  // id (a re-render of the same dialog) must not raise a banner — even when the
-  // rendered TEXT genuinely differs between the two renders. WaitingBoard.add's
-  // Map upsert replaces an entry's content but keeps its id, and `alert` must
-  // be computed from ids alone; a version of this test that used two
-  // byte-identical notifyIdle calls (same label, same constant `what`) could
-  // not tell that apart from a future regression that made `alert` sensitive
-  // to wording — so this one forces the text to change: the idle board's
-  // rendered title carries the session's CURRENT label, read live at render
-  // time (`sessionLabel` in bootstrap.ts), so changing the registered label
-  // between the two calls changes the title under the exact same `idle:s1` id.
-  it('a same-id re-render with a genuinely different label does not alert', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
-    const renders: Array<{ title: string; alert: boolean }> = [];
-    h = await bootstrapDaemon({
-      home: tmp, imAdapters: [],
-      desktopNotifier: { render: async (t, _b, o) => { renders.push({ title: t, alert: !!o?.alert }); }, clear: async () => {} },
-    });
-    h.sessions.upsert({ key: 's1', cwd: '/w/a', label: 'first-label' });
-    await notifyIdle(h, { cwd: '/w/a', sessionId: 's1' });
-    await until(() => { expect(renders.length).toBe(1); });
-    expect(renders[0]!.title).toBe('first-label · your input');
-    h.sessions.upsert({ key: 's1', cwd: '/w/a', label: 'second-label' }); // same idle:s1 id, different text next render
-    await notifyIdle(h, { cwd: '/w/a', sessionId: 's1' });
-    await until(() => { expect(renders.length).toBe(2); });
-    expect(renders[1]!.title).toBe('second-label · your input'); // the text really did change …
-    expect(renders.map((r) => r.alert)).toEqual([true, false]);  // … yet it must not alert
-  });
-
-  // Finding 2 (fix round 1): refreshDesktop runs after every board removal,
-  // most of which are no-ops against an already-empty board (e.g.
-  // clearLocalPrompt's unconditional refresh, hit on every main-session
-  // `activity`/`prompt` event). Logging `desktop.clear` unconditionally there
-  // would emit one content-free line per such event — hundreds per session —
-  // burying the handful of `desktop.render` lines this task exists to
-  // surface. Only the REAL transition (something was on the board, now it
-  // is not) may log.
-  it('a refresh on an already-empty board logs no desktop.clear line', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
-    const lines: Array<{ msg: string; fields: Record<string, unknown> }> = [];
-    h = await bootstrapDaemon({
-      home: tmp, imAdapters: [],
-      desktopNotifier: { render: async () => {}, clear: async () => {} },
-      onLog: (msg, fields) => { lines.push({ msg, fields }); },
-    });
-    const sock = h.ipcSocketPath;
-    // One real transition: something waits, then the user types → the idle
-    // entry retires and the board empties → exactly one `desktop.clear`.
-    await notifyIdle(h, { cwd: '/w/a', sessionId: 's1' });
-    await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/w/a', sessionId: 's1', prompt: 'go on' } }, { socketPath: sock, timeoutMs: 2000 });
-    await until(() => { expect(lines.filter((l) => l.msg === 'desktop.clear')).toHaveLength(1); });
-    // A second, unrelated `prompt` event on the SAME (already-empty) board —
-    // this is exactly clearLocalPrompt's + the idle-removal's own
-    // unconditional refreshDesktop pair, both hitting an empty board — must
-    // add no further `desktop.clear` line.
-    await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/w/a', sessionId: 's1', prompt: 'again' } }, { socketPath: sock, timeoutMs: 2000 });
-    await new Promise((r) => setTimeout(r, 50));
-    expect(lines.filter((l) => l.msg === 'desktop.clear')).toHaveLength(1);
-  });
-});
-
-// Task 11: retiring one of several waiting things fires refreshDesktop TWICE in
-// the same tick — clearLocalPrompt's own unconditional refresh, then the idle
-// removal's unconditional refresh right after it (see clearLocalPrompt's and
-// the `prompt` handler's doc comments). Both computed the same view and both
-// logged/rendered, so answering one of several things waiting produced two
-// byte-identical `desktop.render` lines and a spare notify-send. A projection
-// byte-identical to the last one ACTUALLY rendered, with alert:false, is now
-// skipped entirely: no notifier call, no log line.
-describe('a projection identical to the last one actually rendered is skipped (Task 11)', () => {
-  /** Drive a CC-native permission dialog onto the board exactly like a real
-   *  `permission_prompt` Notification does — matching every other
-   *  `permissionPrompt: true` `hook.notify` call in this file, just named here
-   *  for readability alongside `hookPrompt`. */
-  async function notifyLocalPrompt(handle: DaemonHandle, opts: { cwd: string; sessionId: string }): Promise<void> {
-    await request(
-      { kind: 'hook.notify', cwd: opts.cwd, sessionId: opts.sessionId, level: 'info', message: 'Claude needs your permission to use Bash', permissionPrompt: true },
-      { socketPath: handle.ipcSocketPath, timeoutMs: 2000 },
-    );
-  }
-
-  /** New terminal input for a session — retires its tracked local dialog AND
-   *  its idle reminder, each via its own unconditional `refreshDesktop()` call.
-   *  This is the exact pairing the bug report drove (see the describe's header
-   *  comment). */
-  async function hookPrompt(handle: DaemonHandle, opts: { cwd: string; sessionId: string }): Promise<void> {
-    await request(
-      { kind: 'hook.event', event: { event: 'prompt', cwd: opts.cwd, sessionId: opts.sessionId, prompt: 'go on' } },
-      { socketPath: handle.ipcSocketPath, timeoutMs: 2000 },
-    );
-  }
-
-  it('a projection that would change nothing does not reach the notifier', async () => {
-    const renders: Array<{ title: string; alert: boolean }> = [];
-    h = await bootstrapDaemon({
-      home: tmp, imAdapters: [],
-      desktopNotifier: { render: async (title, _b, o) => { renders.push({ title, alert: !!o?.alert }); }, clear: async () => {} },
-    });
-    await notifyLocalPrompt(h, { cwd: '/w/a', sessionId: 'a' });
-    await notifyLocalPrompt(h, { cwd: '/w/b', sessionId: 'b' });
-    const before = renders.length;
-    // Retiring 'a' fires refreshDesktop twice in the same tick (clearLocalPrompt,
-    // then the idle removal); only the first changes anything.
-    await hookPrompt(h, { cwd: '/w/a', sessionId: 'a' });
-    expect(renders.length - before).toBe(1);
-  });
-
-  it('an identical view returning after the board emptied still renders', async () => {
-    // Wiring only. This does NOT pin the `!alert` half of the skip condition:
-    // the board passes through an empty state here, and the `lastBoardIds`
-    // reset there forces alert:true by a different mechanism, so this test
-    // stays green with `!alert` removed. The clause is pinned by
-    // canSkipProjection's unit tests ('identical view, alert:true'), which is
-    // why that decision was extracted into a pure function. Do not read this
-    // test as proof that text equality alone is insufficient.
-    const renders: Array<{ alert: boolean }> = [];
-    h = await bootstrapDaemon({
-      home: tmp, imAdapters: [],
-      desktopNotifier: { render: async (_t, _b, o) => { renders.push({ alert: !!o?.alert }); }, clear: async () => {} },
-    });
-    // Drive the board directly through two sessions that render the same line.
-    // If the harness cannot produce identical text from two keys, assert the
-    // condition at the unit level instead: identical view + alert:true must render.
-    await notifyLocalPrompt(h, { cwd: '/w/same', sessionId: 's1' });
-    const before = renders.length;
-    await hookPrompt(h, { cwd: '/w/same', sessionId: 's1' });   // board empties
-    await notifyLocalPrompt(h, { cwd: '/w/same', sessionId: 's1' });  // same text, new arrival
-    expect(renders.at(-1)!.alert).toBe(true);
-    expect(renders.length).toBeGreaterThan(before);
-  });
-
-  it('the remembered view is dropped when the board empties, so a returning state still renders', async () => {
-    const renders: string[] = []; const clears: number[] = [];
-    h = await bootstrapDaemon({
-      home: tmp, imAdapters: [],
-      desktopNotifier: { render: async (title) => { renders.push(title); }, clear: async () => { clears.push(1); } },
-    });
-    await notifyLocalPrompt(h, { cwd: '/w/a', sessionId: 'a' });
-    const first = renders.length;
-    await hookPrompt(h, { cwd: '/w/a', sessionId: 'a' });        // empties -> clear
-    await until(() => { expect(clears.length).toBeGreaterThan(0); });
-    await notifyLocalPrompt(h, { cwd: '/w/a', sessionId: 'a' }); // identical view returns
-    expect(renders.length).toBeGreaterThan(first);
+    notifyIdle(h, { cwd: '/w/a', sessionId: 's1' });
+    await until(() => { expect(lines.some((l) => l.msg === 'desktop.notify')).toBe(true); });
+    const fired = lines.filter((l) => l.msg === 'desktop.notify');
+    expect(fired).toHaveLength(1);
+    expect(fired[0]!.fields).toEqual({ kind: 'idle', key: 's1' });
   });
 });
 
 // A hook session's only retirement path was SessionEnd — and kill -9, a crash,
-// or a hard-closed terminal run no hooks at all. Both halves of what it leaves
-// behind matter: the registry entry (a phantom on the dashboard that IM replies
-// still route to) and its waiting entry (a resident toast still claiming that a
-// session which no longer exists is waiting for you).
-describe('a session killed without SessionEnd stops haunting the dashboard and the toast', () => {
+// or a hard-closed terminal run no hooks at all. What it leaves behind is a
+// registry entry: a phantom on the dashboard that IM replies still route to.
+describe('a session killed without SessionEnd stops haunting the dashboard', () => {
   /** A pid that has certainly exited — spawnSync returns only after the child is
    *  reaped, so the liveness probe sees a dead process. */
   const deadPid = (): number => {
@@ -2686,18 +2327,17 @@ describe('a session killed without SessionEnd stops haunting the dashboard and t
     return pid;
   };
 
-  it('reaps the session and retires the waiting entry it left behind', async () => {
+  it('reaps the session it left behind', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
-    const clears: number[] = [];
     h = await bootstrapDaemon({
       home: tmp, imAdapters: [],
-      desktopNotifier: { render: async () => {}, clear: async () => { clears.push(1); } },
+      desktopNotifier: { notify: async () => {} },
       sweepMs: 20,
     });
     const sock = daemonSocketPath(tmp);
     const pid = deadPid();
 
-    // The session announces itself, then goes idle → resident "waiting" toast.
+    // The session announces itself, then goes idle.
     await request(
       { kind: 'hook.event', event: { event: 'session-start', cwd: '/ghost', sessionId: 's1' }, agentPid: pid },
       { socketPath: sock, timeoutMs: 2000 },
@@ -2708,12 +2348,12 @@ describe('a session killed without SessionEnd stops haunting the dashboard and t
     );
     const listed = await request({ kind: 'session.list' }, { socketPath: sock, timeoutMs: 2000 });
     expect(listed.kind === 'session.list' && listed.sessions.length).toBe(1);
-    clears.length = 0; // discard everything before the kill
 
     // Nothing else will ever be heard from this session.
-    await until(() => { expect(clears.length).toBeGreaterThan(0); });
-    const after = await request({ kind: 'session.list' }, { socketPath: sock, timeoutMs: 2000 });
-    expect(after.kind === 'session.list' && after.sessions).toEqual([]);
+    await until(async () => {
+      const after = await request({ kind: 'session.list' }, { socketPath: sock, timeoutMs: 2000 });
+      expect(after.kind === 'session.list' && after.sessions).toEqual([]);
+    });
   });
 
   it('records the pid from a notification too, for a daemon restarted mid-session', async () => {
@@ -2723,7 +2363,7 @@ describe('a session killed without SessionEnd stops haunting the dashboard and t
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
     h = await bootstrapDaemon({
       home: tmp, imAdapters: [],
-      desktopNotifier: { render: async () => {}, clear: async () => {} },
+      desktopNotifier: { notify: async () => {} },
       sweepMs: 20,
     });
     const sock = daemonSocketPath(tmp);
