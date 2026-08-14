@@ -62,11 +62,13 @@ commands this way (those only ship inside the plugin) — `tlive status` and
 ## Codex — no hooks, no trust
 
 Codex needs neither a hooks config nor a trust step. Integration rides the
-app-server companion instead: `tlive` spawns `codex app-server --listen
-unix://…` (adopting an existing one if it finds it), and Codex TUIs
+app-server companion instead: `tlive` starts `codex app-server --listen
+unix://…` detached (adopting an existing one if it finds it), and Codex TUIs
 auto-attach to that socket. Approvals and monitoring flow over that RPC
 connection — there is nothing to write into `~/.codex/hooks.json` and
-nothing to approve in a hooks review.
+nothing to approve in a hooks review. That app-server is shared with every
+Codex TUI on the machine, so `tlive stop` leaves it running and
+`tlive start` adopts it back.
 
 If you have an old dev-build `~/.codex/hooks.json` from before this
 integration existed, delete the file — it's inert now and only wastes a

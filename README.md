@@ -229,11 +229,20 @@ through it interactively (Codex has no slash commands; use the phrase).
 ## Codex: the app-server companion
 
 Codex has no hooks and no trust step — the entire Claude-style hooks/trust
-dance above doesn't apply. Instead, `tlive` takes custody of a `codex
+dance above doesn't apply. Instead, `tlive` attaches to a `codex
 app-server --listen unix://…` process: it adopts one already listening on
-tlive's socket path, or spawns and owns one (with respawn/backoff) if none
+tlive's socket path, or starts one (detached, with respawn/backoff) if none
 is there. Any `codex` TUI you run **auto-attaches** to that socket — this
 is a Codex feature, not something tlive configures per-session.
+
+Because that instance is **shared**, `tlive stop` leaves it running: it is
+the rendezvous point for every Codex TUI on the machine, and stopping it
+would leave those sessions running but invisible to tlive. The next
+`tlive start` adopts the same instance, so restarting tlive never drops a
+Codex session. (This mirrors Codex's own `codex app-server daemon`, which
+keeps one detached, pid-tracked app-server alive across clients. tlive
+doesn't delegate to it because that path requires Codex's standalone
+managed install and errors out for npm installs.)
 
 Over that RPC connection tlive subscribes to Codex's own thread/turn
 events and drives approvals through `ServerRequest`: when Codex asks for a

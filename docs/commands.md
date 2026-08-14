@@ -178,7 +178,11 @@ tlive is holding, a sub-agent's approval waiting at your terminal, a Claude
 Code dialog tlive is not holding, and a finished turn — the last one because
 "nothing happens until you type" is something you need to come back for. A
 failed tool does not: it blocks nobody, and it goes to IM where it is
-diagnosable.
+diagnosable. A Codex turn that dies — a bad API key, a provider error —
+follows the same rule and reports to IM as `⚠️ Codex turn failed: …`; it
+never announces a finished turn or offers a reply that would just fail again.
+A turn you interrupted yourself says nothing anywhere: you were at the
+keyboard.
 
 A finished turn is delivered from the Stop hook, the same event the IM continue
 card rides, after the same `continueGraceSec` grace — so continuing at the
