@@ -8,58 +8,23 @@
 // dashboard has buttons; this notification is the at-the-computer pointer to
 // them. It never carries a decision itself — never-auto-allow untouched.
 //
-// Lifecycle model (Warp-style): the notification exists exactly while
-// something is waiting for the user, and disappears when nothing is. Every
-// reason to wait — a held approval, a sub-agent pass-through, a CC-native
-// dialog, or idle "waiting for your input" — is a WaitingBoard entry, and
-// this file only ever projects that board onto ONE toast.
-// - ONE notification slot total: every render replaces the previous
-//   toast via --print-id/--replace-id (a burst used to stack dozens of toasts).
-// - RESIDENT, not transient: the slot's toast never expires on its own
-//   (--expire-time=0) — step away for five minutes and the signal must still
-//   be there when you get back. It used to self-expire with a `transient`
-//   hint so an expired toast would evaporate instead of falling into the
-//   desktop's notification tray as an "answered long ago, still shows Waiting
-//   for approval" zombie; clear() (below) replaces that treatment for the
-//   normal path. Trade-off: unlike the old 15s expiry, this is not
-//   self-healing if the daemon dies with a toast up — it stays resident
-//   until dismissed by hand. A later task closes that gap with clear()
-//   calls on daemon shutdown and startup.
-// - clear(): when the last pending approval resolves, the live toast is
-//   actively closed over DBus (CloseNotification) — answered means gone.
-// - ALERT vs silent update: on a server advertising the `persistence`
-//   capability (quickshell, GNOME, most modern shells), a resident toast
-//   becomes a permanent panel entry, and --replace-id then updates that
-//   entry IN PLACE AND SILENTLY — no banner, no sound (measured live: a
-//   fresh notification popped, a --replace-id update of it did not, a fresh
-//   one after that popped again). So render()'s `alert` option exists: when
-//   something NEW needs the user, the caller (bootstrap's `refreshDesktop`)
-//   passes `{ alert: true }`, which closes the previous toast first, then
-//   posts a FRESH one with no --replace-id, forcing a banner. Answering one
-//   of several still waiting, or the set only shrinking/re-wording, renders
-//   with no `alert` — today's silent in-place update.
-// - No click action. notify-send once rendered an "Open dashboard" button
-//   (freedesktop actions via --action), but only the linux backend ever
-//   implemented it, so on macOS/Windows the toast invited a click that did
-//   not exist — and on macOS, osascript has no bundle of its own, so the
-//   click landed on Script Editor instead of tlive, which is worse than
-//   nothing. Removed outright, on every platform, rather than papered over.
-//   With no --action, `notify-send --print-id` exits immediately once it has
-//   printed the id, so the plain `spawner` (below) is enough for both render
-//   and clear — there is no longer a long-lived waiter to keep alive or kill.
-// - Sends are still serialized (the `enqueue` chain), so a burst can't race
-//   past the id capture and fork into parallel slots.
+// Model: one notification per waiting thing. Each call to `notify` posts a
+// fresh, independent toast — no id is kept, nothing is replaced, nothing is
+// ever retracted. The notification behaves like every other application's:
+// it banners, then ages into the notification centre, where the user clears
+// it or ignores it. A caller with several things waiting at once fires
+// several notifications; there is no aggregate view and no lifecycle to keep
+// in sync with the set of waiting things.
 //
 // Platform coverage (the notification's whole job is calling the user BACK
 // to the terminal — never a decision surface, on any platform):
-// - linux: notify-send — full model (single resident slot, close).
-// - win32: PowerShell WinRT toast — single slot via Tag replace + active
-//   clear via ToastNotificationManager History.
-// - darwin: osascript `display notification` — single toast; banners
-//   auto-dismiss, Notification Center accumulation is macOS-managed.
-// Missing binary anywhere → silent no-op — the card and dashboard remain
-// the canonical channels. win32/darwin paths are spec-derived, not yet
-// verified on real hardware.
+// - linux: notify-send — one call per notification, no flags beyond the app
+//   name.
+// - win32: PowerShell WinRT toast — one Show() per notification.
+// - darwin: osascript `display notification` — one call per notification.
+// Missing binary anywhere → silent no-op — the card and dashboard remain the
+// canonical channels. win32/darwin paths are spec-derived, not yet verified
+// on real hardware.
 
 import { spawn } from 'node:child_process';
 import { commandOnPath } from '../integrations/hooks-cleanup.js';
@@ -78,41 +43,16 @@ const defaultSpawner: Spawner = (cmd, args) =>
     } catch { resolve(null); }
   });
 
-/** Where the live toast's id survives a daemon restart. Absent → no
- *  persistence (tests, and platforms with no resident slot). */
-export interface ToastIdStore {
-  read(): string | null;
-  write(id: string | null): void;
-}
-
 export interface DesktopNotifier {
   /** Fire one notification about one waiting thing. Fire-and-forget: no id is
    *  kept, nothing is replaced, nothing is ever retracted. The notification
    *  behaves like every other application's — it banners, then ages into the
    *  notification centre, where the user clears it or ignores it. */
   notify(title: string, body: string): Promise<void>;
-  /** Show (or replace) THE waiting toast. Resident: it stays until clear().
-   *  Single slot — a machine shows one toast listing everything that waits.
-   *  `alert` is required, not defaulted: the caller must say which behaviour
-   *  it wants rather than lean on a fallback the next call site might not
-   *  know about — on darwin, "not alerting" means posting NOTHING, the most
-   *  concealed of the three backends' failure modes, so an accidentally
-   *  omitted flag there is silent on the very platform CI cannot see.
-   *  `alert: true` means something NEW needs the user: close the previous
-   *  toast, then post a FRESH one with no replace-id, so a notification
-   *  server that treats a resident toast as a permanent panel entry (the
-   *  `persistence` capability — quickshell, GNOME, most modern shells) still
-   *  raises a banner. `alert: false` is today's silent in-place update — the
-   *  set only shrank or its text changed, nothing new is waiting. */
-  render(title: string, body: string, opts: { alert: boolean }): Promise<void>;
-  /** Close the waiting toast — nothing is waiting anymore. */
-  clear(): Promise<void>;
 }
 
 const NOOP: DesktopNotifier = {
   notify: async () => {},
-  render: async (_title, _body, _opts) => {},
-  clear: async () => {},
 };
 
 export function createDesktopNotifier(opts?: {
@@ -120,14 +60,11 @@ export function createDesktopNotifier(opts?: {
   platform?: NodeJS.Platform;
   hasCmd?: (cmd: string) => boolean;
   spawner?: Spawner;
-  /** Persists the linux slot's notify-send id across a restart. Absent →
-   *  in-memory only, same as before this seam existed. */
-  idStore?: ToastIdStore;
-  /** Optional, injected exactly like `idStore` — this factory must NOT import
-   *  a logger itself (it is dumb IO whose tests inject every side effect).
-   *  Fired exactly ONCE per call, on every return path including the no-op
-   *  ones: a channel that silently resolved to a no-op is precisely the case
-   *  worth knowing about (bootstrap.ts passes its `logJson`). */
+  /** Optional — this factory must NOT import a logger itself (it is dumb IO
+   *  whose tests inject every side effect). Fired exactly ONCE per call, on
+   *  every return path including the no-op ones: a channel that silently
+   *  resolved to a no-op is precisely the case worth knowing about
+   *  (bootstrap.ts passes its `logJson`). */
   log?: (msg: string, fields: Record<string, unknown>) => void;
 }): DesktopNotifier {
   const enabled = opts?.enabled ?? true;
@@ -171,65 +108,6 @@ export function createDesktopNotifier(opts?: {
   if (!hasCmd('notify-send')) { channel(false, 'no-notify-send'); return NOOP; }
   channel(true);
   const sp = opts?.spawner ?? defaultSpawner;
-  const idStore = opts?.idStore;
-  // Seed from the previous process's id (if any) — this single line is what
-  // makes the startup clear() below real: a fresh process otherwise has no
-  // way to know a predecessor left a toast up, and would silently no-op.
-  let lastId: string | null = idStore?.read() ?? null;
-  // Still needed with no click action to wait for: a burst of renders/clears
-  // must not race past the id capture and fork into parallel slots.
-  let chain: Promise<void> = Promise.resolve();
-  const enqueue = (task: () => Promise<void>): Promise<void> => {
-    chain = chain.then(task).catch(() => { /* best-effort, never throws */ });
-    return chain;
-  };
-  // The one gdbus argument list that closes a notification by id. Shared by
-  // clear() and the alert path below — a second copy of this array is exactly
-  // the kind of drift this branch has spent its whole life removing.
-  const closeArgs = (id: string): string[] => [
-    'call', '--session',
-    '--dest', 'org.freedesktop.Notifications',
-    '--object-path', '/org/freedesktop/Notifications',
-    '--method', 'org.freedesktop.Notifications.CloseNotification',
-    id,
-  ];
-  const slotArgs = (title: string, body: string, alert: boolean): string[] => [
-    '--app-name=tlive',
-    // Resident, and NOT transient. The 15s+transient pair used to treat tray
-    // zombies whose real cause was having no reliable way to close a toast;
-    // WaitingBoard supplies that (board empties → clear()), so the treatment
-    // can go. Expiring was actively wrong for the case this channel exists to
-    // serve: step away for five minutes and the signal must still be there.
-    '--expire-time=0',
-    '--print-id',
-    // alert → deliberately no --replace-id, even if a lastId is still on hand:
-    // this must land as a FRESH notification so a persistent notification
-    // server raises a banner instead of silently updating a panel entry.
-    ...(!alert && lastId ? [`--replace-id=${lastId}`] : []),
-    title,
-    body,
-  ];
-  const showSlot = (title: string, body: string, opts?: { alert?: boolean }): Promise<void> => enqueue(async () => {
-    const alert = opts?.alert ?? false;
-    if (alert && lastId) {
-      // Close first, then post. If the process dies between the two, nothing
-      // is on screen and no id is persisted — safe. Posting first and closing
-      // after would orphan the old notification on a crash; the old entry is
-      // a silent panel row anyway, so the sub-10ms gap is invisible.
-      const staleId = lastId;
-      lastId = null;
-      await sp('gdbus', closeArgs(staleId));
-      idStore?.write(null);
-    }
-    // No --action means notify-send exits as soon as it has printed the id
-    // (rather than staying alive to wait for a click), so the plain spawner
-    // that runs a command to completion and hands back its stdout is enough
-    // here — there is no longer a stream to hold open.
-    const id = (await sp('notify-send', slotArgs(title, body, alert)))?.trim();
-    // Old notify-send without --print-id prints nothing → keep stacking
-    // behavior rather than passing garbage to --replace-id.
-    if (id && /^\d+$/.test(id)) { lastId = id; idStore?.write(id); }
-  });
   return {
     notify: async (title, body) => {
       // No --expire-time: the server's own policy applies, so the banner shows
@@ -238,82 +116,24 @@ export function createDesktopNotifier(opts?: {
       // wanted here. No --print-id: nothing will ever come back for this.
       await sp('notify-send', ['--app-name=tlive', title, body]);
     },
-    render: showSlot,
-    clear: () => enqueue(async () => {
-      if (!lastId) return;
-      const id = lastId;
-      lastId = null;
-      // notify-send cannot close; go straight to the DBus spec method. If
-      // gdbus is absent the toast still self-expires (transient) — degraded,
-      // not broken.
-      await sp('gdbus', closeArgs(id));
-      // Persisted AFTER the close resolves, not before: the close is a spawned
-      // process in flight for the whole await, and a `kill -9` mid-flight must
-      // leave the OLD id on disk. A stale id makes the next process's
-      // CloseNotification a harmless best-effort no-op on an already-closed
-      // toast (its result is already ignored); persisting null too early would
-      // instead strand an UNCLOSED toast with no id anywhere that can reach it
-      // — exactly the hole this task exists to close.
-      idStore?.write(null);
-    }),
   };
 }
 
-/** macOS: built-in osascript. No slot — banners auto-dismiss, and there is no
- *  scriptable replace/close for a Notification Center entry (`clear()` stays
- *  a no-op below — that is the platform, not us). Because of that, the only
- *  thing this channel can honestly say is "something NEW needs you": a
- *  silent update is unrepresentable here, so `alert: false` skips the render
- *  entirely rather than post a fresh banner for something that isn't new.
- *  The stale entry left on screen is a timestamped record of what was
- *  waiting at that moment, not a claim about now. */
+/** macOS: built-in osascript. Every call posts a fresh banner; there is
+ *  nothing to replace or close. */
 function darwinNotifier(sp: Spawner): DesktopNotifier {
   const esc = (v: string): string => v.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  const show = (title: string, body: string): Promise<string | null> =>
-    sp('osascript', ['-e', `display notification "${esc(body)}" with title "${esc(title)}"`]);
   return {
-    notify: async (title, body) => { await show(title, body); },
-    render: async (title, body, opts) => {
-      if (!opts.alert) return;
-      await show(title, body);
+    notify: async (title, body) => {
+      await sp('osascript', ['-e', `display notification "${esc(body)}" with title "${esc(title)}"`]);
     },
-    clear: async () => { /* not scriptable on macOS */ },
   };
 }
 
-/** Windows 10/11: WinRT toast via PowerShell (no modules needed). Tag+Group
- *  give the single-slot replace; History.Remove gives the active clear. The
+/** Windows 10/11: WinRT toast via PowerShell (no modules needed). The
  *  well-known PowerShell AppId is used because unregistered AppIds may not
  *  render toasts. Spec-derived — pending real-hardware verification. */
 const WIN_APP_ID = String.raw`{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe`;
-
-/** `alert: true` states its intent up front rather than trusting Tag/Group
- *  replacement to behave a particular way: History.Remove first, then Show,
- *  so a banner is guaranteed regardless of how replacement happens to behave.
- *  `alert: false` (including the omitted default) sets SuppressPopup before
- *  Show, which replaces the Action Center entry (Tag+Group) without raising
- *  a banner — the silent in-place update this backend was missing. */
-export function win32ToastScript(title: string, body: string, opts?: { alert?: boolean }): string {
-  const alert = opts?.alert ?? false;
-  const esc = (v: string): string =>
-    v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
-  return [
-    `[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null`,
-    // A new arrival: close the old Action Center entry BEFORE showing the new
-    // one, so the banner is guaranteed rather than left to Tag/Group replace
-    // semantics (which may suppress the popup on their own).
-    ...(alert ? [`[Windows.UI.Notifications.ToastNotificationManager]::History.Remove('tlive', 'tlive', '${WIN_APP_ID}')`] : []),
-    `$xml = New-Object Windows.Data.Xml.Dom.XmlDocument`,
-    `$xml.LoadXml('<toast><visual><binding template="ToastGeneric"><text>${esc(title)}</text><text>${esc(body)}</text></binding></visual></toast>')`,
-    `$t = [Windows.UI.Notifications.ToastNotification]::new($xml)`,
-    `$t.Tag = 'tlive'`,
-    `$t.Group = 'tlive'`,
-    // A silent update: suppress the popup explicitly rather than relying on
-    // Tag/Group replacement to not re-raise it.
-    ...(!alert ? [`$t.SuppressPopup = $true`] : []),
-    `[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('${WIN_APP_ID}').Show($t)`,
-  ].join('; ');
-}
 
 /** One toast per waiting thing. No Tag, Group, History.Remove or
  *  SuppressPopup: those existed to keep a single slot current, and there is no
@@ -330,24 +150,10 @@ export function win32NotifyScript(title: string, body: string): string {
   ].join('; ');
 }
 
-export function win32ClearScript(): string {
-  return [
-    `[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null`,
-    `[Windows.UI.Notifications.ToastNotificationManager]::History.Remove('tlive', 'tlive', '${WIN_APP_ID}')`,
-  ].join('; ');
-}
-
-// `opts.alert` is threaded straight through to win32ToastScript (see there for
-// the History.Remove/SuppressPopup split) — this backend is still
-// spec-derived and unverified on real hardware, but the two behaviours it
-// must pick between are stated explicitly rather than left to how Tag/Group
-// replacement happens to behave.
 function win32Notifier(sp: Spawner): DesktopNotifier {
   const run = (script: string): Promise<string | null> =>
     sp('powershell', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script]);
   return {
     notify: async (title, body) => { await run(win32NotifyScript(title, body)); },
-    render: async (title, body, opts) => { await run(win32ToastScript(title, body, opts)); },
-    clear: async () => { await run(win32ClearScript()); },
   };
 }

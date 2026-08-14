@@ -29,7 +29,7 @@ import { startCompanion, type Companion } from '../codex/companion.js';
 import { excerptForCard } from './excerpt.js';
 import { TURN_FINISHED_SENTINEL, effectiveMode, type ShimMode } from '../hook/normalizer.js';
 import { writeMode } from '../config/mode.js';
-import { readToastId, writeToastId, wasNotifyExplained, markNotifyExplained } from '../config/state.js';
+import { wasNotifyExplained, markNotifyExplained } from '../config/state.js';
 import { renderWaiting, type WaitingNotice, type Lang } from './waiting-notice.js';
 
 export interface DaemonHandle {
@@ -46,10 +46,8 @@ export interface BootstrapOpts {
   home: string;
   imAdapters?: IMAdapter[];
   ensureAppServer?: typeof ensureCodexAppServer;
-  /** Test seam for the desktop notifier; production uses createDesktopNotifier.
-   *  Narrowed to `notify`: firing an event is the only thing this file asks of
-   *  the desktop channel, so a test has nothing else to stub. */
-  desktopNotifier?: Pick<import('./desktop-notify.js').DesktopNotifier, 'notify'>;
+  /** Test seam for the desktop notifier; production uses createDesktopNotifier. */
+  desktopNotifier?: import('./desktop-notify.js').DesktopNotifier;
   /** Test seam for `notifyDesktop`'s `desktop.notify` line, mirroring how
    *  `desktopNotifier` itself is injected. Production always writes that line
    *  through `logJson` (daemon.log) regardless of whether this is set — it does
@@ -292,10 +290,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     try { return effectiveMode(loadConfig(opts.home).mode); } catch { return effectiveMode(cfg.mode); }
   };
   const desktop = opts.desktopNotifier ?? createDesktopNotifier({
-    // Backed by Task 6's state file, so the linux slot's notify-send id
-    // survives a restart (or a `kill -9`) instead of dying with the process
-    // that rendered it.
-    idStore: { read: () => readToastId(opts.home), write: (id) => writeToastId(opts.home, id) },
     // One `desktop.channel` line, once, at factory time — the whole answer to
     // "why do I never get toasts" without a probe fired at the user's screen.
     log: logJson,

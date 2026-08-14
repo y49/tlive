@@ -1,8 +1,9 @@
 // The copy and the renderer for ONE desktop notification about ONE thing that
 // is waiting for the user.
 //
-// This replaces the WaitingBoard's aggregate projection, and the reason is
-// worth keeping: a notification is an EVENT, not a status display. An
+// This replaces the old aggregate projection (one toast listing everything
+// waiting), and the reason is worth keeping: a notification is an EVENT, not
+// a status display. An
 // aggregate toast has to claim "N sessions are waiting", which is true for a
 // few seconds and then sits in the notification centre's history lying about
 // it — which is exactly how a toast raised by one project came to read as
