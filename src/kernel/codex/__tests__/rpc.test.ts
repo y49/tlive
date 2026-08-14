@@ -1,12 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { connectCodexRpc } from '../rpc';
+import { connectCodexRpc, COMPANION_CLIENT_NAME, NON_ORIGINATING_CLIENT_NAMES } from '../rpc';
 
 class FakeSock extends EventEmitter {
   sent: any[] = [];
   readyState = 1;
+  closed = false;
   send(s: string) { this.sent.push(JSON.parse(s)); }
-  close() { this.emit('close'); }
+  close() { this.closed = true; this.emit('close'); }
   open() { this.emit('open'); }
   reply(obj: unknown) { this.emit('message', Buffer.from(JSON.stringify(obj))); }
 }
@@ -33,6 +34,50 @@ describe('connectCodexRpc handshake', () => {
     const rpc = await p;
     expect(sock.sent[1]).toMatchObject({ method: 'initialized' });
     expect(rpc.call).toBeTypeOf('function');
+  });
+
+  it('identifies as a non-originating client so it cannot hijack the process originator', () => {
+    const { sock } = boot();
+    sock.open();
+    expect(sock.sent[0].params.clientInfo.name).toBe(COMPANION_CLIENT_NAME);
+    // The exemption is a hardcoded allowlist upstream; anything else silently
+    // makes every thread in this app-server — including the user's own TUI
+    // threads — report `originator: <us>`.
+    expect(NON_ORIGINATING_CLIENT_NAMES).toContain(COMPANION_CLIENT_NAME);
+    // Identity still travels, just not as the process-global originator.
+    expect(sock.sent[0].params.clientInfo.title).toMatch(/tlive/);
+  });
+
+  it('reports the effective originator so a lost exemption cannot pass silently', async () => {
+    const { sock, p } = boot();
+    sock.open();
+    sock.reply({ jsonrpc: '2.0', id: sock.sent[0].id, result: { userAgent: 'codex-tui/0.147.0 (Arch Linux; x86_64) codex_cli_rs' } });
+    expect((await p).effectiveOriginator).toBe('codex-tui');
+  });
+
+  it('closes the socket when the handshake fails, and reports the failure exactly once', async () => {
+    const onClose = vi.fn();
+    const { sock, p } = boot({ onClose });
+    sock.open();
+    sock.reply({ jsonrpc: '2.0', id: sock.sent[0].id, error: { message: 'Already initialized' } });
+    await expect(p).rejects.toThrow(/Already initialized/);
+    // Leaked handshakes are not hypothetical: a socket left open keeps its
+    // message handler installed, so a connection the caller believes is dead
+    // goes on delivering events and approval requests.
+    expect(sock.closed).toBe(true);
+    // The rejected promise is the ONLY failure report. Firing onClose as well
+    // gives the caller two reconnect triggers for one failure, which is how the
+    // daemon ended up holding two live connections to one app-server.
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('does not report a pre-open connect error through onClose either', async () => {
+    const onClose = vi.fn();
+    const { sock, p } = boot({ onClose });
+    sock.emit('error', new Error('connect ENOENT'));
+    sock.close();
+    await expect(p).rejects.toThrow(/ENOENT/);
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
 
