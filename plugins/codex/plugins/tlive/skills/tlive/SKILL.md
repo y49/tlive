@@ -73,13 +73,14 @@ ladder). The daemon auto-starts with new sessions (disable via
   (/mute /trust /safe on|off, /mode for the posture ladder) and the CLI
   (`tlive mute|trust|safe on|off`, `tlive mode off|notify|full|all`). `/mute on`
   = go quiet; it silences IM notifications ONLY. The desktop toast is
-  independent of `/mute` and has no on/off switch of its own: it appears
-  whenever something is blocking on you (a pending approval, or the idle
-  "waiting for your input" nudge) and disappears once it is answered (macOS
-  is the exception — Notification Center has no scriptable close or replace,
-  so there it accumulates one entry per change instead of recycling). Silence
-  it with your OS's Do Not Disturb, or `tlive mode off` to stop tlive entirely.
-  A finished turn stays on IM (a per-turn toast would flood the screen).
+  independent of `/mute` and has no on/off switch of its own: one fires per
+  thing that starts waiting on you (a pending approval, or the idle "waiting
+  for your input" nudge), named with its project and call, and tlive never
+  touches it again — it ages into the notification centre like any other
+  app's, a log rather than live status (the dashboard is the live view).
+  Silence it with your OS's Do Not Disturb, or `tlive mode off` to stop tlive
+  entirely. A finished turn stays on IM (a per-turn toast would flood the
+  screen).
 - Vendor-side `permissions.deny` always wins; tlive never overrides it.
 
 ## First-time onboarding

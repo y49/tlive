@@ -17,12 +17,15 @@ Guide the user through tlive setup. Execute in order, showing each result:
    c. Ask the user to check the bot's command menu shows
       /mute /trust /safe /mode /help (a stale client cache → close and
       reopen the chat).
-   d. Desktop notifications: explain they fire on the computer only for things
-      that need you to act — a pending approval, or the idle "waiting for your
-      input" nudge — and disappear once answered. A finished turn and tool
-      failures stay on IM (a per-turn toast would flood the screen). There is
-      no separate on/off switch: use the OS's Do Not Disturb to silence them
-      temporarily, or `tlive mode off` to stop tlive entirely.
+   d. Desktop notifications: explain one fires per thing that needs you to
+      act — a pending approval, or the idle "waiting for your input" nudge —
+      and tlive never touches it again afterward; it just ages into the
+      notification centre like any other app's, so that's a log, not a live
+      status board (open the dashboard for what's waiting right now). A
+      finished turn and tool failures stay on IM (a per-turn toast would
+      flood the screen). There is no separate on/off switch: use the OS's Do
+      Not Disturb to silence them temporarily, or `tlive mode off` to stop
+      tlive entirely.
    e. Hand out the dashboard via `tlive url`; suggest opening it once.
    f. Offer optional next steps: add another channel (continue below), or
       stop here.
