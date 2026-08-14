@@ -65,6 +65,16 @@ describe('renderWaiting', () => {
     expect(renderWaiting(notice({ detail: '> quoted line' }), 'en').body).toBe('quoted line');
   });
 
+  // Caught on a real screen an hour after the strip shipped: a body read
+  // "三条事实: | | 状态 | 依据 | |---|---|---|" because the assistant's last
+  // message contained a markdown table and the strip only knew about fences,
+  // headings, quotes and emphasis.
+  it('flattens markdown tables — pipes and separator rows are not text', () => {
+    const md = 'Three facts:\n\n| | state | evidence |\n|---|---|---|\n| approval | works | companion.ts |';
+    expect(renderWaiting(notice({ detail: md }), 'en').body)
+      .toBe('Three facts: state · evidence approval · works · companion.ts');
+  });
+
   it('an empty detail renders a title-only notification rather than repeating the title', () => {
     expect(renderWaiting(notice({ detail: '' }), 'zh')).toEqual({
       title: 'drama-admin · 等你批准',

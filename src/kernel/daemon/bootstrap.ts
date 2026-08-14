@@ -98,10 +98,27 @@ export function makeCodexResumeHandler(deps: {
   events: Pick<EventHub, 'broadcast' | 'size'>;
   chats: () => unknown[];
   resume: (threadId: string, input: string) => Promise<void>;
+  /** False when the thread started a new turn inside the grace — the same
+   *  "you continued it yourself, nobody needs telling" filter the Claude Code
+   *  Stop hook path applies. Injected rather than built here so this stays a
+   *  pure factory. */
+  gracePassed: (key: string) => Promise<boolean>;
+  /** "Your turn" on the desktop. Nothing about a finished turn is
+   *  vendor-specific, and Codex already reaches the desktop for approvals via
+   *  the same PermissionRouter; only this path was missing. */
+  notifyTurn: (p: { key: string; lastMessage?: string }) => void;
 }): (p: { threadId: string; key: string; lastMessage?: string }) => void {
   return (p) => {
     void (async () => {
       const { threadId, key, lastMessage } = p;
+      if (!(await deps.gracePassed(key))) {
+        deps.events.broadcast({ type: 'session-upsert', session: deps.sessions.upsert({ key, cwd: key, status: 'active' }) });
+        return;
+      }
+      // Above the fast-null return on purpose, same as the Claude Code path:
+      // "nobody can answer" is true of IM and the dashboard and false of the
+      // desktop, which answers nothing — it points.
+      deps.notifyTurn({ key, ...(lastMessage !== undefined ? { lastMessage } : {}) });
       if (shouldFastNullContinue(deps.chats().length, deps.events.size())) {
         deps.events.broadcast({
           type: 'session-upsert',
@@ -819,19 +836,38 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // Indirection: onResumePrompt is needed at construction time, but resume()
   // only exists once startCompanion returns — close over this instead.
   let codexResume: (threadId: string, input: string) => Promise<void> = async () => undefined;
+  /** The Stop-hook grace, reusable by the Codex turn/completed path: one map, so
+   *  a new turn cancels whichever vendor's pending announcement is waiting. */
+  const gracePassed = async (key: string): Promise<boolean> => {
+    const graceSec = cfg.approvals?.continueGraceSec ?? 15;
+    const suppressed = await new Promise<boolean>((res) => {
+      continueGrace.set(key, () => res(true));
+      setTimeout(() => { if (continueGrace.delete(key)) res(false); }, graceSec * 1000).unref();
+    });
+    return !suppressed;
+  };
   const onCodexResumePrompt = makeCodexResumeHandler({
     broker: continueBroker,
     sessions,
     events,
     chats: configuredChats,
     resume: (threadId, input) => codexResume(threadId, input),
+    gracePassed,
+    notifyTurn: ({ key, lastMessage }) => deliver({ key, label: sessionLabel(key), kind: 'idle', detail: lastMessage ?? '' }),
   });
   if (custody) {
     codexState = 'running';
     codexCompanion = startCompanion({
       connect: (events) => connectCodexRpc({ sockPath: codexAppServerSockPath(), events }),
       permissionRouter,
-      onMonitor: (ev, key) => events.broadcast(applyMonitorEvent(sessions, ev, key)),
+      onMonitor: (ev, key) => {
+        // Any thread activity inside the grace means the turn did not really
+        // end — Codex's `turn/started` is what a UserPromptSubmit is for Claude
+        // Code, and both cancel the same pending announcement.
+        const g = continueGrace.get(key);
+        if (g) { continueGrace.delete(key); g(); }
+        events.broadcast(applyMonitorEvent(sessions, ev, key));
+      },
       onResumePrompt: onCodexResumePrompt,
       windowSec: () => approvalWindow(cfg.approvals).timeoutSec,
       log: (m) => console.log(`[codex] ${m}`),

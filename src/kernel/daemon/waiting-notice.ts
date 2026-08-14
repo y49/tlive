@@ -79,6 +79,14 @@ const REASON: Record<WaitKind, Record<Lang, string>> = {
  *  its omission markers ate the budget when it was asked for 90 characters. */
 const stripMarkdown = (s: string): string => s
   .replace(/```[\s\S]*?```/g, ' ')      // fenced code: whole block, not its markers
+  // Tables, before anything else touches the line: the separator row is pure
+  // punctuation, and a data row's pipes are structure that means nothing once
+  // the line is flattened. Same treatment excerptForCard gives them for IM,
+  // for the same reason. Missing this shipped a body reading
+  // "| | state | evidence | |---|---|---|" to a real screen.
+  .replace(/^[ \t]*\|[ \t|:-]+\|[ \t]*$/gm, '')
+  .replace(/^[ \t]*\|(.+)\|[ \t]*$/gm, (_m, row: string) =>
+    row.split('|').map((c) => c.trim()).filter(Boolean).join(' · '))
   .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, '')
   .replace(/^[ \t]{0,3}>[ \t]?/gm, '')
   .replace(/\*\*([^*]+)\*\*/g, '$1')

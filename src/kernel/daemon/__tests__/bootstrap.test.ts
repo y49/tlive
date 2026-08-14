@@ -171,6 +171,57 @@ describe('makeCodexResumeHandler', () => {
     return { broadcast, size: () => size, broadcasts };
   }
 
+  it('a finished Codex turn notifies the desktop, exactly like a finished Claude Code turn', async () => {
+    // Codex reaches the desktop for approvals already — the companion goes
+    // through the same PermissionRouter — but its turn/completed path never did,
+    // so the same machine notified you for one vendor and stayed silent for the
+    // other. Nothing about "your turn" is vendor-specific.
+    const notified: Array<{ key: string; lastMessage?: string }> = [];
+    const handler = makeCodexResumeHandler({
+      broker: { request: async () => null },
+      sessions: new SessionRegistry(),
+      events: fakeEvents(1),
+      chats: () => [],
+      resume: async () => undefined,
+      gracePassed: async () => true,
+      notifyTurn: (p) => notified.push(p),
+    });
+    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'patch applied' });
+    await until(() => { expect(notified).toHaveLength(1); });
+    expect(notified[0]).toEqual({ key: 'codex:t1', lastMessage: 'patch applied' });
+  });
+
+  it('notifies even when nothing can answer — the desktop is not an answer surface', async () => {
+    const notified: Array<{ key: string; lastMessage?: string }> = [];
+    const handler = makeCodexResumeHandler({
+      broker: { request: async () => { throw new Error('broker must not be reached'); } },
+      sessions: new SessionRegistry(),
+      events: fakeEvents(0), // no dashboard client…
+      chats: () => [],       // …and no IM chat: the fast-null path
+      resume: async () => undefined,
+      gracePassed: async () => true,
+      notifyTurn: (p) => notified.push(p),
+    });
+    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'done' });
+    await until(() => { expect(notified).toHaveLength(1); });
+  });
+
+  it('continuing inside the grace notifies nobody — same filter Claude Code gets', async () => {
+    const notified: unknown[] = [];
+    const handler = makeCodexResumeHandler({
+      broker: { request: async () => null },
+      sessions: new SessionRegistry(),
+      events: fakeEvents(1),
+      chats: () => [],
+      resume: async () => undefined,
+      gracePassed: async () => false, // turn/started arrived inside the grace
+      notifyTurn: () => notified.push(1),
+    });
+    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'done' });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(notified).toHaveLength(0);
+  });
+
   it('reply path: resume called and active broadcast', async () => {
     const sessions = new SessionRegistry();
     const events = fakeEvents(1);
@@ -182,6 +233,8 @@ describe('makeCodexResumeHandler', () => {
       events,
       chats: () => [],
       resume: async (t, i) => { resumeCall = [t, i]; await resume(t, i); },
+      gracePassed: async () => true,
+      notifyTurn: () => {}
     });
     handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'done' });
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
@@ -200,6 +253,8 @@ describe('makeCodexResumeHandler', () => {
       events,
       chats: () => [],
       resume: async () => { resumed = true; },
+      gracePassed: async () => true,
+      notifyTurn: () => {},
     });
     handler({ threadId: 't1', key: 'codex:t1' });
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
@@ -218,6 +273,8 @@ describe('makeCodexResumeHandler', () => {
       events,
       chats: () => [],
       resume: async () => { resumed = true; },
+      gracePassed: async () => true,
+      notifyTurn: () => {}
     });
     handler({ threadId: 't1', key: 'codex:t1' });
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
@@ -1126,6 +1183,8 @@ describe('Codex resume handler → continue card (regression: sentinel mismatch)
       events: h.events,
       chats: () => [{}], // non-empty → bypasses the fast-null path
       resume: async () => undefined,
+      gracePassed: async () => true,
+      notifyTurn: () => {}
     });
 
     onCodexResumePrompt({ threadId: 't1', key: 'codex:t1' }); // no lastMessage
