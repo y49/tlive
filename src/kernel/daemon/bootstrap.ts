@@ -575,10 +575,11 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
    *  different subsets. */
   const retireGoneSession = (key: string, cwd: string, sessionId?: string): void => {
     clearLocalPrompt(key, sessionId, cwd);
-    // A session that is gone announces nothing. Hygiene rather than behaviour —
-    // its registry entry goes too — but a per-session Set that only ever grows
-    // is the kind of thing that is obvious now and a puzzle in six months.
+    // A session that is gone announces nothing — neither a pending turn-end
+    // notification nor a future dedup. The Set part is also hygiene: one that
+    // only ever grows is obvious now and a puzzle in six months.
     turnEndAnnounced.delete(key);
+    cancelTurnAnnouncement(key);
   };
 
   // Reap sessions whose owning process died without unregistering: `tlive run`
@@ -838,6 +839,17 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   let codexResume: (threadId: string, input: string) => Promise<void> = async () => undefined;
   /** The Stop-hook grace, reusable by the Codex turn/completed path: one map, so
    *  a new turn cancels whichever vendor's pending announcement is waiting. */
+  /** Cancel a pending turn-end announcement. Exactly two things do it, for
+   *  either vendor: the user said something, or the session is gone. It is
+   *  deliberately NOT "any activity for this key" — a finished turn's own
+   *  trailing events can land inside its grace, and the Codex companion in
+   *  fact emits its turn/completed monitor event before the grace even starts,
+   *  so keying on activity would be one ordering change away from silently
+   *  killing every announcement. */
+  const cancelTurnAnnouncement = (key: string): void => {
+    const g = continueGrace.get(key);
+    if (g) { continueGrace.delete(key); g(); }
+  };
   const gracePassed = async (key: string): Promise<boolean> => {
     const graceSec = cfg.approvals?.continueGraceSec ?? 15;
     const suppressed = await new Promise<boolean>((res) => {
@@ -861,11 +873,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       connect: (events) => connectCodexRpc({ sockPath: codexAppServerSockPath(), events }),
       permissionRouter,
       onMonitor: (ev, key) => {
-        // Any thread activity inside the grace means the turn did not really
-        // end — Codex's `turn/started` is what a UserPromptSubmit is for Claude
-        // Code, and both cancel the same pending announcement.
-        const g = continueGrace.get(key);
-        if (g) { continueGrace.delete(key); g(); }
+        // `prompt` here is a user message item — the Codex analogue of
+        // UserPromptSubmit — and `session-end` is an archived thread. Item and
+        // turn level events are the finished turn talking, not the user.
+        if (ev.event === 'prompt' || ev.event === 'session-end') cancelTurnAnnouncement(key);
         events.broadcast(applyMonitorEvent(sessions, ev, key));
       },
       onResumePrompt: onCodexResumePrompt,
@@ -1314,10 +1325,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // New input = a new turn, so the previous turn's announcement no
             // longer covers anything Claude Code says from here on.
             turnEndAnnounced.delete(key);
+            cancelTurnAnnouncement(key);
             clearLocalPrompt(key, ev.sessionId, ev.cwd);
-            // 用户在键盘前开始了新一轮 → 取消上一 turn 还在 grace 里的续跑卡
-            const g = continueGrace.get(key);
-            if (g) { continueGrace.delete(key); g(); }
           } else if (ev.event === 'session-end') {
             // Session gone → its dialog is gone; retire the tracker so no
             // read-only pending outlives it (the registry entry itself is

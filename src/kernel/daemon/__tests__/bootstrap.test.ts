@@ -603,6 +603,41 @@ describe('AskUserQuestion remote card (Task 9)', () => {
   // registry field that the same hook overwrites with its own boilerplate; and
   // the timing then belongs to tlive's own configurable grace instead of a
   // Claude Code constant that varies with the user's settings.
+  it('a session that ends inside the grace announces nothing — there is nobody left to call back', async () => {
+    // A ONE-SECOND grace, and the wait runs past it: an absence assertion needs
+    // the window it is denying to have actually elapsed.
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { continueGraceSec: 1, continueWindowSec: 60 } }));
+    const renders: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+    void request(
+      { kind: 'hook.continue.request', cwd: '/w/repo', sessionId: 's1', context: 'ctx', lastMessage: 'done' },
+      { socketPath: sock, timeoutMs: 40_000 },
+    ).catch(() => undefined);
+    await request({ kind: 'hook.event', event: { event: 'session-end', cwd: '/w/repo', sessionId: 's1' } }, { socketPath: sock, timeoutMs: 2000 });
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(renders).toHaveLength(0);
+  });
+
+  it('a tool call inside the grace does NOT cancel the announcement — it is the finished turn trailing, not you coming back', async () => {
+    // The cancel rule is deliberately narrow: only a prompt or a session end.
+    // Keying it on any activity would be one event-ordering change away from
+    // silently killing every announcement, since a turn's own trailing events
+    // can land inside its grace — Codex sends the turn/completed attention
+    // event before the grace even starts.
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { continueGraceSec: 1, continueWindowSec: 60 } }));
+    const renders: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+    void request(
+      { kind: 'hook.continue.request', cwd: '/w/repo', sessionId: 's1', context: 'ctx', lastMessage: 'done' },
+      { socketPath: sock, timeoutMs: 40_000 },
+    ).catch(() => undefined);
+    // Inside the grace, and it must not count as you coming back.
+    await request({ kind: 'hook.event', event: { event: 'activity', cwd: '/w/repo', sessionId: 's1', toolName: 'Bash' } }, { socketPath: sock, timeoutMs: 2000 });
+    await until(() => { expect(renders).toHaveLength(1); });
+  });
+
   it('a finished turn notifies the desktop with what Claude actually said', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { continueGraceSec: 0, continueWindowSec: 30 } }));
     const renders: Array<{ title: string; body: string }> = [];
