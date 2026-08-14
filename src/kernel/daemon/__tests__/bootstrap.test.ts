@@ -171,6 +171,34 @@ describe('makeCodexResumeHandler', () => {
     return { broadcast, size: () => size, broadcasts };
   }
 
+  it('an interrupted Codex turn announces nothing — it produced no assistant message, so there is nothing to come back to', async () => {
+    // Real incident: nine Codex sessions in fourteen minutes, each a turn the
+    // user started and interrupted. `turn/completed` fires for an aborted turn
+    // too and carries no assistant message, so tlive announced nine finished
+    // turns with empty bodies — nine IM cards and nine desktop notifications
+    // with nothing in them. The rollout files show it plainly: user typed "1",
+    // then turn_aborted with reason interrupted.
+    let requested = false;
+    const notified: unknown[] = [];
+    const events = fakeEvents(1);
+    const sessions = new SessionRegistry();
+    const handler = makeCodexResumeHandler({
+      broker: { request: async () => { requested = true; return null; } },
+      sessions,
+      events,
+      chats: () => [],
+      resume: async () => undefined,
+      gracePassed: async () => true,
+      notifyTurn: () => notified.push(1),
+    });
+    handler({ threadId: 't1', key: 'codex:t1' }); // no lastMessage: nothing was produced
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(notified).toHaveLength(0); // no desktop notification…
+    expect(requested).toBe(false);    // …and no IM continue card either
+    // The dashboard still learns the session is idle: that part is honest.
+    expect(events.broadcasts.some((b: any) => b.session?.status === 'idle')).toBe(true);
+  });
+
   it('a finished Codex turn notifies the desktop, exactly like a finished Claude Code turn', async () => {
     // Codex reaches the desktop for approvals already — the companion goes
     // through the same PermissionRouter — but its turn/completed path never did,
@@ -1201,7 +1229,7 @@ describe('Codex resume handler → continue card (regression: sentinel mismatch)
     };
   }
 
-  it('renders an empty continue-card body (no duplicated title) when Codex has no lastMessage', async () => {
+  it('the Codex path reaches the shared broker and the IM card, carrying the assistant\'s message', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },
       adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
@@ -1222,15 +1250,20 @@ describe('Codex resume handler → continue card (regression: sentinel mismatch)
       notifyTurn: () => {}
     });
 
-    onCodexResumePrompt({ threadId: 't1', key: 'codex:t1' }); // no lastMessage
+    // This used to pass no lastMessage, and asserted that an EMPTY card went out.
+    // That behaviour is now suppressed: an interrupted turn produces no assistant
+    // message, and announcing it sent nine empty cards in fourteen minutes on
+    // real hardware. The empty-body RENDERING is still covered, at the level it
+    // belongs to — see continue-card.test.ts's `buildContinueCardBody('')` case.
+    // What this test is for is the wiring: Codex reaches the shared broker, whose
+    // onRequest handler builds the IM card.
+    onCodexResumePrompt({ threadId: 't1', key: 'codex:t1', lastMessage: 'patch applied' });
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
 
     expect(sent).toHaveLength(1);
     const card = sent[0] as { kind: 'card'; title?: string; body?: string };
-    // Title carries the usual `<label> · ` session tag (unrelated to this bug);
-    // what matters here is that the body is NOT a quoted repeat of the title.
     expect(card.title?.endsWith('Turn finished')).toBe(true);
-    expect(card.body).toBe('\n*Reply to this message to continue.*');
+    expect(card.body).toContain('patch applied');
   });
 });
 

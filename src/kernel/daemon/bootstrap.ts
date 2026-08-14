@@ -111,6 +111,21 @@ export function makeCodexResumeHandler(deps: {
   return (p) => {
     void (async () => {
       const { threadId, key, lastMessage } = p;
+      // A turn that produced no assistant message has nothing for anyone to come
+      // back to, so it is not announced — not on the desktop and not as an IM
+      // continue card. `turn/completed` fires for an ABORTED turn as well, and
+      // an abort is exactly the case with no message: nine interrupted sessions
+      // in fourteen minutes produced nine empty cards and nine empty
+      // notifications before this guard existed. The dashboard still learns the
+      // session went idle below, which is true and useful.
+      //
+      // The condition is content, not abortedness, on purpose: the RPC gives no
+      // abort flag, and "there is nothing to show you" is the thing that
+      // actually decides whether announcing helps.
+      if (!lastMessage) {
+        deps.events.broadcast({ type: 'session-upsert', session: deps.sessions.upsert({ key, cwd: key, status: 'idle' }) });
+        return;
+      }
       if (!(await deps.gracePassed(key))) {
         deps.events.broadcast({ type: 'session-upsert', session: deps.sessions.upsert({ key, cwd: key, status: 'active' }) });
         return;
