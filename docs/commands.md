@@ -174,8 +174,9 @@ them temporarily, or `tlive mode off` to stop tlive entirely. Without
 `notify-send` (or the platform equivalent) they silently no-op.
 
 **Only work that needs you reaches the desktop.** Four things do: an approval
-tlive is holding, a sub-agent's approval waiting at your terminal, a Claude
-Code dialog tlive is not holding, and a finished turn — the last one because
+tlive is holding, a sub-agent's approval waiting at your terminal, a prompt
+tlive is not holding — a Claude Code dialog, or a Codex approval in a posture
+below `full` — and a finished turn — the last one because
 "nothing happens until you type" is something you need to come back for. A
 failed tool does not: it blocks nobody, and it goes to IM where it is
 diagnosable. A Codex turn that dies — a bad API key, a provider error —

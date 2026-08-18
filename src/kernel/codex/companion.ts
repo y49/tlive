@@ -19,6 +19,18 @@ export type TurnOutcome = 'completed' | 'interrupted' | 'failed';
  *  report is one line in a chat, not a log dump. */
 const ERROR_TEXT_MAX = 200;
 
+/** What tlive may do with an app-server approval request, mapped from the
+ *  posture ladder. Codex used to ignore the ladder entirely — the shim was the
+ *  only thing consulting it — so approvals were held and carded in EVERY
+ *  posture, including `off`, which is documented as a kill switch. */
+export type ApprovalPolicy =
+  /** `off`: behave as if tlive were not installed. */
+  | 'ignore'
+  /** `notify`: point at the terminal, hold nothing, answer nothing. */
+  | 'notify'
+  /** `full` / `all`: hold it and offer a remote answer. */
+  | 'hold';
+
 export interface CompanionDeps {
   connect: (events: CodexRpcEvents) => Promise<CodexRpc>;
   permissionRouter: Pick<PermissionRouter, 'requestPermission' | 'cancel'>;
@@ -26,6 +38,17 @@ export interface CompanionDeps {
   onResumePrompt: (p: { threadId: string; key: string; lastMessage?: string; outcome: TurnOutcome; errorMessage?: string }) => void;
   /** 远程审批窗口(秒),与 CC 共用 approvals.windowSec —— 消除"一家可配一家硬编码"的不对称。 */
   windowSec: () => number;
+  /** Read per request, never cached: `tlive mode …` and IM's `/mode` must
+   *  change the NEXT approval without a restart, exactly as the shim re-reads
+   *  it on every hook. Absent = 'hold', which is the behaviour every caller had
+   *  before the ladder reached this path. */
+  approvalPolicy?: () => ApprovalPolicy;
+  /** `notify` posture: a native prompt is waiting at the terminal. Same
+   *  surfaces the Claude Code path uses for this — the machine and the
+   *  dashboard, never IM, because a phone cannot answer a terminal dialog. */
+  onNativePrompt?: (p: { key: string; cwd: string; detail: string }) => void;
+  /** …and it is over, so the dashboard's read-only card cannot strand. */
+  onNativePromptResolved?: (p: { key: string }) => void;
   log?: (msg: string) => void;
 }
 
@@ -65,6 +88,10 @@ export function startCompanion(deps: CompanionDeps): Companion {
    *  `turn/completed` alone can never say why. Retryable errors are excluded at
    *  the recording site — see the `error` handler. */
   const lastErrors = new Map<string, string>();
+  /** Threads with an outstanding NATIVE prompt we merely pointed at. Only the
+   *  `notify` posture puts anything here; it exists so the dashboard card is
+   *  retired by the same events that would have released a held card. */
+  const nativePrompts = new Set<string>();
   // Threads we've already (attempted to) resume on the current connection.
   // Cleared on disconnect — a reconnect doesn't preserve app-server subscriptions.
   let resumed = new Set<string>();
@@ -154,6 +181,10 @@ export function startCompanion(deps: CompanionDeps): Companion {
     startPolling();
   }
 
+  function retireNativePrompt(threadId: string): void {
+    if (nativePrompts.delete(threadId)) deps.onNativePromptResolved?.({ key: threadKey(threadId) });
+  }
+
   function handleNotify(method: string, params: unknown): void {
     const p = (params ?? {}) as Record<string, unknown>;
     if (method === 'thread/started') {
@@ -206,6 +237,7 @@ export function startCompanion(deps: CompanionDeps): Companion {
       const item = (p.item ?? {}) as Record<string, unknown>;
       if (threadId && item.type === 'commandExecution') {
         deps.permissionRouter.cancel({ key: threadKey(threadId), toolName: 'Bash', sessionId: threadId });
+        retireNativePrompt(threadId);
       }
       if (threadId && item.type === 'agentMessage') {
         // An empty agentMessage must not clobber the previous real one — the
@@ -220,6 +252,7 @@ export function startCompanion(deps: CompanionDeps): Companion {
       const threadId = (p.threadId as string | undefined) ?? '';
       if (threadId) {
         deps.permissionRouter.cancel({ key: threadKey(threadId) });
+        retireNativePrompt(threadId);
         const key = threadKey(threadId);
         const lastMessage = lastMessages.get(threadId);
         const { outcome, errorMessage } = resolveOutcome(p.turn, lastErrors.get(threadId));
@@ -277,6 +310,16 @@ export function startCompanion(deps: CompanionDeps): Companion {
       const command = p.command;
       const cwd = p.cwd;
       const reason = p.reason;
+      const policy = deps.approvalPolicy?.() ?? 'hold';
+      // Never responding is the pass-through: the app-server keeps the request
+      // pending and the native prompt remains the only answer, which is exactly
+      // what "as if tlive were not installed" means here.
+      if (policy === 'ignore') return;
+      if (policy === 'notify') {
+        nativePrompts.add(threadId);
+        deps.onNativePrompt?.({ key: threadKey(threadId), cwd: cwdOf(threadId), detail: describeCommand(command, reason) });
+        return;
+      }
       let abandon: (() => void) | undefined;
       void deps.permissionRouter
         .requestPermission({
@@ -407,6 +450,15 @@ export function resolveOutcome(
     return message ? { outcome: 'failed', errorMessage: message } : { outcome: 'interrupted' };
   }
   return { outcome: 'completed' };
+}
+
+/** One line naming what the terminal is being asked to approve. Codex hands us
+ *  the real command, so unlike the Claude Code notify path this never has to
+ *  guess or fall back to vendor boilerplate. */
+export function describeCommand(command: unknown, reason?: unknown): string {
+  const cmd = Array.isArray(command) ? command.join(' ') : typeof command === 'string' ? command : '';
+  const why = typeof reason === 'string' && reason.trim() ? `${reason.trim()} — ` : '';
+  return `${why}${cmd}`.trim() || 'a command needs your approval';
 }
 
 function readThreadId(p: Record<string, unknown>): string | undefined {

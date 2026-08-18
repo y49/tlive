@@ -403,6 +403,39 @@ describe('local-answer cancel + Stop fast-null (integration)', () => {
     expect(connects).toBe(1);
   });
 
+  it('a Codex approval sends no IM card in the default posture, and none at all when off', async () => {
+    // The ladder promised this and only the Claude Code shim delivered it: the
+    // companion held and carded Codex approvals in every posture, so `notify`
+    // put approvals on a phone the user never opted into and `off` was not a
+    // kill switch at all.
+    const sent: string[] = [];
+    const adapter: IMAdapter = {
+      channel: 'telegram',
+      async start() {}, async stop() {},
+      async send(out: OutgoingMessage) { sent.push(out.kind); return { messageId: 'm1' }; },
+      async edit() {}, onInbound() {}, isConnected() { return 'connected' as const; },
+    };
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false }, mode: 'notify',
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+      approvals: { approvalGraceSec: 0 },
+    }));
+    let events: CodexRpcEvents | undefined;
+    h = await bootstrapDaemon({
+      home: tmp,
+      imAdapters: [adapter],
+      ensureAppServer: async (o: any) => { o.onStateChange?.('running'); return { adopted: true, stop: () => {} }; },
+      connectCodex: async (e) => { events = e; return { call: async () => ({ data: [] }), notify: () => {}, close: () => {} }; },
+    });
+    await until(() => { expect(events).toBeDefined(); });
+
+    const respond = vi.fn();
+    events!.onServerRequest(1, 'item/commandExecution/requestApproval', { threadId: 'T9', command: ['bash', '-lc', 'rm -rf /'] }, respond);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(sent.filter((k) => k === 'card')).toHaveLength(0); // no approval card on notify
+    expect(respond).not.toHaveBeenCalled();                   // and nothing answered for you
+  });
+
   it('a failed Codex turn reaches IM through the real wiring, not a stand-in', async () => {
     // Everything below this line was previously covered only with an injected
     // reportFailure, i.e. the assertion stopped exactly where the hand-written

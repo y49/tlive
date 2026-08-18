@@ -248,6 +248,14 @@ hooks are retired; tlive integrates via app-server`,不再触碰任何决策逻�
   Codex 发起权限请求时以 `ServerRequest` 广播给 IM/web **和**原生 TUI 提示
   ——**先答先得**,与 Claude Code 并行通道同一语义。没有窗口可配置:原生
   提示永远不会被 tlive 卡住,因此没有超时概念。
+  **姿态梯子对两家含义相同**(`approvalPolicy`,每次请求现读不缓存):
+  `off`→`ignore`(**永不响应** = 表现得像没装 tlive,原生提示是唯一答复路径)、
+  `notify`→只把「终端有个框在等」投到**桌面 + dashboard**、IM 一个字不发
+  (手机够不着终端),且**不持有不代答**、`full`/`all`→持有并发卡。
+  ⚠️ 此前 `effectiveMode` **只有 CC 的 shim 在读**,companion 从不查 ⇒ Codex 审批
+  在**任何档位**都被持有并发卡,包括被文档定义为 kill switch 的 `off`。
+  notify 档下 Codex 比 CC 强一点:请求里**带真实命令**,而 CC 的 Notification
+  连 tool_name 都没有,所以那边只能显示厂商的通用句子。
 - **turn 结局判定**(`companion.ts` 的 `resolveOutcome`,纯函数):
   app-server 把"turn 死了"和"为什么死"分在**两个**通知里,只有一个带得动原因:
   `TurnComplete` + 有记录的错误 → `turn.status = "failed"` 且 `turn.error` 有值

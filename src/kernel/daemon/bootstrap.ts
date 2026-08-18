@@ -945,6 +945,26 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       },
       onResumePrompt: onCodexResumePrompt,
       windowSec: () => approvalWindow(cfg.approvals).timeoutSec,
+      // The posture ladder, finally meaning the same thing for both vendors.
+      // It used to be read only by the Claude Code shim, so Codex approvals
+      // were held and carded even on `off` — a kill switch that killed nothing.
+      approvalPolicy: () => {
+        const m = currentMode();
+        return m === 'off' ? 'ignore' : m === 'notify' ? 'notify' : 'hold';
+      },
+      // Same surfaces the Claude Code path uses for a dialog tlive is NOT
+      // holding: the machine and the dashboard, never IM — a phone cannot
+      // answer a terminal prompt, so that message would be pure anxiety with
+      // no exit.
+      onNativePrompt: ({ key, cwd, detail }) => {
+        deliver({ key, label: sessionLabel(key), kind: 'localPrompt', detail });
+        events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd, status: 'waiting-approval', pending: { requestId: `local:${key}`, title: 'Permission needed', body: detail, local: true, seenAt: Date.now() } }) });
+      },
+      onNativePromptResolved: ({ key }) => {
+        if (sessions.get(key)?.pending?.local) {
+          events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: key, pending: null }) });
+        }
+      },
       log: (m) => console.log(`[codex] ${m}`),
     });
     codexResume = (threadId, input) => codexCompanion!.resume(threadId, input);

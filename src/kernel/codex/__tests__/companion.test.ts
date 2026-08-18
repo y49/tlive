@@ -329,6 +329,75 @@ describe('companion', () => {
     });
   });
 
+  describe('approval posture', () => {
+    function rig(policy: 'ignore' | 'notify' | 'hold') {
+      let events: any;
+      const rpc = {
+        call: vi.fn(async (m: string) => (m === 'thread/loaded/list' ? { data: ['t1'] } : {})),
+        notify: vi.fn(), close: vi.fn(),
+      };
+      const router = { requestPermission: vi.fn(async () => ({ decision: 'allow' })), cancel: vi.fn(() => 0) };
+      const onNativePrompt = vi.fn();
+      const onNativePromptResolved = vi.fn();
+      const comp = startCompanion({
+        connect: async (e: any) => { events = e; return rpc as any; },
+        permissionRouter: router as any,
+        onMonitor: vi.fn(),
+        onResumePrompt: vi.fn(),
+        windowSec: () => 86_400,
+        approvalPolicy: () => policy,
+        onNativePrompt,
+        onNativePromptResolved,
+      });
+      return { comp, router, onNativePrompt, onNativePromptResolved, getEvents: () => events };
+    }
+
+    it('off: behaves as if tlive were not installed — no card, no signal, no answer', async () => {
+      // `off` is documented as a kill switch. It was not one for Codex: the
+      // companion answered app-server approvals in every posture, because the
+      // ladder was only ever consulted by the Claude Code shim.
+      const { comp, router, onNativePrompt, getEvents } = rig('ignore');
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve(); await Promise.resolve();
+      const respond = vi.fn();
+      getEvents().onServerRequest(1, 'item/commandExecution/requestApproval', { threadId: 't1', command: 'rm -rf /' }, respond);
+      await Promise.resolve(); await Promise.resolve();
+      expect(router.requestPermission).not.toHaveBeenCalled();
+      expect(onNativePrompt).not.toHaveBeenCalled();
+      expect(respond).not.toHaveBeenCalled();  // never answered: the native prompt owns it
+      comp.stop();
+    });
+
+    it('notify: points at the terminal without holding or answering', async () => {
+      // Same rule the Claude Code path follows in this posture — the machine is
+      // told a prompt is waiting, IM is not, and nothing is held. Codex can say
+      // more than Claude Code does here: the request carries the real command,
+      // where CC's Notification carries no tool name at all.
+      const { comp, router, onNativePrompt, onNativePromptResolved, getEvents } = rig('notify');
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve(); await Promise.resolve();
+      const respond = vi.fn();
+      getEvents().onServerRequest(1, 'item/commandExecution/requestApproval', { threadId: 't1', command: 'rm -rf /', reason: 'because' }, respond);
+      await Promise.resolve(); await Promise.resolve();
+      expect(router.requestPermission).not.toHaveBeenCalled();
+      expect(respond).not.toHaveBeenCalled();
+      expect(onNativePrompt).toHaveBeenCalledWith(expect.objectContaining({ key: 'codex:t1', detail: expect.stringContaining('rm -rf /') }));
+      // …and it retires when the command runs, so the dashboard card cannot strand.
+      getEvents().onNotify('item/completed', { threadId: 't1', item: { type: 'commandExecution' } });
+      expect(onNativePromptResolved).toHaveBeenCalledWith({ key: 'codex:t1' });
+      comp.stop();
+    });
+
+    it('hold: the full posture still holds and answers', async () => {
+      const { comp, router, getEvents } = rig('hold');
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve(); await Promise.resolve();
+      const respond = vi.fn();
+      getEvents().onServerRequest(1, 'item/commandExecution/requestApproval', { threadId: 't1', command: 'ls' }, respond);
+      await Promise.resolve(); await Promise.resolve();
+      expect(router.requestPermission).toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith({ decision: 'accept' });
+      comp.stop();
+    });
+  });
+
   it('a dropped connection abandons its pending approvals', async () => {
     // The approval's caller IS the app-server connection. When it dies the
     // request dies with it, but the card outlived it by the whole approval
