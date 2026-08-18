@@ -256,6 +256,24 @@ hooks are retired; tlive integrates via app-server`,不再触碰任何决策逻�
   在**任何档位**都被持有并发卡,包括被文档定义为 kill switch 的 `off`。
   notify 档下 Codex 比 CC 强一点:请求里**带真实命令**,而 CC 的 Notification
   连 tool_name 都没有,所以那边只能显示厂商的通用句子。
+- **订阅生命周期**(`IDLE_RELEASE_MS`,30 分钟):**订阅本身就是阻止 app-server
+  卸载线程的东西** —— 它只卸载「没有订阅者**且**非活动」的线程。以前 companion
+  订阅了就永不退订 ⇒ 见过的每个 Codex 会话永久驻留(实测 `thread/loaded/list`
+  返回 9 条全是死会话),死线程上没人答的审批还会**被 replay 给每一条新连接**,
+  为几小时前就没了的终端反复弹通知。
+  现在:静默 30 分钟就 `thread/unsubscribe`,之后用 **`thread/read`**
+  (返回 `updatedAt` + `status`,**无需订阅**,真机验证过)从外面盯着,
+  **只在观察到活动时才重新 resume**。不能靠「还在 `thread/loaded/list` 里」重订阅
+  —— 自己终端还挂着的线程无论如何都是 loaded,那样会每轮抖动。
+  30 分钟是 **Codex 自己的数**(`thread_lifecycle.rs` 的 `THREAD_UNLOADING_DELAY`),
+  所以 tlive 绝不会比 Codex 更早放弃一条线程;两个时钟**重叠不叠加**
+  (app-server 取 `max(无订阅者起始, 非活动起始) + 30min`)。
+  **代价**:被释放的线程若用户回来、且一个 poll 周期内就跑完 turn,那条
+  「一轮做完」不会播报。
+- **`thread/closed` / `serverRequest/resolved`**:前者是 app-server 关闭已释放线程
+  (关闭前会 `cancel_requests_for_thread`,注释写明「已无法被回答」)⇒ 结束会话并
+  作废仍持有的卡;后者直接说「这个请求已被结算,不管是谁结的」⇒ 取代原先从
+  `item/completed` 的间接推断。
 - **turn 结局判定**(`companion.ts` 的 `resolveOutcome`,纯函数):
   app-server 把"turn 死了"和"为什么死"分在**两个**通知里,只有一个带得动原因:
   `TurnComplete` + 有记录的错误 → `turn.status = "failed"` 且 `turn.error` 有值
