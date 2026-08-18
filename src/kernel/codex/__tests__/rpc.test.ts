@@ -36,6 +36,26 @@ describe('connectCodexRpc handshake', () => {
     expect(rpc.call).toBeTypeOf('function');
   });
 
+  it('gives up on a socket that connects but never completes the handshake', async () => {
+    // Found by running a real daemon against a stand-in that accepted the
+    // connection and spoke no WebSocket. `open` never fires, so `initialize` is
+    // never sent and its 10s timeout is never even armed: the promise settles
+    // neither way, connectLoop stays parked in its await forever, and there is
+    // no log, no retry and no reconnect - while custody still sees a listening
+    // socket and reports the companion as running. A hung or wedged app-server
+    // does the same thing.
+    vi.useFakeTimers();
+    try {
+      const onClose = vi.fn();
+      const { sock, p } = boot({ onClose });
+      const settled = expect(p).rejects.toThrow(/handshake/i);
+      await vi.advanceTimersByTimeAsync(31_000);
+      await settled;
+      expect(sock.closed).toBe(true);
+      expect(onClose).not.toHaveBeenCalled(); // one report, as with any other handshake failure
+    } finally { vi.useRealTimers(); }
+  });
+
   it('identifies as a non-originating client so it cannot hijack the process originator', () => {
     const { sock } = boot();
     sock.open();

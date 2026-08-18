@@ -58,6 +58,12 @@ export const NON_ORIGINATING_CLIENT_NAMES = ['codex_app_server_daemon', 'codex-b
  *  above catches the day the exemption disappears. */
 export const COMPANION_CLIENT_NAME = NON_ORIGINATING_CLIENT_NAMES[0];
 
+/** Whole-handshake deadline: connect, WebSocket upgrade, `initialize`, reply.
+ *  The per-call timeout cannot stand in for this — it is only armed once the
+ *  socket opens, so a peer that accepts the connection and never upgrades
+ *  leaves nothing armed at all. */
+const HANDSHAKE_TIMEOUT_MS = 15_000;
+
 export function defaultCodexSocket(sockPath: string): WebSocket {
   return new WebSocket(`ws+unix:${sockPath}:/`, { perMessageDeflate: false, headers: { Host: 'localhost' } });
 }
@@ -113,13 +119,27 @@ export async function connectCodexRpc(opts: {
   // app-server, each with handlers attached, so every event was processed twice
   // and every approval requested twice.
   const result = await new Promise<{ userAgent?: unknown }>((resolve, reject) => {
+    // Covers the whole handshake, including the part before `open`. A peer that
+    // accepts the connection and never speaks WebSocket - a wedged app-server,
+    // or something else that grabbed a stale socket path - otherwise parks this
+    // promise forever: `initialize` is never sent, so its own timeout is never
+    // armed, and the caller waits in its await with no failure, no retry and no
+    // log while custody still sees a listening socket.
+    const deadline = setTimeout(
+      () => reject(new Error(`handshake timeout after ${HANDSHAKE_TIMEOUT_MS}ms`)),
+      HANDSHAKE_TIMEOUT_MS,
+    );
+    deadline.unref?.();
+    const settle = <T>(fn: (v: T) => void) => (v: T) => { clearTimeout(deadline); fn(v); };
+    const ok = settle(resolve);
+    const fail = settle(reject);
     sock.once('open', () => {
       call('initialize', {
         clientInfo: { name: COMPANION_CLIENT_NAME, title: 'tlive companion', version: pkgVersion },
         capabilities: { experimentalApi: true },
-      }).then((r) => resolve((r ?? {}) as { userAgent?: unknown }), reject);
+      }).then((r) => ok((r ?? {}) as { userAgent?: unknown }), fail);
     });
-    sock.once('error', (e: Error) => reject(e));
+    sock.once('error', (e: Error) => fail(e));
   }).catch((e: unknown) => {
     // A socket left open keeps its 'message' handler installed and goes on
     // delivering events (and approval ServerRequests) on a connection the
