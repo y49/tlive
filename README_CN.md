@@ -207,9 +207,9 @@ Codex 会话。(这和 Codex 自己的 `codex app-server daemon` 一个思路:�
 语义一致。没有窗口要配置:原生提示永远不会被 tlive 卡住,因此也没有什么
 会超时。
 
-如果 companion 连不上(没装 Codex、respawn 耗尽了 backoff、或者在
-win32 上——`codex app-server` 那边还没接好),`tlive status` 会如实报告
-(`codex: app-server companion unreachable — approvals local-only`),
+如果 companion 连不上(没装 Codex、socket 上没人应答、或者在 win32 上——
+`codex app-server` 那边还没接好),`tlive status` 会如实报告;除非 Codex
+压根没装,tlive 会在后台一直重试——重装 codex 能自行恢复,不必重启 tlive,
 Codex 照常走它自己的本地审批流——没有 IM/web 卡,不会崩,只是少了远程
 通道。
 

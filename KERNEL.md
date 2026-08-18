@@ -273,7 +273,7 @@ hooks are retired; tlive integrates via app-server`,不再触碰任何决策逻�
   审批不是永久丢失:下一个发现轮询(5s)订阅成功后会补送,卡照发。
   rollout 在**首条用户消息**时物化,而审批只可能发生在首条消息之后的 turn
   里 ⟹ 实际盲区上界 ≈ 一个轮询周期。
-- **降级语义**:companion 连不上(未装 Codex、respawn 耗尽 backoff、
+- **降级语义**:companion 连不上(未装 Codex、socket 上没人应答、
   win32 尚未接好)时,`tlive status` 报告 `codex: app-server companion
   unreachable — approvals local-only`,Codex 照常走自己的本地审批流——
   无 IM/web 卡,不崩,只是少了远程通道。

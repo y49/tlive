@@ -882,6 +882,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     onStateChange: (s) => { codexState = s; logJson('codex.appserver', { state: s }); },
   }).catch(() => null);
   if (custody) logJson('codex.appserver', { adopted: custody.adopted });
+  // The 'off' case needs a reason too: it is the one state nothing retries out
+  // of, so 'why' is the whole of what a reader can act on.
+  else logJson('codex.appserver', { state: 'off', reason: process.platform === 'win32' ? 'win32' : 'no-codex-on-path' });
   // Indirection: onResumePrompt is needed at construction time, but resume()
   // only exists once startCompanion returns — close over this instead.
   let codexResume: (threadId: string, input: string) => Promise<void> = async () => undefined;

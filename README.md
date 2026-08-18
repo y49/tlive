@@ -252,10 +252,10 @@ Claude Code's parallel channel. There is no approval window to configure:
 the native prompt is never blocked waiting on tlive, so there's nothing
 that can time out.
 
-If the companion can't be reached (Codex not installed, respawn exhausted
-its backoff, or you're on win32 where `codex app-server` isn't wired up
-yet), `tlive status` says so plainly (`codex: app-server companion
-unreachable — approvals local-only`) and Codex just runs with its normal
+If the companion can't be reached (Codex not installed, nothing answering
+on the socket, or you're on win32 where `codex app-server` isn't wired up
+yet), `tlive status` says so plainly, and unless Codex is simply absent
+tlive keeps retrying in the background — a reinstall recovers on its own and Codex just runs with its normal
 local approval flow — no IM/web card, no crash, no degraded behavior
 beyond losing the remote channel.
 
