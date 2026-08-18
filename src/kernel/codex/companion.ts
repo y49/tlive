@@ -68,6 +68,14 @@ export function startCompanion(deps: CompanionDeps): Companion {
   // Threads we've already (attempted to) resume on the current connection.
   // Cleared on disconnect — a reconnect doesn't preserve app-server subscriptions.
   let resumed = new Set<string>();
+  /** Approvals still waiting for an answer on the CURRENT connection. The
+   *  requester of a Codex approval is that connection, so when it drops the
+   *  request is gone with it — the thread that raised it died too. Without
+   *  this the card sat there for the rest of the approval window, up to 24h,
+   *  offering a decision that would be written to a closed socket. Same shape
+   *  as the Claude Code path, where the IPC server ties onAbandoned to the
+   *  shim's connection. */
+  let abandonOnDisconnect = new Set<() => void>();
   /** threadId → 该 thread 的真实工作目录。来自 thread/resume 响应的 cwd
    *  (ThreadResumeResponse.cwd,见 app-server-protocol .../v2/thread.rs)。
    *  key 仍是 codex:<threadId>(唯一),cwd 才是真目录 —— registry 据此把
@@ -269,6 +277,7 @@ export function startCompanion(deps: CompanionDeps): Companion {
       const command = p.command;
       const cwd = p.cwd;
       const reason = p.reason;
+      let abandon: (() => void) | undefined;
       void deps.permissionRouter
         .requestPermission({
           key: threadKey(threadId),
@@ -283,6 +292,7 @@ export function startCompanion(deps: CompanionDeps): Companion {
           input: { command, cwd, reason },
           timeoutSec: deps.windowSec(),
           sessionId: threadId,
+          onAbandoned: (cb) => { abandon = cb; abandonOnDisconnect.add(cb); },
         })
         .then((r) => {
           if (r.decision === 'allow') respond({ decision: 'accept' });
@@ -293,7 +303,8 @@ export function startCompanion(deps: CompanionDeps): Companion {
           const msg = err instanceof Error ? err.message : String(err);
           log(`approval request failed: ${msg}`);
           // Never respond — approval stays pending, native prompt still governs.
-        });
+        })
+        .finally(() => { if (abandon) abandonOnDisconnect.delete(abandon); });
       return;
     }
     if (method === 'tool/requestUserInput') {
@@ -323,6 +334,10 @@ export function startCompanion(deps: CompanionDeps): Companion {
         rpc = undefined;
         stopPolling();
         resumed = new Set();
+        // Before clearing: every approval still waiting on this connection has
+        // lost its requester.
+        for (const cb of abandonOnDisconnect) cb();
+        abandonOnDisconnect = new Set();
         if (!stopped) scheduleReconnect();
       },
     };

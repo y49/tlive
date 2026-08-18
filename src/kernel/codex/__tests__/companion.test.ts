@@ -329,6 +329,47 @@ describe('companion', () => {
     });
   });
 
+  it('a dropped connection abandons its pending approvals', async () => {
+    // The approval's caller IS the app-server connection. When it dies the
+    // request dies with it, but the card outlived it by the whole approval
+    // window - up to 24h of a surface offering a decision that would now be
+    // written to a closed socket. Claude Code's side already does this: the IPC
+    // server hands requestPermission an onAbandoned tied to that connection.
+    let events: any;
+    let resolved: unknown;
+    const rpc = {
+      call: vi.fn(async (method: string) => (method === 'thread/loaded/list' ? { data: ['t1'] } : {})),
+      notify: vi.fn(),
+      close: vi.fn(),
+    };
+    const router = {
+      requestPermission: vi.fn((opts: any) =>
+        new Promise((resolve) => { opts.onAbandoned?.(() => resolve({ decision: 'gone' })); })
+          .then((r) => { resolved = r; return r; })),
+      cancel: vi.fn(() => 0),
+    };
+    const comp = startCompanion({
+      connect: async (e: any) => { events = e; return rpc as any; },
+      permissionRouter: router as any,
+      onMonitor: vi.fn(),
+      onResumePrompt: vi.fn(),
+      windowSec: () => 86_400,
+    });
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve(); await Promise.resolve();
+
+    const respond = vi.fn();
+    events.onServerRequest(9, 'item/commandExecution/requestApproval', { threadId: 't1', command: 'rm -rf /' }, respond);
+    await Promise.resolve(); await Promise.resolve();
+    expect(resolved).toBeUndefined();     // still waiting for an answer
+
+    events.onClose();                     // the app-server died
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(resolved).toEqual({ decision: 'gone' });
+    expect(respond).not.toHaveBeenCalled(); // nothing is written to a dead socket
+    comp.stop();
+  });
+
   it('thread/archived -> session-end monitor event', async () => {
     // Real archival notification: ThreadArchivedNotification { threadId }
     // (app-server-protocol .../v2/common.rs:1323-1328, camelCase on the wire),
