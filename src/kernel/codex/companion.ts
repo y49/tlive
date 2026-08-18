@@ -72,6 +72,27 @@ const RECONNECT_MAX_MS = 30_000;
 // 0.144.4 binary) — so an approval raised inside the window is answerable
 // the moment the next poll subscribes us, not lost to native-only.
 const POLL_MS = 5_000;
+/** How long a subscribed thread may go silent before we let it go.
+ *
+ *  Deliberately long. A subscription is what stops the app-server from ever
+ *  unloading a thread — it only closes one that has NO subscribers and is idle
+ *  — so watching forever means every Codex session tlive has ever seen stays
+ *  resident, and every approval left pending on a dead one is replayed to each
+ *  new connection, notifying about a thread whose terminal is long gone.
+ *
+ *  The cost of letting go is a blind window: a released thread whose user
+ *  comes back and finishes a turn inside one poll produces no turn-finished
+ *  announcement. Thirty minutes keeps that window almost entirely on threads
+ *  that are actually dead — a session in use never goes that quiet.
+ *
+ *  It is also exactly Codex's own number: THREAD_UNLOADING_DELAY in
+ *  app-server/src/request_processors/thread_lifecycle.rs is 30 minutes of no
+ *  subscribers AND inactivity before it unloads a thread. Matching it means
+ *  tlive never gives up on a thread sooner than Codex would. The two clocks
+ *  overlap rather than stack — the app-server takes
+ *  `max(no-subscribers-since, inactive-since) + 30min` — so the worst case
+ *  from last word to unloaded is about an hour, not two. */
+const IDLE_RELEASE_MS = 30 * 60_000;
 
 export function startCompanion(deps: CompanionDeps): Companion {
   let stopped = false;
@@ -110,6 +131,14 @@ export function startCompanion(deps: CompanionDeps): Companion {
    *  时序保证:resume 成功才订阅、订阅了才有事件 ⟹ cwd 一定先于事件到手
    *  (registry 的 cwd 首次创建后不可变,所以这点很关键)。 */
   const threadCwds = new Map<string, string>();
+  /** threadId → last time this thread said anything on the current connection.
+   *  Absence means "subscribed but nothing heard yet"; the value is seeded at
+   *  resume so a thread that never speaks still ages out. */
+  const lastHeard = new Map<string, number>();
+  /** threadId → the `updatedAt` we last observed for a thread we have RELEASED.
+   *  Presence in this map is what "released, watching from outside" means, and
+   *  the stored value is the baseline that decides whether it has stirred. */
+  const released = new Map<string, number>();
   /** 没拿到真 cwd 时退回 key —— 不崩,只是 label 退化成 codex:<id>。 */
   const cwdOf = (threadId: string): string => threadCwds.get(threadId) ?? threadKey(threadId);
 
@@ -125,6 +154,11 @@ export function startCompanion(deps: CompanionDeps): Companion {
       (res) => {
         const cwd = (res as { cwd?: unknown } | undefined)?.cwd;
         if (typeof cwd === 'string' && cwd) threadCwds.set(threadId, cwd);
+        released.delete(threadId);
+        // Seeded, not left absent: a thread that is resumed and then never
+        // speaks must still age out, or the silent ones would be exactly the
+        // ones we keep forever.
+        if (!lastHeard.has(threadId)) lastHeard.set(threadId, Date.now());
       },
       (err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
@@ -140,12 +174,54 @@ export function startCompanion(deps: CompanionDeps): Companion {
     );
   }
 
+  /** Let a silent thread go, so the app-server can unload it and cancel
+   *  whatever it still has pending. Failure is not worth reporting: the next
+   *  sweep tries again, and a thread that has already gone is the outcome we
+   *  wanted. */
+  function releaseThread(threadId: string): void {
+    if (!rpc) return;
+    resumed.delete(threadId);
+    lastHeard.delete(threadId);
+    released.set(threadId, 0);
+    rpc.call('thread/unsubscribe', { threadId }).catch(() => undefined);
+  }
+
+  /** Has a RELEASED thread stirred? Answered with `thread/read`, which reads
+   *  state without subscribing — that is the whole reason letting go is safe.
+   *  Resubscribing on mere presence in `thread/loaded/list` instead would flap
+   *  every poll, since a thread whose own terminal is still attached stays
+   *  loaded no matter what we do. */
+  async function stirredSinceRelease(threadId: string): Promise<boolean> {
+    if (!rpc) return false;
+    try {
+      const res = (await rpc.call('thread/read', { threadId })) as { thread?: { updatedAt?: unknown; status?: { type?: unknown } } } | undefined;
+      const t = res?.thread ?? {};
+      if (t.status?.type === 'active') return true;
+      const updatedAt = typeof t.updatedAt === 'number' ? t.updatedAt : 0;
+      const baseline = released.get(threadId) ?? 0;
+      if (baseline === 0) { released.set(threadId, updatedAt); return false; }
+      return updatedAt > baseline;
+    } catch {
+      return false;
+    }
+  }
+
   async function pollThreads(): Promise<void> {
     if (stopped || !rpc) return;
     try {
       const res = (await rpc.call('thread/loaded/list', {})) as { data?: string[] } | undefined;
       const ids = res?.data ?? [];
-      for (const id of ids) resumeThread(id);
+      const now = Date.now();
+      for (const [id, heard] of lastHeard) {
+        if (now - heard >= IDLE_RELEASE_MS) releaseThread(id);
+      }
+      for (const id of ids) {
+        if (released.has(id)) {
+          if (await stirredSinceRelease(id)) resumeThread(id);
+          continue;
+        }
+        resumeThread(id);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log(`companion: thread/loaded/list failed: ${msg}`);
@@ -187,6 +263,10 @@ export function startCompanion(deps: CompanionDeps): Companion {
 
   function handleNotify(method: string, params: unknown): void {
     const p = (params ?? {}) as Record<string, unknown>;
+    // Any word from a thread is proof it is alive; that is the whole input to
+    // the release decision below.
+    const heardFrom = (p.threadId as string | undefined) ?? readThreadId(p);
+    if (heardFrom) lastHeard.set(heardFrom, Date.now());
     if (method === 'thread/started') {
       const threadId = readThreadId(p);
       if (threadId) resumeThread(threadId);
@@ -280,7 +360,23 @@ export function startCompanion(deps: CompanionDeps): Companion {
       }
       return;
     }
-    if (method === 'thread/archived') {
+    if (method === 'serverRequest/resolved') {
+      // ServerRequestResolvedNotification { threadId, requestId } — the
+      // app-server telling us this request is settled, whoever settled it.
+      // The terminal answering used to be INFERRED from item/completed; this
+      // is the event that says so, and it also fires when the app-server
+      // cancels a thread's requests on shutdown.
+      const threadId = (p.threadId as string | undefined) ?? '';
+      if (threadId) deps.permissionRouter.cancel({ key: threadKey(threadId) });
+      return;
+    }
+    if (method === 'thread/closed' || method === 'thread/archived') {
+      // `thread/closed` is the app-server shutting an unsubscribed, idle
+      // thread down — it cancels that thread's pending requests first,
+      // "because they can no longer be answered". `thread/archived` is the
+      // user archiving it. Both mean the same thing to us: this session is
+      // over and anything still held for it is void.
+      //
       // Real archival notification: ThreadArchivedNotification { threadId }
       // (app-server-protocol .../v2/common.rs:1323-1328, camelCase on the wire
       // per #[serde(rename_all = "camelCase")]), sent as method "thread/archived"
@@ -292,8 +388,12 @@ export function startCompanion(deps: CompanionDeps): Companion {
       if (threadId) {
         const key = threadKey(threadId);
         const cwd = cwdOf(threadId);
+        deps.permissionRouter.cancel({ key });
         lastMessages.delete(threadId);
         lastErrors.delete(threadId);
+        lastHeard.delete(threadId);
+        released.delete(threadId);
+        resumed.delete(threadId);
         deps.onMonitor({ event: 'session-end', cwd, sessionId: threadId }, key);
         // Thread is done — drop the cached cwd so it can't leak into a stray
         // later event for the same (now-archived) threadId.
@@ -377,6 +477,8 @@ export function startCompanion(deps: CompanionDeps): Companion {
         rpc = undefined;
         stopPolling();
         resumed = new Set();
+        lastHeard.clear();
+        released.clear();
         // Before clearing: every approval still waiting on this connection has
         // lost its requester.
         for (const cb of abandonOnDisconnect) cb();

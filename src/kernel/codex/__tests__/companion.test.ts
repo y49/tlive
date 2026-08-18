@@ -329,6 +329,114 @@ describe('companion', () => {
     });
   });
 
+  describe('subscription lifetime', () => {
+    /** A thread we subscribe to is one the app-server cannot unload, and an
+     *  unloadable thread is one whose pending approvals are never cancelled.
+     *  These tests pin the two halves that make releasing safe. */
+    function rig(opts: { loaded: string[]; read?: (id: string) => any } = { loaded: ['t1'] }) {
+      const calls: Array<{ method: string; params: any }> = [];
+      let events: any;
+      const rpc = {
+        call: vi.fn(async (method: string, params: any) => {
+          calls.push({ method, params });
+          if (method === 'thread/loaded/list') return { data: opts.loaded };
+          if (method === 'thread/read') return { thread: opts.read?.(params.threadId) ?? { updatedAt: 100, status: { type: 'idle' } } };
+          return {};
+        }),
+        notify: vi.fn(), close: vi.fn(),
+      };
+      const comp = startCompanion({
+        connect: async (e: any) => { events = e; return rpc as any; },
+        permissionRouter: { requestPermission: vi.fn(async () => ({ decision: 'allow' })), cancel: vi.fn(() => 0) } as any,
+        onMonitor: vi.fn(), onResumePrompt: vi.fn(), windowSec: () => 86_400,
+      });
+      const since = (m: string) => calls.filter((c) => c.method === m);
+      return { comp, calls, since, getEvents: () => events };
+    }
+
+    it('releases a thread that has been silent long enough to be dead', async () => {
+      const { comp, since } = rig();
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve(); await Promise.resolve();
+      expect(since('thread/resume')).toHaveLength(1);
+      expect(since('thread/unsubscribe')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(31 * 60_000);
+      expect(since('thread/unsubscribe').at(-1)?.params).toEqual({ threadId: 't1' });
+      comp.stop();
+    });
+
+    it('activity keeps a live thread subscribed indefinitely', async () => {
+      const { comp, since, getEvents } = rig();
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve(); await Promise.resolve();
+      for (let i = 0; i < 4; i += 1) {
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+        getEvents().onNotify('turn/started', { threadId: 't1' });
+      }
+      expect(since('thread/unsubscribe')).toHaveLength(0);
+      comp.stop();
+    });
+
+    it('a released thread is not re-subscribed while it stays quiet', async () => {
+      // Without this the poll would re-resume it seconds later and the pair
+      // would flap forever, re-arming the very subscription that keeps the
+      // thread loaded.
+      const { comp, since } = rig();
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve(); await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(31 * 60_000);
+      const resumesAtRelease = since('thread/resume').length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(since('thread/resume')).toHaveLength(resumesAtRelease);
+      expect(since('thread/read').length).toBeGreaterThan(0); // watched, not subscribed
+      comp.stop();
+    });
+
+    it('a released thread is re-subscribed as soon as it shows life', async () => {
+      let updatedAt = 100;
+      const { comp, since } = rig({ loaded: ['t1'], read: () => ({ updatedAt, status: { type: 'idle' } }) });
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve(); await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(31 * 60_000);
+      const before = since('thread/resume').length;
+      updatedAt = 200; // the user typed into that TUI again
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(since('thread/resume').length).toBe(before + 1);
+      comp.stop();
+    });
+
+    it('an active status counts as life even when updatedAt has not moved', async () => {
+      let status: any = { type: 'idle' };
+      const { comp, since } = rig({ loaded: ['t1'], read: () => ({ updatedAt: 100, status }) });
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve(); await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(31 * 60_000);
+      const before = since('thread/resume').length;
+      status = { type: 'active', activeFlags: ['waitingOnApproval'] };
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(since('thread/resume').length).toBe(before + 1);
+      comp.stop();
+    });
+  });
+
+  it('thread/closed ends the session and releases what it was still holding', async () => {
+    // The app-server sends this once a thread has no subscribers and shuts
+    // down — and it cancels that thread's pending requests on the way out,
+    // saying plainly that they "can no longer be answered". Ignoring it left a
+    // card offering a decision nothing would ever receive.
+    const { comp, router, onMonitor, getEvents } = harness();
+    await vi.runOnlyPendingTimersAsync(); await Promise.resolve(); await Promise.resolve();
+    getEvents().onNotify('thread/closed', { threadId: 't1' });
+    expect(onMonitor).toHaveBeenCalledWith({ event: 'session-end', cwd: 'codex:t1', sessionId: 't1' }, 'codex:t1');
+    expect(router.cancel).toHaveBeenCalledWith({ key: 'codex:t1' });
+    comp.stop();
+  });
+
+  it('serverRequest/resolved withdraws a card someone else answered', async () => {
+    // First-class version of what was inferred from item/completed: the
+    // app-server says outright that this request is settled.
+    const { comp, router, getEvents } = harness();
+    await vi.runOnlyPendingTimersAsync(); await Promise.resolve(); await Promise.resolve();
+    getEvents().onNotify('serverRequest/resolved', { threadId: 't1', requestId: 7 });
+    expect(router.cancel).toHaveBeenCalledWith({ key: 'codex:t1' });
+    comp.stop();
+  });
+
   describe('approval posture', () => {
     function rig(policy: 'ignore' | 'notify' | 'hold') {
       let events: any;
