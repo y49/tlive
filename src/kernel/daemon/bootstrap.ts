@@ -906,13 +906,19 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     gracePassed,
     notifyTurn: ({ key, lastMessage }) => deliver({ key, label: sessionLabel(key), kind: 'idle', detail: lastMessage ?? '' }),
     reportFailure: ({ key, message }) => {
-      logJson('codex.turn.failed', { key, message });
       // Same gates and the same ⚠️ error level a failed Claude Code tool call
       // gets in the `hook.notify` handler — a mute means quiet for both vendors.
       // `shouldDropNotify` is not consulted: it only suppresses info-level
       // chatter once a turn end has been announced, and this IS the
       // announcement.
-      if (muted || sessions.get(key)?.muted) return;
+      const suppressed = muted || (sessions.get(key)?.muted ?? false);
+      // Identity and outcome only. The failure text is card text: it is
+      // provider output that has already been seen to carry a private relay
+      // endpoint, and this log is shared by every session on the machine.
+      // `delivered` is the part that is actually diagnosable from here —
+      // whether a mute ate the report is otherwise invisible.
+      logJson('codex.turn.failed', { key, delivered: !suppressed });
+      if (suppressed) return;
       const text = `⚠️ ${message}`;
       void Promise.all(configuredChats().map((t) => sendToChat(t, { text, cwd: key }))).catch(() => undefined);
     },

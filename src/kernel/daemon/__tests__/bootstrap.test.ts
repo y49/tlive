@@ -420,6 +420,9 @@ describe('local-answer cancel + Stop fast-null (integration)', () => {
       adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
     }));
     let events: CodexRpcEvents | undefined;
+    const logLines: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => { logLines.push(a.join(' ')); });
+    try {
     h = await bootstrapDaemon({
       home: tmp,
       imAdapters: [adapter],
@@ -444,6 +447,16 @@ describe('local-answer cancel + Stop fast-null (integration)', () => {
       expect(sent.some((t) => t.includes('Codex turn failed: unexpected status 401 Unauthorized'))).toBe(true);
     });
     expect(sent.find((t) => t.includes('Codex turn failed'))).toContain('\u26a0\ufe0f');
+
+    // The daemon log is shared by every session on the machine, so it carries
+    // identity and outcome only — never card text. This is not hypothetical:
+    // the first version logged the whole failure message and a real 503 from a
+    // provider put a private relay endpoint into the log.
+    const logged = logLines.join('\n');
+    expect(logged).toContain('codex.turn.failed');
+    expect(logged).toContain('"delivered":true');
+    expect(logged).not.toContain('401 Unauthorized');
+    } finally { logSpy.mockRestore(); }
   });
 
   it('a retryable Codex error never reaches IM', async () => {
