@@ -40,9 +40,9 @@ tlive setup
 ~/.tlive/config.json
 ```
 
-装了 Codex 插件时，setup 还会**自动信任 tlive 的 hooks**（经
-`codex app-server` 的 `hooks/list` RPC 完成,失败会自检回滚)——具体机制见
-README 的 Codex 一节，没成功时的手动 `/hooks` 兜底也在那里。
+Codex 既不需要 hooks 也没有信任这一步——那整套流程已经退役。它的集成走
+app-server companion:tlive 连上一个 `codex app-server`,你的 Codex TUI
+也连同一个。没有什么要批准,也没有什么要逐会话配置——见 README 的 Codex 一节。
 
 仅重新注册插件（例如升级 tlive 后）：
 

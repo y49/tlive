@@ -48,9 +48,11 @@ ladder). The daemon auto-starts with new sessions (disable via
 1. No IM messages: `tlive status` for channel config; `tlive logs -f` for send
    errors; confirm the daemon is up after starting a session.
 2. Codex has no remote cards: check `tlive status` — the companion line must say
-   `running`. `off` means codex isn't on PATH (or Windows); `degraded` means the
-   app-server child keeps dying — see `~/.tlive/codex-appserver.log`. Either way
-   Codex still prompts locally; nothing is ever auto-run.
+   `running`. `off` means codex isn't on PATH (or Windows); `degraded` means
+   codex is there but nothing is answering on the app-server socket — see
+   `~/.tlive/codex-appserver.log`. Neither is permanent: tlive keeps checking,
+   so installing or reinstalling codex recovers on its own with no tlive
+   restart. Either way Codex still prompts locally; nothing is ever auto-run.
 3. No approval card ever arrives: check `tlive status` — the `mode:` line must
    say `full` or `all`. The default `notify` never sends approval cards (tool
    prompts stay local); enable remote approval with `tlive mode full`.
@@ -101,5 +103,7 @@ through:
    `tlive mode all` — flag the trade plainly: a held sub-agent has no terminal
    dialog until the window ends, so it only pays off when nobody is at the
    keyboard (`tlive mode full` to come back).
-5. Codex needs no extra step — the companion starts with the daemon. If status
-   says `off`/`degraded`, that's diagnostic info, not a setup task.
+5. Codex needs no extra step — the companion connects as soon as an app-server
+   is answering, and tlive starts one if none is. If status says
+   `off`/`degraded`, that's diagnostic info, not a setup task, and it clears
+   itself once codex is installed — don't tell them to restart tlive.
