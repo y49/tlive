@@ -110,7 +110,7 @@ describe('ensureCodexAppServer', () => {
       codexInstalled = false;   // uninstall takes the app-server with it
       listening = false;
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(states.at(-1)).toBe('degraded');
+      expect(states.at(-1)).toBe('off');   // codex is gone: not a fault, just absent
       // Nothing to spawn, so it does not thrash trying.
       const attemptsWhileMissing = spawnFn.mock.calls.length;
       await vi.advanceTimersByTimeAsync(60_000);
@@ -211,12 +211,34 @@ describe('ensureCodexAppServer', () => {
   it('sock path honors CODEX_HOME arg', () => {
     expect(codexAppServerSockPath('/ch')).toBe(join('/ch', 'app-server-control', 'app-server-control.sock'));
   });
-  it('returns null on win32', async () => {
+  it('returns null on win32 — the feature does not exist there, so there is nothing to watch for', async () => {
     const c = await ensureCodexAppServer({ logPath: '/tmp/x.log', probe: async () => true, platform: 'win32', hasCodex: () => true });
     expect(c).toBeNull();
   });
-  it('returns null when codex missing from PATH', async () => {
-    const c = await ensureCodexAppServer({ logPath: '/tmp/x.log', probe: async () => true, platform: 'linux', hasCodex: () => false });
-    expect(c).toBeNull();
+  it('keeps watching when codex is missing from PATH, and reports off rather than degraded', async () => {
+    // Returning null here was the last permanent give-up: install codex after
+    // the daemon started and tlive never noticed until a restart. `off` is a
+    // stable, correct state — nothing is wrong, the product just is not
+    // installed — so it must not read as a failure to the majority of users
+    // who will never install Codex.
+    vi.useFakeTimers();
+    try {
+      let codexInstalled = false;
+      let listening = false;
+      const states: string[] = [];
+      const spawnFn = vi.fn(() => { listening = codexInstalled; return fakeChild(); });
+      const c = await ensureCodexAppServer({
+        logPath: '/tmp/x.log', probe: async () => listening, spawnFn: spawnFn as any,
+        onStateChange: (s) => states.push(s), platform: 'linux', hasCodex: () => codexInstalled,
+      });
+      expect(c).not.toBeNull();
+      expect(states).toEqual(['off']);
+      expect(spawnFn).not.toHaveBeenCalled();   // nothing to spawn, so no thrashing
+
+      codexInstalled = true;                    // installed later, no tlive restart
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(states.at(-1)).toBe('running');
+      c!.stop();
+    } finally { vi.useRealTimers(); }
   });
 });

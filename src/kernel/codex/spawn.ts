@@ -90,13 +90,16 @@ export async function ensureCodexAppServer(opts: {
   logPath: string;
   probe?: (sockPath: string) => Promise<boolean>;
   spawnFn?: (logPath: string) => ChildLike;
-  onStateChange?: (s: 'running' | 'degraded') => void;
+  onStateChange?: (s: 'running' | 'degraded' | 'off') => void;
   platform?: NodeJS.Platform;
   hasCodex?: () => boolean;
 }): Promise<AppServerCustody | null> {
   const platform = opts.platform ?? process.platform;
   const hasCodex = opts.hasCodex ?? (() => commandOnPath('codex'));
-  if (platform === 'win32' || !hasCodex()) return null;
+  // win32 only: `codex app-server` is not wired up there, so there is nothing
+  // to watch for and no state that could ever change. A MISSING codex is not
+  // the same thing — see the `off` branch in the tick.
+  if (platform === 'win32') return null;
 
   const probe = opts.probe ?? defaultProbe;
   const spawnFn = opts.spawnFn ?? defaultSpawnFn;
@@ -107,10 +110,10 @@ export async function ensureCodexAppServer(opts: {
   let stopped = false;
   let failures = 0;
   let timer: NodeJS.Timeout | undefined;
-  let reported: 'running' | 'degraded' | undefined;
+  let reported: 'running' | 'degraded' | 'off' | undefined;
 
   // Report transitions only: a 15s poll would otherwise repeat itself forever.
-  const setState = (s: 'running' | 'degraded'): void => {
+  const setState = (s: 'running' | 'degraded' | 'off'): void => {
     if (s === reported) return;
     reported = s;
     onStateChange(s);
@@ -168,9 +171,13 @@ export async function ensureCodexAppServer(opts: {
         failures = 0;
         setState('running');
       } else if (!hasCodex()) {
-        // Nothing to spawn: stay quiet and keep looking, so a reinstall
-        // recovers on its own instead of requiring `tlive stop && tlive start`.
-        setState('degraded');
+        // Nothing to spawn: stay quiet and keep looking, so an install or a
+        // reinstall recovers on its own instead of requiring
+        // `tlive stop && tlive start`. Reported as `off`, not `degraded`:
+        // for the majority who will never install Codex this is a stable,
+        // correct state, and calling it degraded would tell every one of them
+        // that something is broken.
+        setState('off');
       } else {
         failures += 1;
         setState(failures > FAILURES_BEFORE_DEGRADED ? 'degraded' : 'running');

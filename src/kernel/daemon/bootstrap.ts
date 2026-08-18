@@ -873,18 +873,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   let codexCompanion: Companion | null = null;
   let codexState: 'running' | 'degraded' | 'off' = 'off';
   const ensureAppServer = opts.ensureAppServer ?? ensureCodexAppServer;
-  const custody = await ensureAppServer({
-    logPath: join(opts.home, 'codex-appserver.log'),
-    // Logged, not just stored: diagnosing a silent companion used to mean
-    // reading `connect failed` spam and guessing, because custody itself left
-    // no trace of whether it had adopted an app-server, started one, or given
-    // up on both.
-    onStateChange: (s) => { codexState = s; logJson('codex.appserver', { state: s }); },
-  }).catch(() => null);
-  if (custody) logJson('codex.appserver', { adopted: custody.adopted });
-  // The 'off' case needs a reason too: it is the one state nothing retries out
-  // of, so 'why' is the whole of what a reader can act on.
-  else logJson('codex.appserver', { state: 'off', reason: process.platform === 'win32' ? 'win32' : 'no-codex-on-path' });
   // Indirection: onResumePrompt is needed at construction time, but resume()
   // only exists once startCompanion returns — close over this instead.
   let codexResume: (threadId: string, input: string) => Promise<void> = async () => undefined;
@@ -929,11 +917,16 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       void Promise.all(configuredChats().map((t) => sendToChat(t, { text, cwd: key }))).catch(() => undefined);
     },
   });
-  if (custody) {
-    // No `codexState = 'running'` here: custody's health loop is the only thing
-    // that knows whether an app-server is answering, and it has already
-    // reported. Asserting it here re-introduced the lie the loop exists to
-    // remove — the daemon claiming a companion because it once called spawn.
+  /** Started on the first `running` report and never before. The companion's
+   *  whole job is to hold an RPC connection, so starting it while no
+   *  app-server exists means an endless reconnect loop logging a failure every
+   *  30s — which is what every machine without Codex would now get, since
+   *  custody no longer bails out when `codex` is absent. No `codexState` is
+   *  asserted here either: the health loop is the only thing that knows
+   *  whether anything answers, and claiming a companion because we once called
+   *  spawn is the lie that loop exists to remove. */
+  const startCodexCompanion = (): void => {
+    if (codexCompanion) return;
     codexCompanion = startCompanion({
       connect: opts.connectCodex ?? ((events) => connectCodexRpc({ sockPath: codexAppServerSockPath(), events })),
       permissionRouter,
@@ -949,7 +942,24 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       log: (m) => console.log(`[codex] ${m}`),
     });
     codexResume = (threadId, input) => codexCompanion!.resume(threadId, input);
-  }
+  };
+
+  const custody = await ensureAppServer({
+    logPath: join(opts.home, 'codex-appserver.log'),
+    // Logged, not just stored: diagnosing a silent companion used to mean
+    // reading `connect failed` spam and guessing, because custody itself left
+    // no trace of whether it had adopted an app-server, started one, or given
+    // up on both.
+    onStateChange: (s) => {
+      codexState = s;
+      logJson('codex.appserver', { state: s });
+      if (s === 'running') startCodexCompanion();
+    },
+  }).catch(() => null);
+  if (custody) logJson('codex.appserver', { adopted: custody.adopted });
+  // win32 is the only outcome with no custody at all, and the only one nothing
+  // retries out of: `codex app-server` is not wired up there.
+  else logJson('codex.appserver', { state: 'off', reason: 'win32' });
 
   // Upstream actions from a dashboard client (/ws/events): approve/ask/reply/mute.
   const onAction = (action: import('../web/event-hub.js').EventAction): void => {

@@ -273,6 +273,14 @@ hooks are retired; tlive integrates via app-server`,不再触碰任何决策逻�
   审批不是永久丢失:下一个发现轮询(5s)订阅成功后会补送,卡照发。
   rollout 在**首条用户消息**时物化,而审批只可能发生在首条消息之后的 turn
   里 ⟹ 实际盲区上界 ≈ 一个轮询周期。
+- **三个状态都不是终点(win32 除外)**:`off` = codex 不在 PATH 上(**稳定且正确**
+  的状态,不是故障 —— 大多数用户永远不会装 Codex,把它叫 degraded 等于告诉他们
+  出问题了);`degraded` = codex 在但 socket 上没人应答;`running` = 有人应答。
+  三者都在同一个循环里,所以**装上 codex 不需要重启 tlive**。win32 是唯一
+  `return null` 的分支 —— 那儿 `codex app-server` 压根没接好,没有会变的状态。
+  companion **只在第一次 `running` 时启动**:它的全部工作就是握一条 RPC 连接,
+  在没有 app-server 时启动它 = 每 30 秒记一条失败的无尽重连,而 custody 不再
+  因为缺 codex 而早退之后,那会落到每一台没装 Codex 的机器上。
 - **降级语义**:companion 连不上(未装 Codex、socket 上没人应答、
   win32 尚未接好)时,`tlive status` 报告 `codex: app-server companion
   unreachable — approvals local-only`,Codex 照常走自己的本地审批流——

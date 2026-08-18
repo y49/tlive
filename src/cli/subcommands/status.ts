@@ -22,7 +22,7 @@ export async function runStatus(_argv: string[]): Promise<void> {
       } else if (r.codex === 'degraded') {
         process.stdout.write('codex:    app-server companion degraded (no app-server answering; tlive keeps retrying — approvals local-only)\n');
       } else {
-        process.stdout.write('codex:    app-server companion off (codex not found or win32 — approvals local-only)\n');
+        process.stdout.write('codex:    app-server companion off (codex not on PATH, or win32 — approvals local-only; installing codex needs no tlive restart)\n');
       }
     }
   } catch { /* not running */ }

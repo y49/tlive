@@ -378,6 +378,31 @@ describe('local-answer cancel + Stop fast-null (integration)', () => {
     };
   }
 
+  it('the companion waits for an app-server to exist before connecting', async () => {
+    // Custody no longer bails out when codex is absent - it keeps watching, so
+    // installing codex later recovers without a tlive restart. The cost of that
+    // is that every machine WITHOUT Codex would otherwise get a companion
+    // looping on a socket that will never exist, logging a failure every 30s.
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, adapters: {} }));
+    let connects = 0;
+    let report: ((s: 'running' | 'degraded' | 'off') => void) | undefined;
+    h = await bootstrapDaemon({
+      home: tmp,
+      ensureAppServer: async (o: any) => { report = o.onStateChange; report?.('off'); return { adopted: false, stop: () => {} }; },
+      connectCodex: async () => {
+        connects += 1;
+        return { call: async () => ({ data: [] }), notify: () => {}, close: () => {} };
+      },
+    });
+    expect(connects).toBe(0);          // nothing to connect to, so nothing tries
+
+    report!('running');                // an app-server appeared
+    await until(() => { expect(connects).toBe(1); });
+    report!('running');                // idempotent: one companion, not one per report
+    await new Promise((r) => setTimeout(r, 20));
+    expect(connects).toBe(1);
+  });
+
   it('a failed Codex turn reaches IM through the real wiring, not a stand-in', async () => {
     // Everything below this line was previously covered only with an injected
     // reportFailure, i.e. the assertion stopped exactly where the hand-written
@@ -398,7 +423,9 @@ describe('local-answer cancel + Stop fast-null (integration)', () => {
     h = await bootstrapDaemon({
       home: tmp,
       imAdapters: [adapter],
-      ensureAppServer: async () => ({ adopted: true, stop: () => {} }),
+      // Reports running like a real adopted custody does — that report is what
+      // starts the companion now, so a fake that stays silent means no companion.
+      ensureAppServer: async (o: any) => { o.onStateChange?.('running'); return { adopted: true, stop: () => {} }; },
       connectCodex: async (e) => {
         events = e;
         return { call: async () => ({ data: [] }), notify: () => {}, close: () => {} };
@@ -435,7 +462,9 @@ describe('local-answer cancel + Stop fast-null (integration)', () => {
     h = await bootstrapDaemon({
       home: tmp,
       imAdapters: [adapter],
-      ensureAppServer: async () => ({ adopted: true, stop: () => {} }),
+      // Reports running like a real adopted custody does — that report is what
+      // starts the companion now, so a fake that stays silent means no companion.
+      ensureAppServer: async (o: any) => { o.onStateChange?.('running'); return { adopted: true, stop: () => {} }; },
       connectCodex: async (e) => {
         events = e;
         return { call: async () => ({ data: [] }), notify: () => {}, close: () => {} };
