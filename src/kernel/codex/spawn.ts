@@ -15,16 +15,23 @@ export interface AppServerCustody {
   stop: () => void;
 }
 
+/** No `kill`: this process outlives us by design, so the supervisor must not
+ *  even be able to reach for it. */
 interface ChildLike {
   pid?: number;
   on: Function;
-  kill: Function;
   unref?: Function;
 }
 
-const FAST_EXIT_MS = 5000;
 const MAX_BACKOFF_MS = 30_000;
+/** Failures before we stop calling the state 'running' and admit 'degraded'.
+ *  Not a give-up threshold — see the tick loop: there is no give-up. */
 const MAX_FAST_EXITS = 6;
+/** How long a healthy app-server goes unchecked. This is the window in which a
+ *  dead one is invisible, so it is also the worst-case time to recovery. */
+const HEALTH_INTERVAL_MS = 15_000;
+/** After a spawn, how soon we look for the socket it should have opened. */
+const SETTLE_MS = 1000;
 
 function defaultProbe(sockPath: string): Promise<boolean> {
   return new Promise((resolve) => {
@@ -95,77 +102,93 @@ export async function ensureCodexAppServer(opts: {
   const onStateChange = opts.onStateChange ?? (() => {});
 
   const sockPath = codexAppServerSockPath();
-  const listening = await probe(sockPath);
-  if (listening) {
-    onStateChange('running');
-    return { adopted: true, stop: () => {} };
-  }
 
   let stopped = false;
-  let fastExitStreak = 0;
-  let currentBackoffMs = 1000;
-  let respawnTimer: NodeJS.Timeout | undefined;
-  let child: ChildLike;
+  let failures = 0;
+  let timer: NodeJS.Timeout | undefined;
+  let reported: 'running' | 'degraded' | undefined;
 
-  const scheduleRespawn = () => {
+  // Report transitions only: a 15s poll would otherwise repeat itself forever.
+  const setState = (s: 'running' | 'degraded'): void => {
+    if (s === reported) return;
+    reported = s;
+    onStateChange(s);
+  };
+
+  const schedule = (ms: number): void => {
     if (stopped) return;
-    if (fastExitStreak >= MAX_FAST_EXITS) {
-      onStateChange('degraded');
+    timer = setTimeout(() => { void tick(); }, ms);
+    timer.unref?.();
+  };
+
+  const spawnOnce = (): void => {
+    const child = spawnFn(opts.logPath);
+    // Async spawn failures — ENOENT TOCTOU, EACCES, EMFILE — emit 'error' and
+    // never 'exit'; without a listener that is an uncaught exception that takes
+    // the daemon down. Death itself needs no handling here: the next tick's
+    // probe is what decides whether an app-server exists.
+    child.on('error', () => {});
+    child.on('exit', () => {});
+    // Detached at spawn; unref'd so this independent process never holds the
+    // daemon's event loop open.
+    child.unref?.();
+  };
+
+  /** One question, asked on a loop: is an app-server listening?
+   *
+   *  Deliberately NOT "is the child we spawned still alive". The instance is
+   *  shared — it may have been started by a previous daemon, by `codex
+   *  app-server daemon start`, or by us — and supervising only our own child
+   *  left an ADOPTED instance completely unwatched: when it died, nothing
+   *  brought it back and `tlive status` kept reporting a running companion
+   *  because the state came from "we called spawn once", not from anything
+   *  answering. Now that a restart always adopts rather than replaces, that was
+   *  every restart.
+   *
+   *  There is also no give-up. The old supervisor stopped scheduling after six
+   *  fast exits, which is exactly what an uninstall looks like: `codex` leaves
+   *  PATH, every respawn ENOENTs instantly, the budget burns in under a minute
+   *  and reinstalling never revived it — the daemon had to be restarted by
+   *  hand. Failures now only widen the backoff and change what we report. */
+  async function tick(): Promise<void> {
+    if (stopped) return;
+    if (await probe(sockPath)) {
+      failures = 0;
+      setState('running');
+      schedule(HEALTH_INTERVAL_MS);
       return;
     }
-    respawnTimer = setTimeout(() => {
-      if (stopped) return;
-      spawnChild();
-    }, currentBackoffMs);
-    respawnTimer.unref?.();
-    currentBackoffMs = Math.min(currentBackoffMs * 2, MAX_BACKOFF_MS);
-  };
+    // Nothing to spawn: stay quiet and keep looking, so a reinstall recovers on
+    // its own instead of requiring `tlive stop && tlive start`.
+    if (!hasCodex()) {
+      setState('degraded');
+      schedule(HEALTH_INTERVAL_MS);
+      return;
+    }
+    failures += 1;
+    setState(failures > MAX_FAST_EXITS ? 'degraded' : 'running');
+    spawnOnce();
+    schedule(failures > MAX_FAST_EXITS ? MAX_BACKOFF_MS : Math.min(SETTLE_MS * 2 ** (failures - 1), MAX_BACKOFF_MS));
+  }
 
-  const spawnChild = () => {
-    const spawnedAt = Date.now();
-    child = spawnFn(opts.logPath);
-    let settled = false;
-    const onDeath = () => {
-      // A child can emit both 'error' and 'exit' for the same failure — only
-      // count/react once per child, or the fast-exit streak double-counts and
-      // scheduleRespawn fires twice (double-spawn).
-      if (settled) return;
-      settled = true;
-      if (stopped) return;
-      const lived = Date.now() - spawnedAt;
-      if (lived < FAST_EXIT_MS) {
-        fastExitStreak += 1;
-      } else {
-        fastExitStreak = 0;
-        currentBackoffMs = 1000;
-      }
-      scheduleRespawn();
-    };
-    // Async spawn failures (ENOENT TOCTOU, EACCES, EMFILE) emit 'error' and
-    // never 'exit' — without this listener that's an uncaught exception that
-    // crashes the daemon and backoff never engages.
-    child.on('error', onDeath);
-    child.on('exit', onDeath);
-    // Detached above; unref'd here so this supervised-but-independent process
-    // never holds the daemon's event loop open. 'exit' still arrives for as
-    // long as we are alive, which is all the respawn logic needs.
-    child.unref?.();
-    onStateChange('running');
-  };
-
-  spawnChild();
+  const adopted = await probe(sockPath);
+  if (adopted) {
+    setState('running');
+    schedule(HEALTH_INTERVAL_MS);
+  } else {
+    await tick();
+  }
 
   return {
-    adopted: false,
-    // Stops SUPERVISION, not the app-server. Same shape as the adopted branch
-    // above, and for the same reason: the socket — not our custody of it — is
-    // the rendezvous point, so the next daemon start re-adopts this very
-    // instance and every TUI already attached to it stays visible. Nothing
-    // leaks that Codex itself would not leak: its own daemon keeps one
+    adopted,
+    // Stops SUPERVISION, not the app-server. The socket — not our custody of
+    // it — is the rendezvous point, so the next daemon start re-adopts this
+    // very instance and every TUI already attached to it stays visible.
+    // Nothing leaks that Codex itself would not leak: its own daemon keeps one
     // app-server alive across clients by design.
     stop: () => {
       stopped = true;
-      if (respawnTimer) clearTimeout(respawnTimer);
+      if (timer) clearTimeout(timer);
     },
   };
 }

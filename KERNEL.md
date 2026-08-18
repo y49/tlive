@@ -199,11 +199,20 @@ Codex 的 hooks/trust 整套已退役(no-compat,2026-07-14)——`tlive hook
 hooks are retired; tlive integrates via app-server`,不再触碰任何决策逻辑。
 真正的集成路径:
 
-- **spawn custody**(`spawn.ts` 的 `codexAppServerSockPath` + adopt-or-spawn
-  逻辑):daemon 探测 tlive 的 unix socket 路径上是否已有 `codex app-server
-  --listen unix://…` 在监听——有就 adopt,没有就 spawn 并**监管**,带
-  respawn/backoff。Codex TUI 启动时**自行**连上那个 socket(Codex 自身特性,
-  tlive 不逐会话配置)。
+- **spawn custody**(`spawn.ts`):一个**永不放弃的健康循环**,只问一个问题
+  ——「control socket 上有没有 app-server 在监听」。有就什么都不做,没有就
+  spawn 一个;`hasCodex()` 为假时保持安静但**继续查**。Codex TUI 启动时
+  **自行**连上那个 socket(Codex 自身特性,tlive 不逐会话配置)。
+  **为什么是「有没有在监听」而不是「我们的子进程还活着吗」**:实例是共享的,
+  可能来自上一个 daemon、来自 `codex app-server daemon start`、也可能来自我们。
+  只监管自己的子进程会让 **adopt 来的实例完全无人看管** —— 它一死就再也回不来,
+  而 `tlive status` 照样说 running(状态来自「我们调过 spawn」,不来自任何应答)。
+  自从重启改成永远 adopt 而不是替换,**那就是每一次重启**。
+  **也没有放弃这一说**:旧逻辑连续 6 次快速退出后就不再排定时器,而那正是
+  卸载 codex 的形状 —— 二进制离开 PATH、每次 respawn 立刻 ENOENT、不到一分钟
+  烧完预算,**把 codex 装回来也没用,必须手动重启 daemon**。现在失败只会
+  拉长 backoff 和改变上报状态。真机验证:`kill -9` 掉 app-server,不碰 daemon,
+  约 15 秒后自己回来。
   **那个实例是共享的,所以 tlive 不拥有它的生命周期**:`appServerSpawnOptions`
   用 `detached: true`(+`unref`),`custody.stop()` **只停监管、不杀进程**。
   以前它是 daemon 的子进程且 stop 时被 `kill()` ⇒ 每次 `tlive stop/start`
