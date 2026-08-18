@@ -9,6 +9,22 @@ on:
   # an edit to this file can never be applied that way. This is the way in.
   workflow_dispatch:
 
+# Two pushes to main seconds apart — a merge, then the branch deletion that
+# follows it — start two runs that race. Real example: 07:09:49 tagged v5.0.1,
+# cut the release and published; 07:09:53 found the tag already there, then
+# failed removing a label the first run had already removed, leaving a red X on
+# a release that had in fact succeeded. A permanently failing release workflow
+# is how a real failure goes unnoticed later.
+#
+# NOT cancel-in-progress. This job tags and cuts the GitHub Release, and the
+# next one publishes to npm; cancelling between those leaves a released version
+# that never reached the registry — the exact failure the workflow_dispatch
+# note above exists to recover from. Queue instead: the second run then sees a
+# release PR already marked tagged and does nothing, which is correct.
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   pull-requests: write
