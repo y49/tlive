@@ -189,10 +189,17 @@ add y49/tlive` 再 `claude plugin install tlive@tlive`,直接从仓库根的
 ## Codex:app-server companion
 
 Codex 没有 hook、也没有信任这一步——上面 Claude 那套 hooks/trust 流程完全
-不适用。tlive 改为接管一个 `codex app-server --listen unix://…` 进程:
-如果 tlive 的 socket 路径上已经有一个在监听就直接 adopt,没有就自己 spawn
-并托管(带 respawn/backoff)。你跑的任何 `codex` TUI 都会**自动连上**那个
+不适用。tlive 改为连上一个 `codex app-server --listen unix://…` 进程:
+如果 tlive 的 socket 路径上已经有一个在监听就直接 adopt,没有就起一个
+(脱离进程组,带 respawn/backoff)。你跑的任何 `codex` TUI 都会**自动连上**那个
 socket——这是 Codex 自身的特性,不是 tlive 每次会话去配置的。
+
+因为那个实例是**共享的**,`tlive stop` **不会**把它停掉:它是这台机器上所有
+Codex TUI 的会合点,停掉它只会让那些会话继续跑、但对 tlive 完全不可见。
+下一次 `tlive start` 会 adopt 同一个实例,所以重启 tlive 不再甩掉任何
+Codex 会话。(这和 Codex 自己的 `codex app-server daemon` 一个思路:一个
+脱离的、按 pid 跟踪的 app-server 跨客户端长活。tlive 没有直接调它,因为
+那条路要求 Codex 的 standalone 托管安装,npm 装法上会直接报错。)
 
 在那条 RPC 连接上,tlive 订阅 Codex 自己的 thread/turn 事件,并通过
 `ServerRequest` 驱动审批:Codex 请求权限决策时,tlive 把同一个请求同时
@@ -200,9 +207,9 @@ socket——这是 Codex 自身的特性,不是 tlive 每次会话去配置的�
 语义一致。没有窗口要配置:原生提示永远不会被 tlive 卡住,因此也没有什么
 会超时。
 
-如果 companion 连不上(没装 Codex、respawn 耗尽了 backoff、或者在
-win32 上——`codex app-server` 那边还没接好),`tlive status` 会如实报告
-(`codex: app-server companion unreachable — approvals local-only`),
+如果 companion 连不上(没装 Codex、socket 上没人应答、或者在 win32 上——
+`codex app-server` 那边还没接好),`tlive status` 会如实报告;除非 Codex
+压根没装,tlive 会在后台一直重试——重装 codex 能自行恢复,不必重启 tlive,
 Codex 照常走它自己的本地审批流——没有 IM/web 卡,不会崩,只是少了远程
 通道。
 

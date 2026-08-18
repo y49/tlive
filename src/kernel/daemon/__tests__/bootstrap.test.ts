@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { bootstrapDaemon, shouldFastNullContinue, clampPermissionTimeout, makeCodexResumeHandler, shouldDropNotify, resolveKey, detectLang, type DaemonHandle } from '../bootstrap';
+import type { CodexRpcEvents } from '../../codex/rpc';
 import { request, daemonSocketPath } from '../../ipc/client';
 import { AlreadyRunningError } from '../../ipc/server.js';
 import type { IMAdapter, IMChannel, OutgoingMessage, IncomingEnvelope } from '../../contracts/im-adapter';
@@ -171,31 +172,78 @@ describe('makeCodexResumeHandler', () => {
     return { broadcast, size: () => size, broadcasts };
   }
 
-  it('an interrupted Codex turn announces nothing — it produced no assistant message, so there is nothing to come back to', async () => {
-    // Real incident: nine Codex sessions in fourteen minutes, each a turn the
-    // user started and interrupted. `turn/completed` fires for an aborted turn
-    // too and carries no assistant message, so tlive announced nine finished
-    // turns with empty bodies — nine IM cards and nine desktop notifications
-    // with nothing in them. The rollout files show it plainly: user typed "1",
-    // then turn_aborted with reason interrupted.
-    let requested = false;
+  function rig(over: Partial<Parameters<typeof makeCodexResumeHandler>[0]> = {}) {
     const notified: unknown[] = [];
+    const reports: Array<{ key: string; message: string }> = [];
     const events = fakeEvents(1);
     const sessions = new SessionRegistry();
+    let requested = false;
     const handler = makeCodexResumeHandler({
       broker: { request: async () => { requested = true; return null; } },
       sessions,
       events,
-      chats: () => [],
+      chats: () => [{}],
       resume: async () => undefined,
       gracePassed: async () => true,
       notifyTurn: () => notified.push(1),
+      reportFailure: (p) => reports.push(p),
+      ...over,
     });
-    handler({ threadId: 't1', key: 'codex:t1' }); // no lastMessage: nothing was produced
+    return { handler, notified, reports, events, sessions, wasRequested: () => requested };
+  }
+
+  it('a completed Codex turn with no assistant message announces nothing — there is nothing to come back to', async () => {
+    const { handler, notified, reports, events, wasRequested } = rig();
+    handler({ threadId: 't1', key: 'codex:t1', outcome: 'completed' }); // nothing was produced
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     expect(notified).toHaveLength(0); // no desktop notification…
-    expect(requested).toBe(false);    // …and no IM continue card either
+    expect(wasRequested()).toBe(false); // …and no IM continue card either
+    expect(reports).toHaveLength(0);    // …and nothing failed, so nothing to report
     // The dashboard still learns the session is idle: that part is honest.
+    expect(events.broadcasts.some((b: any) => b.session?.status === 'idle')).toBe(true);
+  });
+
+  it('a failed turn is reported instead of announced as finished', async () => {
+    // Real incident: nine Codex threads in fourteen minutes, every turn killed
+    // by a 401 against a third-party relay. tlive announced nine FINISHED turns
+    // with empty bodies. Then the empty-body guard turned that into nine
+    // silences, which is better and still wrong: the one thing the user needed
+    // was the reason.
+    const { handler, notified, reports, events, wasRequested } = rig();
+    handler({ threadId: 't1', key: 'codex:t1', outcome: 'failed', errorMessage: 'unexpected status 401 Unauthorized' });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(reports).toEqual([{ key: 'codex:t1', message: 'Codex turn failed: unexpected status 401 Unauthorized' }]);
+    // A failure is not blocking, so it does not reach the desktop, and it must
+    // not offer a reply that resumes a thread about to fail the same way.
+    expect(notified).toHaveLength(0);
+    expect(wasRequested()).toBe(false);
+    expect(events.broadcasts.some((b: any) => b.session?.status === 'idle')).toBe(true);
+  });
+
+  it('a failed turn is reported even when a new turn started inside the grace', async () => {
+    // "Your turn" goes stale the moment you continue it yourself; a failure that
+    // happened stays true. Same as the Claude Code tool-failure path, which
+    // reports on arrival and waits for nothing.
+    const { handler, reports } = rig({ gracePassed: async () => false });
+    handler({ threadId: 't1', key: 'codex:t1', outcome: 'failed', errorMessage: 'boom' });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(reports).toHaveLength(1);
+  });
+
+  it('a failed turn with no error detail still says something', async () => {
+    const { handler, reports } = rig();
+    handler({ threadId: 't1', key: 'codex:t1', outcome: 'failed' });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(reports[0]!.message).toBe('Codex turn failed (no error detail)');
+  });
+
+  it('an interrupted turn says nothing at all — you pressed Esc, you already know', async () => {
+    const { handler, notified, reports, events, wasRequested } = rig();
+    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'half an answer', outcome: 'interrupted' });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(reports).toHaveLength(0);
+    expect(notified).toHaveLength(0);
+    expect(wasRequested()).toBe(false);
     expect(events.broadcasts.some((b: any) => b.session?.status === 'idle')).toBe(true);
   });
 
@@ -213,8 +261,9 @@ describe('makeCodexResumeHandler', () => {
       resume: async () => undefined,
       gracePassed: async () => true,
       notifyTurn: (p) => notified.push(p),
+      reportFailure: () => {},
     });
-    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'patch applied' });
+    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'patch applied', outcome: 'completed' });
     await until(() => { expect(notified).toHaveLength(1); });
     expect(notified[0]).toEqual({ key: 'codex:t1', lastMessage: 'patch applied' });
   });
@@ -229,8 +278,9 @@ describe('makeCodexResumeHandler', () => {
       resume: async () => undefined,
       gracePassed: async () => true,
       notifyTurn: (p) => notified.push(p),
+      reportFailure: () => {},
     });
-    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'done' });
+    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'done', outcome: 'completed' });
     await until(() => { expect(notified).toHaveLength(1); });
   });
 
@@ -244,8 +294,9 @@ describe('makeCodexResumeHandler', () => {
       resume: async () => undefined,
       gracePassed: async () => false, // turn/started arrived inside the grace
       notifyTurn: () => notified.push(1),
+      reportFailure: () => {},
     });
-    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'done' });
+    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'done', outcome: 'completed' });
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     expect(notified).toHaveLength(0);
   });
@@ -262,9 +313,10 @@ describe('makeCodexResumeHandler', () => {
       chats: () => [],
       resume: async (t, i) => { resumeCall = [t, i]; await resume(t, i); },
       gracePassed: async () => true,
-      notifyTurn: () => {}
+      notifyTurn: () => {},
+      reportFailure: () => {},
     });
-    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'done' });
+    handler({ threadId: 't1', key: 'codex:t1', lastMessage: 'done', outcome: 'completed' });
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     expect(resumeCall).toEqual(['t1', 'go on']);
     expect(events.broadcasts.some((b: any) => b.session?.status === 'active')).toBe(true);
@@ -283,8 +335,9 @@ describe('makeCodexResumeHandler', () => {
       resume: async () => { resumed = true; },
       gracePassed: async () => true,
       notifyTurn: () => {},
+      reportFailure: () => {},
     });
-    handler({ threadId: 't1', key: 'codex:t1' });
+    handler({ threadId: 't1', key: 'codex:t1', outcome: 'completed' });
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     expect(requested).toBe(false);
     expect(resumed).toBe(false);
@@ -302,9 +355,10 @@ describe('makeCodexResumeHandler', () => {
       chats: () => [],
       resume: async () => { resumed = true; },
       gracePassed: async () => true,
-      notifyTurn: () => {}
+      notifyTurn: () => {},
+      reportFailure: () => {},
     });
-    handler({ threadId: 't1', key: 'codex:t1' });
+    handler({ threadId: 't1', key: 'codex:t1', outcome: 'completed' });
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     expect(resumed).toBe(false);
     expect(events.broadcasts.filter((b: any) => b.session?.status === 'idle').length).toBeGreaterThan(0);
@@ -323,6 +377,152 @@ describe('local-answer cancel + Stop fast-null (integration)', () => {
       isConnected() { return 'connected' as const; },
     };
   }
+
+  it('the companion waits for an app-server to exist before connecting', async () => {
+    // Custody no longer bails out when codex is absent - it keeps watching, so
+    // installing codex later recovers without a tlive restart. The cost of that
+    // is that every machine WITHOUT Codex would otherwise get a companion
+    // looping on a socket that will never exist, logging a failure every 30s.
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, adapters: {} }));
+    let connects = 0;
+    let report: ((s: 'running' | 'degraded' | 'off') => void) | undefined;
+    h = await bootstrapDaemon({
+      home: tmp,
+      ensureAppServer: async (o: any) => { report = o.onStateChange; report?.('off'); return { adopted: false, stop: () => {} }; },
+      connectCodex: async () => {
+        connects += 1;
+        return { call: async () => ({ data: [] }), notify: () => {}, close: () => {} };
+      },
+    });
+    expect(connects).toBe(0);          // nothing to connect to, so nothing tries
+
+    report!('running');                // an app-server appeared
+    await until(() => { expect(connects).toBe(1); });
+    report!('running');                // idempotent: one companion, not one per report
+    await new Promise((r) => setTimeout(r, 20));
+    expect(connects).toBe(1);
+  });
+
+  it('a Codex approval sends no IM card in the default posture, and none at all when off', async () => {
+    // The ladder promised this and only the Claude Code shim delivered it: the
+    // companion held and carded Codex approvals in every posture, so `notify`
+    // put approvals on a phone the user never opted into and `off` was not a
+    // kill switch at all.
+    const sent: string[] = [];
+    const adapter: IMAdapter = {
+      channel: 'telegram',
+      async start() {}, async stop() {},
+      async send(out: OutgoingMessage) { sent.push(out.kind); return { messageId: 'm1' }; },
+      async edit() {}, onInbound() {}, isConnected() { return 'connected' as const; },
+    };
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false }, mode: 'notify',
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+      approvals: { approvalGraceSec: 0 },
+    }));
+    let events: CodexRpcEvents | undefined;
+    h = await bootstrapDaemon({
+      home: tmp,
+      imAdapters: [adapter],
+      ensureAppServer: async (o: any) => { o.onStateChange?.('running'); return { adopted: true, stop: () => {} }; },
+      connectCodex: async (e) => { events = e; return { call: async () => ({ data: [] }), notify: () => {}, close: () => {} }; },
+    });
+    await until(() => { expect(events).toBeDefined(); });
+
+    const respond = vi.fn();
+    events!.onServerRequest(1, 'item/commandExecution/requestApproval', { threadId: 'T9', command: ['bash', '-lc', 'rm -rf /'] }, respond);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(sent.filter((k) => k === 'card')).toHaveLength(0); // no approval card on notify
+    expect(respond).not.toHaveBeenCalled();                   // and nothing answered for you
+  });
+
+  it('a failed Codex turn reaches IM through the real wiring, not a stand-in', async () => {
+    // Everything below this line was previously covered only with an injected
+    // reportFailure, i.e. the assertion stopped exactly where the hand-written
+    // wiring began: configuredChats, sendToChat, the mute gate and the session
+    // key all went untested. This drives the companion's own notifications.
+    const sent: string[] = [];
+    const adapter: IMAdapter = {
+      channel: 'telegram',
+      async start() {}, async stop() {},
+      async send(out: OutgoingMessage) { if (out.kind === 'text') sent.push(out.text); return { messageId: 'm1' }; },
+      async edit() {}, onInbound() {}, isConnected() { return 'connected' as const; },
+    };
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    let events: CodexRpcEvents | undefined;
+    const logLines: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => { logLines.push(a.join(' ')); });
+    try {
+    h = await bootstrapDaemon({
+      home: tmp,
+      imAdapters: [adapter],
+      // Reports running like a real adopted custody does — that report is what
+      // starts the companion now, so a fake that stays silent means no companion.
+      ensureAppServer: async (o: any) => { o.onStateChange?.('running'); return { adopted: true, stop: () => {} }; },
+      connectCodex: async (e) => {
+        events = e;
+        return { call: async () => ({ data: [] }), notify: () => {}, close: () => {} };
+      },
+    });
+    await until(() => { expect(events).toBeDefined(); });
+
+    // The 401 shape: the reason arrives on `error`, the death arrives as an abort.
+    events!.onNotify('error', {
+      threadId: 'T1', turnId: 'u1', willRetry: false,
+      error: { message: 'unexpected status 401 Unauthorized' },
+    });
+    events!.onNotify('turn/completed', { threadId: 'T1', turn: { status: 'interrupted', error: null } });
+
+    await until(() => {
+      expect(sent.some((t) => t.includes('Codex turn failed: unexpected status 401 Unauthorized'))).toBe(true);
+    });
+    expect(sent.find((t) => t.includes('Codex turn failed'))).toContain('\u26a0\ufe0f');
+
+    // The daemon log is shared by every session on the machine, so it carries
+    // identity and outcome only — never card text. This is not hypothetical:
+    // the first version logged the whole failure message and a real 503 from a
+    // provider put a private relay endpoint into the log.
+    const logged = logLines.join('\n');
+    expect(logged).toContain('codex.turn.failed');
+    expect(logged).toContain('"delivered":true');
+    expect(logged).not.toContain('401 Unauthorized');
+    } finally { logSpy.mockRestore(); }
+  });
+
+  it('a retryable Codex error never reaches IM', async () => {
+    const sent: string[] = [];
+    const adapter: IMAdapter = {
+      channel: 'telegram',
+      async start() {}, async stop() {},
+      async send(out: OutgoingMessage) { if (out.kind === 'text') sent.push(out.text); return { messageId: 'm1' }; },
+      async edit() {}, onInbound() {}, isConnected() { return 'connected' as const; },
+    };
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    let events: CodexRpcEvents | undefined;
+    h = await bootstrapDaemon({
+      home: tmp,
+      imAdapters: [adapter],
+      // Reports running like a real adopted custody does — that report is what
+      // starts the companion now, so a fake that stays silent means no companion.
+      ensureAppServer: async (o: any) => { o.onStateChange?.('running'); return { adopted: true, stop: () => {} }; },
+      connectCodex: async (e) => {
+        events = e;
+        return { call: async () => ({ data: [] }), notify: () => {}, close: () => {} };
+      },
+    });
+    await until(() => { expect(events).toBeDefined(); });
+
+    events!.onNotify('error', { threadId: 'T2', turnId: 'u1', willRetry: true, error: { message: 'websocket 401, retrying' } });
+    events!.onNotify('turn/completed', { threadId: 'T2', turn: { status: 'interrupted', error: null } });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(sent.filter((t) => t.includes('Codex turn failed'))).toHaveLength(0);
+  });
 
   it('a PostToolUse activity for the same key+tool releases the pending approval as defer', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({

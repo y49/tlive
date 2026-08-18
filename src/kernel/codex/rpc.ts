@@ -19,7 +19,50 @@ export interface CodexRpc {
   call(method: string, params: unknown, timeoutMs?: number): Promise<unknown>;
   notify(method: string, params?: unknown): void;
   close(): void;
+  /** The originator this app-server process is actually stamping on threads,
+   *  read back from `initialize`'s `userAgent` (`<originator>/<version> …`, see
+   *  codex-rs/login/src/auth/default_client.rs `get_codex_user_agent`). We send
+   *  a name that must NOT set it (below); this is how we find out if that ever
+   *  stops being true. */
+  effectiveOriginator?: string;
 }
+
+/** Upstream's exemption allowlist, mirrored so the reason is reviewable here:
+ *  codex-rs/app-server/src/request_processors/initialize_processor.rs:16. */
+export const NON_ORIGINATING_CLIENT_NAMES = ['codex_app_server_daemon', 'codex-backend'] as const;
+
+/** Why not `'tlive'`.
+ *
+ *  `initialize` calls `set_default_originator(clientInfo.name)`, which writes a
+ *  PROCESS-GLOBAL, first-write-wins originator (initialize_processor.rs:112 →
+ *  login/src/auth/default_client.rs:86). The companion connects the moment the
+ *  daemon starts, so it always wins that race — and from then on every thread
+ *  created in that app-server is stamped with our name, including threads the
+ *  user opened in their own Codex TUI. Two consequences, both measured:
+ *
+ *  1. `is_first_party_originator()` accepts `"codex-tui"` and rejects anything
+ *     else, and behaviour hangs off it (core/src/mcp_skill_dependencies.rs:42
+ *     silently skips the skill MCP-dependency install prompt). Monitoring the
+ *     user's sessions must not degrade them.
+ *  2. Rollout headers claim `originator: tlive` for sessions tlive never
+ *     started, which twice sent an investigation looking for a self-feeding
+ *     loop that does not exist.
+ *
+ *  Clients in `NON_ORIGINATING_CLIENT_NAMES` skip that mutation entirely
+ *  (`mutates_global_identity`), which is exactly the contract a watcher wants.
+ *  The cost is a borrowed name: upstream's own daemon health-probe client uses
+ *  this one (app-server-daemon/src/client.rs:26), so tlive's connection is not
+ *  distinguishable from it in app-server traces. `clientInfo.title` still says
+ *  tlive, nothing else about the connection changes (`app_server_client_name`
+ *  feeds tracing/analytics only — no feature gates), and `effectiveOriginator`
+ *  above catches the day the exemption disappears. */
+export const COMPANION_CLIENT_NAME = NON_ORIGINATING_CLIENT_NAMES[0];
+
+/** Whole-handshake deadline: connect, WebSocket upgrade, `initialize`, reply.
+ *  The per-call timeout cannot stand in for this — it is only armed once the
+ *  socket opens, so a peer that accepts the connection and never upgrades
+ *  leaves nothing armed at all. */
+const HANDSHAKE_TIMEOUT_MS = 15_000;
 
 export function defaultCodexSocket(sockPath: string): WebSocket {
   return new WebSocket(`ws+unix:${sockPath}:/`, { perMessageDeflate: false, headers: { Host: 'localhost' } });
@@ -66,23 +109,57 @@ export async function connectCodexRpc(opts: {
     }
     if (m.method !== undefined) opts.events.onNotify(m.method, m.params);
   });
+  sock.on('error', () => { /* handshake rejects; after that, 'close' cleans up */ });
+
+  // Until the handshake completes, a failure is reported ONLY by rejecting this
+  // promise — `events.onClose` is deliberately not wired yet. Wiring it here
+  // instead gave every failed connect attempt two reports (the rejection AND
+  // the close event), and callers that reconnect on both then ran two
+  // connect loops in parallel and ended up with two live connections to one
+  // app-server, each with handlers attached, so every event was processed twice
+  // and every approval requested twice.
+  const result = await new Promise<{ userAgent?: unknown }>((resolve, reject) => {
+    // Covers the whole handshake, including the part before `open`. A peer that
+    // accepts the connection and never speaks WebSocket - a wedged app-server,
+    // or something else that grabbed a stale socket path - otherwise parks this
+    // promise forever: `initialize` is never sent, so its own timeout is never
+    // armed, and the caller waits in its await with no failure, no retry and no
+    // log while custody still sees a listening socket.
+    const deadline = setTimeout(
+      () => reject(new Error(`handshake timeout after ${HANDSHAKE_TIMEOUT_MS}ms`)),
+      HANDSHAKE_TIMEOUT_MS,
+    );
+    deadline.unref?.();
+    const settle = <T>(fn: (v: T) => void) => (v: T) => { clearTimeout(deadline); fn(v); };
+    const ok = settle(resolve);
+    const fail = settle(reject);
+    sock.once('open', () => {
+      call('initialize', {
+        clientInfo: { name: COMPANION_CLIENT_NAME, title: 'tlive companion', version: pkgVersion },
+        capabilities: { experimentalApi: true },
+      }).then((r) => ok((r ?? {}) as { userAgent?: unknown }), fail);
+    });
+    sock.once('error', (e: Error) => fail(e));
+  }).catch((e: unknown) => {
+    // A socket left open keeps its 'message' handler installed and goes on
+    // delivering events (and approval ServerRequests) on a connection the
+    // caller has already given up on.
+    sock.close();
+    throw e;
+  });
+  send({ jsonrpc: '2.0', method: 'initialized' });
+
   sock.on('close', () => {
     for (const [, p] of pending) p.reject(new Error('connection closed'));
     pending.clear();
     opts.events.onClose();
   });
-  sock.on('error', () => { /* close 事件负责收尾 */ });
 
-  await new Promise<void>((resolve, reject) => {
-    sock.once('open', () => {
-      call('initialize', {
-        clientInfo: { name: 'tlive', title: 'tlive companion', version: pkgVersion },
-        capabilities: { experimentalApi: true },
-      }).then(() => resolve(), reject);
-    });
-    sock.once('error', (e: Error) => reject(e));
-  });
-  send({ jsonrpc: '2.0', method: 'initialized' });
-
-  return { call, notify: (method, params) => send({ jsonrpc: '2.0', method, params }), close: () => sock.close() };
+  const ua = typeof result.userAgent === 'string' ? result.userAgent : undefined;
+  return {
+    call,
+    notify: (method, params) => send({ jsonrpc: '2.0', method, params }),
+    close: () => sock.close(),
+    ...(ua ? { effectiveOriginator: ua.split('/')[0] } : {}),
+  };
 }

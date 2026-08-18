@@ -62,6 +62,7 @@ Guide the user through tlive setup. Execute in order, showing each result:
    dialog until the window ends, so it only pays off when nobody is at the
    keyboard (`tlive mode full` goes back).
 9. If status shows the Codex companion as `off` or `degraded`, explain what it
-   means (codex missing from PATH / app-server child failing — see
-   `~/.tlive/codex-appserver.log`); Codex approvals stay local-only until it is
-   `running`. There is no trust step to perform.
+   means (codex missing from PATH / nothing answering on the app-server socket
+   — see `~/.tlive/codex-appserver.log`); Codex approvals stay local-only until
+   it is `running`. There is no trust step to perform, and no restart either:
+   tlive keeps checking, so installing codex clears it on its own.

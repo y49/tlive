@@ -16,14 +16,15 @@ function harness() {
   };
   const router = { requestPermission: vi.fn(async () => ({ decision: 'allow' })), cancel: vi.fn(() => 0) };
   const onMonitor = vi.fn();
+  const onResumePrompt = vi.fn();
   const comp = startCompanion({
     connect: async (e: any) => { events = e; return rpc as any; },
     permissionRouter: router as any,
     onMonitor,
-    onResumePrompt: vi.fn(),
+    onResumePrompt,
     windowSec: () => 86_400,
   });
-  return { rpc, router, onMonitor, comp, calls, getEvents: () => events, setEvents: (e: any) => { events = e; } };
+  return { rpc, router, onMonitor, onResumePrompt, comp, calls, getEvents: () => events, setEvents: (e: any) => { events = e; } };
 }
 
 describe('companion', () => {
@@ -241,13 +242,200 @@ describe('companion', () => {
       { event: 'attention', cwd: 'codex:t1', sessionId: 't1', message: 'Turn finished — reply to continue', lastMessage: 'final answer' },
       'codex:t1',
     );
-    expect(onResumePrompt).toHaveBeenCalledWith({ threadId: 't1', key: 'codex:t1', lastMessage: 'final answer' });
+    expect(onResumePrompt).toHaveBeenCalledWith({ threadId: 't1', key: 'codex:t1', lastMessage: 'final answer', outcome: 'completed' });
 
     // An empty agentMessage must not clobber the real last message — the
     // continue card's excerpt would collapse to a bare "Reply to continue".
     events.onNotify('item/completed', { threadId: 't1', item: { type: 'agentMessage', text: '' } });
     events.onNotify('turn/completed', { threadId: 't1' });
-    expect(onResumePrompt).toHaveBeenLastCalledWith({ threadId: 't1', key: 'codex:t1', lastMessage: 'final answer' });
+    expect(onResumePrompt).toHaveBeenLastCalledWith({ threadId: 't1', key: 'codex:t1', lastMessage: 'final answer', outcome: 'completed' });
+    comp.stop();
+  });
+
+  describe('failed turns are reported, not announced as finished', () => {
+    async function live() {
+      const h = harness();
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
+      await Promise.resolve();
+      return { ...h, events: h.getEvents(), lastResume: () => h.onResumePrompt.mock.lastCall![0] as any };
+    }
+
+    it('turn/completed status=failed carries turn.error.message', async () => {
+      const { events, onMonitor, comp } = await live();
+      events.onNotify('turn/completed', {
+        threadId: 't1',
+        turn: { status: 'failed', error: { message: '401 Unauthorized: Invalid API key' } },
+      });
+      expect(onMonitor).toHaveBeenLastCalledWith(
+        { event: 'attention', cwd: 'codex:t1', sessionId: 't1', message: 'Codex turn failed: 401 Unauthorized: Invalid API key' },
+        'codex:t1',
+      );
+      comp.stop();
+    });
+
+    it('an aborted turn preceded by a non-retryable error is a failure, not an interrupt', async () => {
+      // This is the 401 shape. Codex reports auth failure as an ABORT
+      // (bespoke_event_handling.rs:1497 handle_turn_interrupted → status
+      // interrupted, error None), so the message only ever arrives on the
+      // separate `error` notification. Trusting `status` alone reports the
+      // user's own Esc and a dead API key identically.
+      const { events, comp, lastResume } = await live();
+      events.onNotify('error', {
+        threadId: 't1', turnId: 'u1', willRetry: false,
+        error: { message: 'unexpected status 401 Unauthorized' },
+      });
+      events.onNotify('turn/completed', { threadId: 't1', turn: { status: 'interrupted', error: null } });
+      expect(lastResume()).toMatchObject({ outcome: 'failed', errorMessage: 'unexpected status 401 Unauthorized' });
+      comp.stop();
+    });
+
+    it('willRetry errors are transient noise and never surface', async () => {
+      // StreamError (bespoke_event_handling.rs:937) fires per retry — the 401
+      // websocket spam was 17 of these in 60 seconds. Reporting them would be
+      // the empty-card flood again with a different payload.
+      const { events, comp, lastResume } = await live();
+      events.onNotify('error', { threadId: 't1', turnId: 'u1', willRetry: true, error: { message: 'transient' } });
+      events.onNotify('turn/completed', { threadId: 't1', turn: { status: 'interrupted', error: null } });
+      expect(lastResume()).toMatchObject({ outcome: 'interrupted' });
+      expect(lastResume().errorMessage).toBeUndefined();
+      comp.stop();
+    });
+
+    it('a bare interrupt stays an interrupt — you pressed Esc, you already know', async () => {
+      const { events, comp, lastResume } = await live();
+      events.onNotify('turn/completed', { threadId: 't1', turn: { status: 'interrupted', error: null } });
+      expect(lastResume()).toMatchObject({ outcome: 'interrupted' });
+      comp.stop();
+    });
+
+    it('a recorded error does not leak into the next turn', async () => {
+      const { events, comp, lastResume } = await live();
+      events.onNotify('error', { threadId: 't1', turnId: 'u1', willRetry: false, error: { message: 'old failure' } });
+      events.onNotify('turn/completed', { threadId: 't1', turn: { status: 'failed', error: null } });
+      expect(lastResume()).toMatchObject({ outcome: 'failed', errorMessage: 'old failure' });
+      events.onNotify('turn/started', { threadId: 't1' });
+      events.onNotify('turn/completed', { threadId: 't1', turn: { status: 'interrupted', error: null } });
+      expect(lastResume()).toMatchObject({ outcome: 'interrupted' });
+      expect(lastResume().errorMessage).toBeUndefined();
+      comp.stop();
+    });
+
+    it('an app-server that sends no turn payload is treated as a normal completion', async () => {
+      const { events, comp, lastResume } = await live();
+      events.onNotify('turn/completed', { threadId: 't1' });
+      expect(lastResume()).toMatchObject({ outcome: 'completed' });
+      comp.stop();
+    });
+  });
+
+  describe('approval posture', () => {
+    function rig(policy: 'ignore' | 'notify' | 'hold') {
+      let events: any;
+      const rpc = {
+        call: vi.fn(async (m: string) => (m === 'thread/loaded/list' ? { data: ['t1'] } : {})),
+        notify: vi.fn(), close: vi.fn(),
+      };
+      const router = { requestPermission: vi.fn(async () => ({ decision: 'allow' })), cancel: vi.fn(() => 0) };
+      const onNativePrompt = vi.fn();
+      const onNativePromptResolved = vi.fn();
+      const comp = startCompanion({
+        connect: async (e: any) => { events = e; return rpc as any; },
+        permissionRouter: router as any,
+        onMonitor: vi.fn(),
+        onResumePrompt: vi.fn(),
+        windowSec: () => 86_400,
+        approvalPolicy: () => policy,
+        onNativePrompt,
+        onNativePromptResolved,
+      });
+      return { comp, router, onNativePrompt, onNativePromptResolved, getEvents: () => events };
+    }
+
+    it('off: behaves as if tlive were not installed — no card, no signal, no answer', async () => {
+      // `off` is documented as a kill switch. It was not one for Codex: the
+      // companion answered app-server approvals in every posture, because the
+      // ladder was only ever consulted by the Claude Code shim.
+      const { comp, router, onNativePrompt, getEvents } = rig('ignore');
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve(); await Promise.resolve();
+      const respond = vi.fn();
+      getEvents().onServerRequest(1, 'item/commandExecution/requestApproval', { threadId: 't1', command: 'rm -rf /' }, respond);
+      await Promise.resolve(); await Promise.resolve();
+      expect(router.requestPermission).not.toHaveBeenCalled();
+      expect(onNativePrompt).not.toHaveBeenCalled();
+      expect(respond).not.toHaveBeenCalled();  // never answered: the native prompt owns it
+      comp.stop();
+    });
+
+    it('notify: points at the terminal without holding or answering', async () => {
+      // Same rule the Claude Code path follows in this posture — the machine is
+      // told a prompt is waiting, IM is not, and nothing is held. Codex can say
+      // more than Claude Code does here: the request carries the real command,
+      // where CC's Notification carries no tool name at all.
+      const { comp, router, onNativePrompt, onNativePromptResolved, getEvents } = rig('notify');
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve(); await Promise.resolve();
+      const respond = vi.fn();
+      getEvents().onServerRequest(1, 'item/commandExecution/requestApproval', { threadId: 't1', command: 'rm -rf /', reason: 'because' }, respond);
+      await Promise.resolve(); await Promise.resolve();
+      expect(router.requestPermission).not.toHaveBeenCalled();
+      expect(respond).not.toHaveBeenCalled();
+      expect(onNativePrompt).toHaveBeenCalledWith(expect.objectContaining({ key: 'codex:t1', detail: expect.stringContaining('rm -rf /') }));
+      // …and it retires when the command runs, so the dashboard card cannot strand.
+      getEvents().onNotify('item/completed', { threadId: 't1', item: { type: 'commandExecution' } });
+      expect(onNativePromptResolved).toHaveBeenCalledWith({ key: 'codex:t1' });
+      comp.stop();
+    });
+
+    it('hold: the full posture still holds and answers', async () => {
+      const { comp, router, getEvents } = rig('hold');
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve(); await Promise.resolve();
+      const respond = vi.fn();
+      getEvents().onServerRequest(1, 'item/commandExecution/requestApproval', { threadId: 't1', command: 'ls' }, respond);
+      await Promise.resolve(); await Promise.resolve();
+      expect(router.requestPermission).toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith({ decision: 'accept' });
+      comp.stop();
+    });
+  });
+
+  it('a dropped connection abandons its pending approvals', async () => {
+    // The approval's caller IS the app-server connection. When it dies the
+    // request dies with it, but the card outlived it by the whole approval
+    // window - up to 24h of a surface offering a decision that would now be
+    // written to a closed socket. Claude Code's side already does this: the IPC
+    // server hands requestPermission an onAbandoned tied to that connection.
+    let events: any;
+    let resolved: unknown;
+    const rpc = {
+      call: vi.fn(async (method: string) => (method === 'thread/loaded/list' ? { data: ['t1'] } : {})),
+      notify: vi.fn(),
+      close: vi.fn(),
+    };
+    const router = {
+      requestPermission: vi.fn((opts: any) =>
+        new Promise((resolve) => { opts.onAbandoned?.(() => resolve({ decision: 'gone' })); })
+          .then((r) => { resolved = r; return r; })),
+      cancel: vi.fn(() => 0),
+    };
+    const comp = startCompanion({
+      connect: async (e: any) => { events = e; return rpc as any; },
+      permissionRouter: router as any,
+      onMonitor: vi.fn(),
+      onResumePrompt: vi.fn(),
+      windowSec: () => 86_400,
+    });
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve(); await Promise.resolve();
+
+    const respond = vi.fn();
+    events.onServerRequest(9, 'item/commandExecution/requestApproval', { threadId: 't1', command: 'rm -rf /' }, respond);
+    await Promise.resolve(); await Promise.resolve();
+    expect(resolved).toBeUndefined();     // still waiting for an answer
+
+    events.onClose();                     // the app-server died
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(resolved).toEqual({ decision: 'gone' });
+    expect(respond).not.toHaveBeenCalled(); // nothing is written to a dead socket
     comp.stop();
   });
 

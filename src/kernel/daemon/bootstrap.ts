@@ -24,8 +24,8 @@ import { loadOrCreateToken } from '../web/token.js';
 import { EventHub } from '../web/event-hub.js';
 import { applyMonitorEvent, sweepDeadSessions, pidAlive } from '../web/session-events.js';
 import { ensureCodexAppServer, codexAppServerSockPath } from '../codex/spawn.js';
-import { connectCodexRpc } from '../codex/rpc.js';
-import { startCompanion, type Companion } from '../codex/companion.js';
+import { connectCodexRpc, type CodexRpc, type CodexRpcEvents } from '../codex/rpc.js';
+import { startCompanion, failureText, type Companion, type TurnOutcome } from '../codex/companion.js';
 import { excerptForCard } from './excerpt.js';
 import { TURN_FINISHED_SENTINEL, effectiveMode, type ShimMode } from '../hook/normalizer.js';
 import { writeMode } from '../config/mode.js';
@@ -46,6 +46,12 @@ export interface BootstrapOpts {
   home: string;
   imAdapters?: IMAdapter[];
   ensureAppServer?: typeof ensureCodexAppServer;
+  /** Test seam for the Codex RPC connection. Without it the whole Codex path —
+   *  approval cards, continue cards, failure reports — is reachable only
+   *  through a real app-server, so the wiring between the companion and the IM
+   *  adapters had no coverage at all: every test that exercised it injected its
+   *  own stand-in for the very step being wired. */
+  connectCodex?: (events: CodexRpcEvents) => Promise<CodexRpc>;
   /** Test seam for the desktop notifier; production uses createDesktopNotifier. */
   desktopNotifier?: import('./desktop-notify.js').DesktopNotifier;
   /** Test seam for `notifyDesktop`'s `desktop.notify` line, mirroring how
@@ -107,21 +113,43 @@ export function makeCodexResumeHandler(deps: {
    *  vendor-specific, and Codex already reaches the desktop for approvals via
    *  the same PermissionRouter; only this path was missing. */
   notifyTurn: (p: { key: string; lastMessage?: string }) => void;
-}): (p: { threadId: string; key: string; lastMessage?: string }) => void {
+  /** A turn that died has to say so somewhere you can act on it — the same
+   *  treatment a failed Claude Code tool call gets. Non-blocking, so per the
+   *  delivery rule it travels to IM and the dashboard and NOT to the desktop. */
+  reportFailure: (p: { key: string; message: string }) => void;
+}): (p: { threadId: string; key: string; lastMessage?: string; outcome: TurnOutcome; errorMessage?: string }) => void {
   return (p) => {
     void (async () => {
-      const { threadId, key, lastMessage } = p;
-      // A turn that produced no assistant message has nothing for anyone to come
-      // back to, so it is not announced — not on the desktop and not as an IM
-      // continue card. `turn/completed` fires for an ABORTED turn as well, and
-      // an abort is exactly the case with no message: nine interrupted sessions
-      // in fourteen minutes produced nine empty cards and nine empty
-      // notifications before this guard existed. The dashboard still learns the
+      const { threadId, key, lastMessage, outcome, errorMessage } = p;
+      // Ends the turn's story here for anything that is not a clean completion.
+      // Both of these used to fall through to the announcement path and claim
+      // "Turn finished — reply to continue", which was false twice over: the
+      // turn did not finish, and replying resumes a thread that is about to
+      // fail the same way.
+      if (outcome === 'failed') {
+        // No grace wait: unlike "your turn", which goes stale the moment you
+        // continue it yourself, a failure that happened stays true. This is also
+        // what the Claude Code tool-failure path does — report on arrival.
+        deps.reportFailure({ key, message: failureText(errorMessage) });
+        deps.events.broadcast({ type: 'session-upsert', session: deps.sessions.upsert({ key, cwd: key, status: 'idle' }) });
+        return;
+      }
+      if (outcome === 'interrupted') {
+        // You pressed Esc. You were at the keyboard, you already know, and
+        // nothing is waiting on you. The dashboard still records it went idle.
+        deps.events.broadcast({ type: 'session-upsert', session: deps.sessions.upsert({ key, cwd: key, status: 'idle' }) });
+        return;
+      }
+      // A turn that completed cleanly but produced no assistant message has
+      // nothing for anyone to come back to, so it is not announced — not on the
+      // desktop and not as an IM continue card. The dashboard still learns the
       // session went idle below, which is true and useful.
       //
-      // The condition is content, not abortedness, on purpose: the RPC gives no
-      // abort flag, and "there is nothing to show you" is the thing that
-      // actually decides whether announcing helps.
+      // This used to be the ONLY guard, standing in for the aborted case too,
+      // because the RPC was believed to carry no abort flag. It does: `turn`
+      // carries `status` plus, for `failed`, `error` — resolved into `outcome`
+      // upstream in the companion, and handled above. Emptiness is back to
+      // meaning only what it says.
       if (!lastMessage) {
         deps.events.broadcast({ type: 'session-upsert', session: deps.sessions.upsert({ key, cwd: key, status: 'idle' }) });
         return;
@@ -844,11 +872,14 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // local (in-terminal) approvals still work; the daemon must never crash for this.
   let codexCompanion: Companion | null = null;
   let codexState: 'running' | 'degraded' | 'off' = 'off';
-  const ensureAppServer = opts.ensureAppServer ?? ensureCodexAppServer;
-  const custody = await ensureAppServer({
-    logPath: join(opts.home, 'codex-appserver.log'),
-    onStateChange: (s) => { codexState = s; },
-  }).catch(() => null);
+  // Under vitest, never reach for the REAL Codex socket. A test that did not
+  // inject this adopted the developer's own app-server, subscribed to it, and
+  // received the replay of whatever approval was still pending there — firing
+  // notifications for a live thread that has nothing to do with the test, and
+  // failing whichever assertion counted them. Same shape as the desktop
+  // notifier's guard: the seam is off by default in tests, and a test that
+  // wants the Codex path injects its own.
+  const ensureAppServer = opts.ensureAppServer ?? (process.env.VITEST ? (async () => null) : ensureCodexAppServer);
   // Indirection: onResumePrompt is needed at construction time, but resume()
   // only exists once startCompanion returns — close over this instead.
   let codexResume: (threadId: string, input: string) => Promise<void> = async () => undefined;
@@ -881,11 +912,36 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     resume: (threadId, input) => codexResume(threadId, input),
     gracePassed,
     notifyTurn: ({ key, lastMessage }) => deliver({ key, label: sessionLabel(key), kind: 'idle', detail: lastMessage ?? '' }),
+    reportFailure: ({ key, message }) => {
+      // Same gates and the same ⚠️ error level a failed Claude Code tool call
+      // gets in the `hook.notify` handler — a mute means quiet for both vendors.
+      // `shouldDropNotify` is not consulted: it only suppresses info-level
+      // chatter once a turn end has been announced, and this IS the
+      // announcement.
+      const suppressed = muted || (sessions.get(key)?.muted ?? false);
+      // Identity and outcome only. The failure text is card text: it is
+      // provider output that has already been seen to carry a private relay
+      // endpoint, and this log is shared by every session on the machine.
+      // `delivered` is the part that is actually diagnosable from here —
+      // whether a mute ate the report is otherwise invisible.
+      logJson('codex.turn.failed', { key, delivered: !suppressed });
+      if (suppressed) return;
+      const text = `⚠️ ${message}`;
+      void Promise.all(configuredChats().map((t) => sendToChat(t, { text, cwd: key }))).catch(() => undefined);
+    },
   });
-  if (custody) {
-    codexState = 'running';
+  /** Started on the first `running` report and never before. The companion's
+   *  whole job is to hold an RPC connection, so starting it while no
+   *  app-server exists means an endless reconnect loop logging a failure every
+   *  30s — which is what every machine without Codex would now get, since
+   *  custody no longer bails out when `codex` is absent. No `codexState` is
+   *  asserted here either: the health loop is the only thing that knows
+   *  whether anything answers, and claiming a companion because we once called
+   *  spawn is the lie that loop exists to remove. */
+  const startCodexCompanion = (): void => {
+    if (codexCompanion) return;
     codexCompanion = startCompanion({
-      connect: (events) => connectCodexRpc({ sockPath: codexAppServerSockPath(), events }),
+      connect: opts.connectCodex ?? ((events) => connectCodexRpc({ sockPath: codexAppServerSockPath(), events })),
       permissionRouter,
       onMonitor: (ev, key) => {
         // `prompt` here is a user message item — the Codex analogue of
@@ -896,10 +952,47 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       },
       onResumePrompt: onCodexResumePrompt,
       windowSec: () => approvalWindow(cfg.approvals).timeoutSec,
+      // The posture ladder, finally meaning the same thing for both vendors.
+      // It used to be read only by the Claude Code shim, so Codex approvals
+      // were held and carded even on `off` — a kill switch that killed nothing.
+      approvalPolicy: () => {
+        const m = currentMode();
+        return m === 'off' ? 'ignore' : m === 'notify' ? 'notify' : 'hold';
+      },
+      // Same surfaces the Claude Code path uses for a dialog tlive is NOT
+      // holding: the machine and the dashboard, never IM — a phone cannot
+      // answer a terminal prompt, so that message would be pure anxiety with
+      // no exit.
+      onNativePrompt: ({ key, cwd, detail }) => {
+        deliver({ key, label: sessionLabel(key), kind: 'localPrompt', detail });
+        events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd, status: 'waiting-approval', pending: { requestId: `local:${key}`, title: 'Permission needed', body: detail, local: true, seenAt: Date.now() } }) });
+      },
+      onNativePromptResolved: ({ key }) => {
+        if (sessions.get(key)?.pending?.local) {
+          events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: key, pending: null }) });
+        }
+      },
       log: (m) => console.log(`[codex] ${m}`),
     });
     codexResume = (threadId, input) => codexCompanion!.resume(threadId, input);
-  }
+  };
+
+  const custody = await ensureAppServer({
+    logPath: join(opts.home, 'codex-appserver.log'),
+    // Logged, not just stored: diagnosing a silent companion used to mean
+    // reading `connect failed` spam and guessing, because custody itself left
+    // no trace of whether it had adopted an app-server, started one, or given
+    // up on both.
+    onStateChange: (s) => {
+      codexState = s;
+      logJson('codex.appserver', { state: s });
+      if (s === 'running') startCodexCompanion();
+    },
+  }).catch(() => null);
+  if (custody) logJson('codex.appserver', { adopted: custody.adopted });
+  // win32 is the only outcome with no custody at all, and the only one nothing
+  // retries out of: `codex app-server` is not wired up there.
+  else logJson('codex.appserver', { state: 'off', reason: 'win32' });
 
   // Upstream actions from a dashboard client (/ws/events): approve/ask/reply/mute.
   const onAction = (action: import('../web/event-hub.js').EventAction): void => {

@@ -199,18 +199,78 @@ Codex 的 hooks/trust 整套已退役(no-compat,2026-07-14)——`tlive hook
 hooks are retired; tlive integrates via app-server`,不再触碰任何决策逻辑。
 真正的集成路径:
 
-- **spawn custody**(`spawn.ts` 的 `codexAppServerSockPath` + adopt-or-spawn
-  逻辑):daemon 探测 tlive 的 unix socket 路径上是否已有 `codex app-server
-  --listen unix://…` 在监听——有就 adopt,没有就 spawn 并托管,带
-  respawn/backoff。Codex TUI 启动时**自行**连上那个 socket(Codex 自身特性,
-  tlive 不逐会话配置)。
+- **spawn custody**(`spawn.ts`):一个**永不放弃的健康循环**,只问一个问题
+  ——「control socket 上有没有 app-server 在监听」。有就什么都不做,没有就
+  spawn 一个;`hasCodex()` 为假时保持安静但**继续查**。Codex TUI 启动时
+  **自行**连上那个 socket(Codex 自身特性,tlive 不逐会话配置)。
+  **为什么是「有没有在监听」而不是「我们的子进程还活着吗」**:实例是共享的,
+  可能来自上一个 daemon、来自 `codex app-server daemon start`、也可能来自我们。
+  只监管自己的子进程会让 **adopt 来的实例完全无人看管** —— 它一死就再也回不来,
+  而 `tlive status` 照样说 running(状态来自「我们调过 spawn」,不来自任何应答)。
+  自从重启改成永远 adopt 而不是替换,**那就是每一次重启**。
+  **也没有放弃这一说**:旧逻辑连续 6 次快速退出后就不再排定时器,而那正是
+  卸载 codex 的形状 —— 二进制离开 PATH、每次 respawn 立刻 ENOENT、不到一分钟
+  烧完预算,**把 codex 装回来也没用,必须手动重启 daemon**。现在失败只会
+  拉长 backoff 和改变上报状态。真机验证:`kill -9` 掉 app-server,不碰 daemon,
+  约 15 秒后自己回来。
+  **那个实例是共享的,所以 tlive 不拥有它的生命周期**:`appServerSpawnOptions`
+  用 `detached: true`(+`unref`),`custody.stop()` **只停监管、不杀进程**。
+  以前它是 daemon 的子进程且 stop 时被 `kill()` ⇒ 每次 `tlive stop/start`
+  都换一个空实例,当时挂在旧实例上的 TUI 变成孤儿:registry 里没有该会话、
+  无监看无审批无通知,而 `tlive status` 仍说 companion running(它确实连上了
+  新实例,只是那实例里没有线程)。socket 才是会合点,所以重启后 probe 会
+  **adopt 回同一个实例**,已挂上去的 TUI 全都还在。
+  这与 Codex 自己的做法一致(`app-server-daemon/src/backend/pid.rs`:
+  `Stdio::null()` + `pre_exec{setsid()}` + pid 文件长活)。**没有**改成直接调
+  `codex app-server daemon start`:那条路要求 standalone 托管安装
+  (`~/.codex/packages/standalone/current/codex`,`ensure_managed_codex_bin`),
+  npm 装法上硬报错。
 - **rpc**(`rpc.ts` 的 `defaultCodexSocket`):走 Codex 官方 app-server RPC,
   订阅 thread/turn 事件流。
+  **`clientInfo.name` 必须是 `COMPANION_CLIENT_NAME`(upstream 豁免名单里的
+  `codex_app_server_daemon`)**,不能是 `tlive`:`initialize` 会调
+  `set_default_originator(clientInfo.name)`,那是**进程级全局、首次写入即锁死**
+  的值(`initialize_processor.rs:112` → `login/src/auth/default_client.rs:86`),
+  而 companion 永远抢在 TUI 之前连上 ⇒ 该 app-server 里此后所有线程(**包括
+  用户自己在 TUI 里开的**)都被盖成我们的名字。后果有两条,都实测过:
+  ① `is_first_party_originator()` 认 `codex-tui` 不认别的,而
+  `core/src/mcp_skill_dependencies.rs:42` gate 在它上面 ⇒ 监看会**降级被监看的
+  会话**;② rollout 头写着 `originator: tlive` 的会话其实是用户开的,这个错标签
+  两次把排查带去找不存在的"自我喂养"。豁免名单是 upstream 的 const,所以不靠
+  假设——`effectiveOriginator`(从 `initialize` 响应的 `userAgent` 首段解析)
+  在豁免失效那天会打一行 WARNING。
+  另外:握手失败时**必须关掉 socket 并且只报一次**——`onClose` 在握手成功后
+  才接上。以前失败会同时走"promise reject"和"ws close"两条路各触发一次重连,
+  两条重连循环各连一次 ⇒ daemon 对同一个 app-server 握着**两条**连接,
+  两边都装着 handler ⇒ 每个事件处理两遍、每条命令发两次审批。
 - **companion**(`companion.ts` 的 `startCompanion`):把 RPC 事件接进
   daemon 的会话模型(`threadKey` 做 codex thread → tlive session 的映射),
   Codex 发起权限请求时以 `ServerRequest` 广播给 IM/web **和**原生 TUI 提示
   ——**先答先得**,与 Claude Code 并行通道同一语义。没有窗口可配置:原生
   提示永远不会被 tlive 卡住,因此没有超时概念。
+  **姿态梯子对两家含义相同**(`approvalPolicy`,每次请求现读不缓存):
+  `off`→`ignore`(**永不响应** = 表现得像没装 tlive,原生提示是唯一答复路径)、
+  `notify`→只把「终端有个框在等」投到**桌面 + dashboard**、IM 一个字不发
+  (手机够不着终端),且**不持有不代答**、`full`/`all`→持有并发卡。
+  ⚠️ 此前 `effectiveMode` **只有 CC 的 shim 在读**,companion 从不查 ⇒ Codex 审批
+  在**任何档位**都被持有并发卡,包括被文档定义为 kill switch 的 `off`。
+  notify 档下 Codex 比 CC 强一点:请求里**带真实命令**,而 CC 的 Notification
+  连 tool_name 都没有,所以那边只能显示厂商的通用句子。
+- **turn 结局判定**(`companion.ts` 的 `resolveOutcome`,纯函数):
+  app-server 把"turn 死了"和"为什么死"分在**两个**通知里,只有一个带得动原因:
+  `TurnComplete` + 有记录的错误 → `turn.status = "failed"` 且 `turn.error` 有值
+  (`bespoke_event_handling.rs:1478`);`TurnAborted` → `status = "interrupted"`
+  且 **`error: None` 是硬编码的**(:1497)。**Codex 把认证失败走的是后者** ——
+  所以只读 `status` 的话,"用户按了 Esc"和"API key 是死的"长得一模一样
+  (rollout 里那句 `turn_aborted reason: "interrupted"` 也是这么来的)。
+  ⇒ 另一半信号来自 `error` 通知(`ErrorNotification{error,willRetry,threadId,
+  turnId}`):`willRetry: false` 才记(:920,`affects_turn_status()` 把过的),
+  `willRetry: true` 是 `StreamError` 的**每次重试**都发一条(:937,401 那次
+  一分钟 17 条),一律丢弃。判定 = interrupted + 记到错误 ⇒ **failed**;
+  interrupted 且没错误 ⇒ 真的是人按的。`status` 说 failed/completed 时以它为准,
+  我们只补它结构上说不出的原因;没有 `turn` 字段则当正常完成——沉默不许造出失败。
+  失败走 IM(`⚠️ Codex turn failed: …`,不进桌面、不发续跑卡、**不等 grace**,
+  与 CC 工具失败同规则),被打断则**哪儿都不说**。
 - **发现盲区自愈(2026-07-21 源码+二进制实锤)**:活线程首 turn 未落盘时
   `thread/resume` 报 "no rollout"(app-server 对**已加载**线程也强制读
   rollout store,`resume_running_thread` → `read_stored_thread_for_resume?`,
@@ -221,7 +281,15 @@ hooks are retired; tlive integrates via app-server`,不再触碰任何决策逻�
   审批不是永久丢失:下一个发现轮询(5s)订阅成功后会补送,卡照发。
   rollout 在**首条用户消息**时物化,而审批只可能发生在首条消息之后的 turn
   里 ⟹ 实际盲区上界 ≈ 一个轮询周期。
-- **降级语义**:companion 连不上(未装 Codex、respawn 耗尽 backoff、
+- **三个状态都不是终点(win32 除外)**:`off` = codex 不在 PATH 上(**稳定且正确**
+  的状态,不是故障 —— 大多数用户永远不会装 Codex,把它叫 degraded 等于告诉他们
+  出问题了);`degraded` = codex 在但 socket 上没人应答;`running` = 有人应答。
+  三者都在同一个循环里,所以**装上 codex 不需要重启 tlive**。win32 是唯一
+  `return null` 的分支 —— 那儿 `codex app-server` 压根没接好,没有会变的状态。
+  companion **只在第一次 `running` 时启动**:它的全部工作就是握一条 RPC 连接,
+  在没有 app-server 时启动它 = 每 30 秒记一条失败的无尽重连,而 custody 不再
+  因为缺 codex 而早退之后,那会落到每一台没装 Codex 的机器上。
+- **降级语义**:companion 连不上(未装 Codex、socket 上没人应答、
   win32 尚未接好)时,`tlive status` 报告 `codex: app-server companion
   unreachable — approvals local-only`,Codex 照常走自己的本地审批流——
   无 IM/web 卡,不崩,只是少了远程通道。

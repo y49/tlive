@@ -46,10 +46,11 @@ you do enter is written (or merged) into:
 ~/.tlive/config.json
 ```
 
-When the Codex plugin is installed, setup also **automatically trusts the
-tlive hooks** with Codex (via `codex app-server`'s `hooks/list` RPC,
-self-checked and rolled back on failure) — see the README's Codex section
-for how, and the manual `/hooks` fallback if it doesn't go through.
+Codex needs no hooks and no trust step — that whole flow was retired.
+Integration rides the app-server companion instead: tlive connects to a
+`codex app-server` and your Codex TUIs attach to the same one. There is
+nothing to approve and nothing to configure per session; see the README's
+Codex section.
 
 To re-register plugins only (e.g. after a tlive upgrade):
 
