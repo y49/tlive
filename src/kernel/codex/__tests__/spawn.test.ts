@@ -122,6 +122,71 @@ describe('ensureCodexAppServer', () => {
       c!.stop();
     } finally { vi.useRealTimers(); }
   });
+  it('a spawn that throws does not end the loop — that would be the give-up bug again', async () => {
+    // defaultSpawnFn opens the log file first, so EACCES / ENOSPC / EMFILE all
+    // throw SYNCHRONOUSLY out of the tick. An escaping throw skips the
+    // reschedule at the end of the tick, which is the exact failure this whole
+    // supervisor exists to prevent, arriving through a different door.
+    vi.useFakeTimers();
+    try {
+      let broken = true;
+      const spawnFn = vi.fn(() => { if (broken) throw new Error('EACCES /var/log'); return fakeChild(); });
+      const states: string[] = [];
+      const c = await ensureCodexAppServer({
+        logPath: '/tmp/x.log', probe: async () => false, spawnFn: spawnFn as any,
+        onStateChange: (s) => states.push(s), platform: 'linux', hasCodex: () => true,
+      });
+      const attempts = spawnFn.mock.calls.length;
+      expect(attempts).toBeGreaterThan(0);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(spawnFn.mock.calls.length).toBeGreaterThan(attempts); // still trying
+      broken = false;
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(states.at(-1)).toBeDefined();
+      c!.stop();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('a probe that rejects does not end the loop either', async () => {
+    vi.useFakeTimers();
+    try {
+      const spawnFn = vi.fn(() => fakeChild());
+      const c = await ensureCodexAppServer({
+        logPath: '/tmp/x.log', probe: async () => { throw new Error('EMFILE'); },
+        spawnFn: spawnFn as any, platform: 'linux', hasCodex: () => true,
+      });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(c).not.toBeNull();
+      c!.stop();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('stop() during an in-flight health check spawns nothing', async () => {
+    // The stopped-check at the top of the tick is not enough: stop() can land
+    // while the probe is still awaiting, and the code after the await would
+    // then start an app-server the daemon has already finished with.
+    vi.useFakeTimers();
+    try {
+      let release: (v: boolean) => void = () => {};
+      const gate = new Promise<boolean>((r) => { release = r; });
+      let probes = 0;
+      const spawnFn = vi.fn(() => fakeChild());
+      const c = await ensureCodexAppServer({
+        logPath: '/tmp/x.log',
+        // Startup settles normally; the NEXT scheduled check is the one we hold
+        // open across stop().
+        probe: () => { probes += 1; return probes <= 1 ? Promise.resolve(false) : gate; },
+        spawnFn: spawnFn as any, platform: 'linux', hasCodex: () => true,
+      });
+      await vi.advanceTimersByTimeAsync(1100); // the held check begins
+      const before = spawnFn.mock.calls.length;
+      c!.stop();
+      release(false);
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+      expect(spawnFn.mock.calls.length).toBe(before);
+    } finally { vi.useRealTimers(); }
+  });
+
   it("a child's async spawn error does not crash the daemon", async () => {
     // ENOENT TOCTOU / EACCES / EMFILE emit 'error' and never 'exit'. With no
     // listener that is an uncaught exception. Recovery itself is the probe

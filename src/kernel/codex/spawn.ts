@@ -24,9 +24,10 @@ interface ChildLike {
 }
 
 const MAX_BACKOFF_MS = 30_000;
-/** Failures before we stop calling the state 'running' and admit 'degraded'.
- *  Not a give-up threshold — see the tick loop: there is no give-up. */
-const MAX_FAST_EXITS = 6;
+/** Consecutive failed checks before we stop calling the state 'running' and
+ *  admit 'degraded'. NOT a give-up threshold — see the tick loop: there is no
+ *  give-up, only a wider backoff. */
+const FAILURES_BEFORE_DEGRADED = 6;
 /** How long a healthy app-server goes unchecked. This is the window in which a
  *  dead one is invisible, so it is also the worst-case time to recovery. */
 const HEALTH_INTERVAL_MS = 15_000;
@@ -149,35 +150,53 @@ export async function ensureCodexAppServer(opts: {
    *  fast exits, which is exactly what an uninstall looks like: `codex` leaves
    *  PATH, every respawn ENOENTs instantly, the budget burns in under a minute
    *  and reinstalling never revived it — the daemon had to be restarted by
-   *  hand. Failures now only widen the backoff and change what we report. */
-  async function tick(): Promise<void> {
-    if (stopped) return;
-    if (await probe(sockPath)) {
-      failures = 0;
-      setState('running');
-      schedule(HEALTH_INTERVAL_MS);
-      return;
-    }
-    // Nothing to spawn: stay quiet and keep looking, so a reinstall recovers on
-    // its own instead of requiring `tlive stop && tlive start`.
-    if (!hasCodex()) {
+   *  hand. Failures now only widen the backoff and change what we report.
+   *
+   *  Returns whether one was already listening, which the first call reports
+   *  as `adopted`. */
+  async function tick(): Promise<boolean> {
+    if (stopped) return false;
+    let nextMs = HEALTH_INTERVAL_MS;
+    let listening = false;
+    try {
+      listening = await probe(sockPath);
+      // stop() can land while the probe is still in flight; without this the
+      // code below would start an app-server the daemon has already finished
+      // with, and nothing would ever stop it.
+      if (stopped) return listening;
+      if (listening) {
+        failures = 0;
+        setState('running');
+      } else if (!hasCodex()) {
+        // Nothing to spawn: stay quiet and keep looking, so a reinstall
+        // recovers on its own instead of requiring `tlive stop && tlive start`.
+        setState('degraded');
+      } else {
+        failures += 1;
+        setState(failures > FAILURES_BEFORE_DEGRADED ? 'degraded' : 'running');
+        spawnOnce();
+        nextMs = failures > FAILURES_BEFORE_DEGRADED ? MAX_BACKOFF_MS : Math.min(SETTLE_MS * 2 ** (failures - 1), MAX_BACKOFF_MS);
+      }
+    } catch {
+      // An escaping throw would skip the reschedule below and end the loop —
+      // the same permanent give-up this supervisor exists to prevent, arriving
+      // through a different door. Both halves can throw for real:
+      // `defaultSpawnFn` opens the log file first, so EACCES / ENOSPC / EMFILE
+      // land here synchronously, and an injected probe may reject.
+      // Report it rather than staying silent: the state machine has to stay
+      // total, or the daemon is left holding whatever it assumed at startup.
       setState('degraded');
-      schedule(HEALTH_INTERVAL_MS);
-      return;
+      failures += 1;
+      nextMs = MAX_BACKOFF_MS;
     }
-    failures += 1;
-    setState(failures > MAX_FAST_EXITS ? 'degraded' : 'running');
-    spawnOnce();
-    schedule(failures > MAX_FAST_EXITS ? MAX_BACKOFF_MS : Math.min(SETTLE_MS * 2 ** (failures - 1), MAX_BACKOFF_MS));
+    schedule(nextMs);
+    return listening;
   }
 
-  const adopted = await probe(sockPath);
-  if (adopted) {
-    setState('running');
-    schedule(HEALTH_INTERVAL_MS);
-  } else {
-    await tick();
-  }
+  // Startup is just the loop's first turn: one code path, so a probe that
+  // throws on the very first call cannot take the whole companion down with it
+  // (bootstrap turns a rejection here into "no companion, ever").
+  const adopted = await tick();
 
   return {
     adopted,

@@ -869,8 +869,13 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const ensureAppServer = opts.ensureAppServer ?? ensureCodexAppServer;
   const custody = await ensureAppServer({
     logPath: join(opts.home, 'codex-appserver.log'),
-    onStateChange: (s) => { codexState = s; },
+    // Logged, not just stored: diagnosing a silent companion used to mean
+    // reading `connect failed` spam and guessing, because custody itself left
+    // no trace of whether it had adopted an app-server, started one, or given
+    // up on both.
+    onStateChange: (s) => { codexState = s; logJson('codex.appserver', { state: s }); },
   }).catch(() => null);
+  if (custody) logJson('codex.appserver', { adopted: custody.adopted });
   // Indirection: onResumePrompt is needed at construction time, but resume()
   // only exists once startCompanion returns — close over this instead.
   let codexResume: (threadId: string, input: string) => Promise<void> = async () => undefined;
@@ -916,7 +921,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     },
   });
   if (custody) {
-    codexState = 'running';
+    // No `codexState = 'running'` here: custody's health loop is the only thing
+    // that knows whether an app-server is answering, and it has already
+    // reported. Asserting it here re-introduced the lie the loop exists to
+    // remove — the daemon claiming a companion because it once called spawn.
     codexCompanion = startCompanion({
       connect: (events) => connectCodexRpc({ sockPath: codexAppServerSockPath(), events }),
       permissionRouter,
