@@ -872,7 +872,14 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // local (in-terminal) approvals still work; the daemon must never crash for this.
   let codexCompanion: Companion | null = null;
   let codexState: 'running' | 'degraded' | 'off' = 'off';
-  const ensureAppServer = opts.ensureAppServer ?? ensureCodexAppServer;
+  // Under vitest, never reach for the REAL Codex socket. A test that did not
+  // inject this adopted the developer's own app-server, subscribed to it, and
+  // received the replay of whatever approval was still pending there — firing
+  // notifications for a live thread that has nothing to do with the test, and
+  // failing whichever assertion counted them. Same shape as the desktop
+  // notifier's guard: the seam is off by default in tests, and a test that
+  // wants the Codex path injects its own.
+  const ensureAppServer = opts.ensureAppServer ?? (process.env.VITEST ? (async () => null) : ensureCodexAppServer);
   // Indirection: onResumePrompt is needed at construction time, but resume()
   // only exists once startCompanion returns — close over this instead.
   let codexResume: (threadId: string, input: string) => Promise<void> = async () => undefined;
