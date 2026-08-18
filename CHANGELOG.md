@@ -1,5 +1,13 @@
 # Changelog
 
+## [5.0.1](https://github.com/y49/tlive/compare/v5.0.0...v5.0.1) (2026-08-18)
+
+
+### Bug Fixes
+
+* **codex:** keep the app-server shared, stop hijacking it, and report what it says ([#80](https://github.com/y49/tlive/issues/80)) ([1a12f5a](https://github.com/y49/tlive/commit/1a12f5abb86e4235d94866adf2e31114e141d7af))
+* **codex:** let go of Codex threads that have gone quiet ([#82](https://github.com/y49/tlive/issues/82)) ([e49a822](https://github.com/y49/tlive/commit/e49a822e44dd8268d9124668688809f8724a16be))
+
 ## [5.0.0](https://github.com/y49/tlive/compare/v4.1.1...v5.0.0) (2026-08-14)
 
 
