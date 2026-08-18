@@ -24,7 +24,7 @@ import { loadOrCreateToken } from '../web/token.js';
 import { EventHub } from '../web/event-hub.js';
 import { applyMonitorEvent, sweepDeadSessions, pidAlive } from '../web/session-events.js';
 import { ensureCodexAppServer, codexAppServerSockPath } from '../codex/spawn.js';
-import { connectCodexRpc } from '../codex/rpc.js';
+import { connectCodexRpc, type CodexRpc, type CodexRpcEvents } from '../codex/rpc.js';
 import { startCompanion, failureText, type Companion, type TurnOutcome } from '../codex/companion.js';
 import { excerptForCard } from './excerpt.js';
 import { TURN_FINISHED_SENTINEL, effectiveMode, type ShimMode } from '../hook/normalizer.js';
@@ -46,6 +46,12 @@ export interface BootstrapOpts {
   home: string;
   imAdapters?: IMAdapter[];
   ensureAppServer?: typeof ensureCodexAppServer;
+  /** Test seam for the Codex RPC connection. Without it the whole Codex path —
+   *  approval cards, continue cards, failure reports — is reachable only
+   *  through a real app-server, so the wiring between the companion and the IM
+   *  adapters had no coverage at all: every test that exercised it injected its
+   *  own stand-in for the very step being wired. */
+  connectCodex?: (events: CodexRpcEvents) => Promise<CodexRpc>;
   /** Test seam for the desktop notifier; production uses createDesktopNotifier. */
   desktopNotifier?: import('./desktop-notify.js').DesktopNotifier;
   /** Test seam for `notifyDesktop`'s `desktop.notify` line, mirroring how
@@ -926,7 +932,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     // reported. Asserting it here re-introduced the lie the loop exists to
     // remove — the daemon claiming a companion because it once called spawn.
     codexCompanion = startCompanion({
-      connect: (events) => connectCodexRpc({ sockPath: codexAppServerSockPath(), events }),
+      connect: opts.connectCodex ?? ((events) => connectCodexRpc({ sockPath: codexAppServerSockPath(), events })),
       permissionRouter,
       onMonitor: (ev, key) => {
         // `prompt` here is a user message item — the Codex analogue of

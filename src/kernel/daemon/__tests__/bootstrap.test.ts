@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { bootstrapDaemon, shouldFastNullContinue, clampPermissionTimeout, makeCodexResumeHandler, shouldDropNotify, resolveKey, detectLang, type DaemonHandle } from '../bootstrap';
+import type { CodexRpcEvents } from '../../codex/rpc';
 import { request, daemonSocketPath } from '../../ipc/client';
 import { AlreadyRunningError } from '../../ipc/server.js';
 import type { IMAdapter, IMChannel, OutgoingMessage, IncomingEnvelope } from '../../contracts/im-adapter';
@@ -376,6 +377,77 @@ describe('local-answer cancel + Stop fast-null (integration)', () => {
       isConnected() { return 'connected' as const; },
     };
   }
+
+  it('a failed Codex turn reaches IM through the real wiring, not a stand-in', async () => {
+    // Everything below this line was previously covered only with an injected
+    // reportFailure, i.e. the assertion stopped exactly where the hand-written
+    // wiring began: configuredChats, sendToChat, the mute gate and the session
+    // key all went untested. This drives the companion's own notifications.
+    const sent: string[] = [];
+    const adapter: IMAdapter = {
+      channel: 'telegram',
+      async start() {}, async stop() {},
+      async send(out: OutgoingMessage) { if (out.kind === 'text') sent.push(out.text); return { messageId: 'm1' }; },
+      async edit() {}, onInbound() {}, isConnected() { return 'connected' as const; },
+    };
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    let events: CodexRpcEvents | undefined;
+    h = await bootstrapDaemon({
+      home: tmp,
+      imAdapters: [adapter],
+      ensureAppServer: async () => ({ adopted: true, stop: () => {} }),
+      connectCodex: async (e) => {
+        events = e;
+        return { call: async () => ({ data: [] }), notify: () => {}, close: () => {} };
+      },
+    });
+    await until(() => { expect(events).toBeDefined(); });
+
+    // The 401 shape: the reason arrives on `error`, the death arrives as an abort.
+    events!.onNotify('error', {
+      threadId: 'T1', turnId: 'u1', willRetry: false,
+      error: { message: 'unexpected status 401 Unauthorized' },
+    });
+    events!.onNotify('turn/completed', { threadId: 'T1', turn: { status: 'interrupted', error: null } });
+
+    await until(() => {
+      expect(sent.some((t) => t.includes('Codex turn failed: unexpected status 401 Unauthorized'))).toBe(true);
+    });
+    expect(sent.find((t) => t.includes('Codex turn failed'))).toContain('\u26a0\ufe0f');
+  });
+
+  it('a retryable Codex error never reaches IM', async () => {
+    const sent: string[] = [];
+    const adapter: IMAdapter = {
+      channel: 'telegram',
+      async start() {}, async stop() {},
+      async send(out: OutgoingMessage) { if (out.kind === 'text') sent.push(out.text); return { messageId: 'm1' }; },
+      async edit() {}, onInbound() {}, isConnected() { return 'connected' as const; },
+    };
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    let events: CodexRpcEvents | undefined;
+    h = await bootstrapDaemon({
+      home: tmp,
+      imAdapters: [adapter],
+      ensureAppServer: async () => ({ adopted: true, stop: () => {} }),
+      connectCodex: async (e) => {
+        events = e;
+        return { call: async () => ({ data: [] }), notify: () => {}, close: () => {} };
+      },
+    });
+    await until(() => { expect(events).toBeDefined(); });
+
+    events!.onNotify('error', { threadId: 'T2', turnId: 'u1', willRetry: true, error: { message: 'websocket 401, retrying' } });
+    events!.onNotify('turn/completed', { threadId: 'T2', turn: { status: 'interrupted', error: null } });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(sent.filter((t) => t.includes('Codex turn failed'))).toHaveLength(0);
+  });
 
   it('a PostToolUse activity for the same key+tool releases the pending approval as defer', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
