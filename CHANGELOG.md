@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.1.0](https://github.com/y49/tlive/compare/v5.0.1...v5.1.0) (2026-08-20)
+
+
+### Features
+
+* report what actually failed, on both vendors ([#84](https://github.com/y49/tlive/issues/84)) ([5c0c1c8](https://github.com/y49/tlive/commit/5c0c1c8f6b9c8092228e8fab78924701fd25a1b1))
+
 ## [5.0.1](https://github.com/y49/tlive/compare/v5.0.0...v5.0.1) (2026-08-18)
 
 
