@@ -174,11 +174,19 @@ them temporarily, or `tlive mode off` to stop tlive entirely. Without
 `notify-send` (or the platform equivalent) they silently no-op.
 
 **Only work that needs you reaches the desktop.** Five things do: an approval
-tlive is holding, a sub-agent's approval waiting at your terminal, a prompt
-tlive is not holding — a Claude Code dialog, or a Codex approval in a posture
-below `full` — a finished turn, because "nothing happens until you type" is
-something you need to come back for, and a turn that died on an error no retry
-fixes — a bad key, an exhausted balance — for exactly the same reason.
+tlive is holding, a sub-agent's approval waiting at your terminal, anything else
+stuck at the machine — a Claude Code permission dialog, a teammate's approval
+waiting on the team lead, an MCP question, an agent that went blocked needing
+input, or a Codex approval in a posture below `full` — a finished turn, because
+"nothing happens until you type" is something you need to come back for, and a
+turn that died on an error no retry fixes — a bad key, an exhausted balance —
+for exactly the same reason.
+
+The third group splits into two sentences on the toast, and the difference is
+real: `approval needed` means a yes-or-no decision is waiting, `needs an answer`
+means something is asking you a question. Only the first can also be waiting on
+an approval card tlive is holding; the others have no card anywhere, in any
+posture, because tlive was never offered the chance to hold them.
 
 A failed **tool** never does, and it does not reach IM either: the error goes
 straight back to the agent, which handles it on its next turn. On this project's

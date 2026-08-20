@@ -187,7 +187,7 @@ export async function runHook(argv: string[]): Promise<void> {
     }
 
     if (event === 'notification' || event === 'post-tool-use-failure' || event === 'stop-failure') {
-      const att = n as { cwd: string; sessionId: string; message: string; droppable?: boolean; permissionPrompt?: boolean; sessionError?: { text: string; transient: boolean } };
+      const att = n as { cwd: string; sessionId: string; message: string; droppable?: boolean; localWaiting?: 'approval' | 'relayed-approval' | 'blocked'; sessionError?: { text: string; transient: boolean } };
       const level = event === 'notification' ? 'info' : 'error';
       // droppable(空失败,如 Bash 非零退出但 stderr 为空:grep 没命中/test
       // 判假/diff --quiet)照常发 hook.notify IPC——只透传标记,让 daemon 决定
@@ -196,11 +196,11 @@ export async function runHook(argv: string[]): Promise<void> {
       // 没有别的途径看到这次工具活动)——落点错了,daemon 层(bootstrap.ts 的
       // hook.notify handler)现在只据 droppable 跳过 IM 发送,dashboard 广播
       // 不受影响。
-      // permissionPrompt(issue #49)同一课的同一答案:shim 只透传,daemon 拿
+      // localWaiting(issue #49)同一课的同一答案:shim 只透传,daemon 拿
       // pending 判重 —— full 模式已有卡就丢,没卡(notify 模式 / 立即 defer)
       // 就走本地等待通知链。曾经在这里无条件吞掉,notify 模式下权限框零通知。
       await request(
-        { kind: 'hook.notify', cwd: att.cwd, sessionId: att.sessionId, level, message: att.message, ...(wrappedId ? { wrappedId } : {}), ...(agentPid ? { agentPid } : {}), ...(att.droppable ? { droppable: true } : {}), ...(att.permissionPrompt ? { permissionPrompt: true } : {}), ...(att.sessionError ? { sessionError: att.sessionError } : {}) },
+        { kind: 'hook.notify', cwd: att.cwd, sessionId: att.sessionId, level, message: att.message, ...(wrappedId ? { wrappedId } : {}), ...(agentPid ? { agentPid } : {}), ...(att.droppable ? { droppable: true } : {}), ...(att.localWaiting ? { localWaiting: att.localWaiting } : {}), ...(att.sessionError ? { sessionError: att.sessionError } : {}) },
         { timeoutMs: OBSERVE_IPC_TIMEOUT_MS },
       ).catch(() => undefined);
       process.stdout.write('{}');

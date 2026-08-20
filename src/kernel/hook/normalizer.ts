@@ -25,12 +25,47 @@ export type NormalizedHook =
   // 关联回同一个 agent 的挂起审批,同 key 同 tool 的其他 agent 的卡不受影响。
   | { event: 'approval-request'; cwd: string; sessionId: string; toolName: string; input: unknown; permissionMode?: string; agentId?: string }
   | { event: 'activity'; cwd: string; sessionId: string; toolName: string; result: unknown; agentId?: string }
-  | { event: 'attention'; cwd: string; sessionId: string; message: string; lastMessage?: string; stopHookActive?: boolean; droppable?: boolean; permissionPrompt?: boolean; sessionError?: SessionError }
+  | { event: 'attention'; cwd: string; sessionId: string; message: string; lastMessage?: string; stopHookActive?: boolean; droppable?: boolean; localWaiting?: LocalWaiting; sessionError?: SessionError }
   | { event: 'prompt'; cwd: string; sessionId: string; prompt: string }
   | { event: 'subagent'; cwd: string; sessionId: string; delta: 1 | -1; agentType?: string }
   | { event: 'session-start'; cwd: string; sessionId: string; source?: string }
   | { event: 'session-end'; cwd: string; sessionId: string; reason?: string }
   | { event: 'permission-denied'; cwd: string; sessionId: string; toolName: string };
+
+/** Something is stuck at the machine running the session and only whoever is
+ *  sitting there can unstick it.
+ *
+ *  Two independent questions live in this one value, and folding them together
+ *  is a bug waiting to happen — it was one, briefly, while this was being
+ *  written:
+ *
+ *  1. **What do you call it?** `approval` and `relayed-approval` are yes-or-no
+ *     decisions; `blocked` is a question waiting for an answer. Saying
+ *     "approval needed" over an MCP dialog is a small lie, and this project
+ *     keeps paying for those.
+ *  2. **Could tlive already be holding a card for it?** Only for `approval`.
+ *     There is no PermissionRequest behind an elicitation dialog, and Claude
+ *     Code does not dispatch one for a teammate's relayed request at all — see
+ *     anthropics/claude-code#82418. So for the other two, this notice is the
+ *     only signal that exists, at every rung of the posture ladder, and the
+ *     daemon's held-card and posture gates must not be asked about them. */
+export type LocalWaiting = 'approval' | 'relayed-approval' | 'blocked';
+
+/** Which of Claude Code's fourteen `notification_type` values mean someone is
+ *  stuck. Read off the emission sites in 2.1.235 rather than guessed; the nine
+ *  absent ones are news, not a call for help, and an unrecognised value is
+ *  deliberately absent too — a new upstream type is not assumed to be waiting.
+ *
+ *  Two of these carry a 6-second idle gate upstream and two do not, which is
+ *  Claude Code's business, not ours: it decides WHETHER the hook fires, and this
+ *  map only decides what it means once it has. */
+const LOCAL_WAITING_TYPES: Record<string, LocalWaiting> = {
+  permission_prompt: 'approval',
+  worker_permission_prompt: 'relayed-approval',
+  elicitation_dialog: 'blocked',
+  elicitation_url_dialog: 'blocked',
+  agent_needs_input: 'blocked',
+};
 
 /** A turn that ended on an API error, with the one judgement the surfaces need
  *  from it. `transient` is Claude Code's OWN classification, not a guess of
@@ -103,7 +138,8 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
       // full-mode assumption; in notify mode, or on a full-mode immediate
       // defer, there is no card and this is the ONLY signal a local dialog is
       // waiting). Everything else passes through verbatim.
-      return { event: 'attention', cwd, sessionId, message: r.message ?? 'needs your attention', ...(r.notification_type === 'permission_prompt' ? { permissionPrompt: true } : {}) };
+      const waiting = r.notification_type ? LOCAL_WAITING_TYPES[r.notification_type] : undefined;
+      return { event: 'attention', cwd, sessionId, message: r.message ?? 'needs your attention', ...(waiting ? { localWaiting: waiting } : {}) };
     case 'user-prompt-submit':
       return { event: 'prompt', cwd, sessionId, prompt: r.prompt ?? '' };
     case 'session-start':

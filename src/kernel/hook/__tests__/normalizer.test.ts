@@ -45,13 +45,9 @@ describe('notification notification_type', () => {
     const b = parseHookInput('notification', { cwd: '/x', session_id: 's', message: 'hi' });
     expect((b as any).message).toBe('hi');
   });
-  it('permission_prompt → attention with permissionPrompt flag (the daemon decides what to do with it — issue #49)', () => {
-    const n = parseHookInput('notification', { cwd: '/x', session_id: 's', notification_type: 'permission_prompt', message: 'Claude needs your permission to use Bash' });
-    expect(n).toEqual({ event: 'attention', cwd: '/x', sessionId: 's', message: 'Claude needs your permission to use Bash', permissionPrompt: true });
-  });
-  it('other types carry NO permissionPrompt flag', () => {
-    const n = parseHookInput('notification', { cwd: '/x', session_id: 's', notification_type: 'idle_prompt', message: 'waiting' }) as any;
-    expect(n.permissionPrompt).toBeUndefined();
+  it('permission_prompt → attention marked as an approval waiting at the machine (the daemon decides what to do with it — issue #49)', () => {
+    const n = parseHookInput('notification', { cwd: '/x', session_id: 's', message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' });
+    expect(n).toEqual({ event: 'attention', cwd: '/x', sessionId: 's', message: 'Claude needs your permission to use Bash', localWaiting: 'approval' });
   });
 });
 
@@ -110,6 +106,61 @@ describe('permission-request / permission-denied (CC dual-channel)', () => {
  *  alive for a whole major version because each one fed the field name the
  *  parser wanted instead of the one Claude Code sends. A fixture that invents a
  *  field name proves the parser agrees with itself and nothing else. */
+// Claude Code fires one `Notification` hook for fourteen different
+// `notification_type` values, and tlive recognised exactly one of them. Five
+// mean "something is stuck at this machine and only the person sitting here can
+// unstick it"; the other nine are news, not a call for help. Emission sites read
+// out of 2.1.235:
+//
+//   permission_prompt        a native permission dialog, after a 6s idle timer
+//   worker_permission_prompt a teammate's approval forwarded to the team lead
+//   elicitation_dialog       an MCP elicitation dialog, open 6s
+//   elicitation_url_dialog   the same, url flavour
+//   agent_needs_input        an agent's band went to `blocked`, no idle gate
+//
+// The split between `approval` and `blocked` is not cosmetic: it decides both
+// the toast wording and whether the daemon's held-card and posture gates apply.
+// tlive can hold a permission dialog; it can never hold an elicitation dialog or
+// a teammate's forwarded request, so those must reach the machine at every rung.
+describe('notification types — the surface must know which of the fourteen it got', () => {
+  const notify = (t?: string) => parseHookInput('notification', {
+    cwd: '/x', session_id: 's', message: 'm', ...(t ? { notification_type: t } : {}),
+  }) as any;
+
+  it('a native permission dialog is an approval', () => {
+    expect(notify('permission_prompt').localWaiting).toBe('approval');
+  });
+  // Worded like an approval, gated like a blocked notice: Claude Code never
+  // dispatches PermissionRequest for a teammate, so tlive cannot be holding a
+  // card for this one however high the posture ladder is set.
+  it("a teammate's forwarded request is a relayed approval, not one tlive could be holding", () => {
+    expect(notify('worker_permission_prompt').localWaiting).toBe('relayed-approval');
+  });
+  it('an elicitation dialog is blocked-on-an-answer, not an approval', () => {
+    expect(notify('elicitation_dialog').localWaiting).toBe('blocked');
+    expect(notify('elicitation_url_dialog').localWaiting).toBe('blocked');
+  });
+  it('an agent that went to blocked needs an answer', () => {
+    expect(notify('agent_needs_input').localWaiting).toBe('blocked');
+  });
+
+  // Everything else is news. A finished turn already has its own channel, and a
+  // successful login or a quota that resumed itself calls nobody back.
+  it.each([
+    'idle_prompt', 'agent_completed', 'auth_success',
+    'computer_use_enter', 'computer_use_exit',
+    'quota_auto_resume_fired', 'quota_auto_resume_stale', 'quota_auto_resume_disabled',
+    'push_notification',
+  ])('%s waits for nobody', (t) => {
+    expect(notify(t).localWaiting).toBeUndefined();
+  });
+
+  it('an unknown or absent type is not assumed to be waiting', () => {
+    expect(notify('something_new_upstream').localWaiting).toBeUndefined();
+    expect(notify().localWaiting).toBeUndefined();
+  });
+});
+
 describe('failure events', () => {
   it('post-tool-use-failure → attention message with tool name + truncated error, no emoji prefix', () => {
     const n = parseHookInput('post-tool-use-failure', { cwd: '/x', session_id: 's', tool_name: 'Bash', error: 'E'.repeat(500) });

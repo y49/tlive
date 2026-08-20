@@ -1969,6 +1969,97 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     return r.sessions.find((s) => s.id === id);
   }
 
+  // The posture gate below this one exists because in a holding rung tlive has
+  // already seen the request — held it, or handed it back with a notice that
+  // carries more than this event does. That reasoning is true of permission
+  // dialogs and FALSE of everything else that blocks: there is no
+  // PermissionRequest behind an MCP elicitation dialog, and Claude Code does not
+  // dispatch one for a teammate's forwarded request at all, so tlive cannot have
+  // held either. For those, this notice is the only signal that exists, at every
+  // rung.
+  it('a blocked-on-an-answer notice reaches the machine even in a holding rung — tlive never held one of those', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'full' }));
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude Code needs your input', localWaiting: 'blocked' }, { socketPath: sock, timeoutMs: 2000 });
+
+    expect(notes).toHaveLength(1);
+    expect(notes[0].body).toBe('Claude Code needs your input');
+    const s = await findSession(sock, 's1');
+    expect(s?.pending?.local).toBe(true);
+  });
+
+  // A teammate's approval is worded like an approval and gated like a blocked
+  // notice, because those are two different questions: "what do I call this?"
+  // and "might tlive already be holding a card for it?". Claude Code never
+  // dispatches PermissionRequest for a teammate's forwarded request, so the
+  // answer to the second is always no — folding it in with ordinary approvals
+  // would drop it in exactly the rungs where someone is most likely away.
+  it("a teammate's relayed approval reaches the machine in a holding rung, and still reads as an approval", async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'all' }));
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'agent-7 needs permission for Bash', localWaiting: 'relayed-approval' }, { socketPath: sock, timeoutMs: 2000 });
+
+    expect(notes).toHaveLength(1);
+    expect(notes[0].title).toBe('w · approval needed');
+    expect(notes[0].body).toBe('agent-7 needs permission for Bash');
+  });
+
+  // The other half of the same rule: an approval notice in a holding rung stays
+  // suppressed, because there the card owns every surface already.
+  it('an approval notice in a holding rung stays suppressed', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'full' }));
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
+
+    expect(notes).toHaveLength(0);
+  });
+
+  // The one-time IM card exists to say "these become answerable on `full`". That
+  // is true of a permission dialog and FALSE of everything else that blocks: no
+  // rung of the ladder can make an MCP elicitation dialog or a teammate's
+  // forwarded request answerable from a phone, because tlive is never offered
+  // the chance to hold either. Sending it here would spend a once-per-chat card
+  // on a promise the product cannot keep.
+  it('a blocked-on-an-answer notice never spends the one-time "switch to full" card', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const sent: OutgoingMessage[] = [];
+    const adapter = interactiveAdapter('telegram', sent);
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude Code needs your input', localWaiting: 'blocked' }, { socketPath: sock, timeoutMs: 2000 });
+    expect(sent).toHaveLength(0);
+
+    // …and it is still unspent, so the next real approval still gets it.
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
+    await until(() => { expect(sent).toHaveLength(1); });
+  });
+
+  // Same chain, different sentence. "approval needed" over an elicitation dialog
+  // is a small lie, and this project keeps paying for those.
+  it('the two kinds do not read the same on the desktop', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's2', level: 'info', message: 'x needs your input', localWaiting: 'blocked' }, { socketPath: sock, timeoutMs: 2000 });
+
+    expect(notes).toHaveLength(2);
+    expect(notes[0].title).toBe('w · approval needed');
+    expect(notes[1].title).not.toBe(notes[0].title);
+  });
+
   it('no held request → desktop notification + read-only waiting-approval card; IM gets the one-time notify explanation, not dead mail (the chain a silent hang used to be)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
     const sent: OutgoingMessage[] = [];
@@ -1977,7 +2068,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
 
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
 
     // Desktop: one notification, speaking to the person at the machine. CC's
     // Notification carries no tool name and no agent id, so its own sentence is
@@ -2023,7 +2114,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
 
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
 
     await new Promise((r) => setTimeout(r, 80));
     expect(notes).toEqual([]);
@@ -2045,7 +2136,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
 
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
 
     await new Promise((r) => setTimeout(r, 80));
     expect(notes).toEqual([]);
@@ -2070,7 +2161,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
 
     writeMode(tmp, 'notify');
 
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
 
     // Now on 'notify' — the chain must run: it is the only signal a dialog is
     // waiting. IM gets no dead-mail text; the first-ever prompt for this chat
@@ -2090,7 +2181,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
-    await request({ kind: 'hook.notify', cwd: '/w/api', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w/api', sessionId: 's1', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
     await new Promise((r) => setTimeout(r, 50));
     expect(sent.filter((m) => (m as { text?: string }).text?.includes('answer in the terminal'))).toHaveLength(0);
   });
@@ -2102,7 +2193,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
-    await request({ kind: 'hook.notify', cwd: '/w/api', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w/api', sessionId: 's1', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
     await waitForSent(sent);
     expect(sent).toHaveLength(1);
     const card = sent[0] as { buttons?: Array<{ id: string }> };
@@ -2110,7 +2201,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
 
     // A second, unrelated session hits the same suppressed-dialog path —
     // same chat, so the explanation must not repeat.
-    await request({ kind: 'hook.notify', cwd: '/w/api2', sessionId: 's2', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w/api2', sessionId: 's2', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
     await new Promise((r) => setTimeout(r, 50));
     expect(sent).toHaveLength(1); // said once, never again
   });
@@ -2131,7 +2222,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
-    await request({ kind: 'hook.notify', cwd: '/w/api', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w/api', sessionId: 's1', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
     await vi.waitFor(() => {
       expect(logs.some((l) => l.includes('permission.localPrompt.im.undelivered'))).toBe(true);
     }, { timeout: 2000, interval: 10 });
@@ -2142,7 +2233,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     // The flag is still burned even though delivery failed — mark-before-send
     // means a retry (e.g. unmuting later) is a NEW state, not a resend of this
     // same failed attempt (a second dialog for the same chat stays quiet).
-    await request({ kind: 'hook.notify', cwd: '/w/api2', sessionId: 's2', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w/api2', sessionId: 's2', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
     await new Promise((r) => setTimeout(r, 50));
     expect(logs.filter((l) => l.includes('permission.localPrompt.im.undelivered'))).toHaveLength(1);
   });
@@ -2153,7 +2244,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     const boot = async (): Promise<void> => {
       const adapter = interactiveAdapter('telegram', sent);
       h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
-      await request({ kind: 'hook.notify', cwd: '/w/api', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: daemonSocketPath(tmp), timeoutMs: 2000 });
+      await request({ kind: 'hook.notify', cwd: '/w/api', sessionId: 's1', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: daemonSocketPath(tmp), timeoutMs: 2000 });
       await new Promise((r) => setTimeout(r, 50));
       await h.shutdown();
     };
@@ -2225,7 +2316,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     await waitForSent(sent); // card out ⇒ pending registered, onPending ping fired
     expect(notes).toHaveLength(1);
 
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
 
     expect(notes).toHaveLength(1); // no second notification
     expect(sent).toHaveLength(1); // no extra IM text — the card owns IM
@@ -2248,7 +2339,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
     expect((await findSession(sock, 's1'))?.status).toBe('waiting-approval');
     await waitForSent(sent); // the one-time explanation card, sent immediately
     expect(sent).toHaveLength(1);
@@ -2268,7 +2359,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
     await request({ kind: 'hook.event', event: { event: 'activity', cwd: '/w', sessionId: 's1', toolName: 'Read', result: {}, agentId: 'agentA' } }, { socketPath: sock, timeoutMs: 2000 });
 
     const s = await findSession(sock, 's1');
@@ -2290,7 +2381,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'daemon.set', key: 'mute', enabled: true }, { socketPath: sock, timeoutMs: 2000 });
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
 
     expect(notes).toHaveLength(1);
     expect((await findSession(sock, 's1'))?.pending?.local).toBe(true);
@@ -2312,19 +2403,19 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'daemon.set', key: 'mute', enabled: true }, { socketPath: sock, timeoutMs: 2000 });
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
     await new Promise((r) => setTimeout(r, 80));
     expect(sent).toHaveLength(0); // muted → suppressed, not sent, not marked explained
 
     await request({ kind: 'daemon.set', key: 'mute', enabled: false }, { socketPath: sock, timeoutMs: 2000 });
-    await request({ kind: 'hook.notify', cwd: '/w2', sessionId: 's2', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w2', sessionId: 's2', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
     await waitForSent(sent);
     expect(sent).toHaveLength(1); // now unmuted — the explanation they never got still arrives, once
     const card = sent[0] as { buttons?: Array<{ id: string }> };
     expect(card.buttons?.map((b) => b.id)).toContain('mode:full');
 
     // A third suppressed-dialog session, same chat, must not repeat it.
-    await request({ kind: 'hook.notify', cwd: '/w3', sessionId: 's3', level: 'info', message: MSG, permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w3', sessionId: 's3', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
     await new Promise((r) => setTimeout(r, 50));
     expect(sent).toHaveLength(1);
   });
@@ -2460,7 +2551,7 @@ describe('desktop notifications are one-per-event', () => {
     const notes: Array<{ title: string; body: string }> = [];
     h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
-    await request({ kind: 'hook.notify', cwd: '/w/repo', sessionId: 's1', level: 'info', message: 'Claude needs your permission to use Bash', permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w/repo', sessionId: 's1', level: 'info', message: 'Claude needs your permission to use Bash', localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
     expect(notes).toHaveLength(1);
     expect(notes[0]!.title).toBe('repo · approval needed');
     expect(notes[0]!.body).toBe('Claude needs your permission to use Bash');
@@ -2479,7 +2570,7 @@ describe('desktop notifications are one-per-event', () => {
     h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async () => {} } });
     const sock = daemonSocketPath(tmp);
     const before = Date.now();
-    await request({ kind: 'hook.notify', cwd: '/w/repo', sessionId: 's1', level: 'info', message: 'Claude needs your permission to use Bash', permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w/repo', sessionId: 's1', level: 'info', message: 'Claude needs your permission to use Bash', localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
     const seenAt = h.sessions.get('s1')?.pending?.seenAt;
     expect(typeof seenAt).toBe('number');
     expect(seenAt!).toBeGreaterThanOrEqual(before);
@@ -2491,7 +2582,7 @@ describe('desktop notifications are one-per-event', () => {
     const notes: Array<{ title: string; body: string }> = [];
     h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
-    await request({ kind: 'hook.notify', cwd: '/w/repo', sessionId: 's1', level: 'info', message: 'Claude needs your permission to use Bash', permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w/repo', sessionId: 's1', level: 'info', message: 'Claude needs your permission to use Bash', localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
     expect(notes).toHaveLength(1);
     for (const ev of [
       { event: 'activity' as const, cwd: '/w/repo', sessionId: 's1', toolName: 'Bash' },
@@ -2519,7 +2610,7 @@ describe('desktop notifications are one-per-event', () => {
     const notes: Array<{ title: string; body: string }> = [];
     h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
-    await request({ kind: 'hook.notify', cwd: '/w/repo', sessionId: 's1', level: 'info', message: 'Claude needs your permission to use Bash', permissionPrompt: true }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w/repo', sessionId: 's1', level: 'info', message: 'Claude needs your permission to use Bash', localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
     expect(notes[0]!.title).toBe('repo · 等你批准');
   });
 });
@@ -2577,7 +2668,7 @@ describe('the local answer path is a dashboard URL alone', () => {
 describe('the desktop channel is observable from the log alone (Task 10)', () => {
   /** Drive the idle "waiting for your input" notification the same way the CC
    *  hook layer does — a plain `hook.notify` IPC call (level: 'info', no
-   *  permissionPrompt) — matching every other `hook.notify` call in this file,
+   *  localWaiting) — matching every other `hook.notify` call in this file,
    *  just named at this call site for readability. */
   function notifyIdle(handle: DaemonHandle, opts: { cwd: string; sessionId: string }): void {
     // The Stop hook, which is what "your turn" rides. It blocks in the daemon
