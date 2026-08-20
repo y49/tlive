@@ -1404,12 +1404,15 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             reply({ kind: 'ack' });
             return;
           }
-          // droppable(今天 = 每一条工具失败:错误回给 agent,它下一轮自己
-          // 处理)只压 IM——dashboard 广播(下面的 events.broadcast)不受
-          // 影响,始终照常:这条 attention 常是 dashboard 看到这次工具活动的
-          // 唯一途径(PostToolUse/PostToolUseFailure 互斥,失败时没有
-          // activity 事件替补)。Fix 3b:上一版把这个短路放在 shim 层,连
-          // dashboard 一起吞了——落点错了,改回这里。
+          // `droppable` 在**这个 daemon 里已经不起作用了**:IM 现在只走
+          // sessionError 一条路,而工具失败不带 sessionError,所以它被排除的
+          // 理由是"不是死掉的 turn",不再是这个标记。别在下面的条件里再问它
+          // 一次 —— 一个永远为真的判断会让人以为它还在把关。
+          //
+          // 它仍然由 shim 发出,而且必须继续发:daemon 是长命进程,升级时不会
+          // 重启,所以每次构建都会有一段"新 shim × 旧 daemon"。旧 daemon 只认
+          // 这个标记,不发就会让它把工具失败重新推进 IM。等到比该版本更旧的
+          // daemon 不再是问题时,连同 shim 那半一起删。
           // IM carries exactly one thing from this handler: a turn that died and
           // was still dead when the grace ended.
           //
@@ -1425,20 +1428,22 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // reason neither has ever flooded anyone: a session that came back on
           // its own needed nobody told. Pushed without it, this line produced
           // eight identical `server_error` messages in forty-six minutes.
-          if (req.sessionError && !req.droppable) {
+          if (req.sessionError) {
             const detail = req.message;
             void (async () => {
               const survived = await deathGracePassed(key);
+              // Mute is re-read after the grace, not before: a mute set during
+              // it is still a mute, and the send is what it applies to.
+              const silenced = muted || (sessions.get(key)?.muted ?? false);
               // Observability, because silence is the DESIGNED outcome here and
-              // is otherwise indistinguishable from a broken channel. Identity
+              // is otherwise indistinguishable from a broken channel. Both
+              // reasons for silence are recorded, since "it came back" and "you
+              // muted it" are different answers to the same question. Identity
               // and outcome only — the failure text is provider output that has
               // already been seen to carry a private relay endpoint, and this
               // log is shared by every session on the machine.
-              logJson('notify.death', { key, resumed: !survived });
-              if (!survived) return;
-              // Mute is re-read after the grace, not before: a mute set during
-              // it is still a mute, and the send is what it applies to.
-              if (muted || sessions.get(key)?.muted) return;
+              logJson('notify.death', { key, resumed: !survived, delivered: survived && !silenced });
+              if (!survived || silenced) return;
               const text = detail.startsWith('⚠️') ? detail : `⚠️ ${detail}`;
               // cwd carries the resolved KEY so the label tag + reply-routing map are consistent.
               await Promise.all(configuredChats().map((t) => sendToChat(t, { text, cwd: key }))).catch(() => undefined);

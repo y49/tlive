@@ -211,13 +211,12 @@ export async function runHook(argv: string[]): Promise<void> {
     if (event === 'notification' || event === 'post-tool-use-failure' || event === 'stop-failure') {
       const att = n as { cwd: string; sessionId: string; message: string; droppable?: boolean; localWaiting?: 'approval' | 'relayed-approval' | 'question' | 'elsewhere'; sessionError?: { text: string; transient: boolean } };
       const level = event === 'notification' ? 'info' : 'error';
-      // droppable(空失败,如 Bash 非零退出但 stderr 为空:grep 没命中/test
-      // 判假/diff --quiet)照常发 hook.notify IPC——只透传标记,让 daemon 决定
-      // 怎么处理。Fix 3b:曾经在这里提前 return 跳过整条 IPC,连 dashboard 的
+      // droppable 照常发 hook.notify IPC——只透传标记,让 daemon 决定怎么处理。
+      // Fix 3b:曾经在这里提前 return 跳过整条 IPC,连 dashboard 的
       // events.broadcast 一起吞了(PostToolUse/PostToolUseFailure 互斥,dashboard
-      // 没有别的途径看到这次工具活动)——落点错了,daemon 层(bootstrap.ts 的
-      // hook.notify handler)现在只据 droppable 跳过 IM 发送,dashboard 广播
-      // 不受影响。
+      // 没有别的途径看到这次工具活动)——落点错了,判断归 daemon。
+      // ⚠️ 当前 daemon 已经不据它做任何事(见 normalizer 里那段);它现在的唯一
+      // 作用是让**尚未重启的旧 daemon**继续把工具失败挡在 IM 之外。
       // localWaiting(issue #49)同一课的同一答案:shim 只透传,daemon 拿
       // pending 判重 —— full 模式已有卡就丢,没卡(notify 模式 / 立即 defer)
       // 就走本地等待通知链。曾经在这里无条件吞掉,notify 模式下权限框零通知。
