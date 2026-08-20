@@ -1,5 +1,13 @@
 # Changelog
 
+## [5.2.0](https://github.com/y49/tlive/compare/v5.1.0...v5.2.0) (2026-08-20)
+
+
+### Features
+
+* let silence decide what reaches IM, and stop relaying restatements ([#87](https://github.com/y49/tlive/issues/87)) ([1707762](https://github.com/y49/tlive/commit/1707762c9208b3abe860828c143472e4b55b0c52))
+* recognise the other notification types that mean someone is stuck ([#86](https://github.com/y49/tlive/issues/86)) ([563eba3](https://github.com/y49/tlive/commit/563eba32b358cfb4b350495114384a188f432096))
+
 ## [5.1.0](https://github.com/y49/tlive/compare/v5.0.1...v5.1.0) (2026-08-20)
 
 
