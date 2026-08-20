@@ -186,9 +186,11 @@ own machine that is a `diff` that found differences, a `grep` with no match, a
 command that timed out, a quoting slip — several a day, none of them anyone's
 to act on. The dashboard card carries the full error text, which is where you
 read it if you want it. Claude Code's own transient API failures
-(`server_error`, `overloaded` — its classification, not ours) follow the same
-rule: they reach IM and the dashboard so you know the turn was cut short, but
-they never ring a bell, because the session picks up where it left off.
+(`server_error`, `overloaded` — its classification, not ours) reach the
+dashboard and nothing else, for the same reason a failed tool does: the session
+picks up where it left off, so there is nothing to act on. They were briefly
+sent to IM, until a real machine produced eight identical `server_error` lines
+in forty-six minutes.
 
 A Codex turn that dies reports to IM as `⚠️ Codex turn failed: …`; it never
 announces a finished turn or offers a reply that would just fail again. A turn

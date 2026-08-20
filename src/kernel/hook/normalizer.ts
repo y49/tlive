@@ -157,7 +157,15 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
       const kind = typeof r.error === 'string' && r.error ? r.error : 'unknown';
       const details = typeof r.error_details === 'string' ? r.error_details.trim() : '';
       const text = `${kind}${details ? ` — ${details.slice(0, 200)}` : ''}`;
-      return { event: 'attention', cwd, sessionId, message: `session error: ${text}`, sessionError: { text, transient: TRANSIENT_ERROR_KINDS.has(kind) } };
+      const transient = TRANSIENT_ERROR_KINDS.has(kind);
+      // A transient failure goes to the dashboard and nowhere else. It already
+      // stayed off the desktop; IM was kept on an estimate that these were
+      // rare, and a real machine answered that within a day — eight identical
+      // `server_error` lines in forty-six minutes, none of them anything to do.
+      // The rule that governs a failed tool governs this one for the same
+      // reason: the thing recovers on its own, so pushing it to a person is
+      // asking them to watch rather than to act.
+      return { event: 'attention', cwd, sessionId, message: `session error: ${text}`, sessionError: { text, transient }, ...(transient ? { droppable: true } : {}) };
     }
     case 'subagent-start':
       return { event: 'subagent', cwd, sessionId, delta: 1, ...(r.agent_type ? { agentType: r.agent_type } : {}) };

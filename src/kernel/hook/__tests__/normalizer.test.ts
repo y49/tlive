@@ -193,6 +193,26 @@ describe('failure events', () => {
       expect((n as any).sessionError.text).toBe('billing_error — Credit balance too low');
       expect((n as any).message).toBe('session error: billing_error — Credit balance too low');
     });
+    // Measured on a real machine the day after the reason text started
+    // working: eight of these in forty-six minutes, every one `server_error`,
+    // every one identical, and not one of them anything to act on — the
+    // session picks up where it left off. The transient gate already keeps
+    // them off the desktop; the estimate that they were rare enough for IM was
+    // wrong by a factor of forty. Same treatment as a failed tool: the
+    // dashboard keeps the text, nobody gets pushed.
+    it("a transient failure never reaches IM either — it is nobody's to act on", () => {
+      const n = parseHookInput('stop-failure', { cwd: '/x', session_id: 's', error: 'server_error' });
+      expect((n as any).droppable).toBe(true);
+      expect((n as any).message).toBe('session error: server_error');
+    });
+    it('overloaded, the other transient kind, the same', () => {
+      expect((parseHookInput('stop-failure', { cwd: '/x', session_id: 's', error: 'overloaded' }) as any).droppable).toBe(true);
+    });
+    it('a failure nothing retries out of still reaches IM — that one has something to do', () => {
+      const n = parseHookInput('stop-failure', { cwd: '/x', session_id: 's', error: 'billing_error', error_details: 'Credit balance too low' });
+      expect((n as any).droppable).toBeUndefined();
+    });
+
     it('a tool failure carries no sessionError — it is not a turn outcome', () => {
       const n = parseHookInput('post-tool-use-failure', { cwd: '/x', session_id: 's', tool_name: 'Bash', error: 'boom' });
       expect((n as any).sessionError).toBeUndefined();
