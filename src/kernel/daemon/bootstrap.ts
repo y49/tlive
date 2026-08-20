@@ -1406,7 +1406,14 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           if (req.sessionError && !req.droppable) {
             const detail = req.message;
             void (async () => {
-              if (!(await deathGracePassed(key))) return;
+              const survived = await deathGracePassed(key);
+              // Observability, because silence is the DESIGNED outcome here and
+              // is otherwise indistinguishable from a broken channel. Identity
+              // and outcome only — the failure text is provider output that has
+              // already been seen to carry a private relay endpoint, and this
+              // log is shared by every session on the machine.
+              logJson('notify.death', { key, resumed: !survived });
+              if (!survived) return;
               // Mute is re-read after the grace, not before: a mute set during
               // it is still a mute, and the send is what it applies to.
               if (muted || sessions.get(key)?.muted) return;
