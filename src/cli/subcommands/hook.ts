@@ -122,6 +122,28 @@ export function parseHookArgs(argv: string[]): { event?: HookEventName; vendor: 
   return { event, vendor };
 }
 
+/** Wire fields for a local-waiting notice.
+ *
+ *  `permissionPrompt` is a deliberate duplicate of `localWaiting: 'approval'`,
+ *  and the only reason it still exists: the shim and the daemon ship together
+ *  but do NOT update together — the daemon is long-running and nothing restarts
+ *  it on upgrade, so every build opens a window of new shim talking to old
+ *  daemon. An older daemon reads only the boolean, so dropping it would take
+ *  the desktop toast and dashboard card away from every native permission
+ *  dialog in `notify`, the default rung, until someone happened to run
+ *  `tlive stop; tlive start`. Silent, and on the most common path there is.
+ *
+ *  The newer kinds deliberately do NOT set it: an older daemon would run its
+ *  permission chain for them, asking gates that cannot apply, and a teammate's
+ *  relayed approval would come out suppressed in a holding rung — worse than
+ *  the silence it already has there. Drop this field once daemons older than
+ *  the release that introduced `localWaiting` are not a concern. */
+export function localWaitingFields(w?: 'approval' | 'relayed-approval' | 'question' | 'elsewhere'):
+  { permissionPrompt?: true; localWaiting?: 'approval' | 'relayed-approval' | 'question' | 'elsewhere' } {
+  if (!w) return {};
+  return w === 'approval' ? { permissionPrompt: true, localWaiting: w } : { localWaiting: w };
+}
+
 export async function runHook(argv: string[]): Promise<void> {
   const { event, vendor } = parseHookArgs(argv);
   if (!event) {
@@ -187,7 +209,7 @@ export async function runHook(argv: string[]): Promise<void> {
     }
 
     if (event === 'notification' || event === 'post-tool-use-failure' || event === 'stop-failure') {
-      const att = n as { cwd: string; sessionId: string; message: string; droppable?: boolean; localWaiting?: 'approval' | 'relayed-approval' | 'blocked'; sessionError?: { text: string; transient: boolean } };
+      const att = n as { cwd: string; sessionId: string; message: string; droppable?: boolean; localWaiting?: 'approval' | 'relayed-approval' | 'question' | 'elsewhere'; sessionError?: { text: string; transient: boolean } };
       const level = event === 'notification' ? 'info' : 'error';
       // droppable(空失败,如 Bash 非零退出但 stderr 为空:grep 没命中/test
       // 判假/diff --quiet)照常发 hook.notify IPC——只透传标记,让 daemon 决定
@@ -200,7 +222,7 @@ export async function runHook(argv: string[]): Promise<void> {
       // pending 判重 —— full 模式已有卡就丢,没卡(notify 模式 / 立即 defer)
       // 就走本地等待通知链。曾经在这里无条件吞掉,notify 模式下权限框零通知。
       await request(
-        { kind: 'hook.notify', cwd: att.cwd, sessionId: att.sessionId, level, message: att.message, ...(wrappedId ? { wrappedId } : {}), ...(agentPid ? { agentPid } : {}), ...(att.droppable ? { droppable: true } : {}), ...(att.localWaiting ? { localWaiting: att.localWaiting } : {}), ...(att.sessionError ? { sessionError: att.sessionError } : {}) },
+        { kind: 'hook.notify', cwd: att.cwd, sessionId: att.sessionId, level, message: att.message, ...(wrappedId ? { wrappedId } : {}), ...(agentPid ? { agentPid } : {}), ...(att.droppable ? { droppable: true } : {}), ...localWaitingFields(att.localWaiting), ...(att.sessionError ? { sessionError: att.sessionError } : {}) },
         { timeoutMs: OBSERVE_IPC_TIMEOUT_MS },
       ).catch(() => undefined);
       process.stdout.write('{}');

@@ -33,23 +33,25 @@ export type NormalizedHook =
   | { event: 'permission-denied'; cwd: string; sessionId: string; toolName: string };
 
 /** Something is stuck at the machine running the session and only whoever is
- *  sitting there can unstick it.
+ *  sitting there can unstick it. Four values rather than one flag, because
+ *  three separate falsehoods are possible and each one needs a different bit of
+ *  the answer:
  *
- *  Two independent questions live in this one value, and folding them together
- *  is a bug waiting to happen — it was one, briefly, while this was being
- *  written:
- *
- *  1. **What do you call it?** `approval` and `relayed-approval` are yes-or-no
- *     decisions; `blocked` is a question waiting for an answer. Saying
- *     "approval needed" over an MCP dialog is a small lie, and this project
- *     keeps paying for those.
- *  2. **Could tlive already be holding a card for it?** Only for `approval`.
- *     There is no PermissionRequest behind an elicitation dialog, and Claude
- *     Code does not dispatch one for a teammate's relayed request at all — see
- *     anthropics/claude-code#82418. So for the other two, this notice is the
- *     only signal that exists, at every rung of the posture ladder, and the
- *     daemon's held-card and posture gates must not be asked about them. */
-export type LocalWaiting = 'approval' | 'relayed-approval' | 'blocked';
+ *  - **wording.** `approval` and `relayed-approval` are yes-or-no decisions;
+ *    the other two are questions. Saying "approval needed" over an MCP dialog
+ *    is a small lie, and this project keeps paying for those.
+ *  - **heldable.** Only `approval` can also be sitting in tlive's own hands as
+ *    an answerable card. There is no PermissionRequest behind an elicitation
+ *    dialog, and Claude Code dispatches none at all for a teammate's relayed
+ *    request — see anthropics/claude-code#82418. Asking the held-card and
+ *    posture gates about the others would drop them in `full` and `all`, the
+ *    rungs a person selects precisely when they are away.
+ *  - **whose.** `elsewhere` is the odd one: `agent_needs_input` is stamped with
+ *    the WATCHING session's id and cwd, while the thing that is stuck is a
+ *    background job with its own session id. It earns a toast, because Claude
+ *    Code's sentence names the agent and what it needs, but never a dashboard
+ *    card — that card would claim this session is blocked when it is not. */
+export type LocalWaiting = 'approval' | 'relayed-approval' | 'question' | 'elsewhere';
 
 /** Which of Claude Code's fourteen `notification_type` values mean someone is
  *  stuck. Read off the emission sites in 2.1.235 rather than guessed; the nine
@@ -62,9 +64,9 @@ export type LocalWaiting = 'approval' | 'relayed-approval' | 'blocked';
 const LOCAL_WAITING_TYPES: Record<string, LocalWaiting> = {
   permission_prompt: 'approval',
   worker_permission_prompt: 'relayed-approval',
-  elicitation_dialog: 'blocked',
-  elicitation_url_dialog: 'blocked',
-  agent_needs_input: 'blocked',
+  elicitation_dialog: 'question',
+  elicitation_url_dialog: 'question',
+  agent_needs_input: 'elsewhere',
 };
 
 /** A turn that ended on an API error, with the one judgement the surfaces need

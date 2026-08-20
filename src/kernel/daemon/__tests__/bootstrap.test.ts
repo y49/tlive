@@ -1977,13 +1977,13 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
   // dispatch one for a teammate's forwarded request at all, so tlive cannot have
   // held either. For those, this notice is the only signal that exists, at every
   // rung.
-  it('a blocked-on-an-answer notice reaches the machine even in a holding rung — tlive never held one of those', async () => {
+  it('a question notice reaches the machine even in a holding rung — tlive never held one of those', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'full' }));
     const notes: Array<{ title: string; body: string }> = [];
     h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
 
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude Code needs your input', localWaiting: 'blocked' }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude Code needs your input', localWaiting: 'question' }, { socketPath: sock, timeoutMs: 2000 });
 
     expect(notes).toHaveLength(1);
     expect(notes[0].body).toBe('Claude Code needs your input');
@@ -2010,6 +2010,27 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     expect(notes[0].body).toBe('agent-7 needs permission for Bash');
   });
 
+  // `agent_needs_input` is stamped with the WATCHING session's id and cwd — the
+  // notification is emitted by whoever is displaying the agent list, while the
+  // thing that is stuck is a background job with its own session id. The toast
+  // is still worth sending, because Claude Code's own sentence names the agent
+  // and says what it needs. A dashboard card is not: it would put this session
+  // into waiting-approval, which is a claim about a session that is not blocked.
+  it('a notice about some OTHER agent rings the desktop but does not claim THIS session is blocked', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    const notes: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { notes.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'nightly-build needs your input: login required — run /login', localWaiting: 'elsewhere' }, { socketPath: sock, timeoutMs: 2000 });
+
+    expect(notes).toHaveLength(1);
+    expect(notes[0].body).toContain('login required');
+    const s = await findSession(sock, 's1');
+    expect(s?.pending).toBeFalsy();
+    expect(s?.status).not.toBe('waiting-approval');
+  });
+
   // The other half of the same rule: an approval notice in a holding rung stays
   // suppressed, because there the card owns every surface already.
   it('an approval notice in a holding rung stays suppressed', async () => {
@@ -2029,14 +2050,14 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
   // forwarded request answerable from a phone, because tlive is never offered
   // the chance to hold either. Sending it here would spend a once-per-chat card
   // on a promise the product cannot keep.
-  it('a blocked-on-an-answer notice never spends the one-time "switch to full" card', async () => {
+  it('a question notice never spends the one-time "switch to full" card', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
     const sent: OutgoingMessage[] = [];
     const adapter = interactiveAdapter('telegram', sent);
     h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
     const sock = daemonSocketPath(tmp);
 
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude Code needs your input', localWaiting: 'blocked' }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude Code needs your input', localWaiting: 'question' }, { socketPath: sock, timeoutMs: 2000 });
     expect(sent).toHaveLength(0);
 
     // …and it is still unspent, so the next real approval still gets it.
@@ -2053,7 +2074,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     const sock = daemonSocketPath(tmp);
 
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
-    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's2', level: 'info', message: 'x needs your input', localWaiting: 'blocked' }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's2', level: 'info', message: 'x needs your input', localWaiting: 'question' }, { socketPath: sock, timeoutMs: 2000 });
 
     expect(notes).toHaveLength(2);
     expect(notes[0].title).toBe('w · approval needed');

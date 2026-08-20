@@ -1288,8 +1288,12 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // PermissionRequest for a teammate, so no rung of the ladder can
             // have a card for it, and asking the gates would drop it in exactly
             // the postures someone sets when they are away.
-            const wordsAsApproval = req.localWaiting !== 'blocked';
+            const wordsAsApproval = req.localWaiting === 'approval' || req.localWaiting === 'relayed-approval';
             const heldable = req.localWaiting === 'approval';
+            // `elsewhere` means a DIFFERENT agent is stuck and this session is
+            // only the messenger — Claude Code stamps the notification with the
+            // watching session's id and cwd. Worth a toast, never a card.
+            const aboutThisSession = req.localWaiting !== 'elsewhere';
             // A CC-native permission dialog is up (issue #49). A held request
             // for this session already owns every surface (desktop notification
             // already fired from onPending, card sent/gracing, dashboard
@@ -1341,7 +1345,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               deliver({ key, label: sessionLabel(key), kind: wordsAsApproval ? 'localPrompt' : 'localAnswer', detail: req.message });
               // Dashboard: read-only waiting-approval card (pending.local) —
               // visible from anywhere, answerable only at the terminal.
-              events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'waiting-approval', pending: { requestId: `local:${key}`, title: wordsAsApproval ? 'Permission needed' : 'Needs your answer', body: req.message, local: true, seenAt: Date.now() } }) });
+              if (aboutThisSession) events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'waiting-approval', pending: { requestId: `local:${key}`, title: wordsAsApproval ? 'Permission needed' : 'Needs your answer', body: req.message, local: true, seenAt: Date.now() } }) });
               // No IM text for this dialog, ever. It can only be answered at
               // the terminal, and a phone cannot reach a terminal — the message
               // was pure anxiety with no exit. Every channel this daemon

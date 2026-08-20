@@ -127,21 +127,26 @@ describe('notification types — the surface must know which of the fourteen it 
     cwd: '/x', session_id: 's', message: 'm', ...(t ? { notification_type: t } : {}),
   }) as any;
 
-  it('a native permission dialog is an approval', () => {
+  // Four values, not one flag, because three separate falsehoods are possible
+  // and each value has to rule out a different one:
+  //   wording   — "approval needed" over an MCP question is a small lie
+  //   heldable  — asking the posture gate about something tlive can never hold
+  //               drops it in exactly the rungs someone sets when they are away
+  //   ownership — `agent_needs_input` is stamped with the WATCHING session's id
+  //               and cwd, so a dashboard card would claim that session is
+  //               blocked when a different agent is
+  it('a native permission dialog: this session, and tlive may be holding a card for it', () => {
     expect(notify('permission_prompt').localWaiting).toBe('approval');
   });
-  // Worded like an approval, gated like a blocked notice: Claude Code never
-  // dispatches PermissionRequest for a teammate, so tlive cannot be holding a
-  // card for this one however high the posture ladder is set.
-  it("a teammate's forwarded request is a relayed approval, not one tlive could be holding", () => {
+  it("a teammate's relayed request: answered in this session's dialog queue, but never held by tlive", () => {
     expect(notify('worker_permission_prompt').localWaiting).toBe('relayed-approval');
   });
-  it('an elicitation dialog is blocked-on-an-answer, not an approval', () => {
-    expect(notify('elicitation_dialog').localWaiting).toBe('blocked');
-    expect(notify('elicitation_url_dialog').localWaiting).toBe('blocked');
+  it('an elicitation dialog: this session is asking, and it is a question, not an approval', () => {
+    expect(notify('elicitation_dialog').localWaiting).toBe('question');
+    expect(notify('elicitation_url_dialog').localWaiting).toBe('question');
   });
-  it('an agent that went to blocked needs an answer', () => {
-    expect(notify('agent_needs_input').localWaiting).toBe('blocked');
+  it('an agent that went blocked: someone ELSE is stuck, and this session is only the messenger', () => {
+    expect(notify('agent_needs_input').localWaiting).toBe('elsewhere');
   });
 
   // Everything else is news. A finished turn already has its own channel, and a

@@ -58,7 +58,7 @@ export type IpcRequest =
   // error. Carries Claude Code's own transient/not judgement, which is what
   // decides whether this rings a desktop bell: a `server_error` blip the
   // session picks up from calls nobody back, a bad key does.
-  | { kind: 'hook.notify'; cwd: string; sessionId: string; level: 'info' | 'warn' | 'error'; message: string; wrappedId?: string; droppable?: boolean; localWaiting?: LocalWaiting; agentPid?: number; sessionError?: SessionError }
+  | { kind: 'hook.notify'; cwd: string; sessionId: string; level: 'info' | 'warn' | 'error'; message: string; wrappedId?: string; droppable?: boolean; permissionPrompt?: true; localWaiting?: LocalWaiting; agentPid?: number; sessionError?: SessionError }
   | { kind: 'session.register'; session: SessionMeta }
   | { kind: 'session.unregister'; id: string }
   // Terminal-derived activity for a wrapped session (running vs idle) — updates
