@@ -1,7 +1,7 @@
 // src/kernel/ipc/protocol.ts
 
 import type { SessionView } from '../web/session-registry.js';
-import type { MonitorEvent, SessionError } from '../hook/normalizer.js';
+import type { MonitorEvent, SessionError, LocalWaiting } from '../hook/normalizer.js';
 
 export interface SessionMeta {
   id: string;
@@ -42,7 +42,11 @@ export type IpcRequest =
   // hook.notify handler);dashboard 广播不受影响,照常收到 —— 这条 attention
   // 往往是 dashboard 看到这次工具活动的唯一途径(PostToolUse/
   // PostToolUseFailure 互斥,失败时没有 activity 事件替补)。
-  // permissionPrompt: CC Notification(permission_prompt) 透传标记(issue #49)。
+  // localWaiting: CC Notification 里那五种「有东西卡在这台机器上」的类型的透传
+  // 标记(issue #49 起于其中的 permission_prompt)。`approval` 与 `blocked` 的
+  // 区别不是措辞:tlive 可能正持着同一件事的可答卡(approval),但**永远不可能**
+  // 持着 elicitation 对话框或 teammate 转发来的请求(blocked)——所以后者在任何
+  // 档位下都必须落地,前者要先让开已有的卡。
   // daemon 据 pending 判重:full 模式已有 held 卡 → 丢(卡管全部答复面);
   // 没卡(notify 模式 / 立即 defer)→ 本地对话框在等 = 走等待通知链
   // (desktop ping + dashboard 只读 waiting-approval + grace 后 IM 文本)。
@@ -54,7 +58,7 @@ export type IpcRequest =
   // error. Carries Claude Code's own transient/not judgement, which is what
   // decides whether this rings a desktop bell: a `server_error` blip the
   // session picks up from calls nobody back, a bad key does.
-  | { kind: 'hook.notify'; cwd: string; sessionId: string; level: 'info' | 'warn' | 'error'; message: string; wrappedId?: string; droppable?: boolean; permissionPrompt?: boolean; agentPid?: number; sessionError?: SessionError }
+  | { kind: 'hook.notify'; cwd: string; sessionId: string; level: 'info' | 'warn' | 'error'; message: string; wrappedId?: string; droppable?: boolean; permissionPrompt?: true; localWaiting?: LocalWaiting; agentPid?: number; sessionError?: SessionError }
   | { kind: 'session.register'; session: SessionMeta }
   | { kind: 'session.unregister'; id: string }
   // Terminal-derived activity for a wrapped session (running vs idle) — updates

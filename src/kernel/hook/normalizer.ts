@@ -25,12 +25,49 @@ export type NormalizedHook =
   // 关联回同一个 agent 的挂起审批,同 key 同 tool 的其他 agent 的卡不受影响。
   | { event: 'approval-request'; cwd: string; sessionId: string; toolName: string; input: unknown; permissionMode?: string; agentId?: string }
   | { event: 'activity'; cwd: string; sessionId: string; toolName: string; result: unknown; agentId?: string }
-  | { event: 'attention'; cwd: string; sessionId: string; message: string; lastMessage?: string; stopHookActive?: boolean; droppable?: boolean; permissionPrompt?: boolean; sessionError?: SessionError }
+  | { event: 'attention'; cwd: string; sessionId: string; message: string; lastMessage?: string; stopHookActive?: boolean; droppable?: boolean; localWaiting?: LocalWaiting; sessionError?: SessionError }
   | { event: 'prompt'; cwd: string; sessionId: string; prompt: string }
   | { event: 'subagent'; cwd: string; sessionId: string; delta: 1 | -1; agentType?: string }
   | { event: 'session-start'; cwd: string; sessionId: string; source?: string }
   | { event: 'session-end'; cwd: string; sessionId: string; reason?: string }
   | { event: 'permission-denied'; cwd: string; sessionId: string; toolName: string };
+
+/** Something is stuck at the machine running the session and only whoever is
+ *  sitting there can unstick it. Four values rather than one flag, because
+ *  three separate falsehoods are possible and each one needs a different bit of
+ *  the answer:
+ *
+ *  - **wording.** `approval` and `relayed-approval` are yes-or-no decisions;
+ *    the other two are questions. Saying "approval needed" over an MCP dialog
+ *    is a small lie, and this project keeps paying for those.
+ *  - **heldable.** Only `approval` can also be sitting in tlive's own hands as
+ *    an answerable card. There is no PermissionRequest behind an elicitation
+ *    dialog, and Claude Code dispatches none at all for a teammate's relayed
+ *    request — see anthropics/claude-code#82418. Asking the held-card and
+ *    posture gates about the others would drop them in `full` and `all`, the
+ *    rungs a person selects precisely when they are away.
+ *  - **whose.** `elsewhere` is the odd one: `agent_needs_input` is stamped with
+ *    the WATCHING session's id and cwd, while the thing that is stuck is a
+ *    background job with its own session id. It earns a toast, because Claude
+ *    Code's sentence names the agent and what it needs, but never a dashboard
+ *    card — that card would claim this session is blocked when it is not. */
+export type LocalWaiting = 'approval' | 'relayed-approval' | 'question' | 'elsewhere';
+
+/** Which of Claude Code's fourteen `notification_type` values mean someone is
+ *  stuck. Read off the emission sites in 2.1.235 rather than guessed; the nine
+ *  absent ones are news, not a call for help, and an unrecognised value is
+ *  deliberately absent too — a new upstream type is not assumed to be waiting.
+ *
+ *  Two of these carry a 6-second idle gate upstream and two do not, which is
+ *  Claude Code's business, not ours: it decides WHETHER the hook fires, and this
+ *  map only decides what it means once it has. */
+const LOCAL_WAITING_TYPES: Record<string, LocalWaiting> = {
+  permission_prompt: 'approval',
+  worker_permission_prompt: 'relayed-approval',
+  elicitation_dialog: 'question',
+  elicitation_url_dialog: 'question',
+  agent_needs_input: 'elsewhere',
+};
 
 /** A turn that ended on an API error, with the one judgement the surfaces need
  *  from it. `transient` is Claude Code's OWN classification, not a guess of
@@ -103,7 +140,8 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
       // full-mode assumption; in notify mode, or on a full-mode immediate
       // defer, there is no card and this is the ONLY signal a local dialog is
       // waiting). Everything else passes through verbatim.
-      return { event: 'attention', cwd, sessionId, message: r.message ?? 'needs your attention', ...(r.notification_type === 'permission_prompt' ? { permissionPrompt: true } : {}) };
+      const waiting = r.notification_type ? LOCAL_WAITING_TYPES[r.notification_type] : undefined;
+      return { event: 'attention', cwd, sessionId, message: r.message ?? 'needs your attention', ...(waiting ? { localWaiting: waiting } : {}) };
     case 'user-prompt-submit':
       return { event: 'prompt', cwd, sessionId, prompt: r.prompt ?? '' };
     case 'session-start':

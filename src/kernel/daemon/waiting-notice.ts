@@ -20,7 +20,7 @@
 import { maskSecrets } from '../permission/approval-renderer.js';
 
 /** Why the user is being called. Drives the title's second half only. */
-export type WaitKind = 'held' | 'subagent' | 'localPrompt' | 'idle' | 'sessionError';
+export type WaitKind = 'held' | 'subagent' | 'localPrompt' | 'localAnswer' | 'idle' | 'sessionError';
 
 /** Toast language, chosen once at daemon startup from the OS locale — see
  *  bootstrap.ts's `detectLang`. Unrecognised locales fall back to `en` ON
@@ -68,6 +68,13 @@ const REASON: Record<WaitKind, Record<Lang, string>> = {
   held: { en: 'approval needed', zh: '等你批准' },
   localPrompt: { en: 'approval needed', zh: '等你批准' },
   subagent: { en: 'sub-agent needs approval', zh: '子代理等你批准' },
+  // Not `localPrompt`, and not `idle` either. An MCP elicitation dialog or an
+  // agent that went to `blocked` is not asking permission — saying "approval
+  // needed" over it is a small lie — and it is not a finished turn either: the
+  // session is mid-flight and stuck, where `idle` means nothing is running at
+  // all. Both distinctions are the difference between a notification you can
+  // act on and one you have to go and check.
+  localAnswer: { en: 'needs an answer', zh: '等你答复' },
   idle: { en: 'waiting for your input', zh: '等你输入' },
   // The one kind that is not a question: the turn died on something no retry
   // fixes, so nothing further happens in that session until you deal with it.

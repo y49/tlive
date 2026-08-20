@@ -1279,7 +1279,21 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // to the previous value when the patch omits them.
           if (!sessions.get(key)) sessions.upsert({ key, cwd: req.cwd });
           const s = sessions.get(key);
-          if (req.permissionPrompt) {
+          if (req.localWaiting) {
+            // Two questions, deliberately not the same one. `wordsAsApproval`
+            // picks the sentence; `heldable` decides whether the two gates below
+            // may speak at all. Only an ordinary permission dialog is both: an
+            // MCP question is neither, and a teammate's relayed approval is the
+            // first without the second — Claude Code does not dispatch
+            // PermissionRequest for a teammate, so no rung of the ladder can
+            // have a card for it, and asking the gates would drop it in exactly
+            // the postures someone sets when they are away.
+            const wordsAsApproval = req.localWaiting === 'approval' || req.localWaiting === 'relayed-approval';
+            const heldable = req.localWaiting === 'approval';
+            // `elsewhere` means a DIFFERENT agent is stuck and this session is
+            // only the messenger — Claude Code stamps the notification with the
+            // watching session's id and cwd. Worth a toast, never a card.
+            const aboutThisSession = req.localWaiting !== 'elsewhere';
             // A CC-native permission dialog is up (issue #49). A held request
             // for this session already owns every surface (desktop notification
             // already fired from onPending, card sent/gracing, dashboard
@@ -1297,7 +1311,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // unanswerable in principle. It is used only to avoid clobbering an
             // answerable card with the read-only one below — a wrong guess costs
             // a missed toast, never a decision.
-            const heldOwnsIt = permissionRouter.hasPendingFor({ key, sessionId: req.sessionId });
+            const heldOwnsIt = heldable && permissionRouter.hasPendingFor({ key, sessionId: req.sessionId });
             // Posture, unlike heldOwnsIt, is exact — and read LIVE (never a
             // boot-time value): the posture is remotely settable (`tlive mode`,
             // IM's `/mode`), so this must track the CURRENT rung, not whatever
@@ -1313,13 +1327,13 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // reminder. `notify` is the only non-holding rung reachable here
             // (`off` short-circuits in the shim before any IPC) — there this
             // chain is the ONLY signal a dialog is waiting, so it must run.
-            const redundant = currentMode() !== 'notify';
+            const redundant = heldable && currentMode() !== 'notify';
             // The two arms look identical from outside — one means "tlive is
             // gating this and the card owns every surface", the other means
             // "tlive is NOT gating this, the terminal is the only answer path".
             // Confusing them is exactly how a pass-through got mistaken for a
             // held approval, so the log says which.
-            logJson('permission.localPrompt', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), heldOwnsIt, action: heldOwnsIt ? 'suppressed' : redundant ? 'holding-mode-passthrough' : 'tracked' });
+            logJson('permission.localPrompt', { key, ...(req.sessionId ? { sessionId: req.sessionId } : {}), waiting: req.localWaiting, heldOwnsIt, action: heldOwnsIt ? 'suppressed' : redundant ? 'holding-mode-passthrough' : 'tracked' });
             if (!heldOwnsIt && !redundant) {
               localPrompts.note(key, req.sessionId);
               // Desktop first, immediately — the dialog IS a waiting state, and
@@ -1328,10 +1342,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               // sentence is the only information that exists to name what is
               // waiting; it stays in English even under a Chinese locale for
               // exactly that reason.
-              deliver({ key, label: sessionLabel(key), kind: 'localPrompt', detail: req.message });
+              deliver({ key, label: sessionLabel(key), kind: wordsAsApproval ? 'localPrompt' : 'localAnswer', detail: req.message });
               // Dashboard: read-only waiting-approval card (pending.local) —
               // visible from anywhere, answerable only at the terminal.
-              events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'waiting-approval', pending: { requestId: `local:${key}`, title: 'Permission needed', body: req.message, local: true, seenAt: Date.now() } }) });
+              if (aboutThisSession) events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'waiting-approval', pending: { requestId: `local:${key}`, title: wordsAsApproval ? 'Permission needed' : 'Needs your answer', body: req.message, local: true, seenAt: Date.now() } }) });
               // No IM text for this dialog, ever. It can only be answered at
               // the terminal, and a phone cannot reach a terminal — the message
               // was pure anxiety with no exit. Every channel this daemon
@@ -1356,7 +1370,16 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               // the branch that actually sends, so unmuting later still
               // delivers the explanation exactly once — suppression and
               // completion are different states.
-              for (const t of configuredChats()) {
+              //
+              // Heldable only — the same test as the gates above, for the same
+              // reason. The card's whole offer is "switch to `full` and these
+              // become answerable from here", which no rung can deliver for an
+              // MCP question or a teammate's relayed approval, since tlive is
+              // never offered either. A once-per-chat card must not be spent on
+              // a promise the product cannot keep, and must not be spent AT ALL
+              // here, so the next dialog that really would become answerable
+              // still gets it.
+              for (const t of heldable ? configuredChats() : []) {
                 const chatKey = `${t.channel}:${t.chatId}`;
                 if (wasNotifyExplained(opts.home, chatKey)) continue;
                 if (muted || sessions.get(key)?.muted) {
