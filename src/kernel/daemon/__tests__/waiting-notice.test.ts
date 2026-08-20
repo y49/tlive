@@ -37,6 +37,18 @@ describe('renderWaiting', () => {
     expect(renderWaiting(notice({ kind: 'idle' }), 'en').title).toBe('drama-admin · waiting for your input');
   });
 
+  // The fifth kind, and the only one that is not a question waiting for an
+  // answer: the turn died on an error nothing retries its way out of (a bad
+  // key, an exhausted balance), so nothing further will happen until you deal
+  // with it. Transient kinds never get here — see the normalizer.
+  it('a turn that died says so, and the body names the kind', () => {
+    expect(renderWaiting(notice({ kind: 'sessionError', detail: 'billing_error — Credit balance too low' }), 'zh')).toEqual({
+      title: 'drama-admin · 这轮失败了',
+      body: 'billing_error — Credit balance too low',
+    });
+    expect(renderWaiting(notice({ kind: 'sessionError' }), 'en').title).toBe('drama-admin · turn failed');
+  });
+
   it('an unlabelled session (registry miss) degrades to the bare reason, never a stray separator', () => {
     expect(renderWaiting(notice({ label: '' }), 'zh').title).toBe('等你批准');
   });

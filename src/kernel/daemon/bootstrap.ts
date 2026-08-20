@@ -25,12 +25,13 @@ import { EventHub } from '../web/event-hub.js';
 import { applyMonitorEvent, sweepDeadSessions, pidAlive } from '../web/session-events.js';
 import { ensureCodexAppServer, codexAppServerSockPath } from '../codex/spawn.js';
 import { connectCodexRpc, type CodexRpc, type CodexRpcEvents } from '../codex/rpc.js';
-import { startCompanion, failureText, type Companion, type TurnOutcome } from '../codex/companion.js';
+import { startCompanion, failureText, resumeFailureText, type Companion, type TurnOutcome } from '../codex/companion.js';
 import { excerptForCard } from './excerpt.js';
 import { TURN_FINISHED_SENTINEL, effectiveMode, type ShimMode } from '../hook/normalizer.js';
 import { writeMode } from '../config/mode.js';
 import { wasNotifyExplained, markNotifyExplained } from '../config/state.js';
 import { renderWaiting, type WaitingEvent, type Lang } from './waiting-notice.js';
+import { rotateIfOversized } from './log-rotate.js';
 
 export interface DaemonHandle {
   shutdown(): Promise<void>;
@@ -175,8 +176,20 @@ export function makeCodexResumeHandler(deps: {
       });
       const reply = await deps.broker.request({ cwd: key, context: lastMessage ?? TURN_FINISHED_SENTINEL, timeoutSec: 170 });
       if (reply) {
-        deps.resume(threadId, reply).catch((e) => console.log('[codex] resume failed: ' + (e instanceof Error ? e.message : String(e))));
+        // Optimistic 'active' first: the common case is that Codex takes it, and
+        // the dashboard should not lag a whole round-trip behind. The catch below
+        // is what keeps that from becoming a lie.
         deps.events.broadcast({ type: 'session-upsert', session: deps.sessions.upsert({ key, cwd: key, status: 'active', continueId: null }) });
+        deps.resume(threadId, reply).catch((e) => {
+          // This used to be a console.log, which meant a reply typed on a phone
+          // could vanish with no trace anywhere the sender could see — and a
+          // DELIVERED reply is silent too, so there was no way to tell the two
+          // apart. It is a real path: `turn/start` rejects with "no rollout
+          // found" once the thread's rollout is gone.
+          deps.reportFailure({ key, message: resumeFailureText(e instanceof Error ? e.message : String(e)) });
+          // …and nothing is running after all, so the status has to go back.
+          deps.events.broadcast({ type: 'session-upsert', session: deps.sessions.upsert({ key, cwd: key, status: 'idle' }) });
+        });
       } else {
         deps.events.broadcast({ type: 'session-upsert', session: deps.sessions.upsert({ key, cwd: key, status: 'idle', continueId: null }) });
       }
@@ -256,6 +269,19 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   sweepInbox(inboxDir);
   const inboxSweeper = setInterval(() => { sweepInbox(inboxDir); }, 3600_000);
   inboxSweeper.unref();
+  // Same treatment for the log, and for the same reason — the inbox has had a
+  // ceiling since it was written, while daemon.log, the file every diagnostic
+  // path appends to, had none. Checked on the minute rather than the hour: a
+  // runaway loop is the only thing that ever reaches the cap, and an hour of
+  // one is what put 115MB on a real machine.
+  const logPath = join(opts.home, 'daemon.log');
+  // No logJson here: the rotation writes its own `log.truncated` marker as the
+  // first line of the file it just rewrote, which is both the same JSON shape
+  // and the only place a reader could tell a gap happened. Logging it again
+  // from out here would put two near-identical lines next to each other.
+  rotateIfOversized(logPath);
+  const logRotator = setInterval(() => { rotateIfOversized(logPath); }, 60_000);
+  logRotator.unref();
 
   let muted = false;
   const policyState: PolicyState = {
@@ -1363,10 +1389,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             reply({ kind: 'ack' });
             return;
           }
-          // droppable(normalizer 判定"无实际错误内容",如 Bash 非零退出但
-          // stderr 为空)只压 IM——dashboard 广播(下面的 events.broadcast)
-          // 不受影响,始终照常:这条 attention 常是 dashboard 看到这次工具
-          // 活动的唯一途径(PostToolUse/PostToolUseFailure 互斥,失败时没有
+          // droppable(今天 = 每一条工具失败:错误回给 agent,它下一轮自己
+          // 处理)只压 IM——dashboard 广播(下面的 events.broadcast)不受
+          // 影响,始终照常:这条 attention 常是 dashboard 看到这次工具活动的
+          // 唯一途径(PostToolUse/PostToolUseFailure 互斥,失败时没有
           // activity 事件替补)。Fix 3b:上一版把这个短路放在 shim 层,连
           // dashboard 一起吞了——落点错了,改回这里。
           if (!muted && !s?.muted && !shouldDropNotify(turnEndAnnounced.has(key), req.level) && !req.droppable) {
@@ -1391,6 +1417,17 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // recorded. A failure keeps its text — that is the dashboard's only view
           // of a failed tool call.
           events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.level === 'info' ? '' : req.message }, key, req.agentPid));
+          // The one failure that reaches the desktop, and it is not an
+          // exception to the rule above but an instance of it: a turn that died
+          // on a bad key or an exhausted balance means nothing further happens
+          // in that session until a human changes something — the same "nothing
+          // happens until you come back" that earns a finished turn its
+          // notification. Claude Code's transient kinds are excluded upstream
+          // in the normalizer, so a `server_error` blip the session recovers
+          // from stays where it belongs: IM and the dashboard, not a bell.
+          if (req.sessionError && !req.sessionError.transient) {
+            deliver({ key, label: sessionLabel(key), kind: 'sessionError', detail: req.sessionError.text });
+          }
           reply({ kind: 'ack' });
           return;
         }
@@ -1511,6 +1548,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     stopped = true;
     clearInterval(sweeper);
     clearInterval(inboxSweeper);
+    clearInterval(logRotator);
     const forceExit = setTimeout(() => {
       // eslint-disable-next-line no-console
       console.error('tlive daemon: forced exit (event loop did not drain in 2s)');

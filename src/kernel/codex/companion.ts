@@ -3,7 +3,7 @@
 // Codex app-server 陪跑模块:连上后订阅所有线程(list+resume,含 no-rollout
 // 重试)、把 commandExecution 审批转发给 PermissionRouter(超时取自
 // deps.windowSec(),与 CC 共用 approvals.windowSec,默认 86200s 顶格,
-// 本地答案通过 item/completed / turn/completed 释放挂起卡)、requestUserInput
+// 本地答案通过 item/completed / turn/completed 释放挂起卡)、item/tool/requestUserInput
 // 只广播 attention 不代答(留给原生终端)。掉线自动重连(1s..30s 退避),纯编排
 // 层不直接碰 ws/net —— 一切通过注入的 connect。
 import { COMPANION_CLIENT_NAME, type CodexRpc, type CodexRpcEvents } from './rpc.js';
@@ -144,6 +144,10 @@ export function startCompanion(deps: CompanionDeps): Companion {
 
   const log = deps.log ?? (() => undefined);
 
+  /** Threads we have already reported as unresumable on THIS connection.
+   *  Reset with `resumed` on disconnect. */
+  let resumeFailureLogged = new Set<string>();
+
   function resumeThread(threadId: string, attempt = 1): void {
     if (stopped || !rpc) return;
     if (attempt === 1) {
@@ -166,8 +170,18 @@ export function startCompanion(deps: CompanionDeps): Companion {
           const t = setTimeout(() => resumeThread(threadId, attempt + 1), RESUME_RETRY_MS);
           t.unref?.();
         } else {
-          log(`companion: resume ${threadId} failed: ${msg}`);
-          // 清除 resumed 去重集，以便后续轮询周期可以重新尝试该线程
+          // Once per thread per connection. The retry below is deliberate — a
+          // rollout can appear late, so a later poll gets to try again — but a
+          // thread whose rollout is gone for good never stops failing, and a
+          // line per cycle is how one dead thread put 62 identical entries in
+          // daemon.log. A reconnect clears this along with `resumed`, because a
+          // fresh connection failing the same way IS new information.
+          if (!resumeFailureLogged.has(threadId)) {
+            resumeFailureLogged.add(threadId);
+            log(`companion: resume ${threadId} failed: ${msg}`);
+          }
+          // Cleared from the dedupe set so a later poll can try this thread
+          // again — see the "retried again on a later poll" test.
           resumed.delete(threadId);
         }
       },
@@ -450,7 +464,11 @@ export function startCompanion(deps: CompanionDeps): Companion {
         .finally(() => { if (abandon) abandonOnDisconnect.delete(abandon); });
       return;
     }
-    if (method === 'tool/requestUserInput') {
+    // `item/tool/requestUserInput`, in full: it is a server REQUEST, declared in
+    // codex-rs/app-server-protocol/src/protocol/common.rs:1349. This matched the
+    // bare `tool/requestUserInput` for as long as it existed, so the branch never
+    // ran once — a Codex question in the terminal reached no surface at all.
+    if (method === 'item/tool/requestUserInput') {
       const threadId = (p.threadId as string | undefined) ?? '';
       deps.onMonitor(
         { event: 'attention', cwd: cwdOf(threadId), sessionId: threadId, message: 'Codex is asking a question in the terminal' },
@@ -477,6 +495,7 @@ export function startCompanion(deps: CompanionDeps): Companion {
         rpc = undefined;
         stopPolling();
         resumed = new Set();
+        resumeFailureLogged = new Set();
         lastHeard.clear();
         released.clear();
         // Before clearing: every approval still waiting on this connection has
@@ -518,6 +537,15 @@ export function startCompanion(deps: CompanionDeps): Companion {
  *  read the same way in a chat. */
 export function failureText(errorMessage?: string): string {
   return errorMessage ? `Codex turn failed: ${errorMessage}` : 'Codex turn failed (no error detail)';
+}
+
+/** A reply the user sent from IM that Codex would not take. Its own sentence,
+ *  not `failureText`'s, because the two are different news: a failed TURN is
+ *  something that happened to the agent, while this is a message YOU sent that
+ *  is not going to arrive — and the only reason it must be said at all is that
+ *  a delivered reply says nothing either, so silence cannot distinguish them. */
+export function resumeFailureText(errorMessage: string): string {
+  return `Reply not delivered — ${errorMessage}`;
 }
 
 /** Resolve how a turn ended from `turn/completed`'s payload plus any

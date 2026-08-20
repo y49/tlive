@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -201,6 +201,45 @@ describe('makeCodexResumeHandler', () => {
     expect(reports).toHaveLength(0);    // …and nothing failed, so nothing to report
     // The dashboard still learns the session is idle: that part is honest.
     expect(events.broadcasts.some((b: any) => b.session?.status === 'idle')).toBe(true);
+  });
+
+  // You typed a reply on your phone and pressed send. If Codex will not take
+  // it, the ONE thing that must not happen is silence: a delivered reply is
+  // silent too, so silence cannot tell you which of the two happened. Real
+  // failure, seen 15 times on this machine on 2026-08-18: `thread/resume` and
+  // `turn/start` both reject with "no rollout found for thread id …" once the
+  // thread's rollout is gone.
+  it('a reply Codex refuses to take is reported back — silence would be indistinguishable from success', async () => {
+    const { handler, reports, events } = rig({
+      broker: { request: async () => 'keep going' },
+      resume: async () => { throw new Error('no rollout found for thread id t1'); },
+    });
+    handler({ threadId: 't1', key: 'codex:t1', outcome: 'completed', lastMessage: 'done' });
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    expect(reports).toEqual([{ key: 'codex:t1', message: 'Reply not delivered — no rollout found for thread id t1' }]);
+  });
+
+  it('a reply Codex refuses to take leaves the session idle, not active — nothing is running', async () => {
+    const { handler, events } = rig({
+      broker: { request: async () => 'keep going' },
+      resume: async () => { throw new Error('no rollout found for thread id t1'); },
+    });
+    handler({ threadId: 't1', key: 'codex:t1', outcome: 'completed', lastMessage: 'done' });
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    const last = (events.broadcasts as any[]).filter((b) => b.session).pop();
+    expect(last.session.status).toBe('idle');
+  });
+
+  it('a reply Codex DOES take reports nothing and leaves the session active', async () => {
+    const { handler, reports, events } = rig({
+      broker: { request: async () => 'keep going' },
+      resume: async () => undefined,
+    });
+    handler({ threadId: 't1', key: 'codex:t1', outcome: 'completed', lastMessage: 'done' });
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    expect(reports).toHaveLength(0);
+    const last = (events.broadcasts as any[]).filter((b) => b.session).pop();
+    expect(last.session.status).toBe('active');
   });
 
   it('a failed turn is reported instead of announced as finished', async () => {
@@ -810,17 +849,70 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     expect((sent[0] as { title?: string }).title).toContain('Turn finished');
   });
 
-  it('an info-level notify no longer reaches the desktop, and error-level never did', async () => {
+  // 2026-08-14 left a 121MB daemon.log on this machine, 95% of it one repeated
+  // line. The loop that wrote it is fixed; the reason it could cost 115MB is
+  // not, and that is the part that generalises to the next flood.
+  it('a daemon.log past the cap is truncated at startup, newest lines kept', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    const logPath = join(tmp, 'daemon.log');
+    const line = (n: number) => `{"ts":"2026-08-19T00:00:00.000Z","level":"info","msg":"noise ${n}"}\n`;
+    // Deliberately past the REAL cap rather than injecting a test-only one:
+    // the constant is part of what is being checked.
+    writeFileSync(logPath, Array.from({ length: 260_000 }, (_, i) => line(i)).join(''));
+    const before = statSync(logPath).size;
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async () => {} } });
+    const after = readFileSync(logPath, 'utf8');
+    expect(statSync(logPath).size).toBeLessThan(before);
+    expect(after).toContain('"msg":"noise 259999"');
+    expect(after).not.toContain('"msg":"noise 0"');
+  });
+
+  it('an info-level notify no longer reaches the desktop, and a failed tool never did', async () => {
     // Claude Code's own 60-second "waiting for your input" notification used to
-    // be this channel's trigger; "your turn" rides the Stop hook now. Error
-    // level was always excluded: a failed tool blocks nobody, and it goes to IM
-    // where it is diagnosable.
+    // be this channel's trigger; "your turn" rides the Stop hook now. A failed
+    // tool stays excluded: it blocks nobody — the agent recovers from it on its
+    // own turn — and it goes to the dashboard where it is diagnosable.
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
     const renders: Array<{ title: string; body: string }> = [];
     h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
     await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'error', message: 'Bash failed: boom' }, { socketPath: sock, timeoutMs: 2000 });
+    expect(renders).toHaveLength(0);
+  });
+
+  // A turn that died on something no retry fixes is the one failure that DOES
+  // reach the desktop: nothing further will happen in that session until a
+  // human deals with it, which is the same "nothing happens until you come
+  // back" that earns a finished turn its notification.
+  it('a session error nothing retries its way out of pops a desktop notification', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    const renders: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+    await request({
+      kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'error',
+      message: 'session error: billing_error — Credit balance too low',
+      sessionError: { text: 'billing_error — Credit balance too low', transient: false },
+    }, { socketPath: sock, timeoutMs: 2000 });
+    await until(() => { expect(renders).toHaveLength(1); });
+    expect(renders[0]!.body).toContain('billing_error');
+  });
+
+  // The common case on a real machine: every API error observed here was
+  // `server_error` behind "Connection lost mid-response" — the session picks up
+  // where it left off. Ringing a desktop bell for those is the flood the
+  // per-event channel exists to avoid.
+  it('a transient session error stays off the desktop — the session recovers on its own', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    const renders: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+    await request({
+      kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'error',
+      message: 'session error: server_error',
+      sessionError: { text: 'server_error', transient: true },
+    }, { socketPath: sock, timeoutMs: 2000 });
     expect(renders).toHaveLength(0);
   });
 

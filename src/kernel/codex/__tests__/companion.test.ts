@@ -758,6 +758,60 @@ describe('companion', () => {
     comp.stop();
   });
 
+  // Ground truth: codex-rs/app-server-protocol/src/protocol/common.rs:1349,
+  //   ToolRequestUserInput => "item/tool/requestUserInput"
+  // in `server_request_definitions!`. tlive matched the bare
+  // "tool/requestUserInput", so the branch was dead: Codex asking a question in
+  // the terminal reached no surface at all. Same failure as the Claude Code
+  // `error_type`/`tool_error` field names — a wire name written from memory
+  // instead of read off the other side — and no test named the string either.
+  it('a Codex question in the terminal reaches the monitor surfaces', async () => {
+    const { getEvents, onMonitor, comp } = harness();
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve(); await Promise.resolve();
+    getEvents().onServerRequest(9, 'item/tool/requestUserInput', { threadId: 't1', itemId: 'i9' }, vi.fn());
+    await Promise.resolve(); await Promise.resolve();
+    expect(onMonitor).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'attention', sessionId: 't1' }),
+      threadKey('t1'),
+    );
+    comp.stop();
+  });
+
+  // The retry above is deliberate — a rollout can show up late — but the LOG
+  // must not repeat with it. A thread whose rollout is gone for good keeps
+  // failing every poll cycle forever, and one line per cycle is how this
+  // machine's daemon.log collected 62 identical lines for a single dead thread.
+  // Once per thread per connection: a reconnect is new information, another
+  // sweep of the same dead thread is not.
+  it('a permanently unresumable thread is reported once, not once per poll cycle', async () => {
+    let events: any;
+    const logged: string[] = [];
+    const rpc = {
+      call: vi.fn(async (method: string, params: any) => {
+        if (method === 'thread/loaded/list') return { data: ['t9'] };
+        if (method === 'thread/resume') throw new Error('no rollout found for thread id t9');
+        return {};
+      }),
+      notify: vi.fn(),
+      close: vi.fn(),
+    };
+    const comp = startCompanion({
+      connect: async (e: any) => { events = e; return rpc as any; },
+      permissionRouter: { requestPermission: vi.fn(async () => ({ decision: 'allow' })), cancel: vi.fn(() => 0) } as any,
+      onMonitor: vi.fn(),
+      onResumePrompt: vi.fn(),
+      windowSec: () => 86_400,
+      log: (m) => { if (/resume .* failed/.test(m)) logged.push(m); },
+    });
+    await Promise.resolve(); await Promise.resolve();
+    // Well past two full retry-exhaustion cycles (10 attempts x 3s = 27s each).
+    for (let i = 0; i < 40; i++) { await vi.advanceTimersByTimeAsync(3000); await Promise.resolve(); await Promise.resolve(); }
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toContain('t9');
+    comp.stop();
+  });
+
   it('reports the real cwd (from thread/resume) so the session label becomes the project name', async () => {
     let events: any;
     const rpc = {
