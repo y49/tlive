@@ -197,8 +197,10 @@ read it if you want it. Claude Code's own transient API failures
 (`server_error`, `overloaded` — its classification, not ours) never ring the
 desktop, because the session picks up where it left off.
 
-A Codex turn that dies reports to IM as `⚠️ Codex turn failed: …`; it never
-announces a finished turn or offers a reply that would just fail again. A turn
+A Codex turn that dies reports to IM as `⚠️ Codex turn failed: …`, and waits out
+the same silence a Claude Code one does — a thread that came back on its own
+needed nobody told. It never announces a finished turn or offers a reply that
+would just fail again. A turn
 you interrupted yourself says nothing anywhere: you were at the keyboard.
 
 **What reaches IM is decided by silence, not by type.** Three things go there:

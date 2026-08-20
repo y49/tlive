@@ -108,11 +108,18 @@ export function makeCodexResumeHandler(deps: {
       // turn did not finish, and replying resumes a thread that is about to
       // fail the same way.
       if (outcome === 'failed') {
-        // No grace wait: unlike "your turn", which goes stale the moment you
-        // continue it yourself, a failure that happened stays true. This is also
-        // what the Claude Code tool-failure path does — report on arrival.
-        deps.reportFailure({ key, message: failureText(errorMessage) });
+        // The dashboard first and unconditionally: the thread did go idle, and
+        // that is true whether or not anybody is pushed about it.
         deps.events.broadcast({ type: 'session-upsert', session: deps.sessions.upsert({ key, cwd: key, status: 'idle' }) });
+        // Then the same silence test "your turn" waits out, and now for the
+        // same reason: a thread that came back on its own needed nobody told.
+        // This used to report on arrival, justified by a comparison with the
+        // Claude Code tool-failure path — which no longer reports anywhere, so
+        // the justification went with it. Unlike Claude Code there is no
+        // transient/permanent signal to read here, which makes the observed
+        // answer, did it resume, the only one available.
+        if (!(await deps.gracePassed(key))) return;
+        deps.reportFailure({ key, message: failureText(errorMessage) });
         return;
       }
       if (outcome === 'interrupted') {
@@ -930,15 +937,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     gracePassed,
     notifyTurn: ({ key, lastMessage }) => deliver({ key, label: sessionLabel(key), kind: 'idle', detail: lastMessage ?? '' }),
     reportFailure: ({ key, message }) => {
-      // Mute is the only gate here, and it is the same gate the Claude Code
-      // side applies — a mute means quiet for both vendors.
-      //
-      // ⚠️ Asymmetry, deliberate for now and worth knowing: a Claude Code turn
-      // that dies waits the same silence the continue card waits and reports
-      // only if the session was still stopped when it ended. This path reports
-      // on arrival. The justification it used to carry pointed at the Claude
-      // Code tool-failure path, which no longer reports at all, so that
-      // reasoning is gone rather than merely moved.
+      // Mute is the only gate left here — the silence test happens upstream in
+      // makeCodexResumeHandler, so by the time this runs the thread has already
+      // failed to come back. A mute means quiet for both vendors.
       const suppressed = muted || (sessions.get(key)?.muted ?? false);
       // Identity and outcome only. The failure text is card text: it is
       // provider output that has already been seen to carry a private relay

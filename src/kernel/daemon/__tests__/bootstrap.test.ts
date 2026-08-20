@@ -229,6 +229,27 @@ describe('makeCodexResumeHandler', () => {
     expect(last.session.status).toBe('active');
   });
 
+  // Same silence test the Claude Code side uses, and now for the same reason: a
+  // thread that came back needed nobody told.
+  //
+  // This used to assert the opposite, on the argument that "your turn" goes
+  // stale when you continue it yourself while a failure that happened stays
+  // true. True is not the bar — actionable is. A failure whose thread came back
+  // asks you to watch rather than to act, which is what eight identical
+  // `server_error` lines in forty-six minutes felt like on the Claude Code side
+  // before it started waiting. The other half of that argument, that this
+  // matches the Claude Code tool-failure path, is simply false now: that path
+  // reports nowhere at all.
+  it('a failed turn whose thread came back inside the grace tells nobody', async () => {
+    const { handler, reports, events } = rig({ gracePassed: async () => false });
+    handler({ threadId: 't1', key: 'codex:t1', outcome: 'failed', errorMessage: '503' });
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    expect(reports).toHaveLength(0);
+    // The dashboard is told regardless: the thread did go idle, and that is
+    // true whether or not anyone is pushed about it.
+    expect(events.broadcasts.some((b: any) => b.session?.status === 'idle')).toBe(true);
+  });
+
   it('a failed turn is reported instead of announced as finished', async () => {
     // Real incident: nine Codex threads in fourteen minutes, every turn killed
     // by a 401 against a third-party relay. tlive announced nine FINISHED turns
@@ -244,16 +265,6 @@ describe('makeCodexResumeHandler', () => {
     expect(notified).toHaveLength(0);
     expect(wasRequested()).toBe(false);
     expect(events.broadcasts.some((b: any) => b.session?.status === 'idle')).toBe(true);
-  });
-
-  it('a failed turn is reported even when a new turn started inside the grace', async () => {
-    // "Your turn" goes stale the moment you continue it yourself; a failure that
-    // happened stays true. Same as the Claude Code tool-failure path, which
-    // reports on arrival and waits for nothing.
-    const { handler, reports } = rig({ gracePassed: async () => false });
-    handler({ threadId: 't1', key: 'codex:t1', outcome: 'failed', errorMessage: 'boom' });
-    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
-    expect(reports).toHaveLength(1);
   });
 
   it('a failed turn with no error detail still says something', async () => {
@@ -476,6 +487,10 @@ describe('local-answer cancel + Stop fast-null (integration)', () => {
     };
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
       web: { enabled: false },
+      // A one-second silence, not the fifteen-second default: this asserts the
+      // report reaches IM through the real wiring, and the wait in front of it
+      // is covered by its own test.
+      approvals: { continueGraceSec: 1 },
       adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
     }));
     let events: CodexRpcEvents | undefined;
