@@ -20,7 +20,7 @@
 import { maskSecrets } from '../permission/approval-renderer.js';
 
 /** Why the user is being called. Drives the title's second half only. */
-export type WaitKind = 'held' | 'subagent' | 'localPrompt' | 'idle';
+export type WaitKind = 'held' | 'subagent' | 'localPrompt' | 'idle' | 'sessionError';
 
 /** Toast language, chosen once at daemon startup from the OS locale — see
  *  bootstrap.ts's `detectLang`. Unrecognised locales fall back to `en` ON
@@ -69,6 +69,11 @@ const REASON: Record<WaitKind, Record<Lang, string>> = {
   localPrompt: { en: 'approval needed', zh: '等你批准' },
   subagent: { en: 'sub-agent needs approval', zh: '子代理等你批准' },
   idle: { en: 'waiting for your input', zh: '等你输入' },
+  // The one kind that is not a question: the turn died on something no retry
+  // fixes, so nothing further happens in that session until you deal with it.
+  // Transient failures never reach here — the normalizer keeps Claude Code's
+  // own `server_error`/`overloaded` blips off this channel entirely.
+  sessionError: { en: 'turn failed', zh: '这轮失败了' },
 };
 
 /** Markdown markers, stripped so a body is plain text. The last assistant

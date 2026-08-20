@@ -1,7 +1,7 @@
 // src/kernel/ipc/protocol.ts
 
 import type { SessionView } from '../web/session-registry.js';
-import type { MonitorEvent } from '../hook/normalizer.js';
+import type { MonitorEvent, SessionError } from '../hook/normalizer.js';
 
 export interface SessionMeta {
   id: string;
@@ -36,11 +36,12 @@ export type IpcRequest =
   // without firing SessionEnd — kill -9, a crash, or a hard-closed terminal
   // run no hooks at all, and SessionEnd was a hook session's only way out.
   | { kind: 'hook.event'; event: MonitorEvent; wrappedId?: string; agentPid?: number }
-  // droppable: normalizer 判定"无实际错误内容"(如 Bash 非零退出但 stderr
-  // 为空)的 attention 事件透传标记。daemon 侧只据此跳过 IM 发送(见
-  // bootstrap.ts 的 hook.notify handler);dashboard 广播不受影响,照常收到
-  // ——这条 attention 往往是 dashboard 看到这次工具活动的唯一途径
-  // (PostToolUse/PostToolUseFailure 互斥,失败时没有 activity 事件替补)。
+  // droppable: "这条不进 IM"的透传标记,由 normalizer 判定。今天的唯一来源
+  // 是工具失败(含被 Esc 打断的):错误原样回给 agent,它下一轮自己处理,没
+  // 人需要为它做什么。daemon 侧只据此跳过 IM 发送(见 bootstrap.ts 的
+  // hook.notify handler);dashboard 广播不受影响,照常收到 —— 这条 attention
+  // 往往是 dashboard 看到这次工具活动的唯一途径(PostToolUse/
+  // PostToolUseFailure 互斥,失败时没有 activity 事件替补)。
   // permissionPrompt: CC Notification(permission_prompt) 透传标记(issue #49)。
   // daemon 据 pending 判重:full 模式已有 held 卡 → 丢(卡管全部答复面);
   // 没卡(notify 模式 / 立即 defer)→ 本地对话框在等 = 走等待通知链
@@ -49,7 +50,11 @@ export type IpcRequest =
   // that restarts mid-session never sees that session's SessionStart, and a
   // notification may be the first hook it does see — an idle session recreated
   // without a pid could never be reaped.
-  | { kind: 'hook.notify'; cwd: string; sessionId: string; level: 'info' | 'warn' | 'error'; message: string; wrappedId?: string; droppable?: boolean; permissionPrompt?: boolean; agentPid?: number }
+  // sessionError: present only for StopFailure — the turn ended on an API
+  // error. Carries Claude Code's own transient/not judgement, which is what
+  // decides whether this rings a desktop bell: a `server_error` blip the
+  // session picks up from calls nobody back, a bad key does.
+  | { kind: 'hook.notify'; cwd: string; sessionId: string; level: 'info' | 'warn' | 'error'; message: string; wrappedId?: string; droppable?: boolean; permissionPrompt?: boolean; agentPid?: number; sessionError?: SessionError }
   | { kind: 'session.register'; session: SessionMeta }
   | { kind: 'session.unregister'; id: string }
   // Terminal-derived activity for a wrapped session (running vs idle) — updates

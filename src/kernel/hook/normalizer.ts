@@ -25,12 +25,24 @@ export type NormalizedHook =
   // 关联回同一个 agent 的挂起审批,同 key 同 tool 的其他 agent 的卡不受影响。
   | { event: 'approval-request'; cwd: string; sessionId: string; toolName: string; input: unknown; permissionMode?: string; agentId?: string }
   | { event: 'activity'; cwd: string; sessionId: string; toolName: string; result: unknown; agentId?: string }
-  | { event: 'attention'; cwd: string; sessionId: string; message: string; lastMessage?: string; stopHookActive?: boolean; droppable?: boolean; permissionPrompt?: boolean }
+  | { event: 'attention'; cwd: string; sessionId: string; message: string; lastMessage?: string; stopHookActive?: boolean; droppable?: boolean; permissionPrompt?: boolean; sessionError?: SessionError }
   | { event: 'prompt'; cwd: string; sessionId: string; prompt: string }
   | { event: 'subagent'; cwd: string; sessionId: string; delta: 1 | -1; agentType?: string }
   | { event: 'session-start'; cwd: string; sessionId: string; source?: string }
   | { event: 'session-end'; cwd: string; sessionId: string; reason?: string }
   | { event: 'permission-denied'; cwd: string; sessionId: string; toolName: string };
+
+/** A turn that ended on an API error, with the one judgement the surfaces need
+ *  from it. `transient` is Claude Code's OWN classification, not a guess of
+ *  ours: its `apiErrorIsTransient === true || error === 'overloaded' || error
+ *  === 'server_error'`. Only the two kinds survive into the hook payload, so
+ *  that is what TRANSIENT_ERROR_KINDS mirrors — anything else, including a
+ *  missing kind, counts as needing a human, because not knowing whether it
+ *  passes is not the same as knowing it will.
+ *
+ *  `text` is `message` without its "session error: " prefix, for a surface
+ *  whose title already says the turn failed. */
+export interface SessionError { text: string; transient: boolean }
 
 /** Vendor-neutral monitoring subset carried over IPC `hook.event`. */
 export type MonitorEvent = Extract<NormalizedHook, { event: 'activity' | 'attention' | 'prompt' | 'subagent' | 'session-start' | 'session-end' | 'permission-denied' }>;
@@ -44,13 +56,26 @@ export type MonitorEvent = Extract<NormalizedHook, { event: 'activity' | 'attent
  *  要消灭的重复。 */
 export const TURN_FINISHED_SENTINEL = 'Turn finished — reply to continue';
 
+/** The kinds Claude Code retries its own way out of — a server hiccup, not a
+ *  standing condition. Everything else (a bad key, an exhausted balance, a
+ *  model that does not exist) stays broken until a human changes something. */
+const TRANSIENT_ERROR_KINDS = new Set(['overloaded', 'server_error']);
+
 interface RawHook {
   cwd?: string; session_id?: string; permission_mode?: string;
   tool_name?: string; tool_input?: unknown; tool_response?: unknown; message?: string;
   prompt?: string; source?: string; reason?: string; last_assistant_message?: string;
   notification_type?: string;
-  tool_error?: unknown;
-  error_type?: string;
+  /** Both Claude Code failure payloads call it `error` — PostToolUseFailure
+   *  {tool_name, tool_input, tool_use_id, error, is_interrupt?, duration_ms?}
+   *  and StopFailure {error, error_details?, last_assistant_message?}. Taken
+   *  from the shipped binary's own zod schemas; the /hooks help TEXT still
+   *  advertises `error_type` and `is_timeout` and is stale against them, which
+   *  is where the names this once read came from. `unknown` because a hook
+   *  payload is untrusted input, not because the schema is loose. */
+  error?: unknown;
+  error_details?: string;
+  is_interrupt?: boolean;
   agent_type?: string;
   stop_hook_active?: boolean;
   agent_id?: string;
@@ -86,35 +111,54 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
     case 'session-end':
       return { event: 'session-end', cwd, sessionId, ...(r.reason ? { reason: r.reason } : {}) };
     case 'post-tool-use-failure': {
-      const err = typeof r.tool_error === 'string' ? r.tool_error : JSON.stringify(r.tool_error ?? '');
+      const err = typeof r.error === 'string' ? r.error : JSON.stringify(r.error ?? '');
       // 语义上"空"的错误文本:真正空串/纯空白,或 JSON.stringify 序列化出的
-      // 空壳(空对象 {}、null、双引号空串)——这些都不是"有效错误内容"。最常见
-      // 的来源是 Bash 命令非零退出但 stderr 为空(grep 没命中/test 判假/
-      // diff --quiet 这类正常非零退出),属于噪音,不该推告警到手机;有真正
-      // 内容的失败(如 permission denied)不受影响,照常发。
+      // 空壳(空对象 {}、null、双引号空串)。只决定这条读起来是什么样 ——
+      // 不带一对孤零零的空引号(`Bash failed: ""`),换成说人话的文案。
       const trimmed = err.trim();
       const isEmptyError = trimmed === '' || trimmed === '{}' || trimmed === '""' || trimmed === "''" || trimmed === 'null';
       const tool = r.tool_name ?? '(unknown)';
-      // No emoji prefix here — single responsibility: normalizer only normalizes
-      // text. The ⚠️ prefix (for error-level notify) is bootstrap's call.
-      //
+      // You pressed Esc. Claude Code reports the abort through the same failure
+      // hook as a real error, but nothing failed and nobody needs telling: you
+      // were at the keyboard when you did it. Same rule the Codex `interrupted`
+      // outcome follows. The text says what actually happened instead of
+      // "failed", because the dashboard still shows this.
+      if (r.is_interrupt) return { event: 'attention', cwd, sessionId, message: `${tool} interrupted`, droppable: true };
       // droppable 只管 IM(bootstrap.ts 的 hook.notify handler 据此跳过
       // sendToChat)——dashboard 广播(events.broadcast)在那个 if 之外,不受
       // droppable 影响,始终照常收到这条 attention。这也是它唯一能看到这次
       // 工具活动的途径:CC 的 PostToolUse 与 PostToolUseFailure 互斥(同一次
       // 工具调用只触发其一,见 code.claude.com/docs/en/hooks),失败时
-      // PostToolUse 根本不 fire,没有 activity 事件能替补。所以即使
-      // droppable,message 也要保持人话可读——空错误时不带一对孤零零的空
-      // 引号(`Bash failed: ""`),换成说人话的文案;有内容的失败照旧
-      // `<tool> failed: <err>`。
+      // PostToolUse 根本不 fire,没有 activity 事件能替补。
+      //
+      // 工具失败**一律**不进 IM,理由不是"这条没内容",而是**没人需要为它做
+      // 什么**:错误会原样回给 agent,它下一轮自己处理。本机 7 天 42 条真实
+      // 失败(29 条是 `Exit code N` —— diff 有差异、grep 没命中、命令超时、
+      // 我自己引号打错)里没有一条需要人介入,而每一条都会变成一条 ⚠️ 推到
+      // 手机上。这与桌面通道同一条规则:只投递到"你在那儿能做点什么"的面上。
+      // 整轮死掉(stop-failure)是另一回事,见下一个 case。
+      // No emoji prefix here — single responsibility: normalizer only normalizes
+      // text. The ⚠️ prefix (for error-level notify) is bootstrap's call.
       return {
         event: 'attention', cwd, sessionId,
         message: isEmptyError ? `${tool} failed (no error output)` : `${tool} failed: ${err.slice(0, 200)}`,
-        ...(isEmptyError ? { droppable: true } : {}),
+        droppable: true,
       };
     }
-    case 'stop-failure':
-      return { event: 'attention', cwd, sessionId, message: `session error: ${r.error_type ?? 'unknown'}` };
+    case 'stop-failure': {
+      // `error` is one of twelve kinds (rate_limit / overloaded /
+      // authentication_failed / oauth_org_not_allowed / account_on_hold /
+      // billing_error / invalid_request / model_not_found / server_error /
+      // max_output_tokens / unknown). The kind alone tells you which bucket,
+      // never what happened — `error_details` is the only human-readable half,
+      // so it travels with it. Note `unknown` is itself one of the twelve: the
+      // fallback below is indistinguishable from Claude Code genuinely not
+      // knowing, and the details are what settle that either way.
+      const kind = typeof r.error === 'string' && r.error ? r.error : 'unknown';
+      const details = typeof r.error_details === 'string' ? r.error_details.trim() : '';
+      const text = `${kind}${details ? ` — ${details.slice(0, 200)}` : ''}`;
+      return { event: 'attention', cwd, sessionId, message: `session error: ${text}`, sessionError: { text, transient: TRANSIENT_ERROR_KINDS.has(kind) } };
+    }
     case 'subagent-start':
       return { event: 'subagent', cwd, sessionId, delta: 1, ...(r.agent_type ? { agentType: r.agent_type } : {}) };
     case 'subagent-stop':
