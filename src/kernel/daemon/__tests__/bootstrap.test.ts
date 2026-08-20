@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, readFileSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { bootstrapDaemon, shouldFastNullContinue, clampPermissionTimeout, makeCodexResumeHandler, shouldDropNotify, resolveKey, detectLang, type DaemonHandle } from '../bootstrap';
+import { bootstrapDaemon, shouldFastNullContinue, clampPermissionTimeout, makeCodexResumeHandler, resolveKey, detectLang, type DaemonHandle } from '../bootstrap';
 import type { CodexRpcEvents } from '../../codex/rpc';
 import { request, daemonSocketPath } from '../../ipc/client';
 import { AlreadyRunningError } from '../../ipc/server.js';
@@ -149,19 +149,6 @@ describe('resolveKey — one key per session, not per directory', () => {
 
   it('falls back to cwd when the session id is missing (normalizer yields "")', () => {
     expect(resolveKey('', '/w')).toBe('/w');
-  });
-});
-
-describe('shouldDropNotify', () => {
-  it('drops an info-level idle notify once this turn\'s end has already been announced', () => {
-    expect(shouldDropNotify(true, 'info')).toBe(true);
-  });
-  it('never drops an error-level failure notify, announced or not — a tool or stop failure must never be silently eaten', () => {
-    expect(shouldDropNotify(true, 'error')).toBe(false);
-    expect(shouldDropNotify(false, 'error')).toBe(false);
-  });
-  it('keeps an info-level notify when this turn\'s end was never announced — the Stop hook may never have reached the daemon, e.g. it was down, and then this notification is the only signal', () => {
-    expect(shouldDropNotify(false, 'info')).toBe(false);
   });
 });
 
@@ -867,6 +854,66 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     expect(after).not.toContain('"msg":"noise 0"');
   });
 
+  // Every IM flood this project has had came from a push that skipped the
+  // grace. The approval card waits ten seconds of silence, the continue card
+  // waits fifteen, and neither has ever flooded anyone. A dead turn was pushed
+  // immediately, and produced eight identical lines in forty-six minutes on a
+  // real machine. The grace is not a rate limit — it is how tlive detects that
+  // you are not here: if the session came back on its own, nobody needed
+  // telling in the first place.
+  describe('a turn that died reaches IM only if it is still dead when the grace ends', () => {
+    const DEAD = { kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'error' as const,
+      message: 'session error: server_error', sessionError: { text: 'server_error', transient: true } };
+
+    it('the session came back inside the grace → nobody hears about it', async () => {
+      writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+        web: { enabled: false }, approvals: { continueGraceSec: 2 },
+        adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+      }));
+      const sent: OutgoingMessage[] = [];
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [interactiveAdapter('telegram', sent)], desktopNotifier: { notify: async () => {} } });
+      const sock = daemonSocketPath(tmp);
+      await request(DEAD, { socketPath: sock, timeoutMs: 2000 });
+      // A new prompt is the session coming back — the same signal that cancels
+      // a continue card's grace.
+      await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/w', sessionId: 's1', prompt: 'carry on' } }, { socketPath: sock, timeoutMs: 2000 });
+      await new Promise((r) => setTimeout(r, 2400));
+      expect(sent).toHaveLength(0);
+    });
+
+    it('the session stayed dead → one line, carrying the reason', async () => {
+      writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+        web: { enabled: false }, approvals: { continueGraceSec: 1 },
+        adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+      }));
+      const sent: OutgoingMessage[] = [];
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [interactiveAdapter('telegram', sent)], desktopNotifier: { notify: async () => {} } });
+      const sock = daemonSocketPath(tmp);
+      await request(DEAD, { socketPath: sock, timeoutMs: 2000 });
+      await until(() => { expect(sent).toHaveLength(1); });
+      expect((sent[0] as { text?: string }).text).toContain('server_error');
+    });
+  });
+
+  // Claude Code restates "the turn ended" sixty seconds later as its own
+  // notification. tlive already reported that event, as a card you can answer.
+  // A restatement is not a second event, so it does not go to IM — and because
+  // nothing info-level does any more, there is no dedupe flag to get wrong when
+  // a new path appears. That flag existed, keyed on the Stop hook, and missed
+  // exactly the path where the Stop hook never runs.
+  it("Claude Code's own idle text never reaches IM, with or without a card having gone out", async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+      web: { enabled: false }, approvals: { approvalGraceSec: 0 },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    }));
+    const sent: OutgoingMessage[] = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [interactiveAdapter('telegram', sent)], desktopNotifier: { notify: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
+    await new Promise((r) => setTimeout(r, 250));
+    expect(sent).toHaveLength(0);
+  });
+
   it('an info-level notify no longer reaches the desktop, and a failed tool never did', async () => {
     // Claude Code's own 60-second "waiting for your input" notification used to
     // be this channel's trigger; "your turn" rides the Stop hook now. A failed
@@ -1024,7 +1071,7 @@ describe('AskUserQuestion remote card (Task 9)', () => {
 
   it('a notify for a session the daemon has never seen still carries the "<label> · " tag — first contact must not render before the session is registered', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({
-      web: { enabled: false },
+      web: { enabled: false }, approvals: { continueGraceSec: 1 },
       adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
     }));
     const sent: OutgoingMessage[] = [];
@@ -1033,15 +1080,17 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     const sock = daemonSocketPath(tmp);
     // Mirrors a daemon restart: the registry is empty, and this notify is the
     // FIRST thing the daemon ever hears about this session (started earlier).
+    // Driven by a dead turn because that is the only thing this handler still
+    // sends to IM — the label question is the same either way.
     expect(h.sessions.get('s-unseen')).toBeUndefined();
-    await request(
-      { kind: 'hook.notify', cwd: '/unseen-project', sessionId: 's-unseen', level: 'info', message: 'Claude is waiting for your input' },
-      { socketPath: sock, timeoutMs: 2000 },
-    );
-    await waitForSent(sent);
-    const msg = sent[0] as { kind: 'text'; text: string };
-    expect(msg.text.startsWith('unseen-project · ')).toBe(true);
+    await request({
+      kind: 'hook.notify', cwd: '/unseen-project', sessionId: 's-unseen', level: 'error',
+      message: 'session error: billing_error', sessionError: { text: 'billing_error', transient: false },
+    }, { socketPath: sock, timeoutMs: 2000 });
+    await until(() => { expect(sent).toHaveLength(1); });
+    expect((sent[0] as { kind: 'text'; text: string }).text.startsWith('unseen-project · ')).toBe(true);
   });
+
 
   it('a pre-existing registry entry (muted, with a pending approval) survives a notify unclobbered', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
@@ -2295,31 +2344,7 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     expect(sent.filter((m) => (m as { text?: string }).text?.includes('waiting for your input'))).toHaveLength(0);
   });
 
-  it('a new prompt re-arms the dedup — the next turn\'s idle notification is a different turn\'s news', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'notify', approvals: { continueGraceSec: 30, continueWindowSec: 60 } }));
-    const sent: OutgoingMessage[] = [];
-    const adapter = interactiveAdapter('telegram', sent);
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
-    const sock = daemonSocketPath(tmp);
-    void request(
-      { kind: 'hook.continue.request', cwd: '/w/vf', sessionId: 's1', context: 'ctx', lastMessage: 'done' },
-      { socketPath: sock, timeoutMs: 40_000 },
-    ).catch(() => undefined);
-    await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/w/vf', sessionId: 's1' } }, { socketPath: sock, timeoutMs: 2000 });
-    await request({ kind: 'hook.notify', cwd: '/w/vf', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
-    await until(() => { expect(sent.some((m) => (m as { text?: string }).text?.includes('waiting for your input'))).toBe(true); });
-  });
 
-  it('an idle session still reaches IM — replying there continues the run, so it is not dead mail', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ ...CFG, mode: 'notify' }));
-    const sent: OutgoingMessage[] = [];
-    const adapter = interactiveAdapter('telegram', sent);
-    h = await bootstrapDaemon({ home: tmp, imAdapters: [adapter], desktopNotifier: { notify: async () => {} } });
-    const sock = daemonSocketPath(tmp);
-
-    await request({ kind: 'hook.notify', cwd: '/w/vf', sessionId: 's1', level: 'info', message: 'Claude is waiting for your input' }, { socketPath: sock, timeoutMs: 2000 });
-    await until(() => { expect(sent.some((m) => (m as { text?: string }).text?.includes('waiting for your input'))).toBe(true); });
-  });
 
   it('a held request for the same session already owns every surface → the notification is dropped (full-mode dedupe)', async () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
