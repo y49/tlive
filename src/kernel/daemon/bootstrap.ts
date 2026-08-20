@@ -845,12 +845,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
    *  one slot would make that an invariant nobody wrote down and one ordering
    *  change away from silently cancelling the wrong one. */
   const deathGrace = new Map<string, () => void>();
-  // Sessions whose current turn-end has already been announced — the Stop hook
-  // arrived and the continue card went out or is in its grace. Set on the Stop
-  // hook's ARRIVAL and cleared by the next prompt, so it covers the whole
-  // period Claude Code's own idle notification can land in; see
-  // shouldDropNotify for why "is a card live" could not.
-
   continueBroker.onRequest((req) => {
     latestContinueId = req.requestId;
     // Thread the continue requestId into the session so a dashboard client can reply to it.
@@ -936,11 +930,15 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     gracePassed,
     notifyTurn: ({ key, lastMessage }) => deliver({ key, label: sessionLabel(key), kind: 'idle', detail: lastMessage ?? '' }),
     reportFailure: ({ key, message }) => {
-      // Same gates and the same ⚠️ error level a failed Claude Code tool call
-      // gets in the `hook.notify` handler — a mute means quiet for both vendors.
-      // `shouldDropNotify` is not consulted: it only suppresses info-level
-      // chatter once a turn end has been announced, and this IS the
-      // announcement.
+      // Mute is the only gate here, and it is the same gate the Claude Code
+      // side applies — a mute means quiet for both vendors.
+      //
+      // ⚠️ Asymmetry, deliberate for now and worth knowing: a Claude Code turn
+      // that dies waits the same silence the continue card waits and reports
+      // only if the session was still stopped when it ended. This path reports
+      // on arrival. The justification it used to carry pointed at the Claude
+      // Code tool-failure path, which no longer reports at all, so that
+      // reasoning is gone rather than merely moved.
       const suppressed = muted || (sessions.get(key)?.muted ?? false);
       // Identity and outcome only. The failure text is card text: it is
       // provider output that has already been seen to carry a private relay
