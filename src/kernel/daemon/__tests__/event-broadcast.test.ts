@@ -541,7 +541,10 @@ describe('daemon → /ws/events downstream broadcast', () => {
       expect(sent).toHaveLength(0);
     });
 
-    it('a non-droppable failure (real error content) still reaches both IM and the dashboard', async () => {
+    // A failed tool has not reached IM since it stopped being pushed there at
+    // all: the agent gets the error back and handles it on its next turn, so
+    // there is nobody to tell. The dashboard is where the text lives.
+    it('a failure with real error content still reaches the dashboard, and still not IM', async () => {
       const sent: string[] = [];
       const adapter = makeFakeAdapter('telegram');
       adapter.send = async (out: OutgoingMessage) => { sent.push(out.kind === 'text' ? out.text : (out.body ?? '')); return { messageId: 'm1' }; };
@@ -555,11 +558,14 @@ describe('daemon → /ws/events downstream broadcast', () => {
       );
 
       await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's' && x.session.lastMessage === 'Bash failed: permission denied');
-      await until(() => { expect(sent).toHaveLength(1); });
-      expect(sent[0]).toContain('permission denied');
+      await new Promise((r) => setTimeout(r, 150));
+      expect(sent).toHaveLength(0);
     });
 
-    it('a plain notification (no droppable field at all) is unaffected — IM + dashboard both fire as before', async () => {
+    // Nothing Claude Code says at info level reaches IM any more. Its
+    // notifications are restatements of events tlive already reports on a
+    // surface you can act on, and a restatement is not a second event.
+    it('a plain notification reaches the dashboard and stops there', async () => {
       const sent: string[] = [];
       const adapter = makeFakeAdapter('telegram');
       adapter.send = async (out: OutgoingMessage) => { sent.push(out.kind === 'text' ? out.text : (out.body ?? '')); return { messageId: 'm1' }; };
@@ -573,7 +579,8 @@ describe('daemon → /ws/events downstream broadcast', () => {
       );
 
       await waitFor(frames, (x) => x.type === 'session-upsert' && x.session.id === 's');
-      await until(() => { expect(sent).toHaveLength(1); });
+      await new Promise((r) => setTimeout(r, 150));
+      expect(sent).toHaveLength(0);
     });
   });
 

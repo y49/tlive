@@ -72,26 +72,6 @@ export function shouldFastNullContinue(chatCount: number, webClientCount: number
   return chatCount === 0 && webClientCount === 0;
 }
 
-/** Claude Code fires a "waiting for your input" notification about 60 seconds
- *  after a turn ends. That is news tlive already delivered: the Stop hook told
- *  it the same thing, and the continue card went out. So an info-level notify
- *  is dropped once this turn's end has been announced.
- *
- *  `turnEndAnnounced` is deliberately NOT "a continue card is live". That was
- *  the old test, read off the registry's `continueId`, and it was blind for
- *  exactly the window it had to cover: `continueId` is written when the broker
- *  request starts — AFTER the grace — and never written at all when the grace
- *  cancels the card. Claude Code's notification lands in that gap, so the
- *  duplicate went out anyway. The Stop hook's ARRIVAL settles the question
- *  before any grace runs, and a new prompt is what makes it stale again.
- *
- *  Error level is never dropped: a tool or stop failure is separate news, and
- *  an announcement that outlives its turn must not silently eat it.
- *
- *  Judged on state plus level, never by matching vendor wording. */
-export function shouldDropNotify(turnEndAnnounced: boolean, level: 'info' | 'warn' | 'error'): boolean {
-  return level === 'info' && turnEndAnnounced;
-}
 
 /** Codex `turn/completed` → offer the reply to whoever's watching (IM/web) via
  *  ContinueBroker, then feed a non-null reply back into the thread via
@@ -647,7 +627,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     // A session that is gone announces nothing — neither a pending turn-end
     // notification nor a future dedup. The Set part is also hygiene: one that
     // only ever grows is obvious now and a puzzle in six months.
-    turnEndAnnounced.delete(key);
     cancelTurnAnnouncement(key);
   };
 
@@ -861,12 +840,16 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // key → cancel-grace:一个会话在续跑 grace 窗口内时,收到该会话的新 prompt
   // 就调用它取消发卡(用户在键盘前继续了)。
   const continueGrace = new Map<string, () => void>();
+  /** Same shape as `continueGrace`, separate map: a turn that died and a turn
+   *  that finished cannot both be pending for one session today, but sharing
+   *  one slot would make that an invariant nobody wrote down and one ordering
+   *  change away from silently cancelling the wrong one. */
+  const deathGrace = new Map<string, () => void>();
   // Sessions whose current turn-end has already been announced — the Stop hook
   // arrived and the continue card went out or is in its grace. Set on the Stop
   // hook's ARRIVAL and cleared by the next prompt, so it covers the whole
   // period Claude Code's own idle notification can land in; see
   // shouldDropNotify for why "is a card live" could not.
-  const turnEndAnnounced = new Set<string>();
 
   continueBroker.onRequest((req) => {
     latestContinueId = req.requestId;
@@ -921,6 +904,20 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const cancelTurnAnnouncement = (key: string): void => {
     const g = continueGrace.get(key);
     if (g) { continueGrace.delete(key); g(); }
+    const d = deathGrace.get(key);
+    if (d) { deathGrace.delete(key); d(); }
+  };
+  /** True when the session was STILL stopped when the grace ended. The same
+   *  silence test the continue card uses, and for the same reason: it is how
+   *  tlive tells "you are not here" from "you are". A turn that came back on
+   *  its own needed nobody, so nobody is told. */
+  const deathGracePassed = async (key: string): Promise<boolean> => {
+    const graceSec = cfg.approvals?.continueGraceSec ?? 15;
+    const cameBack = await new Promise<boolean>((res) => {
+      deathGrace.set(key, () => res(true));
+      setTimeout(() => { if (deathGrace.delete(key)) res(false); }, graceSec * 1000).unref();
+    });
+    return !cameBack;
   };
   const gracePassed = async (key: string): Promise<boolean> => {
     const graceSec = cfg.approvals?.continueGraceSec ?? 15;
@@ -1213,10 +1210,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // no label at all, which is the one thing it cannot afford to omit.
           // Same guard, same reason, as the hook.notify handler's.
           if (!sessions.get(key)) sessions.upsert({ key, cwd: req.cwd });
-          // Announced from HERE, not from wherever the card ends up going out:
-          // this is the earliest moment tlive knows the turn ended, and the
-          // whole point is to cover the grace as well.
-          turnEndAnnounced.add(key);
           // Grace 门控:turn 刚结束,先等 graceSec —— 你要是在键盘前很快开始新
           // 一轮(UserPromptSubmit),就取消,不发续跑卡(消除刷屏);静默才推卡。
           // (async Stop hook 让 turn 立即结束,本 grace 不占用你的终端。)
@@ -1395,15 +1388,32 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // 唯一途径(PostToolUse/PostToolUseFailure 互斥,失败时没有
           // activity 事件替补)。Fix 3b:上一版把这个短路放在 shim 层,连
           // dashboard 一起吞了——落点错了,改回这里。
-          if (!muted && !s?.muted && !shouldDropNotify(turnEndAnnounced.has(key), req.level) && !req.droppable) {
-            // cwd carries the resolved KEY so the label tag + reply-routing map are consistent.
-            // 装饰性 emoji 一律不发;error 级别用 ⚠️(有信息量)。
-            // normalizer 不再自带任何前缀(单一职责:只归一化文本)——
-            // 前缀统一由这里按 level 决定;调用方若已手动带 ⚠️ 就不叠加。
-            const text = req.message.startsWith('⚠️')
-              ? req.message
-              : req.level === 'error' ? `⚠️ ${req.message}` : req.message;
-            await Promise.all(configuredChats().map((t) => sendToChat(t, { text, cwd: key })));
+          // IM carries exactly one thing from this handler: a turn that died and
+          // was still dead when the grace ended.
+          //
+          // Nothing info-level goes to IM any more, and there is no dedupe flag
+          // left to get wrong. Claude Code's "waiting for your input" is a
+          // restatement of an event tlive already reported as an answerable
+          // card; the flag that used to suppress it keyed on the Stop hook
+          // arriving, so it missed the one path where the Stop hook never runs
+          // — a turn that died — and leaked the restatement there instead.
+          //
+          // The grace is not a rate limit. It is the same silence test the
+          // approval card and the continue card have always used, and the
+          // reason neither has ever flooded anyone: a session that came back on
+          // its own needed nobody told. Pushed without it, this line produced
+          // eight identical `server_error` messages in forty-six minutes.
+          if (req.sessionError && !req.droppable) {
+            const detail = req.message;
+            void (async () => {
+              if (!(await deathGracePassed(key))) return;
+              // Mute is re-read after the grace, not before: a mute set during
+              // it is still a mute, and the send is what it applies to.
+              if (muted || sessions.get(key)?.muted) return;
+              const text = detail.startsWith('⚠️') ? detail : `⚠️ ${detail}`;
+              // cwd carries the resolved KEY so the label tag + reply-routing map are consistent.
+              await Promise.all(configuredChats().map((t) => sendToChat(t, { text, cwd: key }))).catch(() => undefined);
+            })();
           }
           // Claude Code's own 60-second "waiting for your input" notification
           // reaches NO desktop notification: "your turn" is delivered from the
@@ -1467,9 +1477,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // 精确到主会话:一个 backgrounded 子 agent 的审批与父会话的输入框无关
             // (它仍真在等,且无本地答路 —— 清掉 = 保证被 deny),不得被父 prompt 清场。
             permissionRouter.cancel({ key, sessionId: ev.sessionId, matchAgent: null });
-            // New input = a new turn, so the previous turn's announcement no
-            // longer covers anything Claude Code says from here on.
-            turnEndAnnounced.delete(key);
+            // New input = a new turn: it cancels a pending continue card and,
+            // equally, the report of a turn that died — the session came back.
             cancelTurnAnnouncement(key);
             clearLocalPrompt(key, ev.sessionId, ev.cwd);
           } else if (ev.event === 'session-end') {

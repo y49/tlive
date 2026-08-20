@@ -157,15 +157,13 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
       const kind = typeof r.error === 'string' && r.error ? r.error : 'unknown';
       const details = typeof r.error_details === 'string' ? r.error_details.trim() : '';
       const text = `${kind}${details ? ` — ${details.slice(0, 200)}` : ''}`;
-      const transient = TRANSIENT_ERROR_KINDS.has(kind);
-      // A transient failure goes to the dashboard and nowhere else. It already
-      // stayed off the desktop; IM was kept on an estimate that these were
-      // rare, and a real machine answered that within a day — eight identical
-      // `server_error` lines in forty-six minutes, none of them anything to do.
-      // The rule that governs a failed tool governs this one for the same
-      // reason: the thing recovers on its own, so pushing it to a person is
-      // asking them to watch rather than to act.
-      return { event: 'attention', cwd, sessionId, message: `session error: ${text}`, sessionError: { text, transient }, ...(transient ? { droppable: true } : {}) };
+      // Not marked droppable, transient or not. Whether anyone hears about a
+      // dead turn is not a property of the error kind — it is whether the
+      // session came back, and only the daemon can see that. It waits the same
+      // grace the continue card waits and reports only what is still stopped
+      // when the grace ends. `transient` still decides the DESKTOP, which is
+      // immediate and cannot wait for anything.
+      return { event: 'attention', cwd, sessionId, message: `session error: ${text}`, sessionError: { text, transient: TRANSIENT_ERROR_KINDS.has(kind) } };
     }
     case 'subagent-start':
       return { event: 'subagent', cwd, sessionId, delta: 1, ...(r.agent_type ? { agentType: r.agent_type } : {}) };

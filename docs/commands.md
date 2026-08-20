@@ -111,7 +111,7 @@ effect on the **next hook** — no daemon restart, no new session.
 | Mode | What it does |
 |---|---|
 | `off` | Every hook is a no-op — no gating, notifications, monitoring, or daemon autostart (kill switch). |
-| `notify` (default) | Watch + notify only. The shim short-circuits every `PermissionRequest` to a pass-through `{}` — tlive **can never hold or block an approval**; every prompt stays 100% native. A prompt waiting at the terminal reports **to the machine** — desktop toast + read-only dashboard card — since only whoever is sitting there can act on it. IM stays quiet about these (a phone can't reach a terminal), except once ever per chat: the first time, a card explains why and offers the one-tap switch to `full`. Monitoring, turn-finished / waiting notifications, and reply-to-continue all still reach IM — those ARE answerable from a phone. |
+| `notify` (default) | Watch + notify only. The shim short-circuits every `PermissionRequest` to a pass-through `{}` — tlive **can never hold or block an approval**; every prompt stays 100% native. A prompt waiting at the terminal reports **to the machine** — desktop toast + read-only dashboard card — since only whoever is sitting there can act on it. IM stays quiet about these (a phone can't reach a terminal), except once ever per chat: the first time, a card explains why and offers the one-tap switch to `full`. Monitoring and reply-to-continue still reach IM — a finished turn arrives as a card you can answer from a phone. Claude Code's own "waiting for your input" notice does not: it restates the same event on a surface where it cannot be answered. |
 | `full` | Remote approval ON for the main session — this is the posture that puts approvals **on your phone**: tlive holds each tool call so you can Allow/Deny it from IM / desktop / dashboard, in parallel with the terminal dialog (first answer wins). Sub-agent prompts still pass through to the terminal untouched. |
 | `all` | Sub-agent approvals are held too. **A held sub-agent has NO terminal dialog until the window ends** — Claude Code awaits the hook before deciding whether to build one — so this is the "nobody is at the keyboard" posture; `tlive mode full` goes back. |
 
@@ -186,15 +186,31 @@ own machine that is a `diff` that found differences, a `grep` with no match, a
 command that timed out, a quoting slip — several a day, none of them anyone's
 to act on. The dashboard card carries the full error text, which is where you
 read it if you want it. Claude Code's own transient API failures
-(`server_error`, `overloaded` — its classification, not ours) reach the
-dashboard and nothing else, for the same reason a failed tool does: the session
-picks up where it left off, so there is nothing to act on. They were briefly
-sent to IM, until a real machine produced eight identical `server_error` lines
-in forty-six minutes.
+(`server_error`, `overloaded` — its classification, not ours) never ring the
+desktop, because the session picks up where it left off.
 
 A Codex turn that dies reports to IM as `⚠️ Codex turn failed: …`; it never
 announces a finished turn or offers a reply that would just fail again. A turn
 you interrupted yourself says nothing anywhere: you were at the keyboard.
+
+**What reaches IM is decided by silence, not by type.** Three things go there:
+anything you can answer from the chat (approval, question and continue cards),
+the one-time explanation of why terminal-only dialogs are not sent, and a turn
+that died — but only if the session was still stopped when the grace ended.
+
+That last gate is the same silence test the approval card has always used, and
+it is how tlive tells "you are not here" from "you are": a session that came
+back on its own needed nobody told. It is not a rate limit. Pushed without it,
+a dead turn produced eight identical `server_error` lines in forty-six minutes
+on a real machine, none of which anyone needed to act on, because every one of
+those turns resumed.
+
+Nothing else goes to IM. In particular Claude Code's own notifications do not:
+they restate events tlive already reports where you can act on them, and a
+restatement is not a second event. There used to be a flag that suppressed the
+duplicate; it keyed on the Stop hook arriving, so it missed the one path where
+the Stop hook never runs — a turn that died — and leaked the restatement there
+instead. Excluding the whole category removed both the duplicate and the flag.
 
 A finished turn is delivered from the Stop hook, the same event the IM continue
 card rides, after the same `continueGraceSec` grace — so continuing at the
