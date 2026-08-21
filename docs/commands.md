@@ -111,7 +111,7 @@ effect on the **next hook** — no daemon restart, no new session.
 | Mode | What it does |
 |---|---|
 | `off` | Every hook is a no-op — no gating, notifications, monitoring, or daemon autostart (kill switch). |
-| `notify` (default) | Watch + notify only. The shim short-circuits every `PermissionRequest` to a pass-through `{}` — tlive **can never hold or block an approval**; every prompt stays 100% native. A prompt waiting at the terminal reports **to the machine** — desktop toast + read-only dashboard card — since only whoever is sitting there can act on it. IM stays quiet about these (a phone can't reach a terminal), except once ever per chat: the first time, a card explains why and offers the one-tap switch to `full`. Monitoring and reply-to-continue still reach IM — a finished turn arrives as a card you can answer from a phone. Claude Code's own "waiting for your input" notice does not: it restates the same event on a surface where it cannot be answered. |
+| `notify` (default) | Watch + notify only. The shim short-circuits every `PermissionRequest` to a pass-through `{}` — tlive **can never hold or block an approval**; every prompt stays 100% native. A prompt waiting at the terminal reports **to the machine** — desktop toast + read-only dashboard card — since only whoever is sitting there can act on it. IM stays quiet about these, except once ever per chat: the first time, a card explains why and offers the one-tap switch to `full`. Monitoring and reply-to-continue still reach IM — a finished turn arrives as a card you can answer from a phone. Claude Code's own "waiting for your input" notice does not: it restates the same event on a surface where it cannot be answered. |
 | `full` | Remote approval ON for the main session — this is the posture that puts approvals **on your phone**: tlive holds each tool call so you can Allow/Deny it from IM / desktop / dashboard, in parallel with the terminal dialog (first answer wins). Sub-agent prompts still pass through to the terminal untouched. |
 | `all` | Sub-agent approvals are held too. **A held sub-agent has NO terminal dialog until the window ends** — Claude Code awaits the hook before deciding whether to build one — so this is the "nobody is at the keyboard" posture; `tlive mode full` goes back. |
 
@@ -202,6 +202,16 @@ sentence naming the agent and what it needs, and the dashboard records nothing:
 filing it against the watching session would put a project that is running fine
 into a blocked state, and a dashboard that asserts the wrong thing is worse than
 one that never heard.
+
+A dialog waiting at the terminal does not reach IM either, and the reason is
+not that a phone cannot answer it — that is equally true of a dead turn, which
+does go. Two things separate them. A dialog is **frequent**: this project's own
+logs put terminal prompts at 66 to 169 a day against roughly one dead turn.
+And a dialog is **paused, not finished**: it resolves the moment you are back at
+the keyboard and the run carries on, while a dead turn is over and will not
+restart on its own. Frequent and self-resolving is what makes the second, third
+and fourth message of an afternoon worth nothing; rare and terminal is what
+makes the one about a dead turn worth a buzz.
 
 A failed **tool** never does, and it does not reach IM either: the error goes
 straight back to the agent, which handles it on its next turn. On this project's
