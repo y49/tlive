@@ -758,6 +758,105 @@ describe('companion', () => {
     comp.stop();
   });
 
+  // The second of Codex's four approval kinds, and the one tlive could not
+  // answer at all until now: writing files. It travels the same way command
+  // approvals do — `server_request_definitions!` in
+  // codex-rs/app-server-protocol/src/protocol/common.rs — so the app-server was
+  // always sending it and tlive simply had no branch.
+  //
+  // Its params carry NO diff and no path, only ids
+  // (FileChangeRequestApprovalParams: threadId, turnId, itemId, startedAtMs,
+  // reason?, grantRoot?). The changes live on the item, which arrives first as
+  // `item/started` with `changes: [{path, kind, diff}]`. So the card is only
+  // honest if the two are correlated by itemId.
+  describe('file-change approvals', () => {
+    function rigFC() {
+      let events: any;
+      const rpc = {
+        call: vi.fn(async (method: string, params: any) => {
+          if (method === 'thread/loaded/list') return { data: [] };
+          if (method === 'thread/resume') return { thread: { id: params.threadId } };
+          return {};
+        }),
+        notify: vi.fn(), close: vi.fn(),
+      };
+      const router = { requestPermission: vi.fn(async () => ({ decision: 'allow' })), cancel: vi.fn(() => 0) };
+      const comp = startCompanion({
+        connect: async (e: any) => { events = e; return rpc as any; },
+        permissionRouter: router as any,
+        onMonitor: vi.fn(), onResumePrompt: vi.fn(), windowSec: () => 86_400,
+      });
+      return { comp, router, getEvents: () => events };
+    }
+    const ITEM = {
+      threadId: 't1',
+      item: {
+        id: 'i-42', type: 'fileChange', status: 'inProgress',
+        changes: [
+          { path: 'src/a.ts', kind: { type: 'update' }, diff: '@@ -1 +1 @@\n-old\n+new' },
+          { path: 'src/b.ts', kind: { type: 'add' }, diff: '@@ -0,0 +1 @@\n+hello' },
+        ],
+      },
+    };
+
+    it('the card carries the real diff, correlated from the item that arrived first', async () => {
+      const { comp, router, getEvents } = rigFC();
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve();
+      getEvents().onNotify('item/started', ITEM);
+      getEvents().onServerRequest(1, 'item/fileChange/requestApproval', { threadId: 't1', itemId: 'i-42', turnId: 'x' }, vi.fn());
+      await Promise.resolve(); await Promise.resolve();
+      const arg = router.requestPermission.mock.calls[0][0] as any;
+      expect(arg.toolName).toBe('apply_patch');
+      expect(arg.input.command).toContain('src/a.ts');
+      expect(arg.input.command).toContain('+new');
+      expect(arg.input.command).toContain('src/b.ts');
+      comp.stop();
+    });
+
+    it('allow becomes accept and deny becomes decline', async () => {
+      const { comp, router, getEvents } = rigFC();
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve();
+      getEvents().onNotify('item/started', ITEM);
+      const okRespond = vi.fn();
+      getEvents().onServerRequest(1, 'item/fileChange/requestApproval', { threadId: 't1', itemId: 'i-42' }, okRespond);
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+      expect(okRespond).toHaveBeenCalledWith({ decision: 'accept' });
+
+      router.requestPermission.mockResolvedValueOnce({ decision: 'deny' } as any);
+      const noRespond = vi.fn();
+      getEvents().onServerRequest(2, 'item/fileChange/requestApproval', { threadId: 't1', itemId: 'i-42' }, noRespond);
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+      expect(noRespond).toHaveBeenCalledWith({ decision: 'decline' });
+      comp.stop();
+    });
+
+    // Never show an empty diff fence: a card that renders a blank patch claims
+    // to be showing you the change. Say the list is missing instead.
+    it('an approval for an item never seen still asks, and says the list is missing', async () => {
+      const { comp, router, getEvents } = rigFC();
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve();
+      getEvents().onServerRequest(1, 'item/fileChange/requestApproval', { threadId: 't1', itemId: 'ghost' }, vi.fn());
+      await Promise.resolve(); await Promise.resolve();
+      expect(router.requestPermission).toHaveBeenCalledTimes(1);
+      const arg = router.requestPermission.mock.calls[0][0] as any;
+      expect(arg.input.command).toMatch(/no file list/i);
+      comp.stop();
+    });
+
+    it('items do not survive a reconnect — a new connection is a new inventory', async () => {
+      const { comp, router, getEvents } = rigFC();
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve();
+      getEvents().onNotify('item/started', ITEM);
+      getEvents().onClose();
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve();
+      getEvents().onServerRequest(1, 'item/fileChange/requestApproval', { threadId: 't1', itemId: 'i-42' }, vi.fn());
+      await Promise.resolve(); await Promise.resolve();
+      const arg = router.requestPermission.mock.calls[0][0] as any;
+      expect(arg.input.command).toMatch(/no file list/i);
+      comp.stop();
+    });
+  });
+
   // Ground truth: codex-rs/app-server-protocol/src/protocol/common.rs:1349,
   //   ToolRequestUserInput => "item/tool/requestUserInput"
   // in `server_request_definitions!`. tlive matched the bare

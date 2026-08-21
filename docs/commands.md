@@ -197,6 +197,20 @@ read it if you want it. Claude Code's own transient API failures
 (`server_error`, `overloaded` — its classification, not ours) never ring the
 desktop, because the session picks up where it left off.
 
+Codex asks for approval in four situations, and tlive answers two of them: a
+shell command, and a file change. A file-change card carries the real diff —
+Codex's approval request contains only ids, so the changes are taken from the
+item that announced them, and if that item was never seen the card says the file
+list is missing rather than showing you an empty patch. The two tlive does not
+answer yet are MCP elicitation and a request for extra permissions; those stay
+at the terminal.
+
+Codex's own decision vocabulary is wider than the card's: besides accept and
+decline it offers "accept for the rest of the session" and "decline and stop the
+turn". Only the two ends are wired. The middle two would need buttons the card
+does not have, and inventing a mapping would put a choice on a card that cannot
+express it.
+
 A Codex turn that dies reports to IM as `⚠️ Codex turn failed: …`; it never
 announces a finished turn or offers a reply that would just fail again. A turn
 you interrupted yourself says nothing anywhere: you were at the keyboard.
