@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { startCompanion, threadKey } from '../companion';
+import { summarizeToolCall } from '../../permission/approval-renderer';
 
 function harness() {
   const calls: any[] = [];
@@ -807,9 +808,26 @@ describe('companion', () => {
       await Promise.resolve(); await Promise.resolve();
       const arg = router.requestPermission.mock.calls[0][0] as any;
       expect(arg.toolName).toBe('apply_patch');
-      expect(arg.input.command).toContain('src/a.ts');
       expect(arg.input.command).toContain('+new');
-      expect(arg.input.command).toContain('src/b.ts');
+      // The `*** <Kind> File: <path>` envelope, not a bare `--- path` header.
+      // That is the shape `summarizeToolCall` reads to name the file on a
+      // desktop toast, and a real machine showed what happens without it: the
+      // IM card had the whole diff while the toast said nothing but
+      // `apply_patch`. Emitting the format this codebase already reads beats
+      // teaching it a second one.
+      expect(arg.input.command).toContain('*** Update File: src/a.ts');
+      expect(arg.input.command).toContain('*** Add File: src/b.ts');
+      comp.stop();
+    });
+
+    it('the summary a desktop toast uses names the file, not just the tool', async () => {
+      const { comp, router, getEvents } = rigFC();
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve();
+      getEvents().onNotify('item/started', ITEM);
+      getEvents().onServerRequest(1, 'item/fileChange/requestApproval', { threadId: 't1', itemId: 'i-42' }, vi.fn());
+      await Promise.resolve(); await Promise.resolve();
+      const arg = router.requestPermission.mock.calls[0][0] as any;
+      expect(summarizeToolCall('apply_patch', arg.input)).toBe('apply_patch · a.ts');
       comp.stop();
     });
 

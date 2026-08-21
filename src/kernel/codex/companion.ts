@@ -59,6 +59,15 @@ export interface Companion {
 
 export const threadKey = (threadId: string): string => `codex:${threadId}`;
 
+/** Codex's `PatchChangeKind` is `{type: 'add' | 'delete' | 'update', movePath?}`
+ *  (app-server-protocol .../v2/item.rs). Rendered as the verb its own
+ *  apply_patch envelope uses, so one format travels the whole way. */
+const KIND_VERB: Record<string, string> = { add: 'Add', delete: 'Delete', update: 'Update' };
+const kindOf = (c: { kind?: unknown }): string => {
+  const k = (c.kind ?? {}) as { type?: unknown };
+  return typeof k.type === 'string' ? k.type : '';
+};
+
 const RESUME_RETRY_MS = 3000;
 const RESUME_RETRY_MAX = 10;
 const RECONNECT_MIN_MS = 1000;
@@ -145,7 +154,7 @@ export function startCompanion(deps: CompanionDeps): Companion {
    *  item itself, so without this the card could only say "Codex wants to write
    *  something". Reset with the connection: ids are scoped to it, and a stale
    *  entry would put one turn's diff on another turn's card. */
-  let itemChanges = new Map<string, Array<{ path?: unknown; diff?: unknown }>>();
+  let itemChanges = new Map<string, Array<{ path?: unknown; diff?: unknown; kind?: unknown }>>();
 
   /** 没拿到真 cwd 时退回 key —— 不崩,只是 label 退化成 codex:<id>。 */
   const cwdOf = (threadId: string): string => threadCwds.get(threadId) ?? threadKey(threadId);
@@ -308,7 +317,7 @@ export function startCompanion(deps: CompanionDeps): Companion {
         deps.onMonitor({ event: 'activity', cwd, sessionId: threadId, toolName: 'Bash', result: {} }, key);
       } else if (item.type === 'fileChange') {
         const id = typeof item.id === 'string' ? item.id : '';
-        if (id && Array.isArray(item.changes)) itemChanges.set(id, item.changes as Array<{ path?: unknown; diff?: unknown }>);
+        if (id && Array.isArray(item.changes)) itemChanges.set(id, item.changes as Array<{ path?: unknown; diff?: unknown; kind?: unknown }>);
         deps.onMonitor({ event: 'activity', cwd, sessionId: threadId, toolName: 'apply_patch', result: {} }, key);
       }
       return;
@@ -496,7 +505,14 @@ export function startCompanion(deps: CompanionDeps): Companion {
         ? changes.map((c) => {
             const path = typeof c.path === 'string' ? c.path : '(unknown path)';
             const diff = typeof c.diff === 'string' ? c.diff : '';
-            return `--- ${path}\n${diff}`;
+            // The `*** <Kind> File: <path>` envelope Codex's own apply_patch
+            // input uses, not a bare `--- path` header. Both render the same in
+            // a diff fence, but only this one is what `summarizeToolCall` reads
+            // to name the file — and a real machine showed the cost of the
+            // difference: the IM card carried the whole diff while the desktop
+            // toast said nothing but `apply_patch`. Emitting the format this
+            // codebase already reads beats teaching it a second one.
+            return `*** ${KIND_VERB[kindOf(c)] ?? 'Update'} File: ${path}\n${diff}`;
           }).join('\n\n')
         // Never an empty diff fence: a blank patch on a card claims to be
         // showing you the change. Say what is actually true instead.
