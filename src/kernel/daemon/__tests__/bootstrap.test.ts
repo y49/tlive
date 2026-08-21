@@ -2080,6 +2080,25 @@ describe('permission_prompt forwarding — the notify-mode / immediate-defer not
     expect(s?.status).not.toBe('waiting-approval');
   });
 
+  // The dashboard picks its badge word from the session status, and every one of
+  // these notices sets `waiting-approval` — which is the right RANK, since all
+  // of them are genuinely blocked, but the wrong WORD for a question. An
+  // elicitation dialog came out with a card titled "Needs your answer" sitting
+  // next to a badge that said "approve": one card, two claims, and they
+  // disagreed. The kind travels with the pending so the badge can say what the
+  // card says without the frontend guessing from the title string.
+  it('a question card is labelled as one, and an approval as one', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify(CFG));
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async () => {} } });
+    const sock = daemonSocketPath(tmp);
+
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 'q1', level: 'info', message: 'Claude Code needs your input', localWaiting: 'question' }, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.notify', cwd: '/w', sessionId: 'a1', level: 'info', message: MSG, localWaiting: 'approval' }, { socketPath: sock, timeoutMs: 2000 });
+
+    expect((await findSession(sock, 'q1'))?.pending?.answerKind).toBe('answer');
+    expect((await findSession(sock, 'a1'))?.pending?.answerKind).toBe('approve');
+  });
+
   // The other half of the same rule: an approval notice in a holding rung stays
   // suppressed, because there the card owns every surface already.
   it('an approval notice in a holding rung stays suppressed', async () => {
