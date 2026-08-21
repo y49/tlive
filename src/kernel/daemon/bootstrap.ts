@@ -1285,6 +1285,18 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // `elsewhere` means a DIFFERENT agent is stuck and this session is
             // only the messenger — Claude Code stamps the notification with the
             // watching session's id and cwd. Worth a toast, never a card.
+            //
+            // And therefore no dashboard record at all: this branch returns
+            // before the generic attention broadcast below, so skipping the
+            // card skips the whole surface. That is the intended outcome rather
+            // than an oversight. The payload does not identify the session that
+            // is actually stuck — Claude Code sends the watcher's id — so any
+            // record tlive could write would be filed against a session that is
+            // fine, and a dashboard asserting that the wrong project is blocked
+            // is worse than a dashboard that never heard. The toast carries
+            // Claude Code's own sentence, which names the agent, so nothing
+            // about WHAT is stuck is lost; only the ability to look it up later
+            // is, and that is bounded by what the vendor tells us.
             const aboutThisSession = req.localWaiting !== 'elsewhere';
             // A CC-native permission dialog is up (issue #49). A held request
             // for this session already owns every surface (desktop notification

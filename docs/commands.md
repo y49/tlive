@@ -188,6 +188,15 @@ means something is asking you a question. Only the first can also be waiting on
 an approval card tlive is holding; the others have no card anywhere, in any
 posture, because tlive was never offered the chance to hold them.
 
+One of them is a toast and nothing else. When a background agent goes blocked —
+waiting on a login, an exhausted balance, an account on hold — Claude Code sends
+that notice stamped with the id of whichever session is *watching* the agent
+list, not the one that is stuck. So the toast fires, carrying Claude Code's own
+sentence naming the agent and what it needs, and the dashboard records nothing:
+filing it against the watching session would put a project that is running fine
+into a blocked state, and a dashboard that asserts the wrong thing is worse than
+one that never heard.
+
 A failed **tool** never does, and it does not reach IM either: the error goes
 straight back to the agent, which handles it on its next turn. On this project's
 own machine that is a `diff` that found differences, a `grep` with no match, a
