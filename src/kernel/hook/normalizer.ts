@@ -178,12 +178,15 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
       // outcome follows. The text says what actually happened instead of
       // "failed", because the dashboard still shows this.
       if (r.is_interrupt) return { event: 'attention', cwd, sessionId, message: `${tool} interrupted`, droppable: true };
-      // droppable 只管 IM(bootstrap.ts 的 hook.notify handler 据此跳过
-      // sendToChat)——dashboard 广播(events.broadcast)在那个 if 之外,不受
-      // droppable 影响,始终照常收到这条 attention。这也是它唯一能看到这次
-      // 工具活动的途径:CC 的 PostToolUse 与 PostToolUseFailure 互斥(同一次
-      // 工具调用只触发其一,见 code.claude.com/docs/en/hooks),失败时
-      // PostToolUse 根本不 fire,没有 activity 事件能替补。
+      // ⚠️ `droppable` **在当前 daemon 里已经不把关了** —— IM 现在只走
+      // sessionError 一条路,工具失败被排除的理由是"不是死掉的 turn"。它仍然
+      // 必须发出:daemon 升级时不重启,每次构建都有一段"新 shim × 旧 daemon",
+      // 而旧 daemon 只认这个标记,不发就会让它把工具失败重新推回 IM。
+      //
+      // dashboard 广播不受它影响,一直照常收到这条 attention。这也是 dashboard
+      // 唯一能看到这次工具活动的途径:CC 的 PostToolUse 与 PostToolUseFailure
+      // 互斥(同一次工具调用只触发其一,见 code.claude.com/docs/en/hooks),
+      // 失败时 PostToolUse 根本不 fire,没有 activity 事件能替补。
       //
       // 工具失败**一律**不进 IM,理由不是"这条没内容",而是**没人需要为它做
       // 什么**:错误会原样回给 agent,它下一轮自己处理。本机 7 天 42 条真实

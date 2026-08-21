@@ -108,11 +108,18 @@ export function makeCodexResumeHandler(deps: {
       // turn did not finish, and replying resumes a thread that is about to
       // fail the same way.
       if (outcome === 'failed') {
-        // No grace wait: unlike "your turn", which goes stale the moment you
-        // continue it yourself, a failure that happened stays true. This is also
-        // what the Claude Code tool-failure path does — report on arrival.
-        deps.reportFailure({ key, message: failureText(errorMessage) });
+        // The dashboard first and unconditionally: the thread did go idle, and
+        // that is true whether or not anybody is pushed about it.
         deps.events.broadcast({ type: 'session-upsert', session: deps.sessions.upsert({ key, cwd: key, status: 'idle' }) });
+        // Then the same silence test "your turn" waits out, and now for the
+        // same reason: a thread that came back on its own needed nobody told.
+        // This used to report on arrival, justified by a comparison with the
+        // Claude Code tool-failure path — which no longer reports anywhere, so
+        // the justification went with it. Unlike Claude Code there is no
+        // transient/permanent signal to read here, which makes the observed
+        // answer, did it resume, the only one available.
+        if (!(await deps.gracePassed(key))) return;
+        deps.reportFailure({ key, message: failureText(errorMessage) });
         return;
       }
       if (outcome === 'interrupted') {
@@ -845,12 +852,6 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
    *  one slot would make that an invariant nobody wrote down and one ordering
    *  change away from silently cancelling the wrong one. */
   const deathGrace = new Map<string, () => void>();
-  // Sessions whose current turn-end has already been announced — the Stop hook
-  // arrived and the continue card went out or is in its grace. Set on the Stop
-  // hook's ARRIVAL and cleared by the next prompt, so it covers the whole
-  // period Claude Code's own idle notification can land in; see
-  // shouldDropNotify for why "is a card live" could not.
-
   continueBroker.onRequest((req) => {
     latestContinueId = req.requestId;
     // Thread the continue requestId into the session so a dashboard client can reply to it.
@@ -936,11 +937,9 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     gracePassed,
     notifyTurn: ({ key, lastMessage }) => deliver({ key, label: sessionLabel(key), kind: 'idle', detail: lastMessage ?? '' }),
     reportFailure: ({ key, message }) => {
-      // Same gates and the same ⚠️ error level a failed Claude Code tool call
-      // gets in the `hook.notify` handler — a mute means quiet for both vendors.
-      // `shouldDropNotify` is not consulted: it only suppresses info-level
-      // chatter once a turn end has been announced, and this IS the
-      // announcement.
+      // Mute is the only gate left here — the silence test happens upstream in
+      // makeCodexResumeHandler, so by the time this runs the thread has already
+      // failed to come back. A mute means quiet for both vendors.
       const suppressed = muted || (sessions.get(key)?.muted ?? false);
       // Identity and outcome only. The failure text is card text: it is
       // provider output that has already been seen to carry a private relay
@@ -1286,6 +1285,18 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             // `elsewhere` means a DIFFERENT agent is stuck and this session is
             // only the messenger — Claude Code stamps the notification with the
             // watching session's id and cwd. Worth a toast, never a card.
+            //
+            // And therefore no dashboard record at all: this branch returns
+            // before the generic attention broadcast below, so skipping the
+            // card skips the whole surface. That is the intended outcome rather
+            // than an oversight. The payload does not identify the session that
+            // is actually stuck — Claude Code sends the watcher's id — so any
+            // record tlive could write would be filed against a session that is
+            // fine, and a dashboard asserting that the wrong project is blocked
+            // is worse than a dashboard that never heard. The toast carries
+            // Claude Code's own sentence, which names the agent, so nothing
+            // about WHAT is stuck is lost; only the ability to look it up later
+            // is, and that is bounded by what the vendor tells us.
             const aboutThisSession = req.localWaiting !== 'elsewhere';
             // A CC-native permission dialog is up (issue #49). A held request
             // for this session already owns every surface (desktop notification
@@ -1405,12 +1416,15 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             reply({ kind: 'ack' });
             return;
           }
-          // droppable(今天 = 每一条工具失败:错误回给 agent,它下一轮自己
-          // 处理)只压 IM——dashboard 广播(下面的 events.broadcast)不受
-          // 影响,始终照常:这条 attention 常是 dashboard 看到这次工具活动的
-          // 唯一途径(PostToolUse/PostToolUseFailure 互斥,失败时没有
-          // activity 事件替补)。Fix 3b:上一版把这个短路放在 shim 层,连
-          // dashboard 一起吞了——落点错了,改回这里。
+          // `droppable` 在**这个 daemon 里已经不起作用了**:IM 现在只走
+          // sessionError 一条路,而工具失败不带 sessionError,所以它被排除的
+          // 理由是"不是死掉的 turn",不再是这个标记。别在下面的条件里再问它
+          // 一次 —— 一个永远为真的判断会让人以为它还在把关。
+          //
+          // 它仍然由 shim 发出,而且必须继续发:daemon 是长命进程,升级时不会
+          // 重启,所以每次构建都会有一段"新 shim × 旧 daemon"。旧 daemon 只认
+          // 这个标记,不发就会让它把工具失败重新推进 IM。等到比该版本更旧的
+          // daemon 不再是问题时,连同 shim 那半一起删。
           // IM carries exactly one thing from this handler: a turn that died and
           // was still dead when the grace ended.
           //
@@ -1426,20 +1440,22 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // reason neither has ever flooded anyone: a session that came back on
           // its own needed nobody told. Pushed without it, this line produced
           // eight identical `server_error` messages in forty-six minutes.
-          if (req.sessionError && !req.droppable) {
+          if (req.sessionError) {
             const detail = req.message;
             void (async () => {
               const survived = await deathGracePassed(key);
+              // Mute is re-read after the grace, not before: a mute set during
+              // it is still a mute, and the send is what it applies to.
+              const silenced = muted || (sessions.get(key)?.muted ?? false);
               // Observability, because silence is the DESIGNED outcome here and
-              // is otherwise indistinguishable from a broken channel. Identity
+              // is otherwise indistinguishable from a broken channel. Both
+              // reasons for silence are recorded, since "it came back" and "you
+              // muted it" are different answers to the same question. Identity
               // and outcome only — the failure text is provider output that has
               // already been seen to carry a private relay endpoint, and this
               // log is shared by every session on the machine.
-              logJson('notify.death', { key, resumed: !survived });
-              if (!survived) return;
-              // Mute is re-read after the grace, not before: a mute set during
-              // it is still a mute, and the send is what it applies to.
-              if (muted || sessions.get(key)?.muted) return;
+              logJson('notify.death', { key, resumed: !survived, delivered: survived && !silenced });
+              if (!survived || silenced) return;
               const text = detail.startsWith('⚠️') ? detail : `⚠️ ${detail}`;
               // cwd carries the resolved KEY so the label tag + reply-routing map are consistent.
               await Promise.all(configuredChats().map((t) => sendToChat(t, { text, cwd: key }))).catch(() => undefined);
