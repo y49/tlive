@@ -22,6 +22,14 @@ export type SessionKind = 'wrapped' | 'hook';
 
 export interface PendingApproval {
   requestId: string;
+  /** Which word a surface should use for this one: a yes-or-no decision, or a
+   *  question waiting for an answer. Both share the `waiting-approval` status,
+   *  because both are genuinely blocked and belong at the same rank — but the
+   *  status is also where the dashboard picks its badge text, so an elicitation
+   *  dialog came out titled "Needs your answer" next to a badge reading
+   *  "approve". One card, two claims, disagreeing. Absent means approve, which
+   *  is what every held request is. */
+  answerKind?: 'approve' | 'answer';
   /** When this claim was made, ms epoch. Required on purpose: a card that says
    *  "waiting at the terminal" is asserting a present state tlive cannot verify
    *  — the notification reporting a dialog carries no agent id, so one raised by

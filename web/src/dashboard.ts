@@ -11,7 +11,7 @@ const token = new URLSearchParams(location.search).get('token') ?? '';
 
 type Status = 'active' | 'waiting-approval' | 'waiting-input' | 'idle';
 interface AskInfo { question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect: boolean }
-interface Pending { requestId: string; title: string; body: string; toolName?: string; local?: boolean; ask?: AskInfo; seenAt: number }
+interface Pending { requestId: string; title: string; body: string; toolName?: string; local?: boolean; ask?: AskInfo; seenAt: number; answerKind?: 'approve' | 'answer' }
 interface SessionView {
   id: string; label: string; cwd: string;
   kind: 'wrapped' | 'hook'; status: Status;
@@ -158,7 +158,11 @@ const IDLE: Palette = { key: 'idle', label: 'idle', accent: '#5b9bff', fade: 'rg
 function palette(s: SessionView): Palette {
   switch (s.status) {
     case 'active': return RUNNING;
-    case 'waiting-approval': return WAITING('approve');
+    // The status decides the RANK — everything here is genuinely blocked — but
+    // not the word. A question and an approval sit at the same rank and read
+    // differently, so the card and its badge agree instead of contradicting
+    // each other.
+    case 'waiting-approval': return WAITING(s.pending?.answerKind === 'answer' ? 'answer' : 'approve');
     case 'waiting-input': return WAITING('reply');
     default: return IDLE;
   }
