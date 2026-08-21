@@ -7,6 +7,7 @@
 // 只广播 attention 不代答(留给原生终端)。掉线自动重连(1s..30s 退避),纯编排
 // 层不直接碰 ws/net —— 一切通过注入的 connect。
 import { COMPANION_CLIENT_NAME, type CodexRpc, type CodexRpcEvents } from './rpc.js';
+import { summarizeToolCall } from '../permission/approval-renderer.js';
 import type { PermissionRouter } from '../daemon/permission-router.js';
 import { TURN_FINISHED_SENTINEL, type MonitorEvent } from '../hook/normalizer.js';
 
@@ -517,6 +518,17 @@ export function startCompanion(deps: CompanionDeps): Companion {
         // Never an empty diff fence: a blank patch on a card claims to be
         // showing you the change. Say what is actually true instead.
         : 'Codex sent no file list with this request';
+      // The posture ladder governs this exactly as it governs a command
+      // approval, and skipping it was a real defect: on a machine sitting at
+      // the default rung a write approval came out `reason: "held"`, which is
+      // the one thing `notify` promises never happens. `off` never answers at
+      // all; `notify` reports to the machine and holds nothing.
+      const policy = deps.approvalPolicy?.() ?? 'hold';
+      if (policy === 'ignore') return;
+      if (policy === 'notify') {
+        deps.onNativePrompt?.({ key: threadKey(threadId), cwd: cwdOf(threadId), detail: summarizeToolCall('apply_patch', { command: patch }) });
+        return;
+      }
       let abandon: (() => void) | undefined;
       void deps.permissionRouter
         .requestPermission({

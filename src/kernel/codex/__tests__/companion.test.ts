@@ -771,7 +771,7 @@ describe('companion', () => {
   // `item/started` with `changes: [{path, kind, diff}]`. So the card is only
   // honest if the two are correlated by itemId.
   describe('file-change approvals', () => {
-    function rigFC() {
+    function rigFC(policy?: 'ignore' | 'notify' | 'hold') {
       let events: any;
       const rpc = {
         call: vi.fn(async (method: string, params: any) => {
@@ -782,12 +782,15 @@ describe('companion', () => {
         notify: vi.fn(), close: vi.fn(),
       };
       const router = { requestPermission: vi.fn(async () => ({ decision: 'allow' })), cancel: vi.fn(() => 0) };
+      const onNativePrompt = vi.fn();
       const comp = startCompanion({
         connect: async (e: any) => { events = e; return rpc as any; },
         permissionRouter: router as any,
         onMonitor: vi.fn(), onResumePrompt: vi.fn(), windowSec: () => 86_400,
+        ...(policy ? { approvalPolicy: () => policy } : {}),
+        onNativePrompt,
       });
-      return { comp, router, getEvents: () => events };
+      return { comp, router, getEvents: () => events, onNativePrompt };
     }
     const ITEM = {
       threadId: 't1',
@@ -859,6 +862,38 @@ describe('companion', () => {
       const arg = router.requestPermission.mock.calls[0][0] as any;
       expect(summarizeToolCall('apply_patch', arg.input)).toBe('apply_patch · hello.txt');
       expect(arg.input.command).toContain('hi');
+      comp.stop();
+    });
+
+    // The posture ladder governs this request exactly as it governs a command
+    // one. Skipping it was a real defect: on a machine sitting at the default
+    // rung, a write approval came out `reason: "held"` — the one thing `notify`
+    // promises never happens.
+    it('off never responds and never asks', async () => {
+      const { comp, router, getEvents, onNativePrompt } = rigFC('ignore');
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve();
+      getEvents().onNotify('item/started', ITEM);
+      const respond = vi.fn();
+      getEvents().onServerRequest(1, 'item/fileChange/requestApproval', { threadId: 't1', itemId: 'i-42' }, respond);
+      await Promise.resolve(); await Promise.resolve();
+      expect(router.requestPermission).not.toHaveBeenCalled();
+      expect(onNativePrompt).not.toHaveBeenCalled();
+      expect(respond).not.toHaveBeenCalled();
+      comp.stop();
+    });
+
+    it('notify reports to the machine and holds nothing', async () => {
+      const { comp, router, getEvents, onNativePrompt } = rigFC('notify');
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve();
+      getEvents().onNotify('item/started', ITEM);
+      const respond = vi.fn();
+      getEvents().onServerRequest(1, 'item/fileChange/requestApproval', { threadId: 't1', itemId: 'i-42' }, respond);
+      await Promise.resolve(); await Promise.resolve();
+      expect(router.requestPermission).not.toHaveBeenCalled();
+      expect(respond).not.toHaveBeenCalled();
+      // …and what it says names the file, same as the card would.
+      expect(onNativePrompt).toHaveBeenCalledWith(expect.objectContaining({ key: threadKey('t1') }));
+      expect(onNativePrompt.mock.calls[0][0].detail).toContain('a.ts');
       comp.stop();
     });
 
