@@ -188,6 +188,12 @@ means something is asking you a question. Only the first can also be waiting on
 an approval card tlive is holding; the others have no card anywhere, in any
 posture, because tlive was never offered the chance to hold them.
 
+A run that is simply parked counts as waiting too: the usage limit came back and
+it wants a keystroke, or automatic continue was turned off and it will not
+restart by itself. Nothing is open and nothing is running — the work is stopped
+with nobody there, which is the case this whole layer exists for, and neither of
+those reached any surface before.
+
 A failed **tool** never does, and it does not reach IM either: the error goes
 straight back to the agent, which handles it on its next turn. On this project's
 own machine that is a `diff` that found differences, a `grep` with no match, a
