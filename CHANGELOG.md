@@ -1,5 +1,18 @@
 # Changelog
 
+## [5.3.0](https://github.com/y49/tlive/compare/v5.2.0...v5.3.0) (2026-08-21)
+
+
+### Features
+
+* **codex:** answer file-change approvals, with the real diff on the card ([#90](https://github.com/y49/tlive/issues/90)) ([9e47bbe](https://github.com/y49/tlive/commit/9e47bbec1383d0bca178d4ec051b32a19aaeaac1))
+* treat a parked run as waiting, and stop a question card carrying an approve badge ([#91](https://github.com/y49/tlive/issues/91)) ([17499f5](https://github.com/y49/tlive/commit/17499f5f1116c194ad4564d32be43f97b5b92b40))
+
+
+### Bug Fixes
+
+* **codex:** wait out the same silence before reporting a dead turn ([#89](https://github.com/y49/tlive/issues/89)) ([eadcdc1](https://github.com/y49/tlive/commit/eadcdc1287b20b032312ed6761948b434314452e))
+
 ## [5.2.0](https://github.com/y49/tlive/compare/v5.1.0...v5.2.0) (2026-08-20)
 
 
