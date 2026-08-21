@@ -831,6 +831,37 @@ describe('companion', () => {
       comp.stop();
     });
 
+    // Verbatim off the wire, captured from the live app-server on 2026-08-21
+    // while a real Codex turn asked to write a file. The fixture above is
+    // hand-made; this one is what actually arrives, and it is the shape the
+    // desktop toast was silently failing on before the envelope fix.
+    it('the payload a real Codex turn sends produces a toast that names the file', async () => {
+      const { comp, router, getEvents } = rigFC();
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve();
+      getEvents().onNotify('item/started', {
+        threadId: 't1',
+        item: {
+          type: 'fileChange',
+          id: 'exec-90933151-e280-4087-bea5-0fa26de0867f',
+          changes: [{ path: '/tmp/tlive-fc-probe/hello.txt', kind: { type: 'add' }, diff: 'hi\n' }],
+          status: 'inProgress',
+        },
+      });
+      getEvents().onServerRequest(1, 'item/fileChange/requestApproval', {
+        threadId: 't1',
+        turnId: '01a02231-ec86-7812-8abf-76bdeda99d14',
+        itemId: 'exec-90933151-e280-4087-bea5-0fa26de0867f',
+        startedAtMs: 1787280115020,
+        reason: null,
+        grantRoot: null,
+      }, vi.fn());
+      await Promise.resolve(); await Promise.resolve();
+      const arg = router.requestPermission.mock.calls[0][0] as any;
+      expect(summarizeToolCall('apply_patch', arg.input)).toBe('apply_patch · hello.txt');
+      expect(arg.input.command).toContain('hi');
+      comp.stop();
+    });
+
     it('allow becomes accept and deny becomes decline', async () => {
       const { comp, router, getEvents } = rigFC();
       await vi.runOnlyPendingTimersAsync(); await Promise.resolve();
