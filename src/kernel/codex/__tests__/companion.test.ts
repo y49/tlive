@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { startCompanion, threadKey } from '../companion';
+import { summarizeToolCall } from '../../permission/approval-renderer';
 
 function harness() {
   const calls: any[] = [];
@@ -756,6 +757,188 @@ describe('companion', () => {
     expect(resumeAttempts).toBe(11);
 
     comp.stop();
+  });
+
+  // The second of Codex's four approval kinds, and the one tlive could not
+  // answer at all until now: writing files. It travels the same way command
+  // approvals do — `server_request_definitions!` in
+  // codex-rs/app-server-protocol/src/protocol/common.rs — so the app-server was
+  // always sending it and tlive simply had no branch.
+  //
+  // Its params carry NO diff and no path, only ids
+  // (FileChangeRequestApprovalParams: threadId, turnId, itemId, startedAtMs,
+  // reason?, grantRoot?). The changes live on the item, which arrives first as
+  // `item/started` with `changes: [{path, kind, diff}]`. So the card is only
+  // honest if the two are correlated by itemId.
+  describe('file-change approvals', () => {
+    function rigFC(policy?: 'ignore' | 'notify' | 'hold') {
+      let events: any;
+      const rpc = {
+        call: vi.fn(async (method: string, params: any) => {
+          if (method === 'thread/loaded/list') return { data: [] };
+          if (method === 'thread/resume') return { thread: { id: params.threadId } };
+          return {};
+        }),
+        notify: vi.fn(), close: vi.fn(),
+      };
+      const router = { requestPermission: vi.fn(async () => ({ decision: 'allow' })), cancel: vi.fn(() => 0) };
+      const onNativePrompt = vi.fn();
+      const comp = startCompanion({
+        connect: async (e: any) => { events = e; return rpc as any; },
+        permissionRouter: router as any,
+        onMonitor: vi.fn(), onResumePrompt: vi.fn(), windowSec: () => 86_400,
+        ...(policy ? { approvalPolicy: () => policy } : {}),
+        onNativePrompt,
+      });
+      return { comp, router, getEvents: () => events, onNativePrompt };
+    }
+    const ITEM = {
+      threadId: 't1',
+      item: {
+        id: 'i-42', type: 'fileChange', status: 'inProgress',
+        changes: [
+          { path: 'src/a.ts', kind: { type: 'update' }, diff: '@@ -1 +1 @@\n-old\n+new' },
+          { path: 'src/b.ts', kind: { type: 'add' }, diff: '@@ -0,0 +1 @@\n+hello' },
+        ],
+      },
+    };
+
+    it('the card carries the real diff, correlated from the item that arrived first', async () => {
+      const { comp, router, getEvents } = rigFC();
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve();
+      getEvents().onNotify('item/started', ITEM);
+      getEvents().onServerRequest(1, 'item/fileChange/requestApproval', { threadId: 't1', itemId: 'i-42', turnId: 'x' }, vi.fn());
+      await Promise.resolve(); await Promise.resolve();
+      const arg = router.requestPermission.mock.calls[0][0] as any;
+      expect(arg.toolName).toBe('apply_patch');
+      expect(arg.input.command).toContain('+new');
+      // The `*** <Kind> File: <path>` envelope, not a bare `--- path` header.
+      // That is the shape `summarizeToolCall` reads to name the file on a
+      // desktop toast, and a real machine showed what happens without it: the
+      // IM card had the whole diff while the toast said nothing but
+      // `apply_patch`. Emitting the format this codebase already reads beats
+      // teaching it a second one.
+      expect(arg.input.command).toContain('*** Update File: src/a.ts');
+      expect(arg.input.command).toContain('*** Add File: src/b.ts');
+      comp.stop();
+    });
+
+    it('the summary a desktop toast uses names the file, not just the tool', async () => {
+      const { comp, router, getEvents } = rigFC();
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve();
+      getEvents().onNotify('item/started', ITEM);
+      getEvents().onServerRequest(1, 'item/fileChange/requestApproval', { threadId: 't1', itemId: 'i-42' }, vi.fn());
+      await Promise.resolve(); await Promise.resolve();
+      const arg = router.requestPermission.mock.calls[0][0] as any;
+      expect(summarizeToolCall('apply_patch', arg.input)).toBe('apply_patch · a.ts');
+      comp.stop();
+    });
+
+    // Verbatim off the wire, captured from the live app-server on 2026-08-21
+    // while a real Codex turn asked to write a file. The fixture above is
+    // hand-made; this one is what actually arrives, and it is the shape the
+    // desktop toast was silently failing on before the envelope fix.
+    it('the payload a real Codex turn sends produces a toast that names the file', async () => {
+      const { comp, router, getEvents } = rigFC();
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve();
+      getEvents().onNotify('item/started', {
+        threadId: 't1',
+        item: {
+          type: 'fileChange',
+          id: 'exec-90933151-e280-4087-bea5-0fa26de0867f',
+          changes: [{ path: '/tmp/tlive-fc-probe/hello.txt', kind: { type: 'add' }, diff: 'hi\n' }],
+          status: 'inProgress',
+        },
+      });
+      getEvents().onServerRequest(1, 'item/fileChange/requestApproval', {
+        threadId: 't1',
+        turnId: '01a02231-ec86-7812-8abf-76bdeda99d14',
+        itemId: 'exec-90933151-e280-4087-bea5-0fa26de0867f',
+        startedAtMs: 1787280115020,
+        reason: null,
+        grantRoot: null,
+      }, vi.fn());
+      await Promise.resolve(); await Promise.resolve();
+      const arg = router.requestPermission.mock.calls[0][0] as any;
+      expect(summarizeToolCall('apply_patch', arg.input)).toBe('apply_patch · hello.txt');
+      expect(arg.input.command).toContain('hi');
+      comp.stop();
+    });
+
+    // The posture ladder governs this request exactly as it governs a command
+    // one. Skipping it was a real defect: on a machine sitting at the default
+    // rung, a write approval came out `reason: "held"` — the one thing `notify`
+    // promises never happens.
+    it('off never responds and never asks', async () => {
+      const { comp, router, getEvents, onNativePrompt } = rigFC('ignore');
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve();
+      getEvents().onNotify('item/started', ITEM);
+      const respond = vi.fn();
+      getEvents().onServerRequest(1, 'item/fileChange/requestApproval', { threadId: 't1', itemId: 'i-42' }, respond);
+      await Promise.resolve(); await Promise.resolve();
+      expect(router.requestPermission).not.toHaveBeenCalled();
+      expect(onNativePrompt).not.toHaveBeenCalled();
+      expect(respond).not.toHaveBeenCalled();
+      comp.stop();
+    });
+
+    it('notify reports to the machine and holds nothing', async () => {
+      const { comp, router, getEvents, onNativePrompt } = rigFC('notify');
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve();
+      getEvents().onNotify('item/started', ITEM);
+      const respond = vi.fn();
+      getEvents().onServerRequest(1, 'item/fileChange/requestApproval', { threadId: 't1', itemId: 'i-42' }, respond);
+      await Promise.resolve(); await Promise.resolve();
+      expect(router.requestPermission).not.toHaveBeenCalled();
+      expect(respond).not.toHaveBeenCalled();
+      // …and what it says names the file, same as the card would.
+      expect(onNativePrompt).toHaveBeenCalledWith(expect.objectContaining({ key: threadKey('t1') }));
+      expect(onNativePrompt.mock.calls[0][0].detail).toContain('a.ts');
+      comp.stop();
+    });
+
+    it('allow becomes accept and deny becomes decline', async () => {
+      const { comp, router, getEvents } = rigFC();
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve();
+      getEvents().onNotify('item/started', ITEM);
+      const okRespond = vi.fn();
+      getEvents().onServerRequest(1, 'item/fileChange/requestApproval', { threadId: 't1', itemId: 'i-42' }, okRespond);
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+      expect(okRespond).toHaveBeenCalledWith({ decision: 'accept' });
+
+      router.requestPermission.mockResolvedValueOnce({ decision: 'deny' } as any);
+      const noRespond = vi.fn();
+      getEvents().onServerRequest(2, 'item/fileChange/requestApproval', { threadId: 't1', itemId: 'i-42' }, noRespond);
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+      expect(noRespond).toHaveBeenCalledWith({ decision: 'decline' });
+      comp.stop();
+    });
+
+    // Never show an empty diff fence: a card that renders a blank patch claims
+    // to be showing you the change. Say the list is missing instead.
+    it('an approval for an item never seen still asks, and says the list is missing', async () => {
+      const { comp, router, getEvents } = rigFC();
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve();
+      getEvents().onServerRequest(1, 'item/fileChange/requestApproval', { threadId: 't1', itemId: 'ghost' }, vi.fn());
+      await Promise.resolve(); await Promise.resolve();
+      expect(router.requestPermission).toHaveBeenCalledTimes(1);
+      const arg = router.requestPermission.mock.calls[0][0] as any;
+      expect(arg.input.command).toMatch(/no file list/i);
+      comp.stop();
+    });
+
+    it('items do not survive a reconnect — a new connection is a new inventory', async () => {
+      const { comp, router, getEvents } = rigFC();
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve();
+      getEvents().onNotify('item/started', ITEM);
+      getEvents().onClose();
+      await vi.runOnlyPendingTimersAsync(); await Promise.resolve();
+      getEvents().onServerRequest(1, 'item/fileChange/requestApproval', { threadId: 't1', itemId: 'i-42' }, vi.fn());
+      await Promise.resolve(); await Promise.resolve();
+      const arg = router.requestPermission.mock.calls[0][0] as any;
+      expect(arg.input.command).toMatch(/no file list/i);
+      comp.stop();
+    });
   });
 
   // Ground truth: codex-rs/app-server-protocol/src/protocol/common.rs:1349,

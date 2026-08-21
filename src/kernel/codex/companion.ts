@@ -7,6 +7,7 @@
 // 只广播 attention 不代答(留给原生终端)。掉线自动重连(1s..30s 退避),纯编排
 // 层不直接碰 ws/net —— 一切通过注入的 connect。
 import { COMPANION_CLIENT_NAME, type CodexRpc, type CodexRpcEvents } from './rpc.js';
+import { summarizeToolCall } from '../permission/approval-renderer.js';
 import type { PermissionRouter } from '../daemon/permission-router.js';
 import { TURN_FINISHED_SENTINEL, type MonitorEvent } from '../hook/normalizer.js';
 
@@ -58,6 +59,15 @@ export interface Companion {
 }
 
 export const threadKey = (threadId: string): string => `codex:${threadId}`;
+
+/** Codex's `PatchChangeKind` is `{type: 'add' | 'delete' | 'update', movePath?}`
+ *  (app-server-protocol .../v2/item.rs). Rendered as the verb its own
+ *  apply_patch envelope uses, so one format travels the whole way. */
+const KIND_VERB: Record<string, string> = { add: 'Add', delete: 'Delete', update: 'Update' };
+const kindOf = (c: { kind?: unknown }): string => {
+  const k = (c.kind ?? {}) as { type?: unknown };
+  return typeof k.type === 'string' ? k.type : '';
+};
 
 const RESUME_RETRY_MS = 3000;
 const RESUME_RETRY_MAX = 10;
@@ -139,6 +149,14 @@ export function startCompanion(deps: CompanionDeps): Companion {
    *  Presence in this map is what "released, watching from outside" means, and
    *  the stored value is the baseline that decides whether it has stirred. */
   const released = new Map<string, number>();
+  /** itemId → the file changes that item proposes, kept only so a file-change
+   *  approval can show them. Its request carries ids and nothing else
+   *  (FileChangeRequestApprovalParams), while the changes arrive earlier on the
+   *  item itself, so without this the card could only say "Codex wants to write
+   *  something". Reset with the connection: ids are scoped to it, and a stale
+   *  entry would put one turn's diff on another turn's card. */
+  let itemChanges = new Map<string, Array<{ path?: unknown; diff?: unknown; kind?: unknown }>>();
+
   /** 没拿到真 cwd 时退回 key —— 不崩,只是 label 退化成 codex:<id>。 */
   const cwdOf = (threadId: string): string => threadCwds.get(threadId) ?? threadKey(threadId);
 
@@ -298,6 +316,10 @@ export function startCompanion(deps: CompanionDeps): Companion {
         deps.onMonitor({ event: 'prompt', cwd, sessionId: threadId, prompt }, key);
       } else if (item.type === 'commandExecution') {
         deps.onMonitor({ event: 'activity', cwd, sessionId: threadId, toolName: 'Bash', result: {} }, key);
+      } else if (item.type === 'fileChange') {
+        const id = typeof item.id === 'string' ? item.id : '';
+        if (id && Array.isArray(item.changes)) itemChanges.set(id, item.changes as Array<{ path?: unknown; diff?: unknown; kind?: unknown }>);
+        deps.onMonitor({ event: 'activity', cwd, sessionId: threadId, toolName: 'apply_patch', result: {} }, key);
       }
       return;
     }
@@ -464,6 +486,71 @@ export function startCompanion(deps: CompanionDeps): Companion {
         .finally(() => { if (abandon) abandonOnDisconnect.delete(abandon); });
       return;
     }
+    // The second approval kind, and the one tlive answered for the first time
+    // here. Its params carry ids and an optional reason, never the change
+    // itself — so the diff comes from the item recorded when it started, and
+    // the card is honest about it either way.
+    //
+    // Codex's decision vocabulary is four wide: accept / acceptForSession /
+    // decline / cancel. Only the two ends are wired, because the card wire is
+    // allow-or-deny today and inventing a mapping for the middle two would put
+    // choices on a card that cannot express them. Named here so the gap is a
+    // decision rather than an omission: `acceptForSession` would need a third
+    // button, `cancel` a fourth that also stops the turn.
+    if (method === 'item/fileChange/requestApproval') {
+      const threadId = (p.threadId as string | undefined) ?? '';
+      const itemId = (p.itemId as string | undefined) ?? '';
+      const reason = typeof p.reason === 'string' ? p.reason : undefined;
+      const changes = itemChanges.get(itemId);
+      const patch = changes?.length
+        ? changes.map((c) => {
+            const path = typeof c.path === 'string' ? c.path : '(unknown path)';
+            const diff = typeof c.diff === 'string' ? c.diff : '';
+            // The `*** <Kind> File: <path>` envelope Codex's own apply_patch
+            // input uses, not a bare `--- path` header. Both render the same in
+            // a diff fence, but only this one is what `summarizeToolCall` reads
+            // to name the file — and a real machine showed the cost of the
+            // difference: the IM card carried the whole diff while the desktop
+            // toast said nothing but `apply_patch`. Emitting the format this
+            // codebase already reads beats teaching it a second one.
+            return `*** ${KIND_VERB[kindOf(c)] ?? 'Update'} File: ${path}\n${diff}`;
+          }).join('\n\n')
+        // Never an empty diff fence: a blank patch on a card claims to be
+        // showing you the change. Say what is actually true instead.
+        : 'Codex sent no file list with this request';
+      // The posture ladder governs this exactly as it governs a command
+      // approval, and skipping it was a real defect: on a machine sitting at
+      // the default rung a write approval came out `reason: "held"`, which is
+      // the one thing `notify` promises never happens. `off` never answers at
+      // all; `notify` reports to the machine and holds nothing.
+      const policy = deps.approvalPolicy?.() ?? 'hold';
+      if (policy === 'ignore') return;
+      if (policy === 'notify') {
+        deps.onNativePrompt?.({ key: threadKey(threadId), cwd: cwdOf(threadId), detail: summarizeToolCall('apply_patch', { command: patch }) });
+        return;
+      }
+      let abandon: (() => void) | undefined;
+      void deps.permissionRouter
+        .requestPermission({
+          key: threadKey(threadId),
+          cwd: cwdOf(threadId),
+          toolName: 'apply_patch',
+          input: { command: patch, ...(reason ? { reason } : {}) },
+          timeoutSec: deps.windowSec(),
+          sessionId: threadId,
+          onAbandoned: (cb) => { abandon = cb; abandonOnDisconnect.add(cb); },
+        })
+        .then((r) => {
+          if (r.decision === 'allow') respond({ decision: 'accept' });
+          else if (r.decision === 'deny') respond({ decision: 'decline' });
+          // defer / local: never respond — the terminal still owns it.
+        })
+        .catch((err: unknown) => {
+          log(`file-change approval failed: ${err instanceof Error ? err.message : String(err)}`);
+        })
+        .finally(() => { if (abandon) abandonOnDisconnect.delete(abandon); });
+      return;
+    }
     // `item/tool/requestUserInput`, in full: it is a server REQUEST, declared in
     // codex-rs/app-server-protocol/src/protocol/common.rs:1349. This matched the
     // bare `tool/requestUserInput` for as long as it existed, so the branch never
@@ -496,6 +583,7 @@ export function startCompanion(deps: CompanionDeps): Companion {
         stopPolling();
         resumed = new Set();
         resumeFailureLogged = new Set();
+        itemChanges = new Map();
         lastHeard.clear();
         released.clear();
         // Before clearing: every approval still waiting on this connection has
