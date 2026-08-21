@@ -154,10 +154,25 @@ describe('notification types — the surface must know which of the fourteen it 
   it.each([
     'idle_prompt', 'agent_completed', 'auth_success',
     'computer_use_enter', 'computer_use_exit',
-    'quota_auto_resume_fired', 'quota_auto_resume_stale', 'quota_auto_resume_disabled',
+    'quota_auto_resume_fired',
     'push_notification',
   ])('%s waits for nobody', (t) => {
     expect(notify(t).localWaiting).toBeUndefined();
+  });
+
+  // A parked run is the archetype of what this whole layer is for: you left,
+  // the quota came back or the auto-continue was turned off, and the work is
+  // sitting one keystroke away from resuming with nobody there to press it.
+  // Both reached no surface at all before this.
+  it('a run parked on a reset usage limit is waiting for you', () => {
+    expect(notify('quota_auto_resume_stale').localWaiting).toBe('question');
+  });
+  it('a run that will not resume on its own is waiting for you', () => {
+    expect(notify('quota_auto_resume_disabled').localWaiting).toBe('question');
+  });
+  // …but a quota that resumed the task itself is not. Nothing is stopped.
+  it('a quota that continued the task on its own waits for nobody', () => {
+    expect(notify('quota_auto_resume_fired').localWaiting).toBeUndefined();
   });
 
   it('an unknown or absent type is not assumed to be waiting', () => {

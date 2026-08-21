@@ -67,6 +67,22 @@ const LOCAL_WAITING_TYPES: Record<string, LocalWaiting> = {
   elicitation_dialog: 'question',
   elicitation_url_dialog: 'question',
   agent_needs_input: 'elsewhere',
+  // A parked run: the usage limit came back and it wants a keystroke, or
+  // automatic continue was turned off and it will not restart on its own.
+  // Nothing is open and nothing is running — the work is simply stopped with
+  // nobody there. That is the archetype of what this layer exists for, and both
+  // of these reached no surface at all before.
+  //
+  // Filed as `question` rather than a fifth value. A fifth would buy a slightly
+  // better TITLE — "waiting to be resumed" reads truer than "needs an answer"
+  // for something with no dialog open — and cost every reader another value to
+  // learn. The body carries Claude Code's own exact sentence, so nothing about
+  // what is actually stopped is lost; only the category label is generic. That
+  // is a different thing from the badge that said "approve" over a card titled
+  // "Needs your answer": there, two labels on one card disagreed with each
+  // other. Here, a general label sits above an exact one.
+  quota_auto_resume_stale: 'question',
+  quota_auto_resume_disabled: 'question',
 };
 
 /** A turn that ended on an API error, with the one judgement the surfaces need

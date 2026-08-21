@@ -1349,7 +1349,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
               deliver({ key, label: sessionLabel(key), kind: wordsAsApproval ? 'localPrompt' : 'localAnswer', detail: req.message });
               // Dashboard: read-only waiting-approval card (pending.local) —
               // visible from anywhere, answerable only at the terminal.
-              if (aboutThisSession) events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'waiting-approval', pending: { requestId: `local:${key}`, title: wordsAsApproval ? 'Permission needed' : 'Needs your answer', body: req.message, local: true, seenAt: Date.now() } }) });
+              if (aboutThisSession) events.broadcast({ type: 'session-upsert', session: sessions.upsert({ key, cwd: req.cwd, status: 'waiting-approval', pending: { requestId: `local:${key}`, title: wordsAsApproval ? 'Permission needed' : 'Needs your answer', answerKind: wordsAsApproval ? 'approve' : 'answer', body: req.message, local: true, seenAt: Date.now() } }) });
               // No IM text for this dialog, ever. It can only be answered at
               // the terminal, and a phone cannot reach a terminal — the message
               // was pure anxiety with no exit. Every channel this daemon

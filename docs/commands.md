@@ -188,6 +188,12 @@ means something is asking you a question. Only the first can also be waiting on
 an approval card tlive is holding; the others have no card anywhere, in any
 posture, because tlive was never offered the chance to hold them.
 
+A run that is simply parked counts as waiting too: the usage limit came back and
+it wants a keystroke, or automatic continue was turned off and it will not
+restart by itself. Nothing is open and nothing is running — the work is stopped
+with nobody there, which is the case this whole layer exists for, and neither of
+those reached any surface before.
+
 One of them is a toast and nothing else. When a background agent goes blocked —
 waiting on a login, an exhausted balance, an account on hold — Claude Code sends
 that notice stamped with the id of whichever session is *watching* the agent
