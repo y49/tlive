@@ -635,6 +635,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     // notification nor a future dedup. The Set part is also hygiene: one that
     // only ever grows is obvious now and a puzzle in six months.
     cancelTurnAnnouncement(key);
+    deathReported.delete(key);
   };
 
   // Reap sessions whose owning process died without unregistering: `tlive run`
@@ -847,11 +848,48 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   // key → cancel-grace:一个会话在续跑 grace 窗口内时,收到该会话的新 prompt
   // 就调用它取消发卡(用户在键盘前继续了)。
   const continueGrace = new Map<string, () => void>();
-  /** Same shape as `continueGrace`, separate map: a turn that died and a turn
-   *  that finished cannot both be pending for one session today, but sharing
-   *  one slot would make that an invariant nobody wrote down and one ordering
-   *  change away from silently cancelling the wrong one. */
-  const deathGrace = new Map<string, () => void>();
+  /** The pending dead-turn report, at most one per session.
+   *
+   *  Separate from `continueGrace` for the reason that map's neighbour gives:
+   *  a turn that died and a turn that finished cannot both be pending today,
+   *  but sharing one slot would make that an invariant nobody wrote down.
+   *
+   *  ONE per session is the load-bearing half. A single condition kills many
+   *  turns at once — an account-level rate limit takes down every background
+   *  agent in the session — and StopFailure fires per dying turn carrying no
+   *  agent identity at all, so those arrive as N identical reports against one
+   *  key. A new death therefore RE-ARMS this entry rather than opening a
+   *  second one: the silence test then measures the silence after the last
+   *  death, which is the question it was always meant to answer, instead of
+   *  being asked N times in parallel. The map it replaces held one slot but
+   *  opened N timers, so an early death's timer deleted a later death's slot;
+   *  what went out was whichever won that race, and the rest hung forever.
+   *
+   *  `text`/`message` are the LATEST failure — the one still standing when the
+   *  silence is finally measured. `repeats` is carried for the log alone, so a
+   *  flood upstream stays visible after it has been collapsed down here. */
+  interface PendingDeath { text: string; message: string; timer: ReturnType<typeof setTimeout>; repeats: number }
+  const pendingDeath = new Map<string, PendingDeath>();
+  /** What each surface has already said about a session, so a condition that
+   *  stands for hours is not re-announced by every turn that breaks itself on
+   *  it. The grace cannot hold this line on its own: it collapses deaths that
+   *  arrive close together, and a session limit that resets at noon produces
+   *  deaths for as long as anything keeps trying.
+   *
+   *  Holds the failure TEXT, not a flag: a different error is a different
+   *  condition and has never been reported. Per surface, because the two
+   *  report at different moments — the desktop rings at once, IM waits out the
+   *  grace — and one shared mark would let whichever fired first silence the
+   *  other. Cleared when the session shows it is working again or is gone, so
+   *  nothing here outlives its session. */
+  const deathReported = new Map<string, { desktop?: string; im?: string }>();
+  /** True the first time this surface is asked to report this condition. */
+  const claimDeathReport = (key: string, surface: 'desktop' | 'im', text: string): boolean => {
+    const said = deathReported.get(key) ?? {};
+    if (said[surface] === text) return false;
+    deathReported.set(key, { ...said, [surface]: text });
+    return true;
+  };
   continueBroker.onRequest((req) => {
     latestContinueId = req.requestId;
     // Thread the continue requestId into the session so a dashboard client can reply to it.
@@ -905,20 +943,56 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   const cancelTurnAnnouncement = (key: string): void => {
     const g = continueGrace.get(key);
     if (g) { continueGrace.delete(key); g(); }
-    const d = deathGrace.get(key);
-    if (d) { deathGrace.delete(key); d(); }
+    const d = pendingDeath.get(key);
+    if (d) {
+      pendingDeath.delete(key);
+      clearTimeout(d.timer);
+      logJson('notify.death', { key, resumed: true, delivered: false, repeats: d.repeats });
+    }
   };
-  /** True when the session was STILL stopped when the grace ended. The same
-   *  silence test the continue card uses, and for the same reason: it is how
-   *  tlive tells "you are not here" from "you are". A turn that came back on
-   *  its own needed nobody, so nobody is told. */
-  const deathGracePassed = async (key: string): Promise<boolean> => {
+  /** Hold a dead turn for the grace, then tell IM about it if the session is
+   *  still stopped when the grace ends. The same silence test the continue
+   *  card uses, and for the same reason: it is how tlive tells "you are not
+   *  here" from "you are". A turn that came back on its own needed nobody.
+   *
+   *  Two things stop this from repeating itself, and they answer different
+   *  questions. The grace asks "is it still stopped?", and re-arming rather
+   *  than stacking is what keeps that one question per session however many
+   *  agents died. The latch asks "have we already said this?", which is the
+   *  only one that survives a condition outlasting any grace. */
+  const reportDeath = (key: string, text: string, message: string): void => {
+    const prior = pendingDeath.get(key);
+    if (prior) clearTimeout(prior.timer);
+    const repeats = (prior?.repeats ?? 0) + 1;
     const graceSec = cfg.approvals?.continueGraceSec ?? 15;
-    const cameBack = await new Promise<boolean>((res) => {
-      deathGrace.set(key, () => res(true));
-      setTimeout(() => { if (deathGrace.delete(key)) res(false); }, graceSec * 1000).unref();
-    });
-    return !cameBack;
+    const timer = setTimeout(() => {
+      pendingDeath.delete(key);
+      // Mute is re-read after the grace, not before: a mute set during it is
+      // still a mute, and the send is what it applies to.
+      const silenced = muted || (sessions.get(key)?.muted ?? false);
+      // Observability, because silence is the DESIGNED outcome here and is
+      // otherwise indistinguishable from a broken channel. Every reason for it
+      // is recorded separately, since "it came back", "you muted it" and "you
+      // already know" are different answers to the same question. Identity and
+      // outcome only — the failure text is provider output that has already
+      // been seen to carry a private relay endpoint, and this log is shared by
+      // every session on the machine.
+      //
+      // A mute returns BEFORE the latch is claimed: the latch means "you have
+      // been told", and a muted send tells nobody. Claiming it here would let
+      // a mute swallow the report permanently — you unmute, the condition is
+      // still standing, and tlive stays quiet about it because it thinks it
+      // already spoke.
+      if (silenced) { logJson('notify.death', { key, resumed: false, muted: true, delivered: false, repeats }); return; }
+      const fresh = claimDeathReport(key, 'im', text);
+      logJson('notify.death', { key, resumed: false, repeated: !fresh, delivered: fresh, repeats });
+      if (!fresh) return;
+      const body = message.startsWith('⚠️') ? message : `⚠️ ${message}`;
+      // cwd carries the resolved KEY so the label tag + reply-routing map are consistent.
+      void Promise.all(configuredChats().map((t) => sendToChat(t, { text: body, cwd: key }))).catch(() => undefined);
+    }, graceSec * 1000);
+    timer.unref();
+    pendingDeath.set(key, { text, message, timer, repeats });
   };
   const gracePassed = async (key: string): Promise<boolean> => {
     const graceSec = cfg.approvals?.continueGraceSec ?? 15;
@@ -1209,6 +1283,14 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // no label at all, which is the one thing it cannot afford to omit.
           // Same guard, same reason, as the hook.notify handler's.
           if (!sessions.get(key)) sessions.upsert({ key, cwd: req.cwd });
+          // A turn that dies fires StopFailure and no Stop, so arriving here at
+          // all is proof the session is working again: whatever was killing its
+          // turns is over, and the next death is a new condition rather than
+          // the same one restating itself. This is the ONLY thing that clears
+          // it short of the session ending — deliberately not a new prompt,
+          // which says someone tried, not that it worked, and which sibling
+          // sub-agent traffic can raise on its own.
+          deathReported.delete(key);
           // Grace 门控:turn 刚结束,先等 graceSec —— 你要是在键盘前很快开始新
           // 一轮(UserPromptSubmit),就取消,不发续跑卡(消除刷屏);静默才推卡。
           // (async Stop hook 让 turn 立即结束,本 grace 不占用你的终端。)
@@ -1440,27 +1522,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // reason neither has ever flooded anyone: a session that came back on
           // its own needed nobody told. Pushed without it, this line produced
           // eight identical `server_error` messages in forty-six minutes.
-          if (req.sessionError) {
-            const detail = req.message;
-            void (async () => {
-              const survived = await deathGracePassed(key);
-              // Mute is re-read after the grace, not before: a mute set during
-              // it is still a mute, and the send is what it applies to.
-              const silenced = muted || (sessions.get(key)?.muted ?? false);
-              // Observability, because silence is the DESIGNED outcome here and
-              // is otherwise indistinguishable from a broken channel. Both
-              // reasons for silence are recorded, since "it came back" and "you
-              // muted it" are different answers to the same question. Identity
-              // and outcome only — the failure text is provider output that has
-              // already been seen to carry a private relay endpoint, and this
-              // log is shared by every session on the machine.
-              logJson('notify.death', { key, resumed: !survived, delivered: survived && !silenced });
-              if (!survived || silenced) return;
-              const text = detail.startsWith('⚠️') ? detail : `⚠️ ${detail}`;
-              // cwd carries the resolved KEY so the label tag + reply-routing map are consistent.
-              await Promise.all(configuredChats().map((t) => sendToChat(t, { text, cwd: key }))).catch(() => undefined);
-            })();
-          }
+          if (req.sessionError) reportDeath(key, req.sessionError.text, req.message);
           // Claude Code's own 60-second "waiting for your input" notification
           // reaches NO desktop notification: "your turn" is delivered from the
           // Stop hook instead, which is the same event the IM continue card
@@ -1481,7 +1543,14 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // notification. Claude Code's transient kinds are excluded upstream
           // in the normalizer, so a `server_error` blip the session recovers
           // from stays where it belongs: IM and the dashboard, not a bell.
-          if (req.sessionError && !req.sessionError.transient) {
+          //
+          // Immediate, and latched rather than graced: the person this rings
+          // for is at the machine, and a failure nothing retries its way out
+          // of will not have resolved itself in fifteen seconds. What it must
+          // not do is ring once per dead turn — six background agents dying on
+          // one rate limit rang it twenty-four times in two and a half minutes
+          // on a real machine, for one condition with one thing to do about it.
+          if (req.sessionError && !req.sessionError.transient && claimDeathReport(key, 'desktop', req.sessionError.text)) {
             deliver({ key, label: sessionLabel(key), kind: 'sessionError', detail: req.sessionError.text });
           }
           reply({ kind: 'ack' });
