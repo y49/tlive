@@ -628,14 +628,22 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   /** What a session leaves behind once it is gone. Shared by the two ways a
    *  session can end — SessionEnd, and the liveness sweep below for the deaths
    *  that fire no hook at all — so the two can never drift into retiring
-   *  different subsets. */
-  const retireGoneSession = (key: string, cwd: string, sessionId?: string): void => {
+   *  different subsets.
+   *
+   *  `verified` separates them where they genuinely differ. The sweep has
+   *  PROVEN the owning process is gone; a SessionEnd hook has only said so,
+   *  stamped with a session id that a whole fan-out of sub-agents shares. The
+   *  dead-turn episode is dropped only on proof — a hook that merely claims a
+   *  session ended, while more hooks keep arriving for that same key, must not
+   *  be able to reset what tlive has already reported about it. Everything
+   *  else here is idempotent and runs either way. */
+  const retireGoneSession = (key: string, cwd: string, sessionId?: string, verified = false): void => {
     clearLocalPrompt(key, sessionId, cwd);
-    // A session that is gone announces nothing — neither a pending turn-end
-    // notification nor a future dedup. The Set part is also hygiene: one that
-    // only ever grows is obvious now and a puzzle in six months.
-    cancelTurnAnnouncement(key);
-    deathReported.delete(key);
+    // A session that is gone announces nothing — there is nobody to call back.
+    // The pending DEATH report is deliberately not cancelled here: see
+    // cancelContinueCard's neighbour below.
+    cancelContinueCard(key);
+    if (verified) endDeathEpisode(key);
   };
 
   // Reap sessions whose owning process died without unregistering: `tlive run`
@@ -647,7 +655,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     const before = new Map(sessions.list().map((s) => [s.id, s.cwd]));
     for (const f of sweepDeadSessions(sessions, pidAlive)) {
       events.broadcast(f);
-      if (f.type === 'session-remove') retireGoneSession(f.id, before.get(f.id) ?? '');
+      if (f.type === 'session-remove') retireGoneSession(f.id, before.get(f.id) ?? '', undefined, true);
     }
   }, opts.sweepMs ?? 30_000);
   sweeper.unref();
@@ -870,25 +878,52 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
    *  flood upstream stays visible after it has been collapsed down here. */
   interface PendingDeath { text: string; message: string; timer: ReturnType<typeof setTimeout>; repeats: number }
   const pendingDeath = new Map<string, PendingDeath>();
-  /** What each surface has already said about a session, so a condition that
-   *  stands for hours is not re-announced by every turn that breaks itself on
-   *  it. The grace cannot hold this line on its own: it collapses deaths that
-   *  arrive close together, and a session limit that resets at noon produces
-   *  deaths for as long as anything keeps trying.
+  /** The session's current run of dead turns, and what each surface has
+   *  already said about it — so a condition that stands for hours is not
+   *  re-announced by every turn that breaks itself on it. The grace cannot
+   *  hold this line on its own: it collapses deaths that arrive close
+   *  together, and a session limit that resets at noon produces deaths for as
+   *  long as anything keeps trying.
    *
-   *  Holds the failure TEXT, not a flag: a different error is a different
-   *  condition and has never been reported. Per surface, because the two
-   *  report at different moments — the desktop rings at once, IM waits out the
-   *  grace — and one shared mark would let whichever fired first silence the
-   *  other. Cleared when the session shows it is working again or is gone, so
-   *  nothing here outlives its session. */
-  const deathReported = new Map<string, { desktop?: string; im?: string }>();
+   *  `desktop`/`im` hold the failure TEXT, not a flag: a different error is a
+   *  different condition and has never been reported. Per surface because a
+   *  mute silences one and not the other, so one shared mark would let a muted
+   *  send count as having told you.
+   *
+   *  `at` is when the most recent death for this key arrived, and it is what
+   *  makes "the session came back" decidable. See `noteSessionResumed`. */
+  interface DeathEpisode { at: number; desktop?: string; im?: string }
+  const deathEpisodes = new Map<string, DeathEpisode>();
   /** True the first time this surface is asked to report this condition. */
   const claimDeathReport = (key: string, surface: 'desktop' | 'im', text: string): boolean => {
-    const said = deathReported.get(key) ?? {};
-    if (said[surface] === text) return false;
-    deathReported.set(key, { ...said, [surface]: text });
+    const ep = deathEpisodes.get(key) ?? { at: Date.now() };
+    if (ep[surface] === text) return false;
+    deathEpisodes.set(key, { ...ep, [surface]: text });
     return true;
+  };
+  /** The episode is over: the next dead turn is news again. Called on proof —
+   *  a turn that actually finished, or a session the sweep has confirmed is
+   *  gone. */
+  const endDeathEpisode = (key: string): void => { deathEpisodes.delete(key); };
+  /** A new prompt: someone asked this session for something. That ends the
+   *  episode — but ONLY if it did not arrive on the heels of a death.
+   *
+   *  The qualifier is not caution, it is measured. In the real flood the
+   *  events that cancelled these reports arrived 0, 4, 4, 5, 65, 332, 378,
+   *  1543 and 3438 ms after a death: they were the dying turns' own teardown,
+   *  not a person. A person who reads an error and types again is seconds to
+   *  hours away, and `graceSec` is already this daemon's definition of how
+   *  long "you might still be here" lasts, so it is the same line drawn once
+   *  rather than a second number to keep in step.
+   *
+   *  Getting this wrong in the permissive direction re-opens the flood; in the
+   *  strict direction it costs one message in the narrow case where someone
+   *  retried inside the grace and then walked away again. */
+  const noteSessionResumed = (key: string): void => {
+    const ep = deathEpisodes.get(key);
+    if (!ep) return;
+    const graceMs = (cfg.approvals?.continueGraceSec ?? 15) * 1000;
+    if (Date.now() - ep.at > graceMs) deathEpisodes.delete(key);
   };
   continueBroker.onRequest((req) => {
     latestContinueId = req.requestId;
@@ -933,22 +968,37 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   let codexResume: (threadId: string, input: string) => Promise<void> = async () => undefined;
   /** The Stop-hook grace, reusable by the Codex turn/completed path: one map, so
    *  a new turn cancels whichever vendor's pending announcement is waiting. */
-  /** Cancel a pending turn-end announcement. Exactly two things do it, for
+  /** Cancel a pending "your turn is done" card. Exactly two things do it, for
    *  either vendor: the user said something, or the session is gone. It is
    *  deliberately NOT "any activity for this key" — a finished turn's own
    *  trailing events can land inside its grace, and the Codex companion in
    *  fact emits its turn/completed monitor event before the grace even starts,
    *  so keying on activity would be one ordering change away from silently
    *  killing every announcement. */
-  const cancelTurnAnnouncement = (key: string): void => {
+  const cancelContinueCard = (key: string): void => {
     const g = continueGrace.get(key);
     if (g) { continueGrace.delete(key); g(); }
+  };
+  /** Cancel a pending dead-turn report. Only a new prompt does this, and the
+   *  asymmetry with the continue card is the point: a SessionEnd hook arrives
+   *  stamped with a session id that an entire fan-out of sub-agents shares, so
+   *  letting it cancel here means one dying agent's teardown can swallow the
+   *  only notice that the work has stopped. A card nobody gets is a worse
+   *  failure than a card that arrives for a session you had already closed. */
+  const cancelDeathReport = (key: string): void => {
     const d = pendingDeath.get(key);
-    if (d) {
-      pendingDeath.delete(key);
-      clearTimeout(d.timer);
-      logJson('notify.death', { key, resumed: true, delivered: false, repeats: d.repeats });
-    }
+    if (!d) return;
+    pendingDeath.delete(key);
+    clearTimeout(d.timer);
+    logJson('notify.death', { key, resumed: true, delivered: false, repeats: d.repeats });
+  };
+  /** The user is back: both pending announcements go, and the dead-turn
+   *  episode ends if this prompt was not one of a dying turn's own trailing
+   *  events. */
+  const cancelTurnAnnouncement = (key: string): void => {
+    cancelContinueCard(key);
+    cancelDeathReport(key);
+    noteSessionResumed(key);
   };
   /** Hold a dead turn for the grace, then tell IM about it if the session is
    *  still stopped when the grace ends. The same silence test the continue
@@ -964,28 +1014,43 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
     const prior = pendingDeath.get(key);
     if (prior) clearTimeout(prior.timer);
     const repeats = (prior?.repeats ?? 0) + 1;
+    // Stamp the episode on ARRIVAL, not on delivery. `noteSessionResumed` has
+    // to tell a prompt that trails a dying turn from one that follows a
+    // silence, and every death counts for that — including the ones this
+    // report is about to collapse and never mention.
+    deathEpisodes.set(key, { ...(deathEpisodes.get(key) ?? {}), at: Date.now() });
     const graceSec = cfg.approvals?.continueGraceSec ?? 15;
     const timer = setTimeout(() => {
       pendingDeath.delete(key);
+      // Desktop first, gated by neither `/mute` — an IM-only switch — nor the
+      // error kind. `transient` used to keep every `server_error` and
+      // `overloaded` off this channel, on the theory that the session recovers
+      // from those on its own. Measured over two weeks on a real machine it
+      // kept 10 out of 10 dead turns off it, and those sessions did NOT
+      // recover: the next turn to actually finish came between 78 seconds and
+      // 19 minutes later, and once not within the hour. Predicting recovery
+      // from the error kind is the wrong instrument when the grace can observe
+      // it — so the kind no longer gates anything, and whatever is still dead
+      // when the silence ends earns one line on the machine you are sitting
+      // at. That is the whole point of this channel: you are here, but you are
+      // looking at a browser, and nothing else on your screen will tell you
+      // the work stopped.
+      const rang = claimDeathReport(key, 'desktop', text);
+      if (rang) deliver({ key, label: sessionLabel(key), kind: 'sessionError', detail: text });
       // Mute is re-read after the grace, not before: a mute set during it is
-      // still a mute, and the send is what it applies to.
+      // still a mute, and the send is what it applies to. It is checked BEFORE
+      // the IM latch is claimed — the latch means "you have been told", and a
+      // muted send tells nobody, so claiming it would let one mute swallow a
+      // standing condition permanently.
       const silenced = muted || (sessions.get(key)?.muted ?? false);
+      const fresh = silenced ? false : claimDeathReport(key, 'im', text);
       // Observability, because silence is the DESIGNED outcome here and is
-      // otherwise indistinguishable from a broken channel. Every reason for it
-      // is recorded separately, since "it came back", "you muted it" and "you
-      // already know" are different answers to the same question. Identity and
+      // otherwise indistinguishable from a broken channel. Identity and
       // outcome only — the failure text is provider output that has already
       // been seen to carry a private relay endpoint, and this log is shared by
-      // every session on the machine.
-      //
-      // A mute returns BEFORE the latch is claimed: the latch means "you have
-      // been told", and a muted send tells nobody. Claiming it here would let
-      // a mute swallow the report permanently — you unmute, the condition is
-      // still standing, and tlive stays quiet about it because it thinks it
-      // already spoke.
-      if (silenced) { logJson('notify.death', { key, resumed: false, muted: true, delivered: false, repeats }); return; }
-      const fresh = claimDeathReport(key, 'im', text);
-      logJson('notify.death', { key, resumed: false, repeated: !fresh, delivered: fresh, repeats });
+      // every session on the machine. `muted` false with `delivered` false is
+      // the third reason: this surface had already said it.
+      logJson('notify.death', { key, resumed: false, desktop: rang, muted: silenced, delivered: fresh, repeats });
       if (!fresh) return;
       const body = message.startsWith('⚠️') ? message : `⚠️ ${message}`;
       // cwd carries the resolved KEY so the label tag + reply-routing map are consistent.
@@ -1043,7 +1108,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
         // `prompt` here is a user message item — the Codex analogue of
         // UserPromptSubmit — and `session-end` is an archived thread. Item and
         // turn level events are the finished turn talking, not the user.
-        if (ev.event === 'prompt' || ev.event === 'session-end') cancelTurnAnnouncement(key);
+        if (ev.event === 'prompt') cancelTurnAnnouncement(key);
+        else if (ev.event === 'session-end') cancelContinueCard(key);
         events.broadcast(applyMonitorEvent(sessions, ev, key));
       },
       onResumePrompt: onCodexResumePrompt,
@@ -1215,12 +1281,27 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // which is what made a whole class of "why did tlive not hold this?" question
       // unanswerable from the log. Tool input is deliberately never logged.
       const idOf = (r: unknown): Record<string, unknown> => {
-        const o = r as { cwd?: unknown; sessionId?: unknown; agentId?: unknown; toolName?: unknown };
+        const o = r as { cwd?: unknown; sessionId?: unknown; agentId?: unknown; toolName?: unknown; event?: unknown };
+        // `hook.event` carries all of its identity NESTED under `event`, so a
+        // top-level-only reader logged nothing but the bare kind for the single
+        // busiest request type. That blind spot cost a real investigation: a
+        // flood of dead-turn reports was interleaved with something that kept
+        // cancelling their grace, and which hook it was — a user prompt or a
+        // sub-agent's session end — could not be recovered from the log at all,
+        // only guessed at from timing. The event NAME is a type name, and the
+        // ids beside it are the same identity fields already logged everywhere
+        // else; no prompt text, tool input or message body is read here.
+        const e = (o.event ?? {}) as { event?: unknown; cwd?: unknown; sessionId?: unknown; agentId?: unknown; toolName?: unknown };
+        const pick = <T extends { cwd?: unknown; sessionId?: unknown; agentId?: unknown; toolName?: unknown }>(v: T): Record<string, unknown> => ({
+          ...(typeof v.cwd === 'string' ? { cwd: v.cwd } : {}),
+          ...(typeof v.sessionId === 'string' ? { sessionId: v.sessionId } : {}),
+          ...(typeof v.agentId === 'string' ? { agentId: v.agentId } : {}),
+          ...(typeof v.toolName === 'string' ? { toolName: v.toolName } : {}),
+        });
         return {
-          ...(typeof o.cwd === 'string' ? { cwd: o.cwd } : {}),
-          ...(typeof o.sessionId === 'string' ? { sessionId: o.sessionId } : {}),
-          ...(typeof o.agentId === 'string' ? { agentId: o.agentId } : {}),
-          ...(typeof o.toolName === 'string' ? { toolName: o.toolName } : {}),
+          ...(typeof e.event === 'string' ? { event: e.event } : {}),
+          ...pick(e),
+          ...pick(o),
         };
       };
       logJson('ipc.request', { kind: req.kind, callerPid: ctx.callerPid ?? null, ...idOf(req) });
@@ -1290,7 +1371,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // it short of the session ending — deliberately not a new prompt,
           // which says someone tried, not that it worked, and which sibling
           // sub-agent traffic can raise on its own.
-          deathReported.delete(key);
+          endDeathEpisode(key);
           // Grace 门控:turn 刚结束,先等 graceSec —— 你要是在键盘前很快开始新
           // 一轮(UserPromptSubmit),就取消,不发续跑卡(消除刷屏);静默才推卡。
           // (async Stop hook 让 turn 立即结束,本 grace 不占用你的终端。)
@@ -1535,24 +1616,10 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // recorded. A failure keeps its text — that is the dashboard's only view
           // of a failed tool call.
           events.broadcast(applyMonitorEvent(sessions, { event: 'attention', cwd: req.cwd, sessionId: req.sessionId, message: req.level === 'info' ? '' : req.message }, key, req.agentPid));
-          // The one failure that reaches the desktop, and it is not an
-          // exception to the rule above but an instance of it: a turn that died
-          // on a bad key or an exhausted balance means nothing further happens
-          // in that session until a human changes something — the same "nothing
-          // happens until you come back" that earns a finished turn its
-          // notification. Claude Code's transient kinds are excluded upstream
-          // in the normalizer, so a `server_error` blip the session recovers
-          // from stays where it belongs: IM and the dashboard, not a bell.
-          //
-          // Immediate, and latched rather than graced: the person this rings
-          // for is at the machine, and a failure nothing retries its way out
-          // of will not have resolved itself in fifteen seconds. What it must
-          // not do is ring once per dead turn — six background agents dying on
-          // one rate limit rang it twenty-four times in two and a half minutes
-          // on a real machine, for one condition with one thing to do about it.
-          if (req.sessionError && !req.sessionError.transient && claimDeathReport(key, 'desktop', req.sessionError.text)) {
-            deliver({ key, label: sessionLabel(key), kind: 'sessionError', detail: req.sessionError.text });
-          }
+          // A dead turn's desktop notification is NOT fired here any more. It
+          // rides `reportDeath` above, so both surfaces learn it from one
+          // place, after one silence test — see that function for why the
+          // error kind stopped gating this channel.
           reply({ kind: 'ack' });
           return;
         }
