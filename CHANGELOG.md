@@ -1,5 +1,13 @@
 # Changelog
 
+## [5.3.1](https://github.com/y49/tlive/compare/v5.3.0...v5.3.1) (2026-09-02)
+
+
+### Bug Fixes
+
+* one report per dead session, however many agents died with it ([#93](https://github.com/y49/tlive/issues/93)) ([9111b68](https://github.com/y49/tlive/commit/9111b6842527df3ccf1d558ba3bc923f23dc5f1f))
+* tell the desktop about every dead turn, and end the episode only on proof ([#96](https://github.com/y49/tlive/issues/96)) ([a2c5834](https://github.com/y49/tlive/commit/a2c58345d147cbf24ac7abf617193b84dd404d33))
+
 ## [5.3.0](https://github.com/y49/tlive/compare/v5.2.0...v5.3.0) (2026-08-21)
 
 
