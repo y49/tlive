@@ -910,6 +910,162 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     });
   });
 
+  // Real machine, 2026-09-02 01:29–01:31Z. One account-level rate limit killed
+  // six background agents at once. Every dead turn fires its own StopFailure,
+  // and StopFailure carries no `agent_id` at all — Claude Code stamps it with
+  // the MAIN session id — so one condition arrived as twenty-five identical
+  // reports against one session key: twenty-four desktop toasts and eight
+  // Telegram lines in two and a half minutes.
+  //
+  // The grace was never the wrong idea, it was asking the wrong question.
+  // "Did the session come back?" is a question about ONE death, and it was
+  // being asked N times in parallel through a single-slot map, where each
+  // event's timer deleted whichever event's entry happened to be in the slot.
+  // Nothing anywhere asked the question that actually matters once a session
+  // can die more than once: have we already said this?
+  describe('one dead session says it once, however many agents died with it', () => {
+    const dead = (text: string, transient = false) => ({
+      kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'error' as const,
+      message: `session error: ${text}`, sessionError: { text, transient },
+    });
+    const imConfig = (graceSec: number) => JSON.stringify({
+      web: { enabled: false }, approvals: { continueGraceSec: graceSec },
+      adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+    });
+    /** Desktop renders for a dead turn only. `shouldFastNullContinue` also
+     *  pops a "waiting for your input" toast, which is a different event. */
+    const deaths = (renders: Array<{ title: string; body: string }>) =>
+      renders.filter((r) => r.title.includes('turn failed'));
+
+    // Staggered, not a burst, because that is what the machine did: the agents
+    // finished one at a time ("Waiting for 5 background agents to finish"), so
+    // the deaths straddled grace boundaries instead of arriving inside one.
+    // A burst alone does not discriminate — the old single-slot map happened to
+    // deliver exactly one of six that way, by losing the other five rather than
+    // by collapsing them.
+    it('six agents die on one rate limit → one IM line, not six', async () => {
+      writeFileSync(join(tmp, 'config.json'), imConfig(1));
+      const sent: OutgoingMessage[] = [];
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [interactiveAdapter('telegram', sent)], desktopNotifier: { notify: async () => {} } });
+      const sock = daemonSocketPath(tmp);
+      for (let i = 0; i < 6; i++) {
+        await request(dead('rate_limit'), { socketPath: sock, timeoutMs: 2000 });
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      await until(() => { expect(sent).toHaveLength(1); });
+      expect((sent[0] as { text?: string }).text).toContain('rate_limit');
+      // Past the grace of the LAST death, so a second line would have landed.
+      await new Promise((r) => setTimeout(r, 1400));
+      expect(sent).toHaveLength(1);
+    });
+
+    it('six agents die on one rate limit → one desktop toast, not six', async () => {
+      writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { continueGraceSec: 1 } }));
+      const renders: Array<{ title: string; body: string }> = [];
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
+      const sock = daemonSocketPath(tmp);
+      for (let i = 0; i < 6; i++) await request(dead('rate_limit'), { socketPath: sock, timeoutMs: 2000 });
+      await until(() => { expect(deaths(renders)).toHaveLength(1); });
+      expect(deaths(renders)[0]!.body).toContain('rate_limit');
+      await new Promise((r) => setTimeout(r, 1400));
+      expect(deaths(renders)).toHaveLength(1);
+    });
+
+    // A session limit stands for hours. Every turn attempted against it dies
+    // the same way, spaced far wider than any grace — which is why the grace
+    // alone cannot hold this line.
+    it('the same failure, long after it was reported, is not news', async () => {
+      writeFileSync(join(tmp, 'config.json'), imConfig(1));
+      const sent: OutgoingMessage[] = [];
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [interactiveAdapter('telegram', sent)], desktopNotifier: { notify: async () => {} } });
+      const sock = daemonSocketPath(tmp);
+      await request(dead('rate_limit'), { socketPath: sock, timeoutMs: 2000 });
+      await until(() => { expect(sent).toHaveLength(1); });
+      await new Promise((r) => setTimeout(r, 1200));
+      await request(dead('rate_limit'), { socketPath: sock, timeoutMs: 2000 });
+      await new Promise((r) => setTimeout(r, 1400));
+      expect(sent).toHaveLength(1);
+    });
+
+    // Silence is only earned while the condition stands. A different error is
+    // a different condition and has never been reported.
+    it('a different failure is still news', async () => {
+      writeFileSync(join(tmp, 'config.json'), imConfig(1));
+      const sent: OutgoingMessage[] = [];
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [interactiveAdapter('telegram', sent)], desktopNotifier: { notify: async () => {} } });
+      const sock = daemonSocketPath(tmp);
+      await request(dead('rate_limit'), { socketPath: sock, timeoutMs: 2000 });
+      await until(() => { expect(sent).toHaveLength(1); });
+      await new Promise((r) => setTimeout(r, 1200));
+      await request(dead('billing_error — Credit balance too low'), { socketPath: sock, timeoutMs: 2000 });
+      await until(() => { expect(sent).toHaveLength(2); });
+      expect((sent[1] as { text?: string }).text).toContain('billing_error');
+    });
+
+    // What ends the episode: a turn that actually finished. A turn that dies
+    // fires StopFailure and no Stop, so a continue request is proof the
+    // session is working again — and the next death is a new condition.
+    it('a turn that finished ends the episode — the next death is news again', async () => {
+      // No IM chat and no dashboard client ⇒ the continue request returns
+      // immediately instead of holding its window open.
+      writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { continueGraceSec: 1 } }));
+      const renders: Array<{ title: string; body: string }> = [];
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
+      const sock = daemonSocketPath(tmp);
+      await request(dead('rate_limit'), { socketPath: sock, timeoutMs: 2000 });
+      await until(() => { expect(deaths(renders)).toHaveLength(1); });
+      await request({ kind: 'hook.continue.request', cwd: '/w', sessionId: 's1', context: 'ctx', lastMessage: 'done' }, { socketPath: sock, timeoutMs: 4000 });
+      await request(dead('rate_limit'), { socketPath: sock, timeoutMs: 2000 });
+      await until(() => { expect(deaths(renders)).toHaveLength(2); });
+    });
+
+    // Re-arming must not become swallowing. In the real trace the deaths were
+    // interleaved with events that cancel a pending report, and a fix that
+    // only ever collapsed would have turned twenty-five reports into none.
+    it('a death that lands after the session came back is still reported', async () => {
+      writeFileSync(join(tmp, 'config.json'), imConfig(1));
+      const sent: OutgoingMessage[] = [];
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [interactiveAdapter('telegram', sent)], desktopNotifier: { notify: async () => {} } });
+      const sock = daemonSocketPath(tmp);
+      await request(dead('rate_limit'), { socketPath: sock, timeoutMs: 2000 });
+      await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/w', sessionId: 's1', prompt: 'carry on' } }, { socketPath: sock, timeoutMs: 2000 });
+      await request(dead('rate_limit'), { socketPath: sock, timeoutMs: 2000 });
+      await until(() => { expect(sent).toHaveLength(1); });
+      expect((sent[0] as { text?: string }).text).toContain('rate_limit');
+    });
+
+    // A mute is not a report. The latch means "you have been told", so a send
+    // that told nobody must not claim it — otherwise unmuting leaves you quiet
+    // about a condition that is still standing.
+    it('a mute does not burn the report — it is still there when you unmute', async () => {
+      writeFileSync(join(tmp, 'config.json'), imConfig(1));
+      const sent: OutgoingMessage[] = [];
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [interactiveAdapter('telegram', sent)], desktopNotifier: { notify: async () => {} } });
+      const sock = daemonSocketPath(tmp);
+      await request({ kind: 'daemon.set', key: 'mute', enabled: true }, { socketPath: sock, timeoutMs: 2000 });
+      await request(dead('rate_limit'), { socketPath: sock, timeoutMs: 2000 });
+      await new Promise((r) => setTimeout(r, 1400));
+      expect(sent).toHaveLength(0);
+      await request({ kind: 'daemon.set', key: 'mute', enabled: false }, { socketPath: sock, timeoutMs: 2000 });
+      await request(dead('rate_limit'), { socketPath: sock, timeoutMs: 2000 });
+      await until(() => { expect(sent).toHaveLength(1); });
+    });
+
+    // The session going away ends it too — and leaves nothing behind, which is
+    // the difference between a cache and a leak.
+    it('a session that ended leaves no latch behind', async () => {
+      writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { continueGraceSec: 1 } }));
+      const renders: Array<{ title: string; body: string }> = [];
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
+      const sock = daemonSocketPath(tmp);
+      await request(dead('rate_limit'), { socketPath: sock, timeoutMs: 2000 });
+      await until(() => { expect(deaths(renders)).toHaveLength(1); });
+      await request({ kind: 'hook.event', event: { event: 'session-end', cwd: '/w', sessionId: 's1' } }, { socketPath: sock, timeoutMs: 2000 });
+      await request(dead('rate_limit'), { socketPath: sock, timeoutMs: 2000 });
+      await until(() => { expect(deaths(renders)).toHaveLength(2); });
+    });
+  });
+
   // Claude Code restates "the turn ended" sixty seconds later as its own
   // notification. tlive already reported that event, as a card you can answer.
   // A restatement is not a second event, so it does not go to IM — and because
