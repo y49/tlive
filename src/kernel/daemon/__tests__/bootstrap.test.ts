@@ -1051,9 +1051,63 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       await until(() => { expect(sent).toHaveLength(1); });
     });
 
-    // The session going away ends it too — and leaves nothing behind, which is
-    // the difference between a cache and a leak.
-    it('a session that ended leaves no latch behind', async () => {
+    // The incident itself, replayed. Both the death timings and the timings of
+    // the events that kept cancelling their grace are the real ones, lifted
+    // out of daemon.log for 2026-09-02T01:29-01:31Z, scaled so a 15-second
+    // grace becomes 300 ms.
+    //
+    // It runs TWICE because the log of the day could not say WHICH hook those
+    // interleaved events were: `ipc.request` recorded `kind` and nothing else
+    // for the busiest request type in the daemon, so a `prompt` and a
+    // `session-end` were indistinguishable after the fact. Both readings must
+    // collapse to one report, which is what stops this fix from resting on a
+    // guess about a payload nobody kept.
+    const FLOOD_DEATHS = [0, 0.922, 1.204, 1.904, 2.857, 5.443, 5.945, 6.28, 7.178, 8.723,
+      11.084, 13.906, 19.883, 33.615, 43.453, 50.934, 55.311, 58.522, 58.908, 60.004,
+      74.828, 76.66, 77.827, 97.189, 109.119, 110.2, 147.515, 148.415];
+    const FLOOD_CANCELS = [1.904, 1.969, 5.447, 6.277, 8.721, 54.372, 58.9, 76.664, 109.124, 147.519];
+    const SCALE = 50;
+
+    for (const cancelAs of ['prompt', 'session-end'] as const) {
+      it(`the real 2026-09-02 flood collapses to one report, reading its cancels as ${cancelAs}`, async () => {
+        writeFileSync(join(tmp, 'config.json'), JSON.stringify({
+          web: { enabled: false }, approvals: { continueGraceSec: 15 / SCALE },
+          adapters: { telegram: { token: 't', chatIdAllowList: ['c1'] } },
+        }));
+        const sent: OutgoingMessage[] = [];
+        const renders: Array<{ title: string; body: string }> = [];
+        h = await bootstrapDaemon({
+          home: tmp, imAdapters: [interactiveAdapter('telegram', sent)],
+          desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } },
+        });
+        const sock = daemonSocketPath(tmp);
+        const timeline = [
+          ...FLOOD_DEATHS.map((at) => ({ at: at / SCALE, death: true })),
+          ...FLOOD_CANCELS.map((at) => ({ at: at / SCALE, death: false })),
+        ].sort((a, b) => a.at - b.at);
+        const started = Date.now();
+        for (const e of timeline) {
+          const wait = e.at * 1000 - (Date.now() - started);
+          if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+          await request(e.death
+            ? dead('rate_limit')
+            : { kind: 'hook.event', event: cancelAs === 'prompt'
+                ? { event: 'prompt', cwd: '/w', sessionId: 's1', prompt: 'x' }
+                : { event: 'session-end', cwd: '/w', sessionId: 's1' } },
+            { socketPath: sock, timeoutMs: 2000 });
+        }
+        await new Promise((r) => setTimeout(r, 600));
+        expect({ im: sent.length, desktop: deaths(renders).length }).toEqual({ im: 1, desktop: 1 });
+      }, 30_000);
+    }
+
+    // A SessionEnd hook does NOT end the episode, and that is the fix rather
+    // than an oversight: it arrives stamped with a session id an entire
+    // fan-out of sub-agents shares, so honouring it lets one dying agent's
+    // teardown reset what has already been reported and the flood comes
+    // straight back. Only the liveness sweep, which has PROVEN the owning
+    // process is gone, drops the episode.
+    it('a SessionEnd hook does not reset what has already been reported', async () => {
       writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { continueGraceSec: 1 } }));
       const renders: Array<{ title: string; body: string }> = [];
       h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
@@ -1062,7 +1116,59 @@ describe('AskUserQuestion remote card (Task 9)', () => {
       await until(() => { expect(deaths(renders)).toHaveLength(1); });
       await request({ kind: 'hook.event', event: { event: 'session-end', cwd: '/w', sessionId: 's1' } }, { socketPath: sock, timeoutMs: 2000 });
       await request(dead('rate_limit'), { socketPath: sock, timeoutMs: 2000 });
+      await new Promise((r) => setTimeout(r, 1400));
+      expect(deaths(renders)).toHaveLength(1);
+    });
+
+    // Nor may it cancel a report that is still waiting out its grace. This is
+    // the direction that matters most: a teardown landing after the last death
+    // of a fan-out would otherwise swallow the ONLY notice that the work
+    // stopped, and silence is a worse failure than a duplicate.
+    it('a SessionEnd hook does not swallow a report still waiting out its grace', async () => {
+      writeFileSync(join(tmp, 'config.json'), imConfig(1));
+      const sent: OutgoingMessage[] = [];
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [interactiveAdapter('telegram', sent)], desktopNotifier: { notify: async () => {} } });
+      const sock = daemonSocketPath(tmp);
+      await request(dead('rate_limit'), { socketPath: sock, timeoutMs: 2000 });
+      await request({ kind: 'hook.event', event: { event: 'session-end', cwd: '/w', sessionId: 's1' } }, { socketPath: sock, timeoutMs: 2000 });
+      await until(() => { expect(sent).toHaveLength(1); });
+    });
+
+    // The user's own scenario: you were told, you came back and retried, it
+    // died the same way, and you walked off again. That second death is news —
+    // the work has stopped for a second time with nobody watching.
+    it('a prompt after a silence re-opens the episode', async () => {
+      writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { continueGraceSec: 1 } }));
+      const renders: Array<{ title: string; body: string }> = [];
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
+      const sock = daemonSocketPath(tmp);
+      await request(dead('rate_limit'), { socketPath: sock, timeoutMs: 2000 });
+      await until(() => { expect(deaths(renders)).toHaveLength(1); });
+      // Past the grace, so this prompt is a person and not a dying turn's own
+      // trailing event.
+      await new Promise((r) => setTimeout(r, 1200));
+      await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/w', sessionId: 's1', prompt: 'try again' } }, { socketPath: sock, timeoutMs: 2000 });
+      await request(dead('rate_limit'), { socketPath: sock, timeoutMs: 2000 });
       await until(() => { expect(deaths(renders)).toHaveLength(2); });
+    });
+
+    // …and the same event, arriving on the heels of a death, does not. In the
+    // real flood the events that kept cancelling these reports landed 0-3438 ms
+    // after a death: they were the dying turns' own teardown, not a person.
+    it('a prompt that trails a death does not re-open the episode', async () => {
+      writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { continueGraceSec: 1 } }));
+      const renders: Array<{ title: string; body: string }> = [];
+      h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
+      const sock = daemonSocketPath(tmp);
+      await request(dead('rate_limit'), { socketPath: sock, timeoutMs: 2000 });
+      await until(() => { expect(deaths(renders)).toHaveLength(1); });
+      // Immediately after the next death — inside the grace — so it reads as
+      // that turn's teardown.
+      await request(dead('rate_limit'), { socketPath: sock, timeoutMs: 2000 });
+      await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/w', sessionId: 's1', prompt: 'x' } }, { socketPath: sock, timeoutMs: 2000 });
+      await request(dead('rate_limit'), { socketPath: sock, timeoutMs: 2000 });
+      await new Promise((r) => setTimeout(r, 1400));
+      expect(deaths(renders)).toHaveLength(1);
     });
   });
 
@@ -1099,12 +1205,13 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     expect(renders).toHaveLength(0);
   });
 
-  // A turn that died on something no retry fixes is the one failure that DOES
-  // reach the desktop: nothing further will happen in that session until a
-  // human deals with it, which is the same "nothing happens until you come
-  // back" that earns a finished turn its notification.
+  // A turn that died reaches the desktop: nothing further will happen in that
+  // session until a human deals with it, which is the same "nothing happens
+  // until you come back" that earns a finished turn its notification. It waits
+  // out the same grace IM does — the person it is for may be sitting right
+  // there — but the error KIND no longer decides anything.
   it('a session error nothing retries its way out of pops a desktop notification', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { continueGraceSec: 1 } }));
     const renders: Array<{ title: string; body: string }> = [];
     h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
@@ -1117,20 +1224,38 @@ describe('AskUserQuestion remote card (Task 9)', () => {
     expect(renders[0]!.body).toContain('billing_error');
   });
 
-  // The common case on a real machine: every API error observed here was
-  // `server_error` behind "Connection lost mid-response" — the session picks up
-  // where it left off. Ringing a desktop bell for those is the flood the
-  // per-event channel exists to avoid.
-  it('a transient session error stays off the desktop — the session recovers on its own', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false } }));
+  // `transient` used to keep these off the desktop entirely, on the theory
+  // that the session picks up where it left off. Two weeks of real traffic on
+  // this project's own machine says otherwise: 10 of 10 dead turns that
+  // outlived the grace were transient kinds, the desktop said nothing about
+  // any of them, and the next turn to actually finish came between 78 seconds
+  // and 19 minutes later — once not within the hour. Whether the session came
+  // back is now decided by the grace, which observes it, instead of by the
+  // error kind, which guessed.
+  const TRANSIENT_DEAD = {
+    kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'error' as const,
+    message: 'session error: server_error',
+    sessionError: { text: 'server_error', transient: true },
+  };
+
+  it('a transient session error the session never came back from DOES reach the desktop', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { continueGraceSec: 1 } }));
     const renders: Array<{ title: string; body: string }> = [];
     h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
     const sock = daemonSocketPath(tmp);
-    await request({
-      kind: 'hook.notify', cwd: '/w', sessionId: 's1', level: 'error',
-      message: 'session error: server_error',
-      sessionError: { text: 'server_error', transient: true },
-    }, { socketPath: sock, timeoutMs: 2000 });
+    await request(TRANSIENT_DEAD, { socketPath: sock, timeoutMs: 2000 });
+    await until(() => { expect(renders).toHaveLength(1); });
+    expect(renders[0]!.body).toContain('server_error');
+  });
+
+  it('…and stays off it when the session does come back inside the grace', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ web: { enabled: false }, approvals: { continueGraceSec: 2 } }));
+    const renders: Array<{ title: string; body: string }> = [];
+    h = await bootstrapDaemon({ home: tmp, imAdapters: [], desktopNotifier: { notify: async (title, body) => { renders.push({ title, body }); } } });
+    const sock = daemonSocketPath(tmp);
+    await request(TRANSIENT_DEAD, { socketPath: sock, timeoutMs: 2000 });
+    await request({ kind: 'hook.event', event: { event: 'prompt', cwd: '/w', sessionId: 's1', prompt: 'carry on' } }, { socketPath: sock, timeoutMs: 2000 });
+    await new Promise((r) => setTimeout(r, 2400));
     expect(renders).toHaveLength(0);
   });
 
