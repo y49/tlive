@@ -8,6 +8,7 @@ Approve tool calls, watch runs, take over typing — from Telegram, Feishu, or a
 [![npm version](https://img.shields.io/npm/v/tlive)](https://www.npmjs.com/package/tlive)
 [![CI](https://github.com/y49/tlive/actions/workflows/ci.yml/badge.svg)](https://github.com/y49/tlive/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![LINUX DO](https://img.shields.io/badge/LINUX%20DO-Community-blue)](https://linux.do)
 
 [English](README.md) · [简体中文](README_CN.md)
 
@@ -443,6 +444,11 @@ cd tlive
 pnpm install
 npm run typecheck && npm test && npm run build
 ```
+
+## Community
+
+tlive is shared and discussed in the [LINUX DO](https://linux.do) community —
+feedback and bug reports from there are welcome.
 
 ## License
 

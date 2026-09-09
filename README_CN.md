@@ -8,6 +8,7 @@
 [![npm version](https://img.shields.io/npm/v/tlive)](https://www.npmjs.com/package/tlive)
 [![CI](https://github.com/y49/tlive/actions/workflows/ci.yml/badge.svg)](https://github.com/y49/tlive/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![LINUX DO](https://img.shields.io/badge/LINUX%20DO-%E7%A4%BE%E5%8C%BA-blue)](https://linux.do)
 
 [English](README.md) · [简体中文](README_CN.md)
 
@@ -370,6 +371,10 @@ cd tlive
 pnpm install
 npm run typecheck && npm test && npm run build
 ```
+
+## 社区
+
+tlive 在 [LINUX DO](https://linux.do) 社区分享与讨论,欢迎在那里反馈和提 bug。
 
 ## 许可
 
