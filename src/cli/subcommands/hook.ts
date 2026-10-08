@@ -232,8 +232,9 @@ export async function runHook(argv: string[]): Promise<void> {
       // async Stop hook(插件配 async:true+asyncRewake:true):CC 不等本进程,turn
       // 立即结束(键盘前零卡);本进程在后台等 daemon 的续跑回复。
       const att = n as { cwd: string; sessionId: string; message: string; lastMessage?: string; stopHookActive?: boolean };
-      // 防循环:本 turn 是被上一次 stop hook 唤醒的续跑 → 不再等(否则无限续跑)。
-      if (att.stopHookActive) return;
+      // Hook-resumed turns must report completion and accept another remote reply.
+      // Waiting does not create a loop: only an explicit reply below exits 2;
+      // timeout or unavailable daemon exits 0 without waking the session.
       const approvals = (() => {
         try { return loadConfig(process.env.TLIVE_HOME ?? join(homedir(), '.tlive')).approvals; } catch { return undefined; }
       })();
