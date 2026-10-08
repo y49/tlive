@@ -146,8 +146,8 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
     case 'post-tool-use':
       return { event: 'activity', cwd, sessionId, toolName: r.tool_name ?? '(unknown)', result: r.tool_response ?? {}, ...(r.agent_id ? { agentId: r.agent_id } : {}) };
     case 'stop':
-      // stop_hook_active = 本 turn 是被上一次 stop hook 唤醒的续跑;shim 据此
-      // 不再等续跑,避免 async+asyncRewake 下的无限续跑循环。
+      // Preserve whether a previous Stop hook resumed this turn. The shim still
+      // reports its completion; another wake requires a new explicit remote reply.
       return { event: 'attention', cwd, sessionId, message: TURN_FINISHED_SENTINEL, ...(r.last_assistant_message ? { lastMessage: r.last_assistant_message } : {}), ...(r.stop_hook_active ? { stopHookActive: true } : {}) };
     case 'notification':
       // permission_prompt ("Claude needs your permission to use X") is TAGGED,
