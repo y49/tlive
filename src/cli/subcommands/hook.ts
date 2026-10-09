@@ -7,6 +7,7 @@
 // output {} and exit 0 → Claude falls back to local TUI permission prompt.
 
 import { homedir } from 'node:os';
+import { enrichStopFailure } from '../../kernel/hook/session-error.js';
 import { join } from 'node:path';
 import { request } from '../../kernel/ipc/client.js';
 import {
@@ -19,6 +20,7 @@ import {
   type HookVendor,
   type MonitorEvent,
   type ShimMode,
+  type SessionError,
 } from '../../kernel/hook/normalizer.js';
 import { loadConfig } from '../../kernel/config/loader.js';
 import { spawnDaemonDetached } from '../../kernel/daemon/spawn.js';
@@ -171,7 +173,7 @@ export async function runHook(argv: string[]): Promise<void> {
 
   try {
     const raw = await readStdin();
-    const n = parseHookInput(event, raw);
+    const n = parseHookInput(event, event === 'stop-failure' ? await enrichStopFailure(raw) : raw);
     // Inherited from a `tlive run` pty (like $TMUX): routes this hook's traffic
     // to that exact session card, so several wrapped sessions can share one cwd.
     const wrappedId = process.env.TLIVE_SESSION;
@@ -209,7 +211,7 @@ export async function runHook(argv: string[]): Promise<void> {
     }
 
     if (event === 'notification' || event === 'post-tool-use-failure' || event === 'stop-failure') {
-      const att = n as { cwd: string; sessionId: string; message: string; droppable?: boolean; localWaiting?: 'approval' | 'relayed-approval' | 'question' | 'elsewhere'; sessionError?: { text: string; transient: boolean } };
+      const att = n as { cwd: string; sessionId: string; message: string; droppable?: boolean; localWaiting?: 'approval' | 'relayed-approval' | 'question' | 'elsewhere'; sessionError?: SessionError };
       const level = event === 'notification' ? 'info' : 'error';
       // droppable 照常发 hook.notify IPC——只透传标记,让 daemon 决定怎么处理。
       // Fix 3b:曾经在这里提前 return 跳过整条 IPC,连 dashboard 的
@@ -232,8 +234,9 @@ export async function runHook(argv: string[]): Promise<void> {
       // async Stop hook(插件配 async:true+asyncRewake:true):CC 不等本进程,turn
       // 立即结束(键盘前零卡);本进程在后台等 daemon 的续跑回复。
       const att = n as { cwd: string; sessionId: string; message: string; lastMessage?: string; stopHookActive?: boolean };
-      // 防循环:本 turn 是被上一次 stop hook 唤醒的续跑 → 不再等(否则无限续跑)。
-      if (att.stopHookActive) return;
+      // Hook-resumed turns must report completion and accept another remote reply.
+      // Waiting does not create a loop: only an explicit reply below exits 2;
+      // timeout or unavailable daemon exits 0 without waking the session.
       const approvals = (() => {
         try { return loadConfig(process.env.TLIVE_HOME ?? join(homedir(), '.tlive')).approvals; } catch { return undefined; }
       })();

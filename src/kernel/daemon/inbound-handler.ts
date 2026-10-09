@@ -12,8 +12,10 @@ import { STALE_CARD_NOTICE } from './bootstrap.js';
 import { SAFE_TOGGLE_MESSAGE } from '../permission/policy-engine.js';
 import { MODES, MODE_DESC } from '../config/mode.js';
 import type { ShimMode } from '../hook/normalizer.js';
+import type { RetryOutcome } from './session-retry.js';
 
 export interface InboundHandlerDeps {
+  retrySession?: (id: string, channel: string, chatId: string) => Promise<RetryOutcome>;
   senderGuard: SenderGuard;
   imBy: (channel: 'telegram' | 'feishu') => IMAdapter | undefined;
   permissionRouter: PermissionRouter;
@@ -99,6 +101,16 @@ export class InboundHandler {
   async handle(env: IncomingEnvelope): Promise<void> {
     if (!this.deps.senderGuard.allows(env.channel, env.userId)) return;
     if (!env.text && !env.attachments?.length) return;
+
+    if (env.text.startsWith('retry:')) {
+      const outcome = await this.deps.retrySession?.(env.text.slice('retry:'.length), env.channel, env.chatId) ?? 'stale';
+      const text = outcome === 'sent' ? 'Retry request sent to the selected session.'
+        : outcome === 'unavailable' ? 'Retry is unavailable: the selected session must be idle and running inside tlive run. Retry at that terminal.'
+        : outcome === 'failed' ? 'Could not send the retry request. Check the selected terminal and retry there.'
+        : 'This retry action is no longer active. Use the latest error card or retry at the terminal.';
+      await this.reply(env, { kind: 'text', text });
+      return;
+    }
 
     if (env.text.startsWith('pause:')) {
       const requestId = env.text.slice('pause:'.length);

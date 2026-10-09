@@ -1,5 +1,5 @@
 // src/kernel/daemon/bootstrap.ts
-import { join, dirname } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { startIpcServer, type IpcServer } from '../ipc/server.js';
@@ -32,6 +32,8 @@ import { writeMode } from '../config/mode.js';
 import { wasNotifyExplained, markNotifyExplained } from '../config/state.js';
 import { renderWaiting, type WaitingEvent, type Lang } from './waiting-notice.js';
 import { rotateIfOversized } from './log-rotate.js';
+import { SessionRetry } from './session-retry.js';
+import { describeSessionFailure } from '../hook/session-error.js';
 
 export interface DaemonHandle {
   shutdown(): Promise<void>;
@@ -291,6 +293,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   };
 
   const sessions = new SessionRegistry();
+  const wrappedCommands = new Map<string, string>();
   const events = new EventHub();
 
   // IM messageId → registry key, for reply-to routing (bounded; daemon-lifetime only).
@@ -638,6 +641,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
    *  be able to reset what tlive has already reported about it. Everything
    *  else here is idempotent and runs either way. */
   const retireGoneSession = (key: string, cwd: string, sessionId?: string, verified = false): void => {
+    sessionRetry.complete(key);
+    if (verified) wrappedCommands.delete(key);
     clearLocalPrompt(key, sessionId, cwd);
     // A session that is gone announces nothing — there is nobody to call back.
     // The pending DEATH report is deliberately not cancelled here: see
@@ -852,6 +857,27 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   });
 
   const continueBroker = new ContinueBroker();
+  const canRetrySession = (key: string): boolean => {
+    const s = sessions.get(key);
+    return currentMode() !== 'off' && !!s && s.kind === 'wrapped' && !!s.sockPath && wrappedCommands.get(key) === 'claude'
+      && (s.status === 'idle' || s.status === 'waiting-input') && !s.activeSubagents;
+  };
+  const sessionRetry = new SessionRetry(cfg.retries ?? {}, {
+    canRetry: canRetrySession,
+    inject: async (key, text) => {
+      const { injectInput } = await import('./inject.js');
+      const s = sessions.get(key);
+      if (!s || !canRetrySession(key)) throw new Error('session unavailable');
+      await injectInput(s.sockPath!, text);
+    },
+    notify: (key, outcome, attempts) => {
+      const text = outcome === 'sent' ? `Automatic retry ${attempts} submitted. Waiting for the session result.`
+        : outcome === 'unavailable' ? 'Automatic retry cancelled: the terminal is no longer idle or available. Retry at that terminal.'
+        : 'Automatic retry could not reach the terminal. Retry at that terminal.';
+      void Promise.all(configuredChats().map(t => sendToChat(t, { text, cwd: key }))).catch(() => undefined);
+      logJson('session.retry', {key, outcome, attempts});
+    },
+  });
   let latestContinueId: string | null = null;
   // key → cancel-grace:一个会话在续跑 grace 窗口内时,收到该会话的新 prompt
   // 就调用它取消发卡(用户在键盘前继续了)。
@@ -904,7 +930,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
   /** The episode is over: the next dead turn is news again. Called on proof —
    *  a turn that actually finished, or a session the sweep has confirmed is
    *  gone. */
-  const endDeathEpisode = (key: string): void => { deathEpisodes.delete(key); };
+  const endDeathEpisode = (key: string): void => { deathEpisodes.delete(key); sessionRetry.complete(key); cancelDeathReport(key); };
   /** A new prompt: someone asked this session for something. That ends the
    *  episode — but ONLY if it did not arrive on the heels of a death.
    *
@@ -1010,7 +1036,8 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
    *  than stacking is what keeps that one question per session however many
    *  agents died. The latch asks "have we already said this?", which is the
    *  only one that survives a condition outlasting any grace. */
-  const reportDeath = (key: string, text: string, message: string): void => {
+  const reportDeath = (key: string, text: string, message: string, classification?: {retryable?: boolean}): void => {
+    sessionRetry.noteFailure(key, text);
     const prior = pendingDeath.get(key);
     if (prior) clearTimeout(prior.timer);
     const repeats = (prior?.repeats ?? 0) + 1;
@@ -1043,7 +1070,14 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // muted send tells nobody, so claiming it would let one mute swallow a
       // standing condition permanently.
       const silenced = muted || (sessions.get(key)?.muted ?? false);
-      const fresh = silenced ? false : claimDeathReport(key, 'im', text);
+      const [kind, ...details] = text.split(' — ');
+      const failure = describeSessionFailure(kind, details.join(' — '));
+      // A new shim classified the full error before display truncation. Never
+      // reinterpret a hard error as transient from its shortened display text.
+      const retryable = failure.retryable && classification?.retryable !== false;
+      const retry = sessionRetry.failure(key, retryable, configuredChats(), text);
+      const unseen = silenced ? false : claimDeathReport(key, 'im', `${text}:${retry.attempts}`);
+      const fresh = !silenced && (unseen || (retry.canRetry && retry.newAction));
       // Observability, because silence is the DESIGNED outcome here and is
       // otherwise indistinguishable from a broken channel. Identity and
       // outcome only — the failure text is provider output that has already
@@ -1052,9 +1086,18 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // the third reason: this surface had already said it.
       logJson('notify.death', { key, resumed: false, desktop: rang, muted: silenced, delivered: fresh, repeats });
       if (!fresh) return;
-      const body = message.startsWith('⚠️') ? message : `⚠️ ${message}`;
+      const status = retry.nextDelaySec !== undefined
+        ? `Automatic retry ${retry.attempts + 1}/${retry.maxAttempts} in ${retry.nextDelaySec}s.`
+        : retry.attempts >= retry.maxAttempts && cfg.retries?.enabled === true
+        ? `Automatic retries exhausted (${retry.attempts}/${retry.maxAttempts}).`
+        : retryable ? 'Automatic retry is disabled or unavailable.' : 'Automatic retry is not appropriate for this error.';
+      const action = retry.canRetry ? 'Use Retry after checking the cause. A retry resumes from the current state.'
+        : 'Retry at the project terminal. For remote retry, start Claude with tlive run claude --continue.';
+      const body = `⚠️ session error: ${failure.text}\n\n${failure.hint}\n${status}\n${action}`;
       // cwd carries the resolved KEY so the label tag + reply-routing map are consistent.
-      void Promise.all(configuredChats().map((t) => sendToChat(t, { text: body, cwd: key }))).catch(() => undefined);
+      void Promise.all(configuredChats().map((t) => sendToChat(t, retry.canRetry
+        ? {title: 'Session error', body, cwd: key, buttons: [{id: `retry:${retry.id}`, label: 'Retry'}]}
+        : {text: body, cwd: key}))).catch(() => undefined);
     }, graceSec * 1000);
     timer.unref();
     pendingDeath.set(key, { text, message, timer, repeats });
@@ -1603,7 +1646,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           // reason neither has ever flooded anyone: a session that came back on
           // its own needed nobody told. Pushed without it, this line produced
           // eight identical `server_error` messages in forty-six minutes.
-          if (req.sessionError) reportDeath(key, req.sessionError.text, req.message);
+          if (req.sessionError) reportDeath(key, req.sessionError.text, req.message, req.sessionError);
           // Claude Code's own 60-second "waiting for your input" notification
           // reaches NO desktop notification: "your turn" is delivered from the
           // Stop hook instead, which is the same event the IM continue card
@@ -1655,6 +1698,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
             permissionRouter.cancel({ key, toolName: ev.toolName, sessionId: ev.sessionId, matchAgent: null });
             clearLocalPrompt(key, ev.sessionId, ev.cwd);
           } else if (ev.event === 'prompt') {
+            sessionRetry.prompt(key, ev.prompt);
             // 主会话新输入 → 主会话上一轮的对话框已没了,撤它的卡。matchAgent:null
             // 精确到主会话:一个 backgrounded 子 agent 的审批与父会话的输入框无关
             // (它仍真在等,且无本地答路 —— 清掉 = 保证被 deny),不得被父 prompt 清场。
@@ -1674,11 +1718,15 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
           return;
         }
         case 'session.register': {
+          sessionRetry.complete(req.session.id);
+          wrappedCommands.set(req.session.id, basename(req.session.cmd));
           events.broadcast({ type: 'session-upsert', session: sessions.register(req.session) });
           reply({ kind: 'ack' });
           return;
         }
         case 'session.unregister': {
+          sessionRetry.complete(req.id);
+          wrappedCommands.delete(req.id);
           const removed = sessions.unregister(req.id);
           if (removed) events.broadcast({ type: 'session-remove', id: removed.id });
           reply({ kind: 'ack' });
@@ -1704,6 +1752,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
 
   const { injectInput } = await import('./inject.js');
   const inbound = new (await import('./inbound-handler.js')).InboundHandler({
+    retrySession: (id, channel, chatId) => sessionRetry.answer(id, channel, chatId),
     senderGuard,
     imBy: (ch) => (opts.imAdapters ?? []).find((a) => a.channel === ch),
     permissionRouter,
@@ -1757,6 +1806,7 @@ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle
       // an in-flight request and it rejects (IpcConnectionClosedError). Flush a
       // tick so the replies write out before we start closing.
       permissionRouter.settleAllPending();
+      sessionRetry.stop();
       continueBroker.settleAllPending();
       await new Promise((r) => setImmediate(r));
       codexCompanion?.stop();
