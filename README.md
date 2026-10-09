@@ -332,6 +332,36 @@ message to type into that session.
 
 ## Config (`~/.tlive/config.json`)
 
+### Failed turns and retries
+
+Session failures include a redacted error summary and recovery advice. If Claude's
+failure hook omits details, tlive can recover the latest API error from a bounded
+transcript tail; unsupported or ambiguous transcripts remain `unknown`.
+
+A stopped Claude session launched with `tlive run claude` gets a **Retry** button.
+The action targets that session, works once, and expires after 30 minutes. Retry
+submits a request to continue from the current state, rather than replaying already
+completed commands. A plain `claude` session receives instructions to retry at its
+terminal; a failed turn has no live Stop-continuation request to answer remotely.
+
+Automatic retries are **off by default**. To enable them, add:
+
+```json
+"retries": { "enabled": true, "maxAttempts": 3 }
+```
+
+Restart tlive after changing this setting. Identified transient failures (such as
+overload, rate limits, timeouts and connection resets) can retry after 5, 15 and 30
+seconds, following the error-notification grace. `maxAttempts` is clamped to 0–3;
+the budget resets only after successful completion or session termination. TLS,
+certificate, authentication, billing/quota and unidentified errors do not retry
+automatically, even when Claude labels them `server_error`. Fix the underlying
+configuration before using Retry. Retry never changes approval policy or disables
+certificate validation. A new user prompt, permanent error, session termination
+or daemon shutdown cancels a queued action; duplicate errors retain the same
+unconsumed button. Only an idle wrapped session without active subagents accepts
+retry input. A submitted retry is acknowledged separately from its eventual result.
+
 <details>
 <summary>Full annotated config — every field is optional; defaults shown</summary>
 
@@ -342,6 +372,10 @@ message to type into that session.
   // live with `tlive mode …` or `/mode` from IM; unset/unknown falls back to
   // notify.
   "mode": "notify",
+  "retries": {
+    "enabled": false,        // opt-in, idle wrapped Claude sessions only
+    "maxAttempts": 3         // 0–3; delays 5s, 15s, 30s after error grace
+  },
   "adapters": {
     "telegram": { "token": "…", "chatIdAllowList": ["123"] },
     "feishu":   { "appId": "…", "appSecret": "…", "chatId": "oc_…" }

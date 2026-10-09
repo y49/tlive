@@ -1,3 +1,5 @@
+import { describeSessionFailure, type SessionFailureCategory } from './session-error.js';
+
 /** Single source of truth for shim event names. The plugin's hooks.json, the
  *  CLI usage line, and the docs are all checked against this list by the
  *  consistency tests (plugin-consistency.test.ts) — extend it here first. */
@@ -85,17 +87,14 @@ const LOCAL_WAITING_TYPES: Record<string, LocalWaiting> = {
   quota_auto_resume_disabled: 'question',
 };
 
-/** A turn that ended on an API error, with the one judgement the surfaces need
- *  from it. `transient` is Claude Code's OWN classification, not a guess of
- *  ours: its `apiErrorIsTransient === true || error === 'overloaded' || error
- *  === 'server_error'`. Only the two kinds survive into the hook payload, so
- *  that is what TRANSIENT_ERROR_KINDS mirrors — anything else, including a
- *  missing kind, counts as needing a human, because not knowing whether it
- *  passes is not the same as knowing it will.
- *
- *  `text` is `message` without its "session error: " prefix, for a surface
- *  whose title already says the turn failed. */
-export interface SessionError { text: string; transient: boolean }
+/** A failed turn; optional metadata keeps older shim/daemon wire messages valid. */
+export interface SessionError {
+  text: string;
+  transient: boolean;
+  retryable?: boolean;
+  category?: SessionFailureCategory;
+  hint?: string;
+}
 
 /** Vendor-neutral monitoring subset carried over IPC `hook.event`. */
 export type MonitorEvent = Extract<NormalizedHook, { event: 'activity' | 'attention' | 'prompt' | 'subagent' | 'session-start' | 'session-end' | 'permission-denied' }>;
@@ -108,11 +107,6 @@ export type MonitorEvent = Extract<NormalizedHook, { event: 'activity' | 'attent
  *  处漂移都会让这个比较失配,导致正文把标题原样再引用一遍——这正是本常量
  *  要消灭的重复。 */
 export const TURN_FINISHED_SENTINEL = 'Turn finished — reply to continue';
-
-/** The kinds Claude Code retries its own way out of — a server hiccup, not a
- *  standing condition. Everything else (a bad key, an exhausted balance, a
- *  model that does not exist) stays broken until a human changes something. */
-const TRANSIENT_ERROR_KINDS = new Set(['overloaded', 'server_error']);
 
 interface RawHook {
   cwd?: string; session_id?: string; permission_mode?: string;
@@ -203,24 +197,10 @@ export function parseHookInput(event: HookEventName, raw: unknown): NormalizedHo
       };
     }
     case 'stop-failure': {
-      // `error` is one of twelve kinds (rate_limit / overloaded /
-      // authentication_failed / oauth_org_not_allowed / account_on_hold /
-      // billing_error / invalid_request / model_not_found / server_error /
-      // max_output_tokens / unknown). The kind alone tells you which bucket,
-      // never what happened — `error_details` is the only human-readable half,
-      // so it travels with it. Note `unknown` is itself one of the twelve: the
-      // fallback below is indistinguishable from Claude Code genuinely not
-      // knowing, and the details are what settle that either way.
       const kind = typeof r.error === 'string' && r.error ? r.error : 'unknown';
       const details = typeof r.error_details === 'string' ? r.error_details.trim() : '';
-      const text = `${kind}${details ? ` — ${details.slice(0, 200)}` : ''}`;
-      // Not marked droppable, transient or not. Whether anyone hears about a
-      // dead turn is not a property of the error kind — it is whether the
-      // session came back, and only the daemon can see that. It waits the same
-      // grace the continue card waits and reports only what is still stopped
-      // when the grace ends. `transient` still decides the DESKTOP, which is
-      // immediate and cannot wait for anything.
-      return { event: 'attention', cwd, sessionId, message: `session error: ${text}`, sessionError: { text, transient: TRANSIENT_ERROR_KINDS.has(kind) } };
+      const sessionError = describeSessionFailure(kind, details);
+      return { event: 'attention', cwd, sessionId, message: `session error: ${sessionError.text}`, sessionError };
     }
     case 'subagent-start':
       return { event: 'subagent', cwd, sessionId, delta: 1, ...(r.agent_type ? { agentType: r.agent_type } : {}) };

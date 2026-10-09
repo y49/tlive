@@ -233,10 +233,16 @@ describe('failure events', () => {
   // machine (2026-08-18/19): every one carried `error: "server_error"` behind
   // the text "API Error: Connection lost mid-response" — a network blip the
   // session recovers from, NOT something to call anyone back for.
-  describe('stop-failure transience — Claude Code classifies it, tlive does not guess', () => {
-    it('server_error is transient', () => {
+  it('server_error certificate details prohibit retries and expose a corrective hint', () => {
+    const n = parseHookInput('stop-failure', { error: 'server_error', error_details: 'SSL certificate hostname mismatch' });
+    expect((n as any).sessionError).toMatchObject({ transient: false, retryable: false, category: 'tls' });
+    expect((n as any).sessionError.hint).toMatch(/certificate|proxy/i);
+  });
+
+  describe('stop-failure transience — details take precedence over generic kinds', () => {
+    it('bare server_error is unknown and cannot be retried', () => {
       const n = parseHookInput('stop-failure', { cwd: '/x', session_id: 's', error: 'server_error' });
-      expect((n as any).sessionError).toMatchObject({ transient: true });
+      expect((n as any).sessionError).toMatchObject({ transient: false, retryable: false, category: 'unknown' });
     });
     it('overloaded is transient', () => {
       const n = parseHookInput('stop-failure', { cwd: '/x', session_id: 's', error: 'overloaded' });

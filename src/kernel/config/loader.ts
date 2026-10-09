@@ -30,6 +30,8 @@ export interface PolicyConfig { autoAllow?: string[]; autoDeny?: string[]; ask?:
 export interface ApprovalsConfig { windowSec?: number; continueWindowSec?: number; continueGraceSec?: number; approvalGraceSec?: number; autoApprove?: 'readonly' | 'safe'; timeoutAction?: 'defer' | 'deny' }
 
 export interface KernelConfig {
+  /** Opt-in recovery for stopped Claude sessions wrapped with tlive run. */
+  retries?: { enabled?: boolean; maxAttempts?: number };
   allowedSenders: Array<{ channel: 'telegram' | 'feishu'; userId: string }>;
   adapters: AdapterCreds;
   web?: WebConfig;
