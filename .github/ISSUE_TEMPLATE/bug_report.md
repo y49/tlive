@@ -22,10 +22,10 @@ What you expected to happen.
 - OS: [e.g. macOS 14, Ubuntu 22.04]
 - Node.js version: [e.g. 22.x]
 - tlive version: [run `tlive --version`]
-- IM Platform: [Telegram / Discord / Feishu]
+- IM Platform: [Telegram / Feishu]
 
 **Logs**
-Paste output of `tlive doctor` and relevant logs from `tlive logs 50`.
+Paste the output of `tlive status` and the relevant lines from `tlive logs`.
 
 **Additional context**
 Any other context about the problem.
