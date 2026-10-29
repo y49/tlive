@@ -81,6 +81,24 @@ describe('FeishuAdapter', () => {
       expect(inbound.mock.calls[0][0]).toMatchObject({ replyToMessageId: 'om_parent' });
     });
 
+    // allowedSenders is documented as open IDs (ou_…). Feishu always sends
+    // open_id; user_id is only filled when the app holds an extra contact
+    // permission the setup docs never ask for — reading it left userId empty
+    // and the allowlist silently dropped every text message.
+    it('reports the sender by open_id, which Feishu always sends', async () => {
+      const msg = makeMsg('chat-ok');
+      msg.sender.sender_id = { open_id: 'ou_me' } as never;
+      await capturedHandlers['im.message.receive_v1'](msg);
+      expect(inbound.mock.calls[0][0]).toMatchObject({ userId: 'ou_me' });
+    });
+
+    it('prefers open_id over user_id when both are present', async () => {
+      const msg = makeMsg('chat-ok');
+      msg.sender.sender_id = { open_id: 'ou_me', user_id: 'u1' } as never;
+      await capturedHandlers['im.message.receive_v1'](msg);
+      expect(inbound.mock.calls[0][0]).toMatchObject({ userId: 'ou_me' });
+    });
+
     it('still tolerates the legacy wrapped {event:{…}} shape', async () => {
       await capturedHandlers['im.message.receive_v1']({ event: makeMsg('chat-ok') });
       expect(inbound).toHaveBeenCalledOnce();
@@ -195,6 +213,15 @@ describe('FeishuAdapter', () => {
       await capturedHandlers['card.action.trigger'](makeCallback('chat-ok', 'approve:abc'));
       expect(inbound).toHaveBeenCalledOnce();
       expect(inbound.mock.calls[0][0]).toMatchObject({ chatId: 'chat-ok', text: 'approve:abc' });
+    });
+
+    // Same id as a text message from the same person — otherwise one
+    // allowedSenders entry passes buttons but not text, or the reverse.
+    it('prefers open_id over user_id, matching text messages', async () => {
+      const cb = makeCallback('chat-ok', 'approve:abc');
+      cb.operator = { open_id: 'ou_me', user_id: 'u1' } as never;
+      await capturedHandlers['card.action.trigger'](cb);
+      expect(inbound.mock.calls[0][0]).toMatchObject({ userId: 'ou_me' });
     });
 
     it('still tolerates the legacy wrapped {event:{…}} shape', async () => {

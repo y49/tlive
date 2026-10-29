@@ -139,10 +139,18 @@ The wizard writes `~/.tlive/config.json`:
 | `adapters.feishu.chatId` | string | The chat the bot posts to — its `open_chat_id` (starts `oc_`). **Required to send.** |
 | `allowedSenders` | `{channel, userId}[]` | Optional per-user hardening — Open IDs (`ou_…`). Empty ⇒ trust the configured chat. |
 
-`chatId` is **required to send**. If you don't have it yet, leave that prompt
-blank and add it later — find it from the group's info, or from the inbound
-event once the bot receives your first message (Step 7) — then re-run
-`tlive setup` (or edit the file) to fill it in.
+`chatId` is **required to send**, and inbound messages and button taps from
+any other chat are dropped. To find it:
+
+- **Feishu client 7.60+:** open the group (or your DM with the bot) → menu at
+  the top right → **Settings** → the chat ID is shown there.
+- **API Explorer:** pick any API that takes a group ID, open the path
+  parameters tab, click **选择群组 / Select group**, choose the group, then
+  **复制群组 ID / Copy group ID**.
+
+tlive itself can't show it to you: a message from a chat that doesn't match
+`chatId` is dropped before it is read. If you don't have it yet, leave that
+prompt blank, then re-run `tlive setup` (or edit the file) once you do.
 
 Secure the file:
 

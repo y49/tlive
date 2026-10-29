@@ -92,8 +92,8 @@ When the user says "help me set up tlive" (or runs /tlive:setup), walk them
 through:
 1. `tlive status` to check the engine; missing → `npm i -g tlive`.
 2. No channels → collect Telegram (bot token + chat id) or Feishu
-   (appId + appSecret) credentials and merge into `~/.tlive/config.json`:
-   `{ "allowedSenders": [], "adapters": { "telegram": { "token": "…", "chatIdAllowList": ["…"] }, "feishu": { "appId": "…", "appSecret": "…" } } }`
+   (appId + appSecret + chat id `oc_…`) credentials and merge into `~/.tlive/config.json`:
+   `{ "allowedSenders": [], "adapters": { "telegram": { "token": "…", "chatIdAllowList": ["…"] }, "feishu": { "appId": "…", "appSecret": "…", "chatId": "oc_…" } } }`
 3. `tlive start` → `tlive status` to verify channels; `tlive url` for the dashboard.
 4. Offer remote approval: tlive defaults to `notify` (watch + notify only). If
    the user wants to Allow/Deny tool calls from their phone, run `tlive mode full`

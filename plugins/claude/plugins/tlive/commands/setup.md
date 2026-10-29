@@ -36,7 +36,9 @@ Guide the user through tlive setup. Execute in order, showing each result:
    - Telegram: bot token (create via @BotFather) + chat id (send the bot a
      message and read getUpdates, or the user already knows it)
    - Feishu: appId + appSecret (self-built app on the open platform with im
-     message permissions)
+     message permissions) + chatId, the `oc_…` id of the chat the bot uses —
+     shown in that chat's Settings on Feishu 7.60+. Without it tlive can
+     neither send nor receive.
 5. Read `~/.tlive/config.json` (may be absent or partial) and MERGE the new
    fields in (preserve existing ones):
 
@@ -44,7 +46,7 @@ Guide the user through tlive setup. Execute in order, showing each result:
    { "allowedSenders": [],
      "adapters": {
        "telegram": { "token": "<token>", "chatIdAllowList": ["<chatId>"] },
-       "feishu": { "appId": "<appId>", "appSecret": "<secret>" } } }
+       "feishu": { "appId": "<appId>", "appSecret": "<secret>", "chatId": "<oc_…>" } } }
    ```
    (Only write the platforms the user chose; validate the JSON.)
 6. `tlive stop` (if running) then `tlive start`, then `tlive status` to confirm
