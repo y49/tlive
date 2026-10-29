@@ -1,5 +1,13 @@
 # Changelog
 
+## [5.3.3](https://github.com/y49/tlive/compare/v5.3.2...v5.3.3) (2026-10-29)
+
+
+### Bug Fixes
+
+* **feishu:** match allowedSenders by open_id and fix the chatId setup guidance ([#109](https://github.com/y49/tlive/issues/109)) ([85bd04f](https://github.com/y49/tlive/commit/85bd04f18c430a5b827cc69f4a8067b41d224f51))
+* **feishu:** strip the leading [@mention](https://github.com/mention) placeholder so group commands parse ([#105](https://github.com/y49/tlive/issues/105)) ([29a9b9a](https://github.com/y49/tlive/commit/29a9b9a8da2d13eb50fe1c9c20f56b0596d643a4))
+
 ## [5.3.2](https://github.com/y49/tlive/compare/v5.3.1...v5.3.2) (2026-10-14)
 
 
