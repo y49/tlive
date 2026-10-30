@@ -10,7 +10,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![LINUX DO](https://img.shields.io/badge/LINUX%20DO-%E7%A4%BE%E5%8C%BA-blue)](https://linux.do)
 
-[English](README.md) · [简体中文](README_CN.md)
+[English](README.md) · [简体中文](README_CN.md) · [繁體中文](README_ZH_TW.md)
 
 </div>
 
